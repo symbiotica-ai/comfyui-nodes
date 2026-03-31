@@ -17,7 +17,7 @@ class SymbioticaSeed:
         return {
             "required": {
                 "seed": ("INT", {
-                    "default": 0,
+                    "default": 1,
                     "min": -0xFFFFFFFFFFFFFFFF,
                     "max": 0xFFFFFFFFFFFFFFFF,
                 }),
