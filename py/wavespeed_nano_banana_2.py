@@ -151,6 +151,14 @@ def _build_common_body(prompt, aspect_ratio, resolution, output_format):
     return body
 
 
+def _check_search_mutex(enable_web_search, enable_image_search):
+    if enable_web_search and enable_image_search:
+        raise Exception(
+            "Nano Banana 2: enable_web_search and enable_image_search cannot both be ON. "
+            "Pick one — web search grounds on real-time text info, image search grounds on visual references."
+        )
+
+
 # --- Nodes ---
 
 class SymbioticaWavespeedNanoBanana2:
@@ -180,6 +188,7 @@ class SymbioticaWavespeedNanoBanana2:
 
     def run(self, prompt, aspect_ratio, resolution, enable_web_search, enable_image_search,
             output_format, api_key="", timeout=300):
+        _check_search_mutex(enable_web_search, enable_image_search)
         body = _build_common_body(prompt, aspect_ratio, resolution, output_format)
         body["enable_web_search"] = bool(enable_web_search)
         body["enable_image_search"] = bool(enable_image_search)
@@ -251,6 +260,7 @@ class SymbioticaWavespeedNanoBanana2Edit:
 
     def run(self, images, prompt, aspect_ratio, resolution, enable_web_search, enable_image_search,
             output_format, api_key="", timeout=300):
+        _check_search_mutex(enable_web_search, enable_image_search)
         body = _build_common_body(prompt, aspect_ratio, resolution, output_format)
         body["images"] = _images_tensor_to_data_uris(images)
         body["enable_web_search"] = bool(enable_web_search)
