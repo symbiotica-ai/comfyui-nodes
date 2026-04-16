@@ -3,6 +3,7 @@
 
 import base64
 import io
+import json
 import os
 import time
 
@@ -124,12 +125,24 @@ def _submit_and_poll(path: str, body: dict, api_key: str, poll_timeout: int) -> 
         if status == "completed":
             return pdata
         if status == "failed":
-            raise Exception(f"Wavespeed task failed: {pdata.get('error') or pdata}")
+            err = pdata.get("error") or "(no error message)"
+            sent = json.dumps(body, ensure_ascii=False)[:500]
+            full = json.dumps(pdata, ensure_ascii=False)[:800]
+            raise Exception(
+                f"Wavespeed task {task_id} failed.\n"
+                f"  Wavespeed error: {err}\n"
+                f"  Sent body: {sent}\n"
+                f"  Full response: {full}"
+            )
 
 
 def _build_common_body(prompt, aspect_ratio, resolution, output_format):
+    if not prompt or not prompt.strip():
+        raise Exception(
+            "Wavespeed requires a non-empty prompt. Enter prompt text on the node before running."
+        )
     body = {
-        "prompt": prompt,
+        "prompt": prompt.strip(),
         "resolution": resolution,
         "output_format": output_format,
     }
