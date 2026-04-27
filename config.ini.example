@@ -1,0 +1,8 @@
+; Copy this file to config.ini and adjust the paths.
+; Or set SYMBIOTICA_AGENTS_DIR / SYMBIOTICA_SKILLS_DIR environment variables instead.
+
+[agents]
+agents_dir = /path/to/agents
+
+[skills]
+skills_dir = /path/to/skills

@@ -1,0 +1,28 @@
+[project]
+name = "symbiotica"
+description = "Agent-based LLM nodes for ComfyUI. Run Claude, Gemini, GPT, and Grok agents inside your visual workflows, with skills, personalities, and image generation via Wavespeed."
+version = "1.0.0"
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Razvan Matei" },
+]
+keywords = ["comfyui", "comfyui-nodes", "agents", "llm", "claude", "gemini", "gpt", "wavespeed"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "requests>=2.31.0",
+    "pillow>=10.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/symbiotica-ai/comfyui-nodes"
+"Bug Tracker" = "https://github.com/symbiotica-ai/comfyui-nodes/issues"
+
+[tool.comfy]
+PublisherId = "symbiotica"
+DisplayName = "Symbiotica"

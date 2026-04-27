@@ -108,6 +108,11 @@ class SymbioticaAgentSettings:
                 }),
             },
             "optional": {
+                "agents_path": ("STRING", {
+                    "multiline": False,
+                    "default": "",
+                    "tooltip": "Path to agents directory. Overrides env var and config.ini.",
+                }),
                 "user_context": ("STRING", {
                     "multiline": True,
                     "default": "",
@@ -146,6 +151,7 @@ class SymbioticaAgentSettings:
         agent: str,
         soul: str,
         instructions: str,
+        agents_path: str = "",
         user_context: str = "",
         model: str = "claude-sonnet-4-6",
         api_key: str = "",
@@ -154,7 +160,7 @@ class SymbioticaAgentSettings:
         base = {"soul": "", "instructions": "", "user_context": ""}
 
         if agent != "(custom)":
-            agents_dir = _get_agents_dir()
+            agents_dir = agents_path.strip() if agents_path and agents_path.strip() and os.path.isdir(agents_path.strip()) else _get_agents_dir()
             agent_dir = os.path.join(agents_dir, agent)
             if os.path.isdir(agent_dir):
                 base = _read_agent(agent_dir)

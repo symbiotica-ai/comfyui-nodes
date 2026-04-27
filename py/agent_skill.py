@@ -25,9 +25,8 @@ def _get_skills_dir() -> str:
     return os.path.join(_package_dir, "skills")
 
 
-def _list_skills() -> list[str]:
-    """Scan the skills directory for skill subdirectories containing SKILL.md."""
-    skills_dir = _get_skills_dir()
+def _list_skills_from(skills_dir: str) -> list[str]:
+    """Scan a directory for skill subdirectories containing SKILL.md."""
     skills = []
     if os.path.isdir(skills_dir):
         for name in sorted(os.listdir(skills_dir)):
@@ -35,6 +34,11 @@ def _list_skills() -> list[str]:
             if os.path.isdir(skill_path) and os.path.isfile(os.path.join(skill_path, "SKILL.md")):
                 skills.append(name)
     return skills
+
+
+def _list_skills() -> list[str]:
+    """Scan the default skills directory for skill subdirectories containing SKILL.md."""
+    return _list_skills_from(_get_skills_dir())
 
 
 def _read_skill(skill_dir: str) -> dict:
@@ -88,7 +92,14 @@ class SymbioticaSkills:
             })
         return {
             "required": {},
-            "optional": optional,
+            "optional": {
+                "skills_path": ("STRING", {
+                    "multiline": False,
+                    "default": "",
+                    "tooltip": "Path to skills directory. Overrides env var and config.ini.",
+                }),
+                **optional,
+            },
         }
 
     RETURN_TYPES = ("AGENT_SKILLS",)
@@ -111,8 +122,12 @@ class SymbioticaSkills:
         return latest if latest > 0 else float("nan")
 
     def load(self, **kwargs):
-        skills_dir = _get_skills_dir()
-        available_skills = _list_skills()
+        path_override = kwargs.pop("skills_path", "")
+        if path_override and path_override.strip() and os.path.isdir(path_override.strip()):
+            skills_dir = path_override.strip()
+        else:
+            skills_dir = _get_skills_dir()
+        available_skills = _list_skills_from(skills_dir)
         enabled = []
 
         for param_name, is_enabled in kwargs.items():
