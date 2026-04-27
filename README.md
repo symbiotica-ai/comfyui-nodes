@@ -1,69 +1,95 @@
-# Symbiotica ComfyUI Nodes
+# Symbiotica
 
-Custom nodes that bring agent-based LLM interactions into ComfyUI visual workflows.
+All-in-one creative pack for ComfyUI. Agents, image and video generation, audio, transcription, captions, and video composition — in one install.
 
-## Nodes
+## Install
 
-### Symbiotica Agent Settings
+Via ComfyUI Manager: search **Symbiotica** and click install.
 
-Loads an agent definition from disk: CLAUDE.md + SOUL.md from the agent directory, plus shared SOUL.md and USER.md from the agents root. All fields pre-filled and editable.
-
-Accepts up to 5 skill nodes wired in as optional inputs.
-
-**Inputs:**
-- `agent` — Dropdown of discovered agents, or `(custom)` for manual entry
-- `soul` — Personality, values, boundaries (from shared + agent SOUL.md)
-- `instructions` — Identity and operating instructions (from agent CLAUDE.md)
-- `user_context` (optional) — Who the agent serves (from shared USER.md)
-- `model` (optional) — LLM model
-- `api_key` (optional) — Falls back to environment variable
-- `skills` (optional) — Wire from Symbiotica Skills node
-
-**Output:** `AGENT_SETTINGS`
-
-### Symbiotica Skills
-
-Scans the skills directory and shows each discovered skill as a toggle. Enable the ones you want, wire the output into Agent Settings.
-
-**Inputs:**
-- One BOOLEAN toggle per discovered skill (from `SYMBIOTICA_SKILLS_DIR`)
-
-**Output:** `AGENT_SKILLS` (list of enabled skill definitions)
-
-### Symbiotica Agent
-
-Executes a stateless LLM agent. Every execution is the agent's entire lifecycle: born, briefed, does one job, done.
-
-**Inputs:**
-- `agent_settings` — Wire from Symbiotica Agent Settings
-- `prompt` — The task or question
-- `max_tokens`, `temperature`, `seed`, `timeout` — API parameters
-- `api_key` (optional) — Overrides agent settings
-- `model_override` (optional) — Overrides agent settings model
-- `image` (optional) — For vision tasks
-
-**Output:** `response` (STRING)
-
-## Installation
-
+Manual:
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/symbiotica-ai/comfyui-nodes.git
-pip install -r comfyui-nodes/requirements.txt
+git clone https://github.com/symbiotica-ai/comfyui-nodes.git symbiotica
+pip install -r symbiotica/requirements.txt
 ```
+
+## What's in the pack
+
+### Agents (LLM)
+Stateless agents you wire into workflows. Personality (SOUL), instructions (CLAUDE), skills, and a router across providers.
+
+- `Symbiotica Agent Settings` — load agent definition from disk
+- `Symbiotica Agent` — run the agent against a prompt or image
+- `Symbiotica Skills` — toggle which skills the agent has access to
+- `NS LLM Chat` — single-shot chat completion
+- `NS LLM Model Selector` — central model picker for routing
+
+Supports Claude, Gemini, GPT, Grok.
+
+### Image generation (Wavespeed)
+Wrappers around Wavespeed's hosted endpoints.
+
+- **Flux** — Kontext (Dev/Pro/Max), ControlNet Union Pro 2, Image Upscaler
+- **Nano Banana** — text-to-image, edit, fast variants, Pro (text-to-image / edit / multi / ultra), Nano Banana 2 (text-to-image, edit, fast)
+- **Qwen** — text-to-image (+ LoRA), edit (+ LoRA), edit-plus (+ LoRA)
+- **SeedDream V4** — text-to-image, edit, sequential variants
+- **Wan 2.5** — text-to-image, image edit
+- **Runway** — upscale
+
+### Video generation (Wavespeed)
+- **Sora 2** — text-to-video, image-to-video, Pro variants
+- **Veo 3.1** — text-to-video, image-to-video, reference-to-video, fast variants
+- **Wan 2.2 / 2.5** — i2v 720p, animate, image-to-video (+ fast), text-to-video (+ fast)
+- **InfiniteTalk** — single and multi-character
+
+### Audio & transcription
+- `NS Whisper Transcribe` — local faster-whisper transcription with optional initial-prompt biasing
+- `NS Google Transcribe` — Google Speech-to-Text API
+- `NS Music` — generated music track sized to your video
+- `NS Sound Effects` — ElevenLabs-driven SFX from JSON cue lists
+- `NS Voice Atmosphere` — reverb / room tone via scipy fftconvolve
+- `NS Submagic Captions` — Submagic-rendered captions
+
+### Captions, overlays, video composition
+- `NS Caption Overlay` / `NS Caption Style` — Remotion-rendered captions
+- `NS Visual Overlay` — Remotion-rendered Instagram / TikTok / Facebook chrome
+- `NS Video Concat Multi` — stitch multiple clips
+- `NS Video Effects` — speed, crop, flip, etc.
+- `NS Video Overlay` — overlay one video on another
+- `NS Get Video Components` / `NS Create Video` — frame ↔ video conversion utilities
+- `NS Transition Settings` — transition config between clips
+
+### Workflow utilities
+- `NS Workflow Model Downloader` — pulls models referenced in a workflow JSON
+- `NS Prompt List` — multi-prompt iteration
+- `NS Qwen Resolution` — common Qwen-friendly resolutions
+- `Symbiotica Seed` — reproducible seeds with optional auto-increment
 
 ## Configuration
 
+### API keys
+
+Set via environment variables — no key is ever required for the package to load, only at the moment a node calls a provider.
+
+| Variable | Provider |
+|---|---|
+| `ANTHROPIC_API_KEY` | Claude |
+| `OPENAI_API_KEY` | GPT |
+| `GEMINI_API_KEY` | Gemini |
+| `XAI_API_KEY` | Grok |
+| `WAVESPEED_API_KEY` | Wavespeed (image + video) |
+| `ELEVENLABS_API_KEY` | ElevenLabs (sound effects) |
+| `SUBMAGIC_API_KEY` | Submagic (captions) |
+| `GOOGLE_API_KEY` | Google Speech-to-Text |
+
+Per-node `api_key` widget overrides the env var.
+
 ### Agent and skill directories
 
-The nodes scan directories on disk for agent and skill definitions.
+The Agent nodes scan disk for agent and skill definitions.
 
-**Environment variables:**
-- `SYMBIOTICA_AGENTS_DIR` — Path to agent directories (from [symbiotica-ai/agents](https://github.com/symbiotica-ai/agents))
-- `SYMBIOTICA_SKILLS_DIR` — Path to skill directories (from [symbiotica-ai/skills](https://github.com/symbiotica-ai/skills))
-
-**Or via config.ini** in the repo root:
 ```ini
+# config.ini in the package root
 [agents]
 agents_dir = /path/to/agents
 
@@ -71,35 +97,15 @@ agents_dir = /path/to/agents
 skills_dir = /path/to/skills
 ```
 
-### API keys
+Or environment variables `SYMBIOTICA_AGENTS_DIR` and `SYMBIOTICA_SKILLS_DIR`. The `agents_path` / `skills_path` widgets on the nodes also override at the node level.
 
-Set via environment variables:
-- `ANTHROPIC_API_KEY` — Claude
-- `GEMINI_API_KEY` — Gemini
-- `OPENAI_API_KEY` — GPT
-- `XAI_API_KEY` — Grok
+Agents repo: [symbiotica-ai/agents](https://github.com/symbiotica-ai/agents). Skills repo: [symbiotica-ai/skills](https://github.com/symbiotica-ai/skills).
 
-## Agent directory structure
+## Heads up
 
-```
-agents/
-├── SOUL.md            — Shared behavioral rules (all agents inherit)
-├── USER.md            — Shared user profile (all agents read)
-└── lens/
-    ├── CLAUDE.md      — Identity + operating instructions
-    ├── SOUL.md        — Agent-specific personality (layered on shared)
-    └── memory/        — Per-agent memory
-```
+- **`faster-whisper`** is in the deps. First run of `NS Whisper Transcribe` downloads model weights — can be a few GB depending on the model size you pick.
+- **Remotion-rendered nodes** (captions, overlays) need Node.js installed system-wide. The package ships a pre-built Remotion bundle so no `npm install` is needed at install time, but the renderer subprocess still requires `node` on `PATH`.
 
-## Skill directory structure
+## License
 
-Each skill is a directory with a SKILL.md:
-
-```
-analyze-link/
-└── SKILL.md       — What the skill does, process, rules
-```
-
-## Supported Models
-
-Claude, Gemini, GPT, and Grok. The agent node routes to the correct provider based on model name.
+MIT — see `LICENSE`.

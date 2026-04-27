@@ -1,14 +1,38 @@
 [project]
 name = "symbiotica"
-description = "Agent-based LLM nodes for ComfyUI. Run Claude, Gemini, GPT, and Grok agents inside your visual workflows, with skills, personalities, and image generation via Wavespeed."
-version = "1.0.1"
+description = "All-in-one creative pack for ComfyUI: agent-based LLMs (Claude, Gemini, GPT, Grok), Wavespeed image and video generation (Flux, Nano Banana, Qwen, Sora 2, Veo 3, Wan 2.5, SeedDream, InfiniteTalk), audio and transcription (Whisper, ElevenLabs, Submagic), Remotion-rendered overlays and captions, and video composition utilities."
+version = "2.0.0"
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
     { name = "Razvan Matei" },
 ]
-keywords = ["comfyui", "comfyui-nodes", "agents", "llm", "claude", "gemini", "gpt", "wavespeed"]
+keywords = [
+    "comfyui",
+    "comfyui-nodes",
+    "agents",
+    "llm",
+    "claude",
+    "gemini",
+    "gpt",
+    "grok",
+    "wavespeed",
+    "flux",
+    "nano-banana",
+    "qwen",
+    "sora",
+    "veo",
+    "wan",
+    "seedream",
+    "infinitetalk",
+    "whisper",
+    "elevenlabs",
+    "remotion",
+    "captions",
+    "video",
+    "audio",
+]
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -17,6 +41,7 @@ classifiers = [
 dependencies = [
     "requests>=2.31.0",
     "pillow>=10.0.0",
+    "faster-whisper",
 ]
 
 [project.urls]
