@@ -121,8 +121,14 @@ def call_claude_api(
         "model": model,
         "messages": [{"role": "user", "content": content}],
         "max_tokens": max_tokens,
-        "temperature": temperature,
     }
+
+    # Adaptive thinking is always-on for current-gen Claude models (Opus 4.7,
+    # Sonnet 4.6, Haiku 4.5), and the API rejects `temperature` for any model
+    # in this state with "`temperature` is deprecated for this model." We do
+    # not send temperature for Claude at all — the model handles sampling
+    # internally. The temperature slider in the node remains effective for
+    # Gemini / OpenAI / Grok via their own callers.
 
     # Add system prompt if provided
     if system_prompt and system_prompt.strip():
