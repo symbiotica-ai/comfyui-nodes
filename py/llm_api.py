@@ -16,7 +16,6 @@ from torch import Tensor
 
 claude_models = [
     "claude-opus-4-7",
-    "claude-opus-4-6",
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
 ]
@@ -24,22 +23,19 @@ claude_models = [
 gemini_models = [
     "gemini-3.1-pro-preview",
     "gemini-3-flash-preview",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite",
 ]
 
 openai_models = [
-    "gpt-5.3-codex",
-    "gpt-5.2",
-    "gpt-5.2-pro",
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-5.4-mini",
 ]
 
 grok_models = [
-    "grok-4",
-    "grok-4-1-fast-reasoning",
-    "grok-4-fast-reasoning",
-    "grok-4-1-fast-non-reasoning",
-    "grok-4-fast-non-reasoning",
+    "grok-4.3",
+    "grok-4.20-0309-reasoning",
+    "grok-4.20-0309-non-reasoning",
 ]
 
 all_models = claude_models + gemini_models + openai_models + grok_models

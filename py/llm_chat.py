@@ -9,37 +9,28 @@ import requests
 from PIL import Image
 from torch import Tensor
 
-# Latest Claude models (as of 2026)
-# Note: All these models support "Extended thinking" capability for deep reasoning
 claude_models = [
-    "claude-opus-4-6",  # Latest premium model with enhanced intelligence and performance (Feb 5, 2026)
-    "claude-sonnet-4-6",  # Most capable Sonnet yet, preferred over Opus 4.5 (Feb 17, 2026)
-    "claude-haiku-4-5",  # Hybrid model, capable of near-instant responses and extended thinking
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
 ]
 
-# Google Gemini models (as of 2026)
 gemini_models = [
-    "gemini-3.1-pro-preview",  # Latest, most intelligent for complex reasoning and analysis (1M context)
-    "gemini-3-flash-preview",  # Balanced for speed, scale, and frontier intelligence (1M context)
-    "gemini-2.5-pro",  # Stable production model, strong reasoning (1M context)
-    "gemini-2.5-flash",  # Stable production model, fast and efficient (1M context)
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite",
 ]
 
-# OpenAI GPT models (as of 2025)
-# GPT-5 Series only - Latest generation
 openai_models = [
-    "gpt-5.3-codex",  # Latest agentic coding model, 25% faster, helped build itself
-    "gpt-5.2",  # The best model for coding and agentic tasks across industries
-    "gpt-5.2-pro",  # Version of GPT-5.2 that produces smarter and more precise responses
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-5.4-mini",
 ]
 
-# xAI Grok models (as of 2026)
 grok_models = [
-    "grok-4",  # Flagship model with 256k context window, advanced reasoning
-    "grok-4-1-fast-reasoning",  # Fast reasoning variant with 2M context window
-    "grok-4-fast-reasoning",  # Cost-efficient reasoning model with 2M context
-    "grok-4-1-fast-non-reasoning",  # Fast non-reasoning variant with 2M context
-    "grok-4-fast-non-reasoning",  # Cost-efficient non-reasoning model with 2M context
+    "grok-4.3",
+    "grok-4.20-0309-reasoning",
+    "grok-4.20-0309-non-reasoning",
 ]
 
 # All available models
@@ -354,6 +345,90 @@ def call_grok_api(
     raise Exception("No valid response received from Grok API")
 
 
+def call_openai_api(
+    api_key: str,
+    model: str,
+    prompt: str,
+    system_prompt: str,
+    image: Optional[Tensor],
+    max_tokens: int,
+    temperature: float,
+    seed: int = -1,
+    timeout: int = 500,
+):
+    """Call OpenAI Chat Completions API with text and optional images (batch supported).
+
+    Supports seed parameter for reproducible outputs when seed != -1.
+    """
+
+    content = []
+
+    if image is not None:
+        images = [image] if len(image.shape) == 3 else [image[i] for i in range(image.shape[0])]
+        for idx, img in enumerate(images):
+            pil_image = tensor2pil(img)
+            image_base64 = pil2base64(pil_image)
+            if len(images) > 1:
+                content.append({"type": "text", "text": f"Image {idx + 1}:"})
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+            })
+
+    content.append({"type": "text", "text": prompt})
+
+    messages = []
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt})
+
+    if image is not None:
+        messages.append({"role": "user", "content": content})
+    else:
+        messages.append({"role": "user", "content": prompt})
+
+    data = {
+        "messages": messages,
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+
+    if seed != -1:
+        data["seed"] = seed
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    response = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        json=data,
+        headers=headers,
+        timeout=timeout,
+    )
+
+    if response.status_code != 200:
+        error_msg = f"OpenAI API request failed with status {response.status_code}"
+        try:
+            error_data = response.json()
+            if error_data.get("error"):
+                error_msg = error_data["error"].get("message", error_msg)
+        except Exception:
+            error_msg = f"{error_msg}: {response.text}"
+        raise Exception(error_msg)
+
+    response_data = response.json()
+
+    if response_data.get("error"):
+        raise Exception(response_data.get("error").get("message", "Unknown error"))
+
+    if "choices" in response_data and len(response_data["choices"]) > 0:
+        return response_data["choices"][0]["message"]["content"]
+
+    raise Exception("No valid response received from OpenAI API")
+
+
 # ComfyUI Node Class
 class NSLLMChat:
     @classmethod
@@ -361,7 +436,7 @@ class NSLLMChat:
         return {
             "required": {
                 "api_key": ("STRING", {"multiline": False}),
-                "model": (all_models, {"default": "claude-sonnet-4-6"}),
+                "model": (all_models, {"default": "claude-opus-4-7"}),
                 "prompt": ("STRING", {"multiline": True}),
                 "max_tokens": ("INT", {"default": 4096, "min": 1, "max": 200000}),
                 "temperature": (
@@ -375,7 +450,7 @@ class NSLLMChat:
                         "min": -1,
                         "max": 0xFFFFFFFFFFFFFFFF,
                         "control_after_generate": False,
-                        "tooltip": "Random seed for reproducible results. -1 for random seed. Note: Works with Gemini and Grok models. Claude doesn't support seeds.",
+                        "tooltip": "Random seed for reproducible results. -1 for random seed. Note: Works with Gemini, Grok, and OpenAI models. Claude doesn't support seeds.",
                     },
                 ),
                 "timeout": (
@@ -427,6 +502,8 @@ class NSLLMChat:
                 api_key = os.environ.get("XAI_API_KEY") or os.environ.get(
                     "GROK_API_KEY"
                 )
+            elif model in openai_models:
+                api_key = os.environ.get("OPENAI_API_KEY")
             else:
                 api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get(
                     "CLAUDE_API_KEY"
@@ -440,6 +517,10 @@ class NSLLMChat:
             elif model in grok_models:
                 raise Exception(
                     "xAI API key is required. Provide it in the node or set XAI_API_KEY environment variable."
+                )
+            elif model in openai_models:
+                raise Exception(
+                    "OpenAI API key is required. Provide it in the node or set OPENAI_API_KEY environment variable."
                 )
             else:
                 raise Exception(
@@ -461,6 +542,18 @@ class NSLLMChat:
             )
         elif model in grok_models:
             response = call_grok_api(
+                api_key=api_key.strip(),
+                model=model,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                image=image,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                seed=seed,
+                timeout=timeout,
+            )
+        elif model in openai_models:
+            response = call_openai_api(
                 api_key=api_key.strip(),
                 model=model,
                 prompt=prompt,
