@@ -10,7 +10,7 @@ from PIL import Image
 from torch import Tensor
 
 claude_models = [
-    "claude-opus-4-7",
+    "claude-opus-4-8",
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
 ]
@@ -123,7 +123,7 @@ def call_claude_api(
         "max_tokens": max_tokens,
     }
 
-    # Adaptive thinking is always-on for current-gen Claude models (Opus 4.7,
+    # Adaptive thinking is always-on for current-gen Claude models (Opus 4.8,
     # Sonnet 4.6, Haiku 4.5), and the API rejects `temperature` for any model
     # in this state with "`temperature` is deprecated for this model." We do
     # not send temperature for Claude at all — the model handles sampling
@@ -442,7 +442,7 @@ class NSLLMChat:
         return {
             "required": {
                 "api_key": ("STRING", {"multiline": False}),
-                "model": (all_models, {"default": "claude-opus-4-7"}),
+                "model": (all_models, {"default": "claude-opus-4-8"}),
                 "prompt": ("STRING", {"multiline": True}),
                 "max_tokens": ("INT", {"default": 4096, "min": 1, "max": 200000}),
                 "temperature": (
