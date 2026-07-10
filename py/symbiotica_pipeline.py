@@ -12,3 +12,8 @@ for _cls in PIPELINE_NODE_CLASSES:
     NODE_CLASS_MAPPINGS[_schema.node_id] = _cls
     if _schema.display_name:
         NODE_DISPLAY_NAME_MAPPINGS[_schema.node_id] = _schema.display_name
+
+try:
+    from .pipeline import routes as _routes  # noqa: F401  (registers aiohttp route)
+except Exception:
+    pass  # outside a running ComfyUI server (e.g. tests) the route is unavailable
