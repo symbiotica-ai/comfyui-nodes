@@ -139,9 +139,9 @@ def build_catalog_sheet(group: dict, assets_root: str):
 
 
 def _parse_color(color_str: str) -> tuple:
-    """Parse hex color string to RGB tuple."""
+    """Parse hex color string to RGB tuple. Returns (0, 0, 0) for empty or invalid."""
     if not color_str:
-        return (0, 0, 0, 0)
+        return (0, 0, 0)
     color_str = color_str.strip()
     if color_str.startswith("#"):
         color_str = color_str[1:]
