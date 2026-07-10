@@ -59,6 +59,19 @@ def test_centered_layout_without_settings():
     assert abs(mid0 - 0.5) < 0.01
 
 
+def test_packed_overflow_oversized_cell_stays_in_bounds():
+    # Cell (256 fallback) taller than the 200px sheet: region must clamp to y=0,
+    # never negative (normalized coords stay within 0-1).
+    settings = PackSettings(algorithm="shelf", preset=None, max_width=200,
+                            max_height=200, distribute_by_folder=False)
+    res = prefill_regions([asset("Big", ["Big.png"], canvas="-")], 200, 200,
+                          settings=settings)
+    for region in res["regions"]:
+        assert region["y"] >= 0
+        for m in region["members"]:
+            assert m["y"] >= 0
+
+
 def test_packed_layout_with_settings_and_overflow_stacks_below():
     settings = PackSettings(algorithm="shelf", preset=None, max_width=300,
                             max_height=140, distribute_by_folder=False)

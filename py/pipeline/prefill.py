@@ -102,7 +102,8 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
             if not row:
                 continue
             overflow.append(row["asset"]["assetName"])
-            y = min(y_px, sheet_h - row["cellH"])
+            # floor at 0 — oversized strips clamp to the top edge instead of going out of bounds
+            y = max(0, min(y_px, sheet_h - row["cellH"]))
             regions.append(_region_at(row, PAD_PX, y, sheet_w, sheet_h))
             y_px = y + row["cellH"] + PAD_PX
         regions.sort(key=lambda r: (r["y"], r["x"]))
