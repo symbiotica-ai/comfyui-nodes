@@ -1,7 +1,7 @@
 // ABOUTME: Frontend for the Symbiotica order pipeline nodes — dynamic event and
 // ABOUTME: group combos fed by server pushes, plus an events browser on Order Read.
-import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
+import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
 
 // node.id -> {events, refFileCount, refsRoot} (last parse per Order Read node)
 const orderCache = new Map();
@@ -85,7 +85,7 @@ function thumbUrl(refsRoot, file) {
 }
 
 function renderBrowser(container, data) {
-    container.innerHTML = "";
+    container.replaceChildren();
     if (!data) {
         container.textContent = "Queue once to parse the order.";
         container.style.opacity = "0.6";
@@ -93,7 +93,6 @@ function renderBrowser(container, data) {
     }
     container.style.opacity = "1";
     for (const ev of data.events) {
-        const named = ev.assets.filter((a) => a.assetName);
         const refCount = ev.assets.filter((a) => a.refFiles.length > 0).length;
         const unspecced = ev.assets.every((a) => !a.assetName);
 
@@ -103,11 +102,18 @@ function renderBrowser(container, data) {
             "font-size:11px;cursor:pointer;background:#2a2a2a;";
         const head = document.createElement("div");
         head.style.cssText = "display:flex;justify-content:space-between;gap:6px;";
-        head.innerHTML =
-            `<span><b>${ev.feature}</b> ${ev.eventName ?? ""}</span>` +
-            `<span style="opacity:.7">${unspecced
-                ? `${ev.assets.length} slots — unspecced`
-                : `${ev.assets.length} assets · ${refCount} refs`}</span>`;
+        const title = document.createElement("span");
+        const strong = document.createElement("b");
+        strong.textContent = ev.feature;
+        title.appendChild(strong);
+        title.appendChild(document.createTextNode(` ${ev.eventName ?? ""}`));
+        const count = document.createElement("span");
+        count.style.opacity = "0.7";
+        count.textContent = unspecced
+            ? `${ev.assets.length} slots — unspecced`
+            : `${ev.assets.length} assets · ${refCount} refs`;
+        head.appendChild(title);
+        head.appendChild(count);
         card.appendChild(head);
 
         const body = document.createElement("div");
