@@ -10,14 +10,15 @@ from PIL import Image
 from torch import Tensor
 
 claude_models = [
+    "claude-fable-5",
     "claude-opus-4-8",
-    "claude-sonnet-4-6",
+    "claude-sonnet-5",
     "claude-haiku-4-5",
 ]
 
 gemini_models = [
     "gemini-3.1-pro-preview",
-    "gemini-3-flash-preview",
+    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
 ]
 
@@ -28,9 +29,7 @@ openai_models = [
 ]
 
 grok_models = [
-    "grok-4.3",
-    "grok-4.20-0309-reasoning",
-    "grok-4.20-0309-non-reasoning",
+    "grok-4.5",
 ]
 
 # All available models

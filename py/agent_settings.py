@@ -119,7 +119,7 @@ class SymbioticaAgentSettings:
                     "tooltip": "Who the agent serves. Loaded from shared USER.md.",
                 }),
                 "model": (all_models, {
-                    "default": "claude-sonnet-4-6",
+                    "default": "claude-sonnet-5",
                     "tooltip": "LLM model for this agent.",
                 }),
                 "api_key": ("STRING", {
@@ -153,7 +153,7 @@ class SymbioticaAgentSettings:
         instructions: str,
         agents_path: str = "",
         user_context: str = "",
-        model: str = "claude-sonnet-4-6",
+        model: str = "claude-sonnet-5",
         api_key: str = "",
         skills: list = None,
     ):

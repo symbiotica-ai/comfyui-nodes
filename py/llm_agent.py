@@ -96,7 +96,7 @@ class SymbioticaAgent:
         if model_override and model_override.strip():
             model = model_override.strip()
         else:
-            model = agent_settings.get("model", "claude-sonnet-4-6")
+            model = agent_settings.get("model", "claude-sonnet-5")
 
         # Resolve API key: direct input > agent settings > env var (handled by call_llm)
         resolved_key = api_key

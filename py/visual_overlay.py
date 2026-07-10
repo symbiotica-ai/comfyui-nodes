@@ -388,7 +388,7 @@ class NSVisualOverlay:
             },
             "optional": {
                 "api_key": ("STRING", {"multiline": False, "default": ""}),
-                "model": (claude_models, {"default": "claude-sonnet-4-6"}),
+                "model": (claude_models, {"default": "claude-sonnet-5"}),
                 "density": (["Low", "Medium", "High"], {"default": "Medium"}),
                 "style": (ALL_STYLES, {"default": "Auto"}),
             }
@@ -801,7 +801,7 @@ class NSVisualOverlay:
                 except OSError:
                     pass
 
-    def execute(self, video, transcript, api_key="", model="claude-sonnet-4-6", density="Medium", style="Auto"):
+    def execute(self, video, transcript, api_key="", model="claude-sonnet-5", density="Medium", style="Auto"):
         from comfy_api.latest import InputImpl
 
         if isinstance(transcript, str):
