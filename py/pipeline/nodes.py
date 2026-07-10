@@ -1,0 +1,306 @@
+# ABOUTME: V3 ComfyUI nodes for the order pipeline — Order Read, Event Specs,
+# ABOUTME: Template Builder, Template Prompt. Thin wrappers over py/pipeline/*.
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+
+import numpy as np
+import torch
+from comfy_api.latest import io, ui
+
+import folder_paths
+
+from .compose import build_catalog_sheet, build_prefill_sheet, save_sheet
+from .order_loader import event_spec, load_order, order_overview, spec_wire_json
+from .order_sheet import slugify
+from .texture_pack import PackSettings
+
+OrderEvents = io.Custom("SYMBIOTICA_ORDER_EVENTS")
+EventSpec = io.Custom("SYMBIOTICA_EVENT_SPEC")
+Template = io.Custom("SYMBIOTICA_TEMPLATE")
+
+_RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
+_MODELS = ["nano-banana-pro", "nano-banana-2", "imagen-4", "custom"]
+_ASPECTS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5",
+            "21:9", "4:1", "1:4", "8:1", "1:8"]
+
+
+def _push(event: str, payload: dict) -> None:
+    """Fire-and-forget UI push; absent/failed server must never break execution."""
+    try:
+        from server import PromptServer
+        PromptServer.instance.send_sync(event, payload)
+    except Exception:
+        pass
+
+
+def _register_refs_root(path: str) -> None:
+    try:
+        from .routes import register_root
+        register_root(path)
+    except Exception:
+        pass
+
+
+def _pil_to_tensor(img) -> torch.Tensor:
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
+    return torch.from_numpy(arr)[None, ...]
+
+
+class SymbioticaOrderRead(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaOrderRead",
+            display_name="Symbiotica Order Read",
+            category="symbiotica/pipeline",
+            description="Parse a monthly order xlsx + reference-image folder "
+                        "into events. Wire an Event Specs node after this to "
+                        "pick an event to work on.",
+            inputs=[
+                io.String.Input("order_path", default="",
+                                tooltip="Absolute path to the order .xlsx"),
+                io.String.Input("refs_path", default="", optional=True,
+                                tooltip="Folder of client reference images"),
+            ],
+            outputs=[OrderEvents.Output(display_name="events")],
+            hidden=[io.Hidden.unique_id],
+            is_output_node=True,
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, order_path, refs_path=""):
+        h = hashlib.sha256(f"{order_path}|{refs_path}".encode())
+        try:
+            st = os.stat(order_path)
+            h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
+        except OSError:
+            pass
+        try:
+            if refs_path:
+                h.update("\n".join(sorted(os.listdir(refs_path))).encode())
+        except OSError:
+            pass
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, order_path, refs_path="") -> io.NodeOutput:
+        loaded = load_order(order_path.strip(), refs_path.strip())
+        payload = {
+            "events": loaded["events"],
+            "refFileCount": loaded["refFileCount"],
+            "refsRoot": refs_path.strip(),
+        }
+        if refs_path.strip():
+            _register_refs_root(refs_path.strip())
+        _push("symbiotica.order_events",
+              {"node_id": cls.hidden.unique_id, **payload})
+        summary = json.dumps(order_overview(loaded["events"]), indent=1)
+        return io.NodeOutput(payload, ui=ui.PreviewText(summary))
+
+
+class SymbioticaEventSpecs(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaEventSpecs",
+            display_name="Symbiotica Event Specs",
+            category="symbiotica/pipeline",
+            description="Pick one event from the parsed order and emit its "
+                        "spec — template groups with per-asset canvas, plot, "
+                        "client prompt, and reference files.",
+            inputs=[
+                OrderEvents.Input("events"),
+                io.String.Input("feature", default="",
+                                tooltip="Event to work on (the order's Feature "
+                                        "column, e.g. \"QE 2\")"),
+            ],
+            outputs=[EventSpec.Output(display_name="event spec")],
+            hidden=[io.Hidden.unique_id],
+        )
+
+    @classmethod
+    def execute(cls, events, feature) -> io.NodeOutput:
+        spec = event_spec(events["events"], feature.strip())
+        spec = {**spec, "refsRoot": events.get("refsRoot", "")}
+        _push("symbiotica.event_spec",
+              {"node_id": cls.hidden.unique_id, "feature": spec["feature"],
+               "templates": [{"template": g["template"], "category": g["category"],
+                              "canvas": g["canvas"], "assets": len(g["assets"])}
+                             for g in spec["templates"]]})
+        return io.NodeOutput(spec, ui=ui.PreviewText(spec_wire_json(spec)))
+
+
+class SymbioticaTemplateBuilder(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaTemplateBuilder",
+            display_name="Symbiotica Template Builder",
+            category="symbiotica/pipeline",
+            description="Compose a template sheet from an event spec: either "
+                        "prefill strips from the client's reference images, or "
+                        "a grid of existing catalog art for one template group.",
+            inputs=[
+                EventSpec.Input("spec"),
+                io.Combo.Input("mode", options=["prefill_from_specs", "catalog_grid"],
+                               default="prefill_from_specs"),
+                io.String.Input("group", default="", optional=True,
+                                tooltip="Template group slug (required for "
+                                        "catalog_grid; filters prefill when set)"),
+                io.String.Input("assets_root", default="", optional=True,
+                                tooltip="Game asset catalog folder "
+                                        "(catalog_grid mode)"),
+                io.String.Input("sheet_name", default="", optional=True,
+                                tooltip="Saved sheet name (defaults to the "
+                                        "group / feature slug)"),
+                io.Combo.Input("preset_model", options=_MODELS,
+                               default="nano-banana-pro"),
+                io.Combo.Input("resolution", options=_RESOLUTIONS, default="2K"),
+                io.Combo.Input("aspect_ratio", options=_ASPECTS, default="1:1"),
+                io.Int.Input("max_width", default=2048, min=64, max=8192,
+                             optional=True, advanced=True,
+                             tooltip="Sheet width when preset_model=custom"),
+                io.Int.Input("max_height", default=2048, min=64, max=8192,
+                             optional=True, advanced=True),
+                io.Combo.Input("algorithm", options=["shelf", "maxrects", "grid"],
+                               default="shelf"),
+                io.Boolean.Input("distribute_by_folder", default=True),
+                io.Int.Input("padding", default=0, min=0, max=512, optional=True,
+                             advanced=True),
+                io.Int.Input("border", default=0, min=0, max=512, optional=True,
+                             advanced=True),
+                io.Int.Input("grid_cell", default=0, min=0, max=4096, optional=True,
+                             advanced=True),
+                io.Int.Input("columns", default=0, min=0, max=64, optional=True,
+                             advanced=True),
+                io.String.Input("background", default="#808080", optional=True,
+                                tooltip="Hex fill; empty = transparent"),
+            ],
+            outputs=[
+                Template.Output(display_name="template"),
+                io.Image.Output(display_name="sheet"),
+                io.String.Output(display_name="bundle_json"),
+            ],
+            hidden=[io.Hidden.unique_id],
+            is_output_node=True,
+        )
+
+    @classmethod
+    def execute(cls, spec, mode, group="", assets_root="", sheet_name="",
+                preset_model="nano-banana-pro", resolution="2K", aspect_ratio="1:1",
+                max_width=2048, max_height=2048, algorithm="shelf",
+                distribute_by_folder=True, padding=0, border=0, grid_cell=0,
+                columns=0, background="#808080") -> io.NodeOutput:
+        groups = spec["templates"]
+        group = group.strip()
+        preset = (None if preset_model == "custom"
+                  else {"model": preset_model, "tier": resolution, "ar": aspect_ratio})
+        settings = PackSettings(
+            algorithm=algorithm, preset=preset, max_width=max_width,
+            max_height=max_height, padding=padding, border=border,
+            grid_cell=grid_cell, distribute_by_folder=distribute_by_folder,
+            columns=columns, background=background.strip(),
+        )
+
+        if mode == "catalog_grid":
+            picked = next((g for g in groups if g["template"] == group), None)
+            if picked is None:
+                have = ", ".join(g["template"] for g in groups)
+                raise ValueError(
+                    f'group "{group}" is not in the event spec (have: {have})')
+            if not assets_root.strip():
+                raise ValueError("catalog_grid mode needs assets_root "
+                                 "(the game's existing asset folder)")
+            sheet, regions, sheet_w, sheet_h = build_catalog_sheet(
+                picked, assets_root.strip())
+            template_name = picked["template"]
+            assets = picked["assets"]
+        else:
+            if group:
+                groups = [g for g in groups if g["template"] == group]
+                if not groups:
+                    raise ValueError(f'group "{group}" is not in the event spec')
+            assets = [a for g in groups for a in g["assets"] if a["refFiles"]]
+            if not assets:
+                raise ValueError(
+                    "no assets with reference files to prefill — check the "
+                    "Order Read refs_path")
+            from .texture_pack import effective_max
+            dims = effective_max(settings)
+            sheet_w, sheet_h = dims["w"], dims["h"]
+            sheet, regions, overflow = build_prefill_sheet(
+                assets, spec.get("refsRoot", ""), sheet_w, sheet_h, settings)
+            if overflow:
+                print(f"[Symbiotica] template overflow (stacked below): {overflow}")
+            template_name = group or f"{slugify(spec['feature'])}-specs"
+
+        name = sheet_name.strip() or template_name
+        rel = save_sheet(sheet, regions, name, folder_paths.get_output_directory(),
+                         meta={"template": template_name})
+
+        refs_root = (spec.get("refsRoot", "") or "").rstrip("/")
+        ref_paths = (
+            {a["assetName"]: [f"{refs_root}/{f}" for f in a["refFiles"]]
+             for a in assets}
+            if refs_root else {}
+        )
+        bundle = {
+            "kind": "template",
+            "template": template_name,
+            "sheetFile": rel,
+            "templateSize": {"w": sheet.width, "h": sheet.height},
+            "regions": regions,
+            "refPaths": ref_paths,
+        }
+        tensor = _pil_to_tensor(sheet)
+        return io.NodeOutput(bundle, tensor, json.dumps(bundle, indent=1),
+                             ui=ui.PreviewImage(tensor, cls=cls))
+
+
+class SymbioticaTemplatePrompt(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaTemplatePrompt",
+            display_name="Symbiotica Template Prompt",
+            category="symbiotica/pipeline",
+            description="Turn a template bundle into an edit prompt for the "
+                        "image nodes: one numbered instruction per region, "
+                        "using each asset's client prompt.",
+            inputs=[
+                Template.Input("template"),
+                io.String.Input("scene", default="", multiline=True, optional=True,
+                                tooltip="Overall scene/style instruction "
+                                        "prepended to the region list"),
+            ],
+            outputs=[io.String.Output(display_name="prompt")],
+        )
+
+    @classmethod
+    def execute(cls, template, scene="") -> io.NodeOutput:
+        lines = []
+        if scene.strip():
+            lines.append(scene.strip())
+        lines.append(
+            "The image is a sprite template sheet. Replace the content of each "
+            "listed region with a new game asset, keeping position and size; "
+            "keep everything outside the regions unchanged.")
+        for region in sorted(template["regions"], key=lambda r: r.get("zIndex", 0)):
+            name = region.get("name") or region["id"]
+            desc = (region.get("desc") or "").strip()
+            asset_type = region.get("assetType") or ""
+            suffix = f" ({asset_type})" if asset_type else ""
+            lines.append(f"{region.get('zIndex', 0) + 1}. \"{name}\"{suffix}: "
+                         f"{desc or 'match the sheet style'}")
+        return io.NodeOutput("\n".join(lines))
+
+
+PIPELINE_NODE_CLASSES = [
+    SymbioticaOrderRead,
+    SymbioticaEventSpecs,
+    SymbioticaTemplateBuilder,
+    SymbioticaTemplatePrompt,
+]
