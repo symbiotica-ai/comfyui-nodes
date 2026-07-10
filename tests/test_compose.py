@@ -93,9 +93,41 @@ def test_build_prefill_sheet_draws_refs(tmp_path):
     m = region["members"][0]
     cx = int((m["x"] + m["w"] / 2) * 512)
     cy = int((m["y"] + m["h"] / 2) * 512)
-    assert img.getpixel((cx, cy)) == (0, 255, 0)
-    # Outside any region: background gray.
-    assert img.getpixel((5, 5)) == (128, 128, 128)
+    assert img.getpixel((cx, cy))[:3] == (0, 255, 0)
+    # Outside any region: background gray. (The packed strip sits at the top
+    # of the sheet and the upscaled ref fills its cell, so sample well below.)
+    assert img.getpixel((5, 500))[:3] == (128, 128, 128)
+
+
+def test_build_prefill_sheet_upscales_ref_to_fill_cell(tmp_path):
+    # Hub parity: a 64px ref in a 128px cell is drawn at cell size (upscaled),
+    # so the ref's color reaches the cell's corners, not just its center.
+    refs = tmp_path / "refs"
+    make_png(str(refs / "Cart.png"), (64, 64), (0, 255, 0))
+    assets = [{"assetName": "Cart", "category": "Decoration", "canvas": "128x128",
+               "prompt": "p", "refFiles": ["Cart.png"]}]
+    settings = PackSettings(preset=None, max_width=512, max_height=512,
+                            background="#808080")
+    img, regions, overflow = build_prefill_sheet(assets, str(refs), 512, 512, settings)
+    assert overflow == []
+    m = regions[0]["members"][0]
+    # ~4px in from the member cell's top-left corner: green only if upscaled to fill.
+    px = int(m["x"] * 512) + 4
+    py = int(m["y"] * 512) + 4
+    assert img.getpixel((px, py))[:3] == (0, 255, 0)
+
+
+def test_build_prefill_sheet_empty_background_transparent_rgba(tmp_path):
+    refs = tmp_path / "refs"
+    make_png(str(refs / "Cart.png"), (64, 64), (0, 255, 0))
+    assets = [{"assetName": "Cart", "category": "Decoration", "canvas": "128x128",
+               "prompt": "p", "refFiles": ["Cart.png"]}]
+    settings = PackSettings(preset=None, max_width=512, max_height=512,
+                            background="")
+    img, regions, overflow = build_prefill_sheet(assets, str(refs), 512, 512, settings)
+    assert img.mode == "RGBA"
+    # Outside all regions (below the packed strip): fully transparent.
+    assert img.getpixel((5, 500))[3] == 0
 
 
 def test_save_sheet_writes_png_and_sidecar(tmp_path):

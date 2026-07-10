@@ -138,34 +138,17 @@ def build_catalog_sheet(group: dict, assets_root: str):
     return sheet, regions, sheet_w, sheet_h
 
 
-def _parse_color(color_str: str) -> tuple:
-    """Parse hex color string to RGB tuple. Returns (0, 0, 0) for empty or invalid."""
-    if not color_str:
-        return (0, 0, 0)
-    color_str = color_str.strip()
-    if color_str.startswith("#"):
-        color_str = color_str[1:]
-    if len(color_str) == 6:
-        try:
-            r = int(color_str[0:2], 16)
-            g = int(color_str[2:4], 16)
-            b = int(color_str[4:6], 16)
-            return (r, g, b)
-        except ValueError:
-            pass
-    return (0, 0, 0)
-
-
 def _paint_background(sheet_w: int, sheet_h: int, background: str) -> Image.Image:
-    color = _parse_color(background) if background else (0, 0, 0)
-    # Create as RGBA for compositing, will convert to RGB at the end
-    rgba_color = color + (255,) if len(color) == 3 else color
-    return Image.new("RGBA", (sheet_w, sheet_h), rgba_color)
+    # Pillow parses "#RRGGBB" natively; "" means transparent.
+    if background:
+        return Image.new("RGBA", (sheet_w, sheet_h), background)
+    return Image.new("RGBA", (sheet_w, sheet_h), (0, 0, 0, 0))
 
 
 def _contain_fit(img: Image.Image, w: int, h: int) -> tuple[Image.Image, int, int]:
-    """Contain-fit: scale image to fit in cell without exceeding it, don't scale up."""
-    scale = min(1.0, w / img.width, h / img.height)
+    """Contain-fit: scale (up or down) to fill the cell while preserving aspect,
+    matching the hub's drawImage-at-cell-size behavior."""
+    scale = min(w / img.width, h / img.height)
     fw, fh = max(1, round(img.width * scale)), max(1, round(img.height * scale))
     return img.resize((fw, fh), Image.LANCZOS), (w - fw) // 2, (h - fh) // 2
 
@@ -216,8 +199,7 @@ def build_prefill_sheet(assets: list[dict], refs_root: str, sheet_w: int,
                     continue  # Completely out of bounds
 
             sheet.alpha_composite(fitted, (paste_x, paste_y))
-    # Convert to RGB for the final result (alpha handling done during compositing)
-    return sheet.convert("RGB"), result["regions"], result["overflow"]
+    return sheet, result["regions"], result["overflow"]
 
 
 def save_sheet(img: Image.Image, regions: list[dict], name: str, out_root: str,
