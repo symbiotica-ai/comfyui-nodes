@@ -1,23 +1,24 @@
+import os
+import sys
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
+
+# pytest 9 imports its bundled `py` shim module at startup (_pytest/compat.py),
+# so by conftest time the top-level name `py` is already a plain module and our
+# local py/ package can never win the import. Point the shim's __path__ at py/
+# so `import py.pipeline.*` resolves locally (py.path/py.error keep working).
+import py
+
+if not hasattr(py, "__path__"):
+    py.__path__ = [os.path.join(_REPO_ROOT, "py")]
+
 # ABOUTME: Shared test fixtures — builds minimal xlsx byte blobs in memory
 # ABOUTME: (sheet XML + optional sharedStrings) for the order-sheet parser tests.
 import io
-import os
-import sys
 import zipfile
 
 import pytest
-
-# Add repo root to sys.path early so imports work
-_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _repo_root not in sys.path:
-    sys.path.insert(0, _repo_root)
-
-
-def pytest_configure(config):
-    """Ensure repo root is on sys.path after pytest has loaded its own modules."""
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
 
 
 def make_xlsx(sheet_xml: str, shared_strings_xml: str | None = None) -> bytes:
