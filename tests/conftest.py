@@ -1,17 +1,8 @@
 import os
 import sys
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _REPO_ROOT)
-
-# pytest 9 imports its bundled `py` shim module at startup (_pytest/compat.py),
-# so by conftest time the top-level name `py` is already a plain module and our
-# local py/ package can never win the import. Point the shim's __path__ at py/
-# so `import py.pipeline.*` resolves locally (py.path/py.error keep working).
-import py
-
-if not hasattr(py, "__path__"):
-    py.__path__ = [os.path.join(_REPO_ROOT, "py")]
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py"))
 
 # ABOUTME: Shared test fixtures — builds minimal xlsx byte blobs in memory
 # ABOUTME: (sheet XML + optional sharedStrings) for the order-sheet parser tests.

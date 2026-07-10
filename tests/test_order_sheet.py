@@ -2,7 +2,7 @@
 # ABOUTME: order-sheet.test.ts so both parsers keep identical behavior.
 from conftest import inline_cell, make_xlsx, sheet_of_rows
 
-from py.pipeline.order_sheet import parse_xlsx_grid
+from pipeline.order_sheet import parse_xlsx_grid
 
 
 def test_reads_inline_string_cells_into_grid():
