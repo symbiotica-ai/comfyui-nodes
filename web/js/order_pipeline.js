@@ -378,7 +378,18 @@ async function openEditorForNode(node, uiState) {
         saveTemplate: async (name) => {
             const state = handle.state;
             const finalName = (name || state.loadedName || "template").trim();
-            const png = await handle.exportSheet();
+            // The saved sheet is ALWAYS the base sheet (assigned project art,
+            // refs where unassigned) regardless of the preview toggle — the
+            // task sheet is composed server-side from the regions at queue time.
+            const prevMode = state.refMode;
+            state.refMode = "project";
+            let png;
+            try {
+                png = await handle.exportSheet();
+            } finally {
+                state.refMode = prevMode;
+                state.emit("regions"); // restore the on-screen preview
+            }
             const resp = await api.fetchApi("/symbiotica/template-save", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
