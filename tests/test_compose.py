@@ -207,3 +207,36 @@ def test_build_paired_sheets_missing_assignment_file_is_background(tmp_path):
     cx = int((m["x"] + m["w"] / 2) * 512)
     cy = int((m["y"] + m["h"] / 2) * 512)
     assert base.getpixel((cx, cy))[:3] == (128, 128, 128)
+
+
+def test_draw_task_refs_honors_selection_and_pair_flip(tmp_path):
+    from pipeline.compose import _draw_task_refs, _paint_background
+
+    refs = tmp_path / "refs"
+    # Asymmetric ref: left half green, right half red.
+    img = Image.new("RGB", (64, 64), (0, 255, 0))
+    for x in range(32, 64):
+        for y in range(64):
+            img.putpixel((x, y), (255, 0, 0))
+    os.makedirs(refs, exist_ok=True)
+    img.save(refs / "Cart_1.png")
+    make_png(str(refs / "Cart.png"), (64, 64), (0, 0, 255))
+
+    # Two-cell region born with two refs, user checked only Cart_1.png.
+    regions = [{
+        "id": "region:spec:Cart", "name": "Cart",
+        "x": 0, "y": 0, "w": 0.5, "h": 0.25,
+        "taskRefs": {"paths": ["Decoration/Cart/Cart_1.png"], "mode": "meta"},
+        "members": [
+            {"spriteId": "Decoration/Cart/Cart.png", "x": 0.0, "y": 0.0,
+             "w": 0.125, "h": 0.125},
+            {"spriteId": "Decoration/Cart/Cart_1.png", "x": 0.25, "y": 0.0,
+             "w": 0.125, "h": 0.125},
+        ],
+    }]
+    sheet = _paint_background(512, 512, "#808080")
+    _draw_task_refs(sheet, regions, str(refs), 512, 512)
+    # Cell 1 draws Cart_1 (not the blue Cart.png): left quarter green.
+    assert sheet.getpixel((16, 32))[:3] == (0, 255, 0)
+    # Cell 2 draws the SAME image mirrored: left quarter now red.
+    assert sheet.getpixel((128 + 16, 32))[:3] == (255, 0, 0)

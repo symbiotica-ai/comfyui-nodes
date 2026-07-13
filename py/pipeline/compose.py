@@ -163,10 +163,11 @@ def _load_rgba(path: str) -> Image.Image | None:
 
 
 def _composite_member(sheet: Image.Image, img: Image.Image, member: dict,
-                      sheet_w: int, sheet_h: int) -> None:
+                      sheet_w: int, sheet_h: int, flip: bool | None = None) -> None:
     """Draw one image into a member cell: flipX mirror, contain-fit, and clip
-    to sheet bounds (oversized overflow strips can extend past the sheet)."""
-    if member.get("flipX"):
+    to sheet bounds (oversized overflow strips can extend past the sheet).
+    `flip` overrides the member's own flipX when given (dynamic pair rule)."""
+    if member.get("flipX") if flip is None else flip:
         img = img.transpose(Image.FLIP_LEFT_RIGHT)
     cw = max(1, round(member["w"] * sheet_w))
     ch = max(1, round(member["h"] * sheet_h))
@@ -190,15 +191,32 @@ def _composite_member(sheet: Image.Image, img: Image.Image, member: dict,
 
 def _draw_task_refs(sheet: Image.Image, regions: list[dict], refs_root: str,
                     sheet_w: int, sheet_h: int) -> None:
+    """Draw each region's task references, honoring the editor's selection:
+    checked taskRefs paths override the prefill spriteIds, and one effective
+    image in a two-cell region mirrors the second cell (the pair convention —
+    same rules as the editor canvas, so the queued sheet matches the edit)."""
     for region in regions:
-        for member in region.get("members", []):
-            # spriteId is "Category/AssetName/file.png"; the actual ref file
-            # lives flat in refs_root under its basename.
-            filename = member["spriteId"].split("/")[-1]
+        members = region.get("members", [])
+        paths = (region.get("taskRefs") or {}).get("paths") or []
+        for i, member in enumerate(members):
+            flip = None  # member's own flipX
+            if paths:
+                if len(paths) == 1:
+                    filename = paths[0].split("/")[-1]
+                    flip = len(members) == 2 and i == 1
+                else:
+                    filename = paths[min(i, len(paths) - 1)].split("/")[-1]
+            else:
+                sprite = member.get("spriteId")
+                if not sprite:
+                    continue
+                # spriteId is "Category/AssetName/file.png"; the ref file lives
+                # flat in refs_root under its basename.
+                filename = sprite.split("/")[-1]
             img = _load_rgba(os.path.join(refs_root, filename))
             if img is None:
                 continue  # missing ref: cell stays background for the img2img pass
-            _composite_member(sheet, img, member, sheet_w, sheet_h)
+            _composite_member(sheet, img, member, sheet_w, sheet_h, flip)
 
 
 def build_prefill_sheet(assets: list[dict], refs_root: str, sheet_w: int,
