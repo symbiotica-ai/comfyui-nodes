@@ -65,6 +65,27 @@ Wrappers around Wavespeed's hosted endpoints.
 - `NS Qwen Resolution` — common Qwen-friendly resolutions
 - `Symbiotica Seed` — reproducible seeds with optional auto-increment
 
+## Order pipeline (Symbiotica Hub port)
+
+Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
+
+- **Symbiotica Order Read** — parses a monthly order `.xlsx` (Feature / Asset
+  Name / Canvas / Prompt columns) plus a folder of reference images
+  (`AssetName.png`, `AssetName_2.png`, ...) into events.
+- **Symbiotica Event Specs** — picks one event (feature) and emits its spec:
+  template groups by category + canvas with per-asset prompts and refs.
+- **Symbiotica Template Builder** — composes a template sheet: either
+  `prefill_from_specs` (reference strips packed onto the sheet — single-ref
+  assets get a flipped pair, multi-ref assets one cell per stage) or
+  `catalog_grid` (existing game art matched by category). Sheets save to
+  `output/templates/<name>.png` with a JSON region sidecar, and the bundle
+  output feeds the Template Prompt node.
+- **Symbiotica Template Prompt** — turns the bundle's regions into an edit
+  prompt for the Nano Banana edit nodes.
+
+The web extension adds an events browser on Order Read and populates the
+feature/group dropdowns after the first queue.
+
 ## Configuration
 
 ### API keys
