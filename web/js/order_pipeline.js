@@ -264,21 +264,58 @@ function parseJsonWidget(node, name, fallback) {
     }
 }
 
-function taskAssetsFor(node) {
-    const ev = pickedEventFor(node);
-    if (!ev) return [];
-    return ev.assets.filter((a) => a.assetName).map((a) => ({
+function upstreamOrderRead(node) {
+    // Editor -> (spec) EventSpecs -> (events) OrderRead, by widgets not cache.
+    let cur = node;
+    for (let hop = 0; hop < 3 && cur; hop++) {
+        if (cur.comfyClass === "SymbioticaOrderRead") return cur;
+        cur = upstreamNode(cur, SPEC_INPUT_NODES.has(cur.comfyClass) ? "spec" : "events");
+    }
+    return null;
+}
+
+async function taskDataFor(node) {
+    // Parse the order server-side from the upstream nodes' widget values, so
+    // the editor works without queueing first. Falls back to the push cache.
+    const orderNode = upstreamOrderRead(node);
+    const orderPath = orderNode && widgetOf(orderNode, "order_path")?.value?.trim();
+    const refsRoot = (orderNode && widgetOf(orderNode, "refs_path")?.value?.trim()) ?? "";
+    let events = null;
+    if (orderPath) {
+        try {
+            events = (await fetchJson(
+                `/symbiotica/parse-order?order_path=${encodeURIComponent(orderPath)}` +
+                `&refs_path=${encodeURIComponent(refsRoot)}`)).events;
+        } catch (e) {
+            console.warn("[symbiotica] parse-order failed:", e.message);
+        }
+    }
+    if (!events) {
+        const cached = orderDataFor(node);
+        events = cached?.events ?? [];
+    }
+    const specs = upstreamNode(node, "spec");
+    const feature = specs?.widgets?.find((w) => w.name === "feature")?.value;
+    const ev = events.find((e) => e.feature === feature);
+    const taskAssets = (ev?.assets ?? []).filter((a) => a.assetName).map((a) => ({
         assetName: a.assetName,
         category: a.category,
         canvas: a.canvas,
         prompt: a.prompt,
         refFiles: a.refFiles ?? [],
     }));
+    return { taskAssets, refsRoot };
 }
 
-function openEditorForNode(node, uiState) {
+async function openEditorForNode(node, uiState) {
     const root = widgetOf(node, "assets_root")?.value?.trim() ?? "";
-    const refsRoot = orderDataFor(node)?.refsRoot ?? "";
+    const { taskAssets, refsRoot } = await taskDataFor(node);
+    if (root && !uiState.images.length) {
+        try {
+            uiState.images = (await fetchJson(
+                `/symbiotica/list-assets?dir=${encodeURIComponent(root)}`)).images;
+        } catch { /* tree shows the set-folder hint */ }
+    }
     let handle = null;
 
     const opts = {
@@ -288,7 +325,7 @@ function openEditorForNode(node, uiState) {
             scenePrompt: widgetOf(node, "scene_prompt")?.value ?? "",
             root,
             images: uiState.images,
-            taskAssets: taskAssetsFor(node),
+            taskAssets,
             refsRoot,
             loadedName: (widgetOf(node, "sheet_file")?.value ?? "")
                 .split("/").pop()?.replace(/\.png$/, "") ?? "",

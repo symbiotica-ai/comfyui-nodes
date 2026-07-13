@@ -258,6 +258,25 @@ export function renderRail(state, host, opts) {
         return map;
     }
 
+    function buildTree(rels) {
+        // Trie of path segments: {folders: Map<name, node>, files: [rel]}
+        const rootNode = { folders: new Map(), files: [], count: 0 };
+        for (const rel of rels) {
+            const parts = rel.split("/");
+            let node = rootNode;
+            node.count++;
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!node.folders.has(parts[i])) {
+                    node.folders.set(parts[i], { folders: new Map(), files: [], count: 0 });
+                }
+                node = node.folders.get(parts[i]);
+                node.count++;
+            }
+            node.files.push(rel);
+        }
+        return rootNode;
+    }
+
     function renderTree() {
         treeTitle.textContent = `Project assets · ${state.images.length}`;
         treeBody.replaceChildren();
@@ -268,59 +287,68 @@ export function renderRail(state, host, opts) {
         }
         const assigned = assignmentsByRel();
         const sel = state.selectedRegion();
+        const px = THUMB_SIZES[local.thumb];
 
-        const byFolder = new Map();
-        for (const rel of state.images) {
-            const top = rel.includes("/") ? rel.split("/")[0] : "(root)";
-            if (!byFolder.has(top)) byFolder.set(top, []);
-            byFolder.get(top).push(rel);
+        function fileRow(rel, depth) {
+            const row = el("div",
+                `display:flex;align-items:center;gap:6px;padding:1px 0 1px ${12 * depth}px;`);
+            const check = el("input");
+            check.type = "checkbox";
+            check.checked = Boolean(sel && sel.projectPaths?.[0] === rel);
+            check.disabled = !sel;
+            check.addEventListener("change", () => {
+                if (!sel) return;
+                state.updateRegion(sel.id,
+                    { projectPaths: check.checked ? [rel] : [] });
+            });
+            row.appendChild(check);
+
+            const img = el("img",
+                `width:${px}px;height:${px}px;object-fit:contain;background:#111;` +
+                "border-radius:3px;flex:none;");
+            img.loading = "lazy";
+            img.src = opts.imageUrl(state.root, rel);
+            row.appendChild(img);
+
+            const label = el("span",
+                "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;");
+            let text = rel.split("/").pop();
+            const owner = assigned.get(rel);
+            if (owner) text += `  → ${owner.name || owner.id}`;
+            label.textContent = text;
+            label.title = rel;
+            row.appendChild(label);
+            return row;
         }
 
-        const px = THUMB_SIZES[local.thumb];
-        for (const [folder, rels] of byFolder) {
-            const open = local.expanded.has(folder);
-            const nAssigned = rels.filter((rel) => assigned.has(rel)).length;
-            const fh = el("div", "cursor:pointer;padding:2px 0;",
-                `${open ? "▾" : "▸"} ${folder}  ${nAssigned}/${rels.length}`);
-            fh.addEventListener("click", () => {
-                local.expanded[open ? "delete" : "add"](folder);
-                renderTree();
-            });
-            treeBody.appendChild(fh);
-            if (!open) continue;
+        function countAssigned(node) {
+            let n = node.files.filter((rel) => assigned.has(rel)).length;
+            for (const child of node.folders.values()) n += countAssigned(child);
+            return n;
+        }
 
-            for (const rel of rels) {
-                const row = el("div",
-                    "display:flex;align-items:center;gap:6px;padding:1px 0 1px 12px;");
-                const check = el("input");
-                check.type = "checkbox";
-                check.checked = Boolean(sel && sel.projectPaths?.[0] === rel);
-                check.disabled = !sel;
-                check.addEventListener("change", () => {
-                    if (!sel) return;
-                    state.updateRegion(sel.id,
-                        { projectPaths: check.checked ? [rel] : [] });
+        function renderNode(node, prefix, depth) {
+            for (const [name, child] of node.folders) {
+                const key = prefix ? `${prefix}/${name}` : name;
+                const open = local.expanded.has(key);
+                const fh = el("div",
+                    `cursor:pointer;padding:2px 0 2px ${12 * depth}px;white-space:nowrap;` +
+                    "overflow:hidden;text-overflow:ellipsis;");
+                fh.textContent =
+                    `${open ? "▾" : "▸"} 📁 ${name}  ${countAssigned(child)}/${child.count}`;
+                fh.title = key;
+                fh.addEventListener("click", () => {
+                    local.expanded[open ? "delete" : "add"](key);
+                    renderTree();
                 });
-                row.appendChild(check);
-
-                const img = el("img",
-                    `width:${px}px;height:${px}px;object-fit:contain;background:#111;` +
-                    "border-radius:3px;flex:none;");
-                img.loading = "lazy";
-                img.src = opts.imageUrl(state.root, rel);
-                row.appendChild(img);
-
-                const label = el("span",
-                    "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;");
-                let text = rel.split("/").pop();
-                const owner = assigned.get(rel);
-                if (owner) text += `  → ${owner.name || owner.id}`;
-                label.textContent = text;
-                label.title = rel;
-                row.appendChild(label);
-                treeBody.appendChild(row);
+                treeBody.appendChild(fh);
+                if (open) renderNode(child, key, depth + 1);
+            }
+            for (const rel of node.files) {
+                treeBody.appendChild(fileRow(rel, depth));
             }
         }
+        renderNode(buildTree(state.images), "", 0);
     }
     renderTree();
     state.on("selection", renderTree);

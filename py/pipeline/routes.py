@@ -136,6 +136,25 @@ async def browse_dirs(request):
     return web.json_response(info)
 
 
+@PromptServer.instance.routes.get("/symbiotica/parse-order")
+async def parse_order(request):
+    """On-demand order parse for the template editor — same loader the Order
+    Read node uses, so task assets are available without queueing first."""
+    from .order_loader import load_order
+
+    order_path = request.query.get("order_path", "").strip()
+    refs_path = request.query.get("refs_path", "").strip()
+    if not order_path:
+        return web.json_response({"error": "order_path required"}, status=400)
+    try:
+        loaded = load_order(order_path, refs_path)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    if refs_path:
+        register_root(refs_path)
+    return web.json_response(loaded)
+
+
 @PromptServer.instance.routes.get("/symbiotica/list-assets")
 async def list_assets(request):
     """Recursive image listing of a user-picked project folder. Picking the

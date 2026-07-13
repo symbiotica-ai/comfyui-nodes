@@ -87,3 +87,11 @@ def test_list_templates_missing_dir(tmp_path, monkeypatch):
     routes = _load_routes(monkeypatch)
     assert routes.list_templates(str(tmp_path / "nope")) == []
     assert routes.list_templates(None) == []
+
+
+def test_parse_order_route_registered(monkeypatch):
+    # Route handlers exist and the module still imports with stubs; the parse
+    # logic itself is covered by test_order_loader.
+    import importlib
+    routes = importlib.import_module("pipeline.routes")
+    assert hasattr(routes, "parse_order")
