@@ -374,20 +374,57 @@ export function renderRail(state, host, opts) {
             return n;
         }
 
+        function filesUnder(node) {
+            const rels = node.files.map((e) => e.rel);
+            for (const child of node.folders.values()) rels.push(...filesUnder(child));
+            return rels;
+        }
+
         function renderNode(node, prefix, depth) {
             for (const [name, child] of node.folders) {
                 const key = prefix ? `${prefix}/${name}` : name;
                 const open = local.expanded.has(key);
                 const fh = el("div",
-                    `cursor:pointer;padding:2px 0 2px ${12 * depth}px;white-space:nowrap;` +
-                    "overflow:hidden;text-overflow:ellipsis;");
-                fh.textContent =
+                    `display:flex;align-items:center;gap:4px;padding:2px 0 2px ${12 * depth}px;` +
+                    "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;");
+
+                // Folder checkbox: one click assigns the whole folder's sprites
+                // to the selected region (tree order, capped at the cell count);
+                // uncheck removes them all.
+                const rels = filesUnder(child);
+                const inSel = (p) => Boolean(sel?.projectPaths?.includes(p));
+                const nChecked = rels.filter(inSel).length;
+                const check = el("input");
+                check.type = "checkbox";
+                check.checked = nChecked > 0 && nChecked === rels.length;
+                check.indeterminate = nChecked > 0 && nChecked < rels.length;
+                check.disabled = !sel;
+                check.addEventListener("click", (e) => e.stopPropagation());
+                check.addEventListener("change", () => {
+                    if (!sel) return;
+                    const cap = Math.max(1, sel.members?.length ?? 1);
+                    let paths = (sel.projectPaths ?? []).filter((p) => !rels.includes(p));
+                    if (check.checked) {
+                        for (const rel of rels) {
+                            if (paths.length >= cap) break;
+                            paths.push(rel);
+                        }
+                    }
+                    state.updateRegion(sel.id, { projectPaths: paths });
+                });
+                fh.appendChild(check);
+
+                const label = el("span",
+                    "flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;" +
+                    "white-space:nowrap;");
+                label.textContent =
                     `${open ? "▾" : "▸"} 📁 ${name}  ${countAssigned(child)}/${child.count}`;
-                fh.title = key;
-                fh.addEventListener("click", () => {
+                label.title = key;
+                label.addEventListener("click", () => {
                     local.expanded[open ? "delete" : "add"](key);
                     renderTree();
                 });
+                fh.appendChild(label);
                 treeBody.appendChild(fh);
                 if (open) renderNode(child, key, depth + 1);
             }
