@@ -84,7 +84,9 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   prompt for the Nano Banana edit nodes.
 
 The web extension adds an events browser on Order Read and populates the
-feature/group dropdowns after the first queue.
+feature/group dropdowns after the first queue. On a fully cached run the
+browser panel is not re-pushed — change any input (or re-parse) to
+repopulate it after a page reload.
 
 ## Configuration
 

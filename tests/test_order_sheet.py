@@ -120,6 +120,16 @@ def test_empty_status_is_none():
     assert extract_order_rows(grid)[0]["status"] is None
 
 
+def test_nan_status_is_none():
+    grid = _grid(HEADER, _row("Crate", "", "Chest", status="nan"))
+    assert extract_order_rows(grid)[0]["status"] is None
+
+
+def test_inf_status_is_none():
+    grid = _grid(HEADER, _row("Crate", "", "Chest", status="inf"))
+    assert extract_order_rows(grid)[0]["status"] is None
+
+
 def test_compact_asset_name_removes_spaces_keeps_underscores():
     assert compact_asset_name("Bat Croissants") == "BatCroissants"
     assert compact_asset_name("Gargoyle_Handle x") == "Gargoyle_Handlex"

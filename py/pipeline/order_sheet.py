@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import math
 import re
 import zipfile
 
@@ -138,6 +139,8 @@ def _number(s: str):
         f = float(s)
     except ValueError:
         return None  # JS Number("junk") is NaN; NaN serializes to null anyway.
+    if not math.isfinite(f):
+        return None  # hub: Number("nan"/"inf") -> NaN/Infinity -> JSON null
     return int(f) if f == int(f) else f
 
 

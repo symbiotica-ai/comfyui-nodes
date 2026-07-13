@@ -13,6 +13,7 @@ from comfy_api.latest import io, ui
 import folder_paths
 
 from .compose import build_catalog_sheet, build_prefill_sheet, save_sheet
+from .model_presets import MODEL_PRESETS, preset_dims
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
 from .texture_pack import PackSettings
@@ -72,6 +73,8 @@ class SymbioticaOrderRead(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, order_path, refs_path=""):
+        order_path = order_path.strip()
+        refs_path = (refs_path or "").strip()
         h = hashlib.sha256(f"{order_path}|{refs_path}".encode())
         try:
             st = os.stat(order_path)
@@ -119,6 +122,7 @@ class SymbioticaEventSpecs(io.ComfyNode):
             ],
             outputs=[EventSpec.Output(display_name="event spec")],
             hidden=[io.Hidden.unique_id],
+            is_output_node=True,
         )
 
     @classmethod
@@ -198,6 +202,14 @@ class SymbioticaTemplateBuilder(io.ComfyNode):
         group = group.strip()
         preset = (None if preset_model == "custom"
                   else {"model": preset_model, "tier": resolution, "ar": aspect_ratio})
+        if preset is not None and preset_dims(preset) is None:
+            model = next((m for m in MODEL_PRESETS if m["id"] == preset_model), None)
+            raise ValueError(
+                f'{preset_model} does not support {resolution} @ {aspect_ratio} — '
+                f'valid tiers: {", ".join(model["tiers"])}; '
+                f'aspect ratios: {", ".join(model["aspectRatios"])}'
+                if model else f'unknown preset model "{preset_model}"'
+            )
         settings = PackSettings(
             algorithm=algorithm, preset=preset, max_width=max_width,
             max_height=max_height, padding=padding, border=border,

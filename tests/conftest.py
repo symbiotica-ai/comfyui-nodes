@@ -1,6 +1,8 @@
 import os
 import sys
 
+# Insert <repo>/py (not the repo root): pytest bundles a top-level `py` shim
+# module, so tests import the pipeline as `pipeline.*` to avoid shadowing it.
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py"))
 
