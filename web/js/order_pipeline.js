@@ -343,10 +343,15 @@ async function openEditorForNode(node, uiState) {
             const members = region.members ?? [];
             const i = Math.max(0, members.indexOf(member));
             const pairFlip = members.length === 2 && i === 1;
-            const projectRel = region.projectPaths?.[0];
+            const projectRels = region.projectPaths ?? [];
 
-            if (mode === "project" && projectRel && root) {
-                return { url: thumbUrl(root, projectRel), flip: pairFlip };
+            if (mode === "project" && projectRels.length && root) {
+                if (projectRels.length === 1) {
+                    return { url: thumbUrl(root, projectRels[0]), flip: pairFlip };
+                }
+                // One picked sprite per cell, in click order.
+                const rel = projectRels[Math.min(i, projectRels.length - 1)];
+                return { url: thumbUrl(root, rel), flip: Boolean(member.flipX) };
             }
             const paths = region.taskRefs?.paths;
             if (paths?.length && refsRoot) {
@@ -361,8 +366,10 @@ async function openEditorForNode(node, uiState) {
                 return { url: thumbUrl(refsRoot, member.spriteId.split("/").pop()),
                          flip: Boolean(member.flipX) };
             }
-            if (projectRel && root) {
-                return { url: thumbUrl(root, projectRel), flip: pairFlip };
+            if (projectRels.length && root) {
+                const rel = projectRels[Math.min(i, projectRels.length - 1)];
+                return { url: thumbUrl(root, rel),
+                         flip: projectRels.length === 1 ? pairFlip : Boolean(member.flipX) };
             }
             return null;
         },

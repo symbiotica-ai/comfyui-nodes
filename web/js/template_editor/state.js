@@ -72,6 +72,35 @@ export function createEditorState(init = {}) {
             Object.assign(r, patch);
             state.emit("regions");
         },
+        moveRegion(id, x, y) {
+            // Members hold absolute sheet coords — carry them with the region.
+            const r = state.regions.find((v) => v.id === id);
+            if (!r) return;
+            const dx = x - r.x, dy = y - r.y;
+            r.x = x;
+            r.y = y;
+            for (const m of r.members ?? []) {
+                m.x += dx;
+                m.y += dy;
+            }
+            state.emit("regions");
+        },
+        resizeRegion(id, rect) {
+            // Scale member cells proportionally within the region box.
+            const r = state.regions.find((v) => v.id === id);
+            if (!r) return;
+            const old = { x: r.x, y: r.y, w: r.w, h: r.h };
+            Object.assign(r, rect);
+            const sx = old.w ? rect.w / old.w : 1;
+            const sy = old.h ? rect.h / old.h : 1;
+            for (const m of r.members ?? []) {
+                m.x = rect.x + (m.x - old.x) * sx;
+                m.y = rect.y + (m.y - old.y) * sy;
+                m.w *= sx;
+                m.h *= sy;
+            }
+            state.emit("regions");
+        },
         addRegion(rect) {
             const region = {
                 id: `region:${Date.now().toString(36)}-${regionSeq++}`,

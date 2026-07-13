@@ -410,7 +410,7 @@ export function createCanvasPanel(state, host, opts) {
                 if (bx) { nx += bx.delta; drag.guides.xs.push(bx.guide); }
                 if (by) { ny += by.delta; drag.guides.ys.push(by.guide); }
             }
-            state.updateRegion(drag.id, { x: nx / state.sheetW, y: ny / state.sheetH });
+            state.moveRegion(drag.id, nx / state.sheetW, ny / state.sheetH);
             return;
         }
 
@@ -435,7 +435,7 @@ export function createCanvasPanel(state, host, opts) {
             if (my >= drag.fixed.y) my = Math.max(drag.fixed.y + MIN_SIZE_PX, my);
             else my = Math.min(drag.fixed.y - MIN_SIZE_PX, my);
             const rx = Math.min(drag.fixed.x, mx), ry = Math.min(drag.fixed.y, my);
-            state.updateRegion(drag.id, {
+            state.resizeRegion(drag.id, {
                 x: rx / state.sheetW, y: ry / state.sheetH,
                 w: Math.abs(mx - drag.fixed.x) / state.sheetW,
                 h: Math.abs(my - drag.fixed.y) / state.sheetH,

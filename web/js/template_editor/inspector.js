@@ -123,6 +123,9 @@ export function renderInspector(state, host, opts) {
         if (region.projectPaths?.[0]) {
             previewUrl = opts.imageUrl?.(state.root, region.projectPaths[0]) ?? null;
             previewCaption = basename(region.projectPaths[0]);
+            if (region.projectPaths.length > 1) {
+                previewCaption += ` (+${region.projectPaths.length - 1} more)`;
+            }
         } else if (region.taskRefs?.paths?.length) {
             previewUrl = opts.refImageUrl?.(basename(region.taskRefs.paths[0])) ?? null;
             previewCaption = `${basename(region.taskRefs.paths[0])} (${region.taskRefs.paths.length} refs)`;

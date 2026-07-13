@@ -250,11 +250,13 @@ export function renderRail(state, host, opts) {
     host.appendChild(treeBody);
 
     function assignmentsByRel() {
-        // rel path -> region assigned to it (first wins per hub semantics)
+        // rel path -> region assigned to it (first wins per hub semantics).
+        // A region may hold several paths (multi-cell assets pick one per cell).
         const map = new Map();
         for (const r of state.regions) {
-            const rel = r.projectPaths?.[0];
-            if (rel && !map.has(rel)) map.set(rel, r);
+            for (const rel of r.projectPaths ?? []) {
+                if (rel && !map.has(rel)) map.set(rel, r);
+            }
         }
         return map;
     }
@@ -331,12 +333,20 @@ export function renderRail(state, host, opts) {
                 `display:flex;align-items:center;gap:6px;padding:1px 0 1px ${12 * depth}px;`);
             const check = el("input");
             check.type = "checkbox";
-            check.checked = Boolean(sel && sel.projectPaths?.[0] === rel);
+            check.checked = Boolean(sel?.projectPaths?.includes(rel));
             check.disabled = !sel;
             check.addEventListener("change", () => {
                 if (!sel) return;
-                state.updateRegion(sel.id,
-                    { projectPaths: check.checked ? [rel] : [] });
+                // Multi-cell regions take one sprite per cell (check several,
+                // in click order, capped at the cell count); checking beyond
+                // the cap replaces the last pick.
+                const cap = Math.max(1, sel.members?.length ?? 1);
+                let paths = (sel.projectPaths ?? []).filter((p) => p !== rel);
+                if (check.checked) {
+                    if (paths.length >= cap) paths = paths.slice(0, cap - 1);
+                    paths.push(rel);
+                }
+                state.updateRegion(sel.id, { projectPaths: paths });
             });
             row.appendChild(check);
 
