@@ -13,6 +13,8 @@ from comfy_api.latest import io, ui
 import folder_paths
 
 from .compose import (
+    _draw_task_refs,
+    _paint_background,
     build_catalog_sheet,
     build_paired_sheets,
     build_prefill_sheet,
@@ -315,6 +317,13 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                 io.Boolean.Input("distribute_by_folder", default=True),
                 io.String.Input("background", default="#808080", optional=True,
                                 tooltip="Hex fill; empty = transparent"),
+                io.String.Input("sheet_file", default="", optional=True,
+                                tooltip="Saved editor sheet (managed by the "
+                                        "editor)"),
+                io.String.Input("regions_json", default="[]", multiline=True,
+                                optional=True),
+                io.String.Input("scene_prompt", default="", multiline=True,
+                                optional=True),
             ],
             outputs=[
                 Template.Output(display_name="template"),
@@ -330,7 +339,13 @@ class SymbioticaTemplateEditor(io.ComfyNode):
     def execute(cls, spec, assets_root, assignments, group="", sheet_name="",
                 preset_model="nano-banana-pro", resolution="2K", aspect_ratio="1:1",
                 max_width=2048, max_height=2048, algorithm="shelf",
-                distribute_by_folder=True, background="#808080") -> io.NodeOutput:
+                distribute_by_folder=True, background="#808080",
+                sheet_file="", regions_json="[]",
+                scene_prompt="") -> io.NodeOutput:
+        if sheet_file.strip():
+            return cls._execute_editor_sheet(
+                spec, sheet_file.strip(), regions_json, scene_prompt,
+                sheet_name, background)
         assets_root = assets_root.strip()
         if not assets_root or not os.path.isdir(assets_root):
             raise ValueError(
@@ -407,6 +422,60 @@ class SymbioticaTemplateEditor(io.ComfyNode):
             "regions": regions,
             "refPaths": ref_paths,
         }
+        if scene_prompt.strip():
+            bundle["scenePrompt"] = scene_prompt.strip()
+        base_tensor = _pil_to_tensor(base_sheet)
+        task_tensor = _pil_to_tensor(task_sheet)
+        return io.NodeOutput(bundle, base_tensor, task_tensor,
+                             json.dumps(bundle, indent=1),
+                             ui=ui.PreviewImage(base_tensor, cls=cls))
+
+    @classmethod
+    def _execute_editor_sheet(cls, spec, sheet_file, regions_json, scene_prompt,
+                              sheet_name, background) -> io.NodeOutput:
+        """Editor-saved sheet branch: the saved PNG IS the base sheet and the
+        editor's regions ARE the layout — no assets_root or packing needed.
+        The task sheet is repainted from the client refs on the same layout."""
+        from PIL import Image
+        path = os.path.join(folder_paths.get_output_directory(),
+                            *sheet_file.split("/"))
+        try:
+            base_sheet = Image.open(path)
+            base_sheet.load()
+        except OSError:
+            raise ValueError(f"could not read sheet {path} — re-save from the "
+                             "template editor")
+        base_sheet = base_sheet.convert("RGBA")
+        try:
+            regions = json.loads(regions_json or "[]")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"regions_json is not valid JSON: {e}")
+        if not isinstance(regions, list):
+            raise ValueError("regions_json must be a JSON list")
+
+        sheet_w, sheet_h = base_sheet.width, base_sheet.height
+        task_sheet = _paint_background(sheet_w, sheet_h, background.strip())
+        _draw_task_refs(task_sheet, regions, spec.get("refsRoot", ""),
+                        sheet_w, sheet_h)
+
+        template_name = slugify(
+            os.path.splitext(os.path.basename(sheet_file))[0]) or "template"
+        name = sheet_name.strip() or template_name
+        rel = save_sheet(task_sheet, regions, f"{name}-task",
+                         folder_paths.get_output_directory(),
+                         meta={"template": template_name, "role": "task"})
+
+        bundle = {
+            "kind": "template",
+            "template": template_name,
+            "sheetFile": rel,
+            "baseSheetFile": sheet_file,
+            "templateSize": {"w": sheet_w, "h": sheet_h},
+            "regions": regions,
+            "refPaths": {},
+        }
+        if scene_prompt.strip():
+            bundle["scenePrompt"] = scene_prompt.strip()
         base_tensor = _pil_to_tensor(base_sheet)
         task_tensor = _pil_to_tensor(task_sheet)
         return io.NodeOutput(bundle, base_tensor, task_tensor,

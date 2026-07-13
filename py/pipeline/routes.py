@@ -2,6 +2,8 @@
 # ABOUTME: thumbnails, folder browsing, and project-asset listings.
 from __future__ import annotations
 
+import base64
+import json
 import os
 import threading
 
@@ -9,6 +11,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .compose import scan_images
+from .order_sheet import slugify
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
@@ -67,6 +70,51 @@ def list_subdirs(path: str) -> dict | None:
         return None
 
 
+def _template_dir() -> str | None:
+    """ComfyUI's output/templates folder, or None when folder_paths is absent
+    (unit tests import this module with server/aiohttp stubbed)."""
+    try:
+        import folder_paths
+    except ImportError:
+        return None
+    return os.path.join(folder_paths.get_output_directory(), "templates")
+
+
+def write_template(out_dir: str, name: str, png_bytes: bytes,
+                   sidecar: dict) -> str:
+    """Write <slug>.png + <slug>.json into out_dir. Returns the rel key
+    "templates/<slug>.png". Re-saves overwrite."""
+    stem = slugify(name) or "template"
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, f"{stem}.png"), "wb") as f:
+        f.write(png_bytes)
+    with open(os.path.join(out_dir, f"{stem}.json"), "w") as f:
+        json.dump({"name": stem, **sidecar}, f, indent=1)
+    return f"templates/{stem}.png"
+
+
+def list_templates(out_dir: str | None) -> list[dict]:
+    """Sidecar dicts for every readable template in out_dir (each gains
+    "file": "templates/<slug>.png"), sorted by name. Unreadable or invalid
+    sidecars are skipped; a missing dir is an empty list."""
+    if not out_dir or not os.path.isdir(out_dir):
+        return []
+    templates = []
+    for entry in sorted(os.listdir(out_dir)):
+        if not entry.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(out_dir, entry)) as f:
+                sidecar = json.load(f)
+        except (OSError, ValueError):
+            continue  # corrupt/unreadable sidecar: skip, don't fail the list
+        if not isinstance(sidecar, dict):
+            continue
+        sidecar["file"] = f"templates/{os.path.splitext(entry)[0]}.png"
+        templates.append(sidecar)
+    return sorted(templates, key=lambda s: str(s.get("name", "")))
+
+
 @PromptServer.instance.routes.get("/symbiotica/local-image")
 async def local_image(request):
     path = request.query.get("path", "")
@@ -102,3 +150,53 @@ async def list_assets(request):
     except OSError:
         return web.json_response({"error": "could not scan folder"}, status=400)
     return web.json_response({"root": root, "images": images})
+
+
+@PromptServer.instance.routes.post("/symbiotica/template-save")
+async def template_save(request):
+    """Persist an editor-built template: PNG (data URL) + JSON sidecar under
+    output/templates. The dir is registered so /symbiotica/local-image can
+    serve the PNG back to the editor."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid JSON body"}, status=400)
+    name = str(body.get("name") or "")
+    slug = slugify(name)
+    if not slug:
+        return web.json_response({"error": "name is required"}, status=400)
+    png = str(body.get("png") or "")
+    try:
+        png_bytes = base64.b64decode(png.split(",", 1)[1])
+    except (IndexError, ValueError):
+        return web.json_response(
+            {"error": "png must be a base64 PNG data URL"}, status=400)
+    if not png_bytes:
+        return web.json_response({"error": "png is empty"}, status=400)
+    regions = body.get("regions")
+    if not isinstance(regions, list):
+        return web.json_response({"error": "regions must be a list"}, status=400)
+
+    out_dir = _template_dir()
+    if out_dir is None:
+        return web.json_response(
+            {"error": "output directory unavailable"}, status=500)
+    sidecar = {
+        "size": body.get("size"),
+        "spriteCount": len(regions),
+        "regions": regions,
+        "settings": body.get("settings"),
+        "scenePrompt": body.get("scenePrompt"),
+    }
+    try:
+        rel = write_template(out_dir, name, png_bytes, sidecar)
+    except OSError as e:
+        return web.json_response({"error": f"could not write template: {e}"},
+                                 status=400)
+    register_root(out_dir)
+    return web.json_response({"ok": True, "file": rel, "name": slug})
+
+
+@PromptServer.instance.routes.get("/symbiotica/template-list")
+async def template_list(request):
+    return web.json_response({"templates": list_templates(_template_dir())})

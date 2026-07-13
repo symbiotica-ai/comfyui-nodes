@@ -16,6 +16,8 @@ def _load_routes(monkeypatch):
                 return fn
             return deco
 
+        post = get
+
     fake_server.PromptServer = types.SimpleNamespace(
         instance=types.SimpleNamespace(routes=_Routes()))
     monkeypatch.setitem(sys.modules, "server", fake_server)

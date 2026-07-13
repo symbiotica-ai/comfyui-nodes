@@ -1,7 +1,8 @@
 // ABOUTME: Frontend for the Symbiotica order pipeline nodes — dynamic event and
-// ABOUTME: group combos fed by server pushes, plus an events browser on Order Read.
+// ABOUTME: group combos fed by server pushes, events browser, and the template editor.
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { openTemplateEditor } from "./template_editor/editor.js";
 
 // node.id -> {events, refFileCount, refsRoot} (last parse per Order Read node)
 const orderCache = new Map();
@@ -243,14 +244,7 @@ app.registerExtension({
         }
     },
 });
-
-// --- template editor ----------------------------------------------------------
-const THUMB_SIZES = { S: 18, M: 28, L: 44 };
-
-function localImageUrl(root, rel) {
-    return thumbUrl(root, rel);
-}
-
+// --- template editor wiring ----------------------------------------------------
 async function fetchJson(route) {
     const res = await api.fetchApi(route);
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
@@ -261,60 +255,124 @@ function widgetOf(node, name) {
     return node.widgets?.find((w) => w.name === name);
 }
 
-function readAssignments(node) {
+function parseJsonWidget(node, name, fallback) {
     try {
-        const parsed = JSON.parse(widgetOf(node, "assignments")?.value || "{}");
-        return parsed && typeof parsed === "object" ? parsed : {};
+        const parsed = JSON.parse(widgetOf(node, name)?.value || "");
+        return parsed ?? fallback;
     } catch {
-        return {};
+        return fallback;
     }
 }
 
-function writeAssignments(node, assignments) {
-    const w = widgetOf(node, "assignments");
-    if (w) w.value = JSON.stringify(assignments);
+function taskAssetsFor(node) {
+    const ev = pickedEventFor(node);
+    if (!ev) return [];
+    return ev.assets.filter((a) => a.assetName).map((a) => ({
+        assetName: a.assetName,
+        category: a.category,
+        canvas: a.canvas,
+        prompt: a.prompt,
+        refFiles: a.refFiles ?? [],
+    }));
+}
+
+function openEditorForNode(node, uiState) {
+    const root = widgetOf(node, "assets_root")?.value?.trim() ?? "";
+    const refsRoot = orderDataFor(node)?.refsRoot ?? "";
+    let handle = null;
+
+    const opts = {
+        api,
+        init: {
+            regions: parseJsonWidget(node, "regions_json", []),
+            scenePrompt: widgetOf(node, "scene_prompt")?.value ?? "",
+            root,
+            images: uiState.images,
+            taskAssets: taskAssetsFor(node),
+            refsRoot,
+            loadedName: (widgetOf(node, "sheet_file")?.value ?? "")
+                .split("/").pop()?.replace(/\.png$/, "") ?? "",
+        },
+        imageUrl: (r, rel) => thumbUrl(r, rel),
+        refImageUrl: (file) => (refsRoot ? thumbUrl(refsRoot, file) : null),
+        resolveMemberUrl: (region, member) => {
+            const rel = region.projectPaths?.[0];
+            if (rel && root) return thumbUrl(root, rel);
+            if (member.spriteId && refsRoot) {
+                return thumbUrl(refsRoot, member.spriteId.split("/").pop());
+            }
+            return null;
+        },
+        loadAssets: (dir) => fetchJson(`/symbiotica/list-assets?dir=${encodeURIComponent(dir)}`),
+        listSaved: async () => (await fetchJson("/symbiotica/template-list")).templates ?? [],
+        saveTemplate: async (name) => {
+            const state = handle.state;
+            const finalName = (name || state.loadedName || "template").trim();
+            const png = await handle.exportSheet();
+            const resp = await api.fetchApi("/symbiotica/template-save", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    name: finalName,
+                    png,
+                    regions: state.regions,
+                    settings: state.settings,
+                    size: { w: state.sheetW, h: state.sheetH },
+                    scenePrompt: state.scenePrompt,
+                }),
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.ok) throw new Error(data.error ?? "save failed");
+            const sheetW = widgetOf(node, "sheet_file");
+            if (sheetW) sheetW.value = data.file;
+            const regionsW = widgetOf(node, "regions_json");
+            if (regionsW) regionsW.value = JSON.stringify(state.regions);
+            const sceneW = widgetOf(node, "scene_prompt");
+            if (sceneW) sceneW.value = state.scenePrompt;
+            uiState.refreshGallery?.();
+            return { name: data.name, file: data.file };
+        },
+        onClose: (state) => {
+            // Persist in-progress edits on the node even without a save.
+            const regionsW = widgetOf(node, "regions_json");
+            if (regionsW) regionsW.value = JSON.stringify(state.regions);
+            const sceneW = widgetOf(node, "scene_prompt");
+            if (sceneW) sceneW.value = state.scenePrompt;
+            uiState.render?.();
+        },
+    };
+    handle = openTemplateEditor(opts);
+    return handle;
 }
 
 function setupTemplateEditor(node) {
     const container = document.createElement("div");
-    container.style.cssText = "max-height:420px;overflow-y:auto;padding:2px;font-size:11px;";
+    container.style.cssText = "max-height:340px;overflow-y:auto;padding:2px;font-size:11px;";
+    const uiState = { images: [], browsing: false, templates: [] };
 
-    const state = {
-        root: "",          // picked project reference folder
-        images: [],        // rel paths under root
-        thumb: "M",
-        selectedTask: "",  // task asset name awaiting an assignment
-        expanded: new Set(),
-        browsing: false,
-    };
-
-    const editor = {
+    node._symbioticaEditor = {
         restore() {
             const root = widgetOf(node, "assets_root")?.value?.trim();
-            if (root && root !== state.root) {
-                state.root = root;
-                listAssets();
-            } else {
-                render();
+            if (root) {
+                fetchJson(`/symbiotica/list-assets?dir=${encodeURIComponent(root)}`)
+                    .then((d) => { uiState.images = d.images; render(); })
+                    .catch(() => render());
             }
+            refreshGallery();
         },
     };
-    node._symbioticaEditor = editor;
 
-    async function listAssets() {
+    async function refreshGallery() {
         try {
-            const data = await fetchJson(
-                `/symbiotica/list-assets?dir=${encodeURIComponent(state.root)}`);
-            state.root = data.root;
-            state.images = data.images;
-        } catch (e) {
-            state.images = [];
-            state.error = `Could not list folder: ${e.message}`;
+            uiState.templates = (await fetchJson("/symbiotica/template-list")).templates ?? [];
+        } catch {
+            uiState.templates = [];
         }
         render();
     }
+    uiState.refreshGallery = refreshGallery;
+    uiState.render = () => render();
 
-    // --- folder browser (inline panel) ---
     async function renderFolderBrowser(parent) {
         const panel = document.createElement("div");
         panel.style.cssText =
@@ -331,12 +389,10 @@ function setupTemplateEditor(node) {
                 return;
             }
             panel.replaceChildren();
-
             const cur = document.createElement("div");
             cur.style.cssText = "opacity:.8;margin-bottom:4px;word-break:break-all;";
             cur.textContent = info.path;
             panel.appendChild(cur);
-
             const list = document.createElement("div");
             list.style.cssText = "max-height:180px;overflow-y:auto;";
             if (info.parent) {
@@ -355,188 +411,112 @@ function setupTemplateEditor(node) {
                 list.appendChild(row);
             }
             panel.appendChild(list);
-
             const actions = document.createElement("div");
             actions.style.cssText = "display:flex;gap:6px;margin-top:4px;";
             const use = document.createElement("button");
             use.textContent = "Use this folder";
-            use.addEventListener("click", () => {
-                state.root = info.path;
+            use.addEventListener("click", async () => {
                 const w = widgetOf(node, "assets_root");
                 if (w) w.value = info.path;
-                state.browsing = false;
-                listAssets();
+                uiState.browsing = false;
+                try {
+                    const d = await fetchJson(
+                        `/symbiotica/list-assets?dir=${encodeURIComponent(info.path)}`);
+                    uiState.images = d.images;
+                } catch {
+                    uiState.images = [];
+                }
+                render();
             });
             const cancel = document.createElement("button");
             cancel.textContent = "Cancel";
             cancel.addEventListener("click", () => {
-                state.browsing = false;
+                uiState.browsing = false;
                 render();
             });
             actions.appendChild(use);
             actions.appendChild(cancel);
             panel.appendChild(actions);
         }
-        await show(state.root || undefined);
-    }
-
-    // --- task assets (assignment targets) ---
-    function renderTasks(parent) {
-        const ev = pickedEventFor(node);
-        const head = document.createElement("div");
-        head.style.cssText = "margin:6px 0 2px;opacity:.7;text-transform:uppercase;font-size:10px;";
-        head.textContent = "task assets — select one, then tick its base below";
-        parent.appendChild(head);
-        if (!ev) {
-            const hint = document.createElement("div");
-            hint.style.opacity = "0.6";
-            hint.textContent = "Queue Order Read + pick a feature on Event Specs first.";
-            parent.appendChild(hint);
-            return;
-        }
-        const assignments = readAssignments(node);
-        for (const a of ev.assets) {
-            if (!a.assetName || !a.refFiles.length) continue;
-            const row = document.createElement("div");
-            const selected = state.selectedTask === a.assetName;
-            row.style.cssText =
-                "display:flex;gap:6px;align-items:center;padding:2px 4px;cursor:pointer;" +
-                `border-radius:4px;${selected ? "background:#4a6;color:#000;" : ""}`;
-            const label = document.createElement("span");
-            label.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-            label.textContent = a.assetName;
-            row.appendChild(label);
-            const assigned = document.createElement("span");
-            assigned.style.cssText = "opacity:.7;max-width:45%;overflow:hidden;" +
-                "text-overflow:ellipsis;white-space:nowrap;";
-            const rel = assignments[a.assetName];
-            assigned.textContent = rel ? rel.split("/").pop() : "— unassigned";
-            row.appendChild(assigned);
-            row.addEventListener("click", () => {
-                state.selectedTask = selected ? "" : a.assetName;
-                render();
-            });
-            parent.appendChild(row);
-        }
-    }
-
-    // --- project assets tree ---
-    function renderTree(parent) {
-        const assignments = readAssignments(node);
-        const head = document.createElement("div");
-        head.style.cssText =
-            "display:flex;justify-content:space-between;align-items:center;margin:6px 0 2px;";
-        const title = document.createElement("span");
-        title.style.cssText = "opacity:.7;text-transform:uppercase;font-size:10px;";
-        title.textContent = `project assets · ${state.images.length}`;
-        head.appendChild(title);
-        const sizes = document.createElement("span");
-        for (const s of Object.keys(THUMB_SIZES)) {
-            const b = document.createElement("a");
-            b.textContent = s;
-            b.style.cssText = `cursor:pointer;margin-left:6px;${state.thumb === s ? "" : "opacity:.5;"}`;
-            b.addEventListener("click", () => { state.thumb = s; render(); });
-            sizes.appendChild(b);
-        }
-        head.appendChild(sizes);
-        parent.appendChild(head);
-
-        const byFolder = new Map();
-        for (const rel of state.images) {
-            const top = rel.includes("/") ? rel.split("/")[0] : "(root)";
-            if (!byFolder.has(top)) byFolder.set(top, []);
-            byFolder.get(top).push(rel);
-        }
-        const px = THUMB_SIZES[state.thumb];
-        for (const [folder, rels] of byFolder) {
-            const fh = document.createElement("div");
-            fh.style.cssText = "cursor:pointer;padding:2px 0;";
-            const open = state.expanded.has(folder);
-            fh.textContent = `${open ? "▾" : "▸"} ${folder} · ${rels.length}`;
-            fh.addEventListener("click", () => {
-                state.expanded[open ? "delete" : "add"](folder);
-                render();
-            });
-            parent.appendChild(fh);
-            if (!open) continue;
-            for (const rel of rels) {
-                const row = document.createElement("div");
-                row.style.cssText =
-                    "display:flex;align-items:center;gap:6px;padding:1px 0 1px 12px;";
-                const check = document.createElement("input");
-                check.type = "checkbox";
-                const owner = Object.keys(assignments).find((k) => assignments[k] === rel);
-                check.checked = state.selectedTask
-                    ? assignments[state.selectedTask] === rel
-                    : Boolean(owner);
-                check.disabled = !state.selectedTask && !owner;
-                check.addEventListener("change", () => {
-                    const a = readAssignments(node);
-                    if (check.checked && state.selectedTask) {
-                        a[state.selectedTask] = rel;
-                    } else {
-                        const key = state.selectedTask || owner;
-                        if (key) delete a[key];
-                    }
-                    writeAssignments(node, a);
-                    render();
-                });
-                row.appendChild(check);
-                const img = document.createElement("img");
-                img.src = localImageUrl(state.root, rel);
-                img.loading = "lazy";
-                img.style.cssText =
-                    `width:${px}px;height:${px}px;object-fit:contain;background:#111;border-radius:3px;`;
-                row.appendChild(img);
-                const label = document.createElement("span");
-                label.style.cssText =
-                    "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-                label.textContent = rel.split("/").slice(1).join("/") || rel;
-                if (owner) label.textContent += `  → ${owner}`;
-                row.appendChild(label);
-                parent.appendChild(row);
-            }
-        }
+        await show(widgetOf(node, "assets_root")?.value?.trim() || undefined);
     }
 
     function render() {
         container.replaceChildren();
-        state.error = undefined;
 
         const bar = document.createElement("div");
-        bar.style.cssText = "display:flex;gap:6px;align-items:center;";
+        bar.style.cssText = "display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
+        const open = document.createElement("button");
+        open.textContent = "↗ Open template editor";
+        open.style.cssText =
+            "border:1px solid #c33;color:#f66;background:#2a2a2a;border-radius:6px;" +
+            "padding:4px 10px;cursor:pointer;";
+        open.addEventListener("click", () => openEditorForNode(node, uiState));
+        bar.appendChild(open);
         const browse = document.createElement("button");
-        browse.textContent = state.root ? "Change folder…" : "Browse project folder…";
+        const root = widgetOf(node, "assets_root")?.value?.trim();
+        browse.textContent = root ? "Change project folder…" : "Set project folder…";
         browse.addEventListener("click", () => {
-            state.browsing = !state.browsing;
+            uiState.browsing = !uiState.browsing;
             render();
         });
         bar.appendChild(browse);
-        if (state.root) {
-            const path = document.createElement("span");
-            path.style.cssText =
-                "opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;";
-            path.textContent = state.root;
-            path.title = state.root;
-            bar.appendChild(path);
-        }
         container.appendChild(bar);
 
-        if (state.browsing) {
+        if (root) {
+            const path = document.createElement("div");
+            path.style.cssText =
+                "opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" +
+                "direction:rtl;margin:2px 0;";
+            path.textContent = root;
+            path.title = root;
+            container.appendChild(path);
+        }
+        if (uiState.browsing) {
             renderFolderBrowser(container);
             return;
         }
-        if (state.error) {
-            const err = document.createElement("div");
-            err.style.cssText = "color:#e66;";
-            err.textContent = state.error;
-            container.appendChild(err);
+
+        const sheetFile = widgetOf(node, "sheet_file")?.value;
+        const cur = document.createElement("div");
+        cur.style.cssText = "margin:4px 0;opacity:.8;";
+        cur.textContent = sheetFile
+            ? `current: ${sheetFile}`
+            : "no saved template — open the editor, prefill from specs, save";
+        container.appendChild(cur);
+
+        const gh = document.createElement("div");
+        gh.style.cssText = "margin:6px 0 2px;opacity:.7;text-transform:uppercase;font-size:10px;";
+        gh.textContent = `saved templates · ${uiState.templates.length}`;
+        container.appendChild(gh);
+        for (const t of uiState.templates) {
+            const row = document.createElement("div");
+            const active = sheetFile === t.file;
+            row.style.cssText =
+                "display:flex;gap:6px;align-items:center;padding:2px 4px;cursor:pointer;" +
+                `border-radius:4px;border:1px solid ${active ? "#c33" : "transparent"};`;
+            const label = document.createElement("span");
+            label.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+            label.textContent = t.name;
+            const count = document.createElement("span");
+            count.style.opacity = "0.6";
+            count.textContent = `${t.spriteCount ?? (t.regions?.length ?? 0)} regions`;
+            row.append(label, count);
+            row.addEventListener("click", () => {
+                const sheetW = widgetOf(node, "sheet_file");
+                if (sheetW) sheetW.value = t.file;
+                const regionsW = widgetOf(node, "regions_json");
+                if (regionsW) regionsW.value = JSON.stringify(t.regions ?? []);
+                const sceneW = widgetOf(node, "scene_prompt");
+                if (sceneW && t.scenePrompt) sceneW.value = t.scenePrompt;
+                render();
+            });
+            container.appendChild(row);
         }
-        renderTasks(container);
-        if (state.root) renderTree(container);
     }
 
     render();
+    refreshGallery();
     node.addDOMWidget("template_editor", "custom", container,
                       { serialize: false, hideOnZoom: true });
     node.size[0] = Math.max(node.size[0], 380);
