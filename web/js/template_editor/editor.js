@@ -103,6 +103,27 @@ export function openTemplateEditor(opts) {
     scene.placeholder = "Scene prompt — the whole picture (empty → use the upstream text)";
     scene.value = state.scenePrompt;
     scene.addEventListener("input", () => { state.scenePrompt = scene.value; });
+    // Project / Task reference toggle — drives which reference the canvas
+    // draws in each region's cells (hub parity: centered above the canvas).
+    const refToggle = document.createElement("span");
+    refToggle.style.cssText = "display:flex;gap:4px;";
+    const syncRefToggle = () => {
+        refToggle.replaceChildren();
+        for (const [mode, label] of [["project", "Project reference"],
+                                     ["task", "Task reference"]]) {
+            const btn = document.createElement("button");
+            btn.textContent = label;
+            if (state.refMode === mode) btn.classList.add("active");
+            btn.addEventListener("click", () => {
+                state.refMode = mode;
+                syncRefToggle();
+                state.emit("regions"); // canvas redraws cell contents
+            });
+            refToggle.appendChild(btn);
+        }
+    };
+    syncRefToggle();
+
     const addRegion = document.createElement("button");
     addRegion.textContent = "+ Add region";
     addRegion.addEventListener("click", () => state.addRegion());
@@ -116,7 +137,7 @@ export function openTemplateEditor(opts) {
         syncPrompt();
         state.emit("regions"); // canvas hides labels
     });
-    topbar.append(scene, addRegion, promptToggle);
+    topbar.append(scene, refToggle, addRegion, promptToggle);
 
     // ---- body ----
     const body = document.createElement("div");

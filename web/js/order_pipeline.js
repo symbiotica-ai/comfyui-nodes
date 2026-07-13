@@ -333,11 +333,25 @@ async function openEditorForNode(node, uiState) {
         imageUrl: (r, rel) => thumbUrl(r, rel),
         refImageUrl: (file) => (refsRoot ? thumbUrl(refsRoot, file) : null),
         resolveMemberUrl: (region, member) => {
-            const rel = region.projectPaths?.[0];
-            if (rel && root) return thumbUrl(root, rel);
+            // Which image fills a member cell depends on the reference mode:
+            // Project reference -> the assigned game asset; Task reference ->
+            // the CHECKED task refs (members map to checked paths in order, so
+            // picking one of two provided refs redraws the pair with it).
+            const mode = handle?.state?.refMode ?? "task";
+            const projectRel = region.projectPaths?.[0];
+            if (mode === "project" && projectRel && root) {
+                return thumbUrl(root, projectRel);
+            }
+            const paths = region.taskRefs?.paths;
+            if (paths?.length && refsRoot) {
+                const i = Math.max(0, region.members?.indexOf(member) ?? 0);
+                const file = paths[Math.min(i, paths.length - 1)].split("/").pop();
+                return thumbUrl(refsRoot, file);
+            }
             if (member.spriteId && refsRoot) {
                 return thumbUrl(refsRoot, member.spriteId.split("/").pop());
             }
+            if (projectRel && root) return thumbUrl(root, projectRel);
             return null;
         },
         loadAssets: (dir) => fetchJson(`/symbiotica/list-assets?dir=${encodeURIComponent(dir)}`),

@@ -49,19 +49,9 @@ export function renderInspector(state, host, opts) {
         }
     };
 
-    // ---- section 1: reference-mode toggle ----------------------------------
+    // (reference-mode toggle lives in the editor top bar, above the canvas)
     function buildRefToggle() {
-        const wrap = el("div", "display:flex;justify-content:center;gap:6px;margin:4px 0 8px;");
-        for (const [mode, label] of [["project", "Project reference"], ["task", "Task reference"]]) {
-            const btn = el("button", null, label);
-            if (state.refMode === mode) btn.classList.add("active");
-            btn.addEventListener("click", () => {
-                state.refMode = mode;
-                state.emit("regions"); // canvas may redraw reference overlays
-            });
-            wrap.appendChild(btn);
-        }
-        return wrap;
+        return document.createDocumentFragment();
     }
 
     // ---- section 3: selected region editor ----------------------------------
