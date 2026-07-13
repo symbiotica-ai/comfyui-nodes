@@ -100,8 +100,13 @@ export function createCanvasPanel(state, host, opts) {
         const regions = [...state.regions].sort((a, b) => a.zIndex - b.zIndex);
         for (const region of regions) {
             for (const member of region.members ?? []) {
-                const url = opts.resolveMemberUrl(region, member);
+                const resolved = opts.resolveMemberUrl(region, member);
+                const url = typeof resolved === "string" ? resolved : resolved?.url;
                 if (!url) continue;
+                // The resolver may override the flip (dynamic pair convention:
+                // one effective image in a two-cell region mirrors cell 2).
+                const flip = typeof resolved === "object" && resolved !== null
+                    ? Boolean(resolved.flip) : Boolean(member.flipX);
                 const { img } = loadImage(url);
                 if (!img.complete || !img.naturalWidth) continue;
                 const cell = {
@@ -111,7 +116,7 @@ export function createCanvasPanel(state, host, opts) {
                 const scale = Math.min(cell.w / img.naturalWidth, cell.h / img.naturalHeight);
                 const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
                 const dx = cell.x + (cell.w - dw) / 2, dy = cell.y + (cell.h - dh) / 2;
-                if (member.flipX) {
+                if (flip) {
                     c.save();
                     c.translate(dx + dw, dy);
                     c.scale(-1, 1);
@@ -507,7 +512,8 @@ export function createCanvasPanel(state, host, opts) {
         const waits = [];
         for (const region of state.regions) {
             for (const member of region.members ?? []) {
-                const url = opts.resolveMemberUrl(region, member);
+                const resolved = opts.resolveMemberUrl(region, member);
+                const url = typeof resolved === "string" ? resolved : resolved?.url;
                 if (url) waits.push(loadImage(url).promise.catch(() => null));
             }
         }

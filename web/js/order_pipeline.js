@@ -335,23 +335,35 @@ async function openEditorForNode(node, uiState) {
         resolveMemberUrl: (region, member) => {
             // Which image fills a member cell depends on the reference mode:
             // Project reference -> the assigned game asset; Task reference ->
-            // the CHECKED task refs (members map to checked paths in order, so
-            // picking one of two provided refs redraws the pair with it).
+            // the CHECKED task refs. Returns {url, flip}: whenever ONE
+            // effective image fills a two-cell region, the second cell mirrors
+            // it (the in-game pair convention) — regardless of whether the
+            // region was born single-ref or the user narrowed it to one.
             const mode = handle?.state?.refMode ?? "task";
+            const members = region.members ?? [];
+            const i = Math.max(0, members.indexOf(member));
+            const pairFlip = members.length === 2 && i === 1;
             const projectRel = region.projectPaths?.[0];
+
             if (mode === "project" && projectRel && root) {
-                return thumbUrl(root, projectRel);
+                return { url: thumbUrl(root, projectRel), flip: pairFlip };
             }
             const paths = region.taskRefs?.paths;
             if (paths?.length && refsRoot) {
-                const i = Math.max(0, region.members?.indexOf(member) ?? 0);
+                if (paths.length === 1) {
+                    const file = paths[0].split("/").pop();
+                    return { url: thumbUrl(refsRoot, file), flip: pairFlip };
+                }
                 const file = paths[Math.min(i, paths.length - 1)].split("/").pop();
-                return thumbUrl(refsRoot, file);
+                return { url: thumbUrl(refsRoot, file), flip: Boolean(member.flipX) };
             }
             if (member.spriteId && refsRoot) {
-                return thumbUrl(refsRoot, member.spriteId.split("/").pop());
+                return { url: thumbUrl(refsRoot, member.spriteId.split("/").pop()),
+                         flip: Boolean(member.flipX) };
             }
-            if (projectRel && root) return thumbUrl(root, projectRel);
+            if (projectRel && root) {
+                return { url: thumbUrl(root, projectRel), flip: pairFlip };
+            }
             return null;
         },
         loadAssets: (dir) => fetchJson(`/symbiotica/list-assets?dir=${encodeURIComponent(dir)}`),
