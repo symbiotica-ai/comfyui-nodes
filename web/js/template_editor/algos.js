@@ -525,3 +525,60 @@ export function rebuildSpecRegions(state) {
     }
     return regions;
 }
+
+// --- task-driven asset filtering (port of hub flows/template-filter.ts) --------
+
+/** Bidirectional-prefix rule: folder/category match when either prefixes the
+ *  other — "Decoration"/"Decorations", folder "Food" under "Food - 3 stages",
+ *  without "Wall Decoration" leaking into "Decoration". */
+function prefixPair(folderLower, categoryLower) {
+    return folderLower.startsWith(categoryLower) || categoryLower.startsWith(folderLower);
+}
+
+/** The order category (original case) `folder` matches, or undefined. */
+export function matchCategory(folder, categories) {
+    const fl = folder.toLowerCase();
+    for (const c of categories) {
+        if (prefixPair(fl, c.toLowerCase())) return c;
+    }
+    return undefined;
+}
+
+/** Canvas sizes the order asks for per category (lowercased key) — the
+ *  spec-driven resolution filter ("decoration" -> Set{"256x256"}). */
+export function categoryCanvasSizes(assets) {
+    const out = new Map();
+    for (const a of assets) {
+        const canvas = (a.canvas ?? "").toLowerCase().replace(/\s+/g, "");
+        if (!/^\d+x\d+$/.test(canvas)) continue;
+        const key = a.category.toLowerCase();
+        if (!out.has(key)) out.set(key, new Set());
+        out.get(key).add(canvas);
+    }
+    return out;
+}
+
+/** Display path for the filtered rail, grouped under the ORDER category:
+ *  `<Category>/<W×H>/<deepest non-category folder>/<file>`. Unmatched sprites
+ *  keep their deepest folder with no category prefix. */
+export function flattenSpritePath(path, categories, size) {
+    const parts = path.split("/");
+    const file = parts.pop();
+    let matched;
+    const folders = parts.filter((f) => {
+        const m = matchCategory(f, categories);
+        if (m) {
+            matched = matched ?? m;
+            return false;
+        }
+        return true;
+    });
+    const kept = folders.length > 0 ? folders[folders.length - 1] : undefined;
+    const tail = kept ? `${kept}/${file}` : file;
+    if (matched) {
+        const sizeLevel = size?.w && size?.h ? `${size.w}×${size.h}/` : "";
+        return `${matched}/${sizeLevel}${tail}`;
+    }
+    const fallback = kept ?? parts[parts.length - 1];
+    return fallback ? `${fallback}/${file}` : file;
+}

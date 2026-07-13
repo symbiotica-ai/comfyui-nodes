@@ -165,9 +165,20 @@ async def list_assets(request):
         return web.json_response({"error": "not a readable directory"}, status=400)
     register_root(root)
     try:
-        images = scan_images(root)
+        rels = scan_images(root)
     except OSError:
         return web.json_response({"error": "could not scan folder"}, status=400)
+    images = []
+    for rel in rels:
+        # Pixel size drives the editor's resolution folders/filter (hub
+        # parity); PIL reads only the header. Unreadable -> size unknown.
+        try:
+            from PIL import Image
+            with Image.open(os.path.join(root, rel.replace("/", os.sep))) as im:
+                w, h = im.size
+        except Exception:
+            w = h = None
+        images.append({"rel": rel, "w": w, "h": h})
     return web.json_response({"root": root, "images": images})
 
 

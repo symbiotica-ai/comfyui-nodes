@@ -279,7 +279,16 @@ export function renderInspector(state, host, opts) {
         host.replaceChildren(...parts);
     }
 
-    state.on("selection", render);
+    state.on("selection", () => {
+        // Focus: expand only the selected region's asset in the task-refs
+        // tree, collapse the others.
+        const sel = state.selectedRegion();
+        if (sel?.name) {
+            expanded.clear();
+            expanded.add(sel.name);
+        }
+        render();
+    });
     state.on("regions", render);
     render();
 }

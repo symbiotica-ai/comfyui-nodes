@@ -1,6 +1,7 @@
 // ABOUTME: Left rail of the template editor — prefill/save/load, project asset
 // ABOUTME: tree with region assignment checkboxes, and the pack settings panel.
-import { prefillRegions, rebuildSpecRegions, MODEL_PRESETS, presetDims, slugify }
+import { prefillRegions, rebuildSpecRegions, MODEL_PRESETS, presetDims, slugify,
+         matchCategory, categoryCanvasSizes, flattenSpritePath, canvasSpecOf }
     from "./algos.js";
 
 const THUMB_SIZES = { S: 18, M: 28, L: 44, XL: 64 };
@@ -258,11 +259,47 @@ export function renderRail(state, host, opts) {
         return map;
     }
 
-    function buildTree(rels) {
-        // Trie of path segments: {folders: Map<name, node>, files: [rel]}
+    function taskCategories() {
+        return [...new Set(state.taskAssets.map((a) => a.category).filter(Boolean))];
+    }
+
+    function displayEntries() {
+        // Filtered rail entries (hub template-filter): each image reorganized
+        // under its ORDER category with a resolution level; sprites matching no
+        // task category are hidden, and per-category resolutions are limited to
+        // the ordered canvas (and its 2x variant). No task context -> show all.
+        const categories = taskCategories();
+        const sizesByCat = categoryCanvasSizes(state.taskAssets);
+        const entries = [];
+        for (const img of state.images) {
+            const rel = typeof img === "string" ? img : img.rel;
+            const size = typeof img === "string" ? null : { w: img.w, h: img.h };
+            if (!categories.length) {
+                entries.push({ display: rel, rel });
+                continue;
+            }
+            const display = flattenSpritePath(rel, categories, size);
+            const cat = matchCategory(display.split("/")[0], categories);
+            if (!cat) continue; // not an asset type this task asks for
+            const wanted = sizesByCat.get(cat.toLowerCase());
+            if (wanted?.size && size?.w && size?.h) {
+                const ok = [...wanted].some((c) => {
+                    const spec = canvasSpecOf(c);
+                    return spec && ((size.w === spec.w && size.h === spec.h) ||
+                                    (size.w === spec.w * 2 && size.h === spec.h * 2));
+                });
+                if (!ok) continue; // resolution the order doesn't ask for
+            }
+            entries.push({ display, rel });
+        }
+        return entries;
+    }
+
+    function buildTree(entries) {
+        // Trie of display-path segments: {folders: Map<name, node>, files: [entry]}
         const rootNode = { folders: new Map(), files: [], count: 0 };
-        for (const rel of rels) {
-            const parts = rel.split("/");
+        for (const entry of entries) {
+            const parts = entry.display.split("/");
             let node = rootNode;
             node.count++;
             for (let i = 0; i < parts.length - 1; i++) {
@@ -272,13 +309,12 @@ export function renderRail(state, host, opts) {
                 node = node.folders.get(parts[i]);
                 node.count++;
             }
-            node.files.push(rel);
+            node.files.push(entry);
         }
         return rootNode;
     }
 
     function renderTree() {
-        treeTitle.textContent = `Project assets · ${state.images.length}`;
         treeBody.replaceChildren();
         if (!state.root) {
             treeBody.appendChild(el("div", "opacity:.6;font-size:11px;",
@@ -289,7 +325,8 @@ export function renderRail(state, host, opts) {
         const sel = state.selectedRegion();
         const px = THUMB_SIZES[local.thumb];
 
-        function fileRow(rel, depth) {
+        function fileRow(entry, depth) {
+            const rel = entry.rel;
             const row = el("div",
                 `display:flex;align-items:center;gap:6px;padding:1px 0 1px ${12 * depth}px;`);
             const check = el("input");
@@ -322,7 +359,7 @@ export function renderRail(state, host, opts) {
         }
 
         function countAssigned(node) {
-            let n = node.files.filter((rel) => assigned.has(rel)).length;
+            let n = node.files.filter((e) => assigned.has(e.rel)).length;
             for (const child of node.folders.values()) n += countAssigned(child);
             return n;
         }
@@ -344,14 +381,46 @@ export function renderRail(state, host, opts) {
                 treeBody.appendChild(fh);
                 if (open) renderNode(child, key, depth + 1);
             }
-            for (const rel of node.files) {
-                treeBody.appendChild(fileRow(rel, depth));
+            for (const entry of node.files) {
+                treeBody.appendChild(fileRow(entry, depth));
             }
         }
-        renderNode(buildTree(state.images), "", 0);
+        const entries = displayEntries();
+        treeTitle.textContent = `Project assets · ${entries.length}`;
+        renderNode(buildTree(entries), "", 0);
     }
+
+    function focusSelection() {
+        // Click a region -> expand exactly the folders it needs (its category
+        // and the canvas-matching resolution levels), collapse the rest.
+        const sel = state.selectedRegion();
+        if (sel?.assetType) {
+            const categories = taskCategories();
+            const cat = matchCategory(sel.assetType, categories) ?? sel.assetType;
+            local.expanded = new Set([cat]);
+            const asset = state.taskAssets.find((a) => a.assetName === sel.name);
+            const spec = asset && canvasSpecOf(asset.canvas ?? "");
+            if (spec) {
+                local.expanded.add(`${cat}/${spec.w}×${spec.h}`);
+                local.expanded.add(`${cat}/${spec.w * 2}×${spec.h * 2}`);
+            } else {
+                // No parseable canvas: open every resolution level under it.
+                for (const img of state.images) {
+                    const rel = typeof img === "string" ? img : img.rel;
+                    const size = typeof img === "string" ? null : { w: img.w, h: img.h };
+                    const display = flattenSpritePath(rel, categories, size);
+                    const parts = display.split("/");
+                    if (parts[0] === cat && parts.length > 2) {
+                        local.expanded.add(`${cat}/${parts[1]}`);
+                    }
+                }
+            }
+        }
+        renderTree();
+    }
+
     renderTree();
-    state.on("selection", renderTree);
+    state.on("selection", focusSelection);
     state.on("regions", renderTree);
 
     // --- 6. pack settings ------------------------------------------------------------
