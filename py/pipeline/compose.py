@@ -153,6 +153,54 @@ def _contain_fit(img: Image.Image, w: int, h: int) -> tuple[Image.Image, int, in
     return img.resize((fw, fh), Image.LANCZOS), (w - fw) // 2, (h - fh) // 2
 
 
+def _load_rgba(path: str) -> Image.Image | None:
+    try:
+        img = Image.open(path)
+        img.load()
+        return img.convert("RGBA")
+    except OSError:
+        return None
+
+
+def _composite_member(sheet: Image.Image, img: Image.Image, member: dict,
+                      sheet_w: int, sheet_h: int) -> None:
+    """Draw one image into a member cell: flipX mirror, contain-fit, and clip
+    to sheet bounds (oversized overflow strips can extend past the sheet)."""
+    if member.get("flipX"):
+        img = img.transpose(Image.FLIP_LEFT_RIGHT)
+    cw = max(1, round(member["w"] * sheet_w))
+    ch = max(1, round(member["h"] * sheet_h))
+    fitted, ox, oy = _contain_fit(img, cw, ch)
+    paste_x = round(member["x"] * sheet_w) + ox
+    paste_y = round(member["y"] * sheet_h) + oy
+
+    if paste_x + fitted.width > sheet_w or paste_y + fitted.height > sheet_h:
+        crop_left = max(0, -paste_x)
+        crop_top = max(0, -paste_y)
+        crop_right = min(fitted.width, sheet_w - paste_x)
+        crop_bottom = min(fitted.height, sheet_h - paste_y)
+        if crop_right <= crop_left or crop_bottom <= crop_top:
+            return  # completely out of bounds
+        fitted = fitted.crop((crop_left, crop_top, crop_right, crop_bottom))
+        paste_x = max(0, paste_x)
+        paste_y = max(0, paste_y)
+
+    sheet.alpha_composite(fitted, (paste_x, paste_y))
+
+
+def _draw_task_refs(sheet: Image.Image, regions: list[dict], refs_root: str,
+                    sheet_w: int, sheet_h: int) -> None:
+    for region in regions:
+        for member in region.get("members", []):
+            # spriteId is "Category/AssetName/file.png"; the actual ref file
+            # lives flat in refs_root under its basename.
+            filename = member["spriteId"].split("/")[-1]
+            img = _load_rgba(os.path.join(refs_root, filename))
+            if img is None:
+                continue  # missing ref: cell stays background for the img2img pass
+            _composite_member(sheet, img, member, sheet_w, sheet_h)
+
+
 def build_prefill_sheet(assets: list[dict], refs_root: str, sheet_w: int,
                         sheet_h: int, settings: PackSettings, chosen=None):
     """Prefill-from-specs sheet: regions via prefill_regions, each member cell
@@ -161,45 +209,43 @@ def build_prefill_sheet(assets: list[dict], refs_root: str, sheet_w: int,
     result = prefill_regions(assets, sheet_w, sheet_h, chosen=chosen,
                              settings=settings)
     sheet = _paint_background(sheet_w, sheet_h, settings.background)
-    for region in result["regions"]:
-        for member in region.get("members", []):
-            # spriteId is "Category/AssetName/file.png"; the actual ref file
-            # lives flat in refs_root under its basename.
-            filename = member["spriteId"].split("/")[-1]
-            path = os.path.join(refs_root, filename)
-            try:
-                img = Image.open(path)
-                img.load()
-                img = img.convert("RGBA")
-            except OSError:
-                continue  # missing ref: cell stays background for the img2img pass
-            if member.get("flipX"):
-                img = img.transpose(Image.FLIP_LEFT_RIGHT)
-            cw = max(1, round(member["w"] * sheet_w))
-            ch = max(1, round(member["h"] * sheet_h))
-            fitted, ox, oy = _contain_fit(img, cw, ch)
-            paste_x = round(member["x"] * sheet_w) + ox
-            paste_y = round(member["y"] * sheet_h) + oy
-
-            # Guard against oversized overflow strips: clip fitted image to the
-            # intersection with sheet bounds before compositing. The destination
-            # box for alpha_composite must be within bounds.
-            if paste_x + fitted.width > sheet_w or paste_y + fitted.height > sheet_h:
-                # Compute intersection region
-                crop_left = max(0, -paste_x)
-                crop_top = max(0, -paste_y)
-                crop_right = min(fitted.width, sheet_w - paste_x)
-                crop_bottom = min(fitted.height, sheet_h - paste_y)
-
-                if crop_right > crop_left and crop_bottom > crop_top:
-                    fitted = fitted.crop((crop_left, crop_top, crop_right, crop_bottom))
-                    paste_x = max(0, paste_x)
-                    paste_y = max(0, paste_y)
-                else:
-                    continue  # Completely out of bounds
-
-            sheet.alpha_composite(fitted, (paste_x, paste_y))
+    _draw_task_refs(sheet, result["regions"], refs_root, sheet_w, sheet_h)
     return sheet, result["regions"], result["overflow"]
+
+
+def build_paired_sheets(assets: list[dict], refs_root: str, assets_root: str,
+                        assignments: dict[str, str], sheet_w: int, sheet_h: int,
+                        settings: PackSettings, chosen=None):
+    """Base + task sheets sharing ONE region layout (computed once), so region i
+    on the base sheet is region i on the task-reference sheet.
+
+    The task sheet draws the client's reference images (like build_prefill_sheet).
+    The base sheet draws the ASSIGNED existing-game asset for each region —
+    `assignments` maps asset name -> catalog rel path under assets_root — into
+    every member cell (the flip pair mirrors it). Unassigned regions stay
+    background so the img2img pass invents them.
+
+    Returns (base_sheet, task_sheet, regions, overflow_names).
+    """
+    result = prefill_regions(assets, sheet_w, sheet_h, chosen=chosen,
+                             settings=settings)
+    regions = result["regions"]
+
+    task_sheet = _paint_background(sheet_w, sheet_h, settings.background)
+    _draw_task_refs(task_sheet, regions, refs_root, sheet_w, sheet_h)
+
+    base_sheet = _paint_background(sheet_w, sheet_h, settings.background)
+    for region in regions:
+        rel = (assignments or {}).get(region.get("name") or "")
+        if not rel:
+            continue
+        img = _load_rgba(os.path.join(assets_root, rel.replace("/", os.sep)))
+        if img is None:
+            continue  # missing/unreadable assignment: cell stays background
+        for member in region.get("members", []):
+            _composite_member(base_sheet, img, member, sheet_w, sheet_h)
+
+    return base_sheet, task_sheet, regions, result["overflow"]
 
 
 def save_sheet(img: Image.Image, regions: list[dict], name: str, out_root: str,

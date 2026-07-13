@@ -82,6 +82,11 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   output feeds the Template Prompt node.
 - **Symbiotica Template Prompt** — turns the bundle's regions into an edit
   prompt for the Nano Banana edit nodes.
+- **Symbiotica Template Editor** — browse the project's reference folder
+  (folder browser on the node, works across projects), select a task asset,
+  then tick an existing game asset to make it that region's base. Outputs a
+  base sheet and a task-reference sheet sharing one region layout — wire
+  both into an img2img edit node.
 
 The web extension adds an events browser on Order Read and populates the
 feature/group dropdowns after the first queue. On a fully cached run the

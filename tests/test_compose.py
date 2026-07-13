@@ -141,3 +141,69 @@ def test_save_sheet_writes_png_and_sidecar(tmp_path):
     assert sidecar["spriteCount"] == 1
     assert sidecar["regions"] == regions
     assert sidecar["template"] == "g"
+
+
+from pipeline.compose import build_paired_sheets
+
+
+def test_build_paired_sheets_aligned_and_assigned(tmp_path):
+    refs = tmp_path / "refs"
+    make_png(str(refs / "Cart.png"), (64, 64), (0, 255, 0))
+    catalog = tmp_path / "assets"
+    make_png(str(catalog / "Decoration" / "Old Cart" / "old.png"), (64, 64), (255, 0, 0))
+    assets = [{"assetName": "Cart", "category": "Decoration", "canvas": "128x128",
+               "prompt": "p", "refFiles": ["Cart.png"]}]
+    settings = PackSettings(preset=None, max_width=512, max_height=512,
+                            background="#808080")
+    base, task, regions, overflow = build_paired_sheets(
+        assets, str(refs), str(catalog), {"Cart": "Decoration/Old Cart/old.png"},
+        512, 512, settings)
+    assert overflow == []
+    (region,) = regions
+    m = region["members"][0]
+    cx = int((m["x"] + m["w"] / 2) * 512)
+    cy = int((m["y"] + m["h"] / 2) * 512)
+    # Same region layout, different content: ref on task, assigned art on base.
+    assert task.getpixel((cx, cy))[:3] == (0, 255, 0)
+    assert base.getpixel((cx, cy))[:3] == (255, 0, 0)
+    # Flip pair: second member cell also drawn on the base sheet.
+    m2 = region["members"][1]
+    cx2 = int((m2["x"] + m2["w"] / 2) * 512)
+    assert base.getpixel((cx2, cy))[:3] == (255, 0, 0)
+
+
+def test_build_paired_sheets_unassigned_stays_background(tmp_path):
+    refs = tmp_path / "refs"
+    make_png(str(refs / "Cart.png"), (64, 64), (0, 255, 0))
+    catalog = tmp_path / "assets"
+    catalog.mkdir()
+    assets = [{"assetName": "Cart", "category": "Decoration", "canvas": "128x128",
+               "prompt": "p", "refFiles": ["Cart.png"]}]
+    settings = PackSettings(preset=None, max_width=512, max_height=512,
+                            background="#808080")
+    base, task, regions, _ = build_paired_sheets(
+        assets, str(refs), str(catalog), {}, 512, 512, settings)
+    (region,) = regions
+    m = region["members"][0]
+    cx = int((m["x"] + m["w"] / 2) * 512)
+    cy = int((m["y"] + m["h"] / 2) * 512)
+    assert base.getpixel((cx, cy))[:3] == (128, 128, 128)  # background
+    assert task.getpixel((cx, cy))[:3] == (0, 255, 0)      # ref still drawn
+
+
+def test_build_paired_sheets_missing_assignment_file_is_background(tmp_path):
+    refs = tmp_path / "refs"
+    make_png(str(refs / "Cart.png"), (64, 64), (0, 255, 0))
+    catalog = tmp_path / "assets"
+    catalog.mkdir()
+    assets = [{"assetName": "Cart", "category": "Decoration", "canvas": "128x128",
+               "prompt": "p", "refFiles": ["Cart.png"]}]
+    settings = PackSettings(preset=None, max_width=512, max_height=512,
+                            background="#808080")
+    base, _, regions, _ = build_paired_sheets(
+        assets, str(refs), str(catalog), {"Cart": "Nope/missing.png"},
+        512, 512, settings)
+    m = regions[0]["members"][0]
+    cx = int((m["x"] + m["w"] / 2) * 512)
+    cy = int((m["y"] + m["h"] / 2) * 512)
+    assert base.getpixel((cx, cy))[:3] == (128, 128, 128)

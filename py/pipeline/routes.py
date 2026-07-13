@@ -1,5 +1,5 @@
 # ABOUTME: aiohttp routes for the order pipeline — serves local ref-image
-# ABOUTME: thumbnails, restricted to roots registered by executed nodes.
+# ABOUTME: thumbnails, folder browsing, and project-asset listings.
 from __future__ import annotations
 
 import os
@@ -7,6 +7,8 @@ import threading
 
 from aiohttp import web
 from server import PromptServer
+
+from .compose import scan_images
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
@@ -45,6 +47,26 @@ def is_allowed(path: str) -> str | None:
         return None
 
 
+def list_subdirs(path: str) -> dict | None:
+    """Directory info for the folder browser: resolved path, parent, and the
+    visible (non-dot) subdirectory names sorted case-insensitively. None when
+    the path is not a readable directory."""
+    try:
+        real = os.path.realpath(path or os.path.expanduser("~"))
+        if not os.path.isdir(real):
+            return None
+        dirs = sorted(
+            (e.name for e in os.scandir(real)
+             if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")),
+            key=str.lower,
+        )
+        parent = os.path.dirname(real)
+        return {"path": real, "parent": parent if parent != real else None,
+                "dirs": dirs}
+    except (ValueError, OSError):
+        return None
+
+
 @PromptServer.instance.routes.get("/symbiotica/local-image")
 async def local_image(request):
     path = request.query.get("path", "")
@@ -53,3 +75,30 @@ async def local_image(request):
         return web.json_response({"error": "not an allowed image path"}, status=403)
     return web.FileResponse(resolved,
                             headers={"Cache-Control": "private, max-age=60"})
+
+
+@PromptServer.instance.routes.get("/symbiotica/browse-dirs")
+async def browse_dirs(request):
+    """Folder browser for picking a project reference folder. Lists directory
+    NAMES only (no files) — the same local, single-user surface as ComfyUI's
+    own filesystem pickers."""
+    info = list_subdirs(request.query.get("path", ""))
+    if info is None:
+        return web.json_response({"error": "not a readable directory"}, status=400)
+    return web.json_response(info)
+
+
+@PromptServer.instance.routes.get("/symbiotica/list-assets")
+async def list_assets(request):
+    """Recursive image listing of a user-picked project folder. Picking the
+    folder in the browser IS the user intent, so the root is registered for
+    thumbnail serving via /symbiotica/local-image."""
+    root = os.path.realpath(request.query.get("dir", ""))
+    if not root or not os.path.isdir(root):
+        return web.json_response({"error": "not a readable directory"}, status=400)
+    register_root(root)
+    try:
+        images = scan_images(root)
+    except OSError:
+        return web.json_response({"error": "could not scan folder"}, status=400)
+    return web.json_response({"root": root, "images": images})

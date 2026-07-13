@@ -12,7 +12,12 @@ from comfy_api.latest import io, ui
 
 import folder_paths
 
-from .compose import build_catalog_sheet, build_prefill_sheet, save_sheet
+from .compose import (
+    build_catalog_sheet,
+    build_paired_sheets,
+    build_prefill_sheet,
+    save_sheet,
+)
 from .model_presets import MODEL_PRESETS, preset_dims
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
@@ -272,6 +277,143 @@ class SymbioticaTemplateBuilder(io.ComfyNode):
                              ui=ui.PreviewImage(tensor, cls=cls))
 
 
+class SymbioticaTemplateEditor(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaTemplateEditor",
+            display_name="Symbiotica Template Editor",
+            category="symbiotica/pipeline",
+            description="Assign existing game assets from the project reference "
+                        "folder as per-region base art. Emits a base sheet and a "
+                        "task-reference sheet sharing one region layout — wire "
+                        "both into an img2img edit node. Browse the folder and "
+                        "tick assets on the node.",
+            inputs=[
+                EventSpec.Input("spec"),
+                io.String.Input("assets_root", default="",
+                                tooltip="Project reference folder (set via the "
+                                        "node's Browse button)"),
+                io.String.Input("assignments", default="{}", multiline=True,
+                                tooltip="JSON: task asset name -> catalog rel "
+                                        "path (managed by the node UI)"),
+                io.String.Input("group", default="", optional=True,
+                                tooltip="Template group slug filter (empty = "
+                                        "all groups with refs)"),
+                io.String.Input("sheet_name", default="", optional=True),
+                io.Combo.Input("preset_model", options=_MODELS,
+                               default="nano-banana-pro"),
+                io.Combo.Input("resolution", options=_RESOLUTIONS, default="2K"),
+                io.Combo.Input("aspect_ratio", options=_ASPECTS, default="1:1"),
+                io.Int.Input("max_width", default=2048, min=64, max=8192,
+                             optional=True, advanced=True,
+                             tooltip="Sheet width when preset_model=custom"),
+                io.Int.Input("max_height", default=2048, min=64, max=8192,
+                             optional=True, advanced=True),
+                io.Combo.Input("algorithm", options=["shelf", "maxrects", "grid"],
+                               default="shelf"),
+                io.Boolean.Input("distribute_by_folder", default=True),
+                io.String.Input("background", default="#808080", optional=True,
+                                tooltip="Hex fill; empty = transparent"),
+            ],
+            outputs=[
+                Template.Output(display_name="template"),
+                io.Image.Output(display_name="base sheet"),
+                io.Image.Output(display_name="task sheet"),
+                io.String.Output(display_name="bundle_json"),
+            ],
+            hidden=[io.Hidden.unique_id],
+            is_output_node=True,
+        )
+
+    @classmethod
+    def execute(cls, spec, assets_root, assignments, group="", sheet_name="",
+                preset_model="nano-banana-pro", resolution="2K", aspect_ratio="1:1",
+                max_width=2048, max_height=2048, algorithm="shelf",
+                distribute_by_folder=True, background="#808080") -> io.NodeOutput:
+        assets_root = assets_root.strip()
+        if not assets_root or not os.path.isdir(assets_root):
+            raise ValueError(
+                "assets_root is not a folder — use the node's Browse button to "
+                "pick the project reference folder")
+        try:
+            assigned = json.loads(assignments or "{}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"assignments is not valid JSON: {e}")
+        if not isinstance(assigned, dict):
+            raise ValueError("assignments must be a JSON object "
+                             "(task asset name -> catalog rel path)")
+
+        preset = (None if preset_model == "custom"
+                  else {"model": preset_model, "tier": resolution, "ar": aspect_ratio})
+        if preset is not None and preset_dims(preset) is None:
+            model = next((m for m in MODEL_PRESETS if m["id"] == preset_model), None)
+            raise ValueError(
+                f'{preset_model} does not support {resolution} @ {aspect_ratio} — '
+                f'valid tiers: {", ".join(model["tiers"])}; '
+                f'aspect ratios: {", ".join(model["aspectRatios"])}'
+                if model else f'unknown preset model "{preset_model}"'
+            )
+        settings = PackSettings(
+            algorithm=algorithm, preset=preset, max_width=max_width,
+            max_height=max_height, distribute_by_folder=distribute_by_folder,
+            background=background.strip(),
+        )
+
+        groups = spec["templates"]
+        group = group.strip()
+        if group:
+            groups = [g for g in groups if g["template"] == group]
+            if not groups:
+                have = ", ".join(g["template"] for g in spec["templates"])
+                raise ValueError(
+                    f'group "{group}" is not in the event spec (have: {have})')
+        assets = [a for g in groups for a in g["assets"] if a["refFiles"]]
+        if not assets:
+            raise ValueError("no assets with reference files — check the "
+                             "Order Read refs_path")
+
+        from .texture_pack import effective_max
+        dims = effective_max(settings)
+        sheet_w, sheet_h = dims["w"], dims["h"]
+        base_sheet, task_sheet, regions, overflow = build_paired_sheets(
+            assets, spec.get("refsRoot", ""), assets_root, assigned,
+            sheet_w, sheet_h, settings)
+        if overflow:
+            print(f"[Symbiotica] template overflow (stacked below): {overflow}")
+
+        _register_refs_root(assets_root)
+        template_name = group or f"{slugify(spec['feature'])}-specs"
+        name = sheet_name.strip() or template_name
+        rel = save_sheet(task_sheet, regions, name,
+                         folder_paths.get_output_directory(),
+                         meta={"template": template_name})
+        base_rel = save_sheet(base_sheet, regions, f"{name}-base",
+                              folder_paths.get_output_directory(),
+                              meta={"template": template_name, "role": "base"})
+
+        refs_root = (spec.get("refsRoot", "") or "").rstrip("/")
+        ref_paths = (
+            {a["assetName"]: [f"{refs_root}/{f}" for f in a["refFiles"]]
+             for a in assets}
+            if refs_root else {}
+        )
+        bundle = {
+            "kind": "template",
+            "template": template_name,
+            "sheetFile": rel,
+            "baseSheetFile": base_rel,
+            "templateSize": {"w": task_sheet.width, "h": task_sheet.height},
+            "regions": regions,
+            "refPaths": ref_paths,
+        }
+        base_tensor = _pil_to_tensor(base_sheet)
+        task_tensor = _pil_to_tensor(task_sheet)
+        return io.NodeOutput(bundle, base_tensor, task_tensor,
+                             json.dumps(bundle, indent=1),
+                             ui=ui.PreviewImage(base_tensor, cls=cls))
+
+
 class SymbioticaTemplatePrompt(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -314,5 +456,6 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
+    SymbioticaTemplateEditor,
     SymbioticaTemplatePrompt,
 ]

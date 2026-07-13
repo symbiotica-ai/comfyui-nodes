@@ -84,3 +84,32 @@ def test_null_byte_denied_without_exception(tmp_path, monkeypatch):
     routes.register_root(str(root))
 
     assert routes.is_allowed(str(root) + "/a\x00.png") is None
+
+
+def test_list_subdirs(tmp_path, monkeypatch):
+    routes = _load_routes(monkeypatch)
+    (tmp_path / "Beta").mkdir()
+    (tmp_path / "alpha").mkdir()
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / "file.txt").write_bytes(b"x")
+    info = routes.list_subdirs(str(tmp_path))
+    assert info["path"] == str(tmp_path.resolve())
+    assert info["dirs"] == ["alpha", "Beta"]  # case-insensitive sort, no dotdirs
+    assert info["parent"] == str(tmp_path.resolve().parent)
+
+
+def test_list_subdirs_bad_paths(tmp_path, monkeypatch):
+    routes = _load_routes(monkeypatch)
+    assert routes.list_subdirs(str(tmp_path / "nope")) is None
+    f = tmp_path / "f.txt"
+    f.write_bytes(b"x")
+    assert routes.list_subdirs(str(f)) is None
+    assert routes.list_subdirs("bad\x00path") is None
+
+
+def test_list_subdirs_default_is_home(monkeypatch):
+    routes = _load_routes(monkeypatch)
+    import os
+    info = routes.list_subdirs("")
+    assert info is not None
+    assert info["path"] == os.path.realpath(os.path.expanduser("~"))
