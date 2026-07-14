@@ -124,9 +124,16 @@ export function openTemplateEditor(opts) {
     };
     syncRefToggle();
 
+    // "+ Add region" arms a draw mode: the next drag on empty sheet draws the
+    // region (drag-empty otherwise box-selects).
     const addRegion = document.createElement("button");
     addRegion.textContent = "+ Add region";
-    addRegion.addEventListener("click", () => state.addRegion());
+    addRegion.addEventListener("click", () => {
+        state.setAddRegionMode(!state.addRegionMode);
+    });
+    state.on("mode", () => {
+        addRegion.classList.toggle("active", state.addRegionMode);
+    });
     const promptToggle = document.createElement("button");
     const syncPrompt = () => {
         promptToggle.textContent = state.promptHidden ? "🚫 Prompt" : "👁 Prompt";
@@ -171,6 +178,10 @@ export function openTemplateEditor(opts) {
     // esc: leave member-edit mode first, close the editor otherwise
     const onKey = (e) => {
         if (e.key !== "Escape") return;
+        if (state.addRegionMode) {
+            state.setAddRegionMode(false);
+            return;
+        }
         if (state.memberEditRegionId) {
             state.setMemberEdit(null);
             return;

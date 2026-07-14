@@ -25,7 +25,7 @@ export function createCanvasPanel(state, host, opts) {
         footer.textContent =
             `${state.sheetW}×${state.sheetH} px · scroll to zoom · ` +
             `space-drag to pan · drag empty to draw · click select · ` +
-            `drag move · corner resize · double-click to move sprites inside`;
+            `drag move · corner resize · shift-click multi-select · drag empty to box-select · double-click to move sprites inside`;
     };
     syncFooter();
 
@@ -168,7 +168,8 @@ export function createCanvasPanel(state, host, opts) {
             const p = sheetToScreen(px.x, px.y);
             const w = px.w * view.zoom, h = px.h * view.zoom;
             const color = PALETTE[((region.zIndex % PALETTE.length) + PALETTE.length) % PALETTE.length];
-            const selected = region.id === state.selectedRegionId;
+            const selected = state.isSelected(region.id) ||
+                             region.id === state.selectedRegionId;
 
             ctx.fillStyle = color + "1f"; // ~12% alpha
             ctx.fillRect(p.x, p.y, w, h);
@@ -198,7 +199,10 @@ export function createCanvasPanel(state, host, opts) {
                 }
             }
 
-            if (selected) {
+            // corner handles only on a single selection (primary); resize with
+            // a multi-selection is ambiguous
+            if (selected && region.id === state.selectedRegionId &&
+                state.selectedRegionIds.size <= 1) {
                 for (const [cx, cy] of [[p.x, p.y], [p.x + w, p.y], [p.x, p.y + h], [p.x + w, p.y + h]]) {
                     ctx.fillStyle = "#fff";
                     ctx.strokeStyle = "#000";
@@ -239,7 +243,7 @@ export function createCanvasPanel(state, host, opts) {
         }
 
         // rubber band
-        if (drag && drag.mode === "draw" && drag.band) {
+        if (drag && (drag.mode === "draw" || drag.mode === "boxselect") && drag.band) {
             const a = sheetToScreen(drag.band.x, drag.band.y);
             ctx.save();
             ctx.strokeStyle = "#fff";
@@ -401,17 +405,36 @@ export function createCanvasPanel(state, host, opts) {
 
         const hit = regionAt(sp);
         if (hit) {
-            if (hit.id !== state.selectedRegionId) state.selectRegion(hit.id);
+            if (e.shiftKey) {
+                // shift-click toggles membership in the multi-selection
+                state.toggleSelect(hit.id);
+                return;
+            }
+            if (!state.isSelected(hit.id)) state.selectRegion(hit.id);
+            else if (hit.id !== state.selectedRegionId) {
+                state.selectedRegionId = hit.id; // primary follows the click
+                state.emit("selection");
+            }
             const px = regionPx(hit);
+            // Group move: every selected region travels with the drag.
+            const ids = [...state.selectedRegionIds].map((id) => {
+                const r = state.regions.find((v) => v.id === id);
+                return r ? { id, ox: r.x * state.sheetW, oy: r.y * state.sheetH } : null;
+            }).filter(Boolean);
             drag = {
                 mode: "move", id: hit.id, start: pt, startSheet: sp,
                 origin: { x: px.x, y: px.y, w: px.w, h: px.h },
+                group: ids,
                 moved: false, guides: { xs: [], ys: [] },
             };
             return;
         }
 
-        drag = { mode: "draw", start: pt, startSheet: sp, band: null, guides: { xs: [], ys: [] } };
+        // Empty sheet: "+ Add region" mode draws; default drags a select box.
+        drag = {
+            mode: state.addRegionMode ? "draw" : "boxselect",
+            start: pt, startSheet: sp, band: null, guides: { xs: [], ys: [] },
+        };
     });
 
     canvas.addEventListener("pointermove", (e) => {
@@ -427,7 +450,7 @@ export function createCanvasPanel(state, host, opts) {
             return;
         }
 
-        if (drag.mode === "draw") {
+        if (drag.mode === "draw" || drag.mode === "boxselect") {
             drag.band = {
                 x: Math.min(drag.startSheet.x, sp.x),
                 y: Math.min(drag.startSheet.y, sp.y),
@@ -494,7 +517,12 @@ export function createCanvasPanel(state, host, opts) {
                 if (bx) { nx += bx.delta; drag.guides.xs.push(bx.guide); }
                 if (by) { ny += by.delta; drag.guides.ys.push(by.guide); }
             }
-            state.moveRegion(drag.id, nx / state.sheetW, ny / state.sheetH);
+            // Apply the (snapped) primary delta to every selected region.
+            const dxs = nx - drag.origin.x, dys = ny - drag.origin.y;
+            for (const g of drag.group ?? [{ id: drag.id, ox: drag.origin.x, oy: drag.origin.y }]) {
+                state.moveRegion(g.id, (g.ox + dxs) / state.sheetW,
+                                 (g.oy + dys) / state.sheetH);
+            }
             return;
         }
 
@@ -540,6 +568,25 @@ export function createCanvasPanel(state, host, opts) {
                     x: d.band.x / state.sheetW, y: d.band.y / state.sheetH,
                     w: d.band.w / state.sheetW, h: d.band.h / state.sheetH,
                 });
+            }
+            state.setAddRegionMode(false); // one region per arm
+        }
+        if (d.mode === "boxselect") {
+            const pt = localPoint(e);
+            const dxPx = Math.abs(pt.x - d.start.x), dyPx = Math.abs(pt.y - d.start.y);
+            if (d.band && (dxPx > 4 || dyPx > 4)) {
+                // Select every region intersecting the marquee.
+                const b = d.band;
+                const ids = state.regions.filter((r) => {
+                    const px = regionPx(r);
+                    return px.x < b.x + b.w && px.x + px.w > b.x &&
+                           px.y < b.y + b.h && px.y + px.h > b.y;
+                }).map((r) => r.id);
+                if (e.shiftKey) {
+                    state.selectMany([...new Set([...state.selectedRegionIds, ...ids])]);
+                } else {
+                    state.selectMany(ids);
+                }
             } else {
                 state.selectRegion(null);
             }
@@ -573,9 +620,9 @@ export function createCanvasPanel(state, host, opts) {
             e.preventDefault();
             return;
         }
-        if ((e.key === "Delete" || e.key === "Backspace") && state.selectedRegionId) {
+        if ((e.key === "Delete" || e.key === "Backspace") && state.selectedRegionIds.size) {
             e.preventDefault();
-            state.deleteRegion(state.selectedRegionId);
+            for (const id of [...state.selectedRegionIds]) state.deleteRegion(id);
         }
     }
     function onKeyUp(e) {

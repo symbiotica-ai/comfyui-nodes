@@ -282,7 +282,7 @@ export function renderInspector(state, host, opts) {
                 "display:flex;align-items:center;gap:6px;padding:3px 6px;margin:2px 0;" +
                     "border:1px solid #2a2a2a;border-radius:5px;cursor:pointer;"
             );
-            if (region.id === state.selectedRegionId) {
+            if (state.isSelected(region.id) || region.id === state.selectedRegionId) {
                 row.style.borderColor = "#c33";
                 row.style.background = "#1c1414";
             }
@@ -310,18 +310,45 @@ export function renderInspector(state, host, opts) {
             down.addEventListener("click", (e) => { e.stopPropagation(); move(1); });
             row.append(up, down);
 
-            row.addEventListener("click", () => state.selectRegion(region.id));
+            row.addEventListener("click", (e) => {
+                if (e.shiftKey) state.toggleSelect(region.id);
+                else state.selectRegion(region.id);
+            });
             frag.appendChild(row);
         });
         return frag;
     }
 
     // ---- render ---------------------------------------------------------------
+    function buildMultiEditor() {
+        const frag = document.createDocumentFragment();
+        const n = state.selectedRegionIds.size;
+        frag.appendChild(el("div", "text-align:center;opacity:.8;padding:8px 0 4px;",
+            `${n} regions selected`));
+        const row = el("div", "display:flex;justify-content:center;gap:6px;margin:4px 0 8px;");
+        for (const [factor, label] of [[0.5, "×½ all"], [2, "×2 all"]]) {
+            const b = el("button", null, label);
+            b.addEventListener("click", () => {
+                for (const id of [...state.selectedRegionIds]) state.scaleRegion(id, factor);
+            });
+            row.appendChild(b);
+        }
+        const del = el("button", null, "🗑 Delete all");
+        del.addEventListener("click", () => {
+            for (const id of [...state.selectedRegionIds]) state.deleteRegion(id);
+        });
+        row.appendChild(del);
+        frag.appendChild(row);
+        return frag;
+    }
+
     function render() {
         if (muted) return;
         const parts = [buildRefToggle()];
         const region = state.selectedRegion();
-        if (region) {
+        if (state.selectedRegionIds.size > 1) {
+            parts.push(buildMultiEditor());
+        } else if (region) {
             parts.push(buildRegionEditor(region));
         } else {
             parts.push(el(

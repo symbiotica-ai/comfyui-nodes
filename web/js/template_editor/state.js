@@ -28,7 +28,9 @@ export function createEditorState(init = {}) {
         sheetH: init.sheetH ?? 2048,
         settings: structuredClone({ ...DEFAULT_SETTINGS, ...(init.settings ?? {}) }),
         regions: init.regions ?? [],
-        selectedRegionId: null,
+        selectedRegionId: null,          // primary selection (last clicked)
+        selectedRegionIds: new Set(),    // full multi-selection
+        addRegionMode: false,            // "+ Add region" armed: next drag draws
 
         // template identity
         templateName: init.templateName ?? "",
@@ -64,10 +66,37 @@ export function createEditorState(init = {}) {
         // region ops ----------------------------------------------------------
         selectRegion(id) {
             state.selectedRegionId = id;
+            state.selectedRegionIds = new Set(id ? [id] : []);
             state.emit("selection");
+        },
+        toggleSelect(id) {
+            // shift-click: add/remove one region from the multi-selection
+            const set = state.selectedRegionIds;
+            if (set.has(id)) {
+                set.delete(id);
+                if (state.selectedRegionId === id) {
+                    state.selectedRegionId = set.values().next().value ?? null;
+                }
+            } else {
+                set.add(id);
+                state.selectedRegionId = id;
+            }
+            state.emit("selection");
+        },
+        selectMany(ids) {
+            state.selectedRegionIds = new Set(ids);
+            state.selectedRegionId = ids[0] ?? null;
+            state.emit("selection");
+        },
+        isSelected(id) {
+            return state.selectedRegionIds.has(id);
         },
         selectedRegion() {
             return state.regions.find((r) => r.id === state.selectedRegionId) ?? null;
+        },
+        setAddRegionMode(on) {
+            state.addRegionMode = Boolean(on);
+            state.emit("mode");
         },
         updateRegion(id, patch) {
             const r = state.regions.find((x) => x.id === id);
@@ -162,18 +191,24 @@ export function createEditorState(init = {}) {
             };
             state.regions.push(region);
             state.selectedRegionId = region.id;
+            state.selectedRegionIds = new Set([region.id]);
             state.emit("regions");
             return region;
         },
         deleteRegion(id) {
             state.regions = state.regions.filter((r) => r.id !== id);
             state.regions.forEach((r, i) => { r.zIndex = i; });
-            if (state.selectedRegionId === id) state.selectedRegionId = null;
+            state.selectedRegionIds.delete(id);
+            if (state.selectedRegionId === id) {
+                state.selectedRegionId =
+                    state.selectedRegionIds.values().next().value ?? null;
+            }
             state.emit("regions");
         },
         setRegions(regions) {
             state.regions = regions;
             state.selectedRegionId = null;
+            state.selectedRegionIds = new Set();
             state.emit("regions");
         },
         restackRegions(orderedIds) {

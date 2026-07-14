@@ -195,6 +195,7 @@ app.registerExtension({
                 const container = document.createElement("div");
                 container.style.cssText =
                     "max-height:280px;overflow-y:auto;padding:2px;";
+                stopWheel(container);
                 this._symbioticaBrowser = container;
                 renderBrowser(container, undefined);
                 this.addDOMWidget("events_browser", "custom", container,
@@ -426,9 +427,16 @@ async function openEditorForNode(node, uiState) {
     return handle;
 }
 
+function stopWheel(elem) {
+    // Scrollable node panels: keep the wheel for the panel's own scroll —
+    // without this LiteGraph zooms the whole graph canvas instead.
+    elem.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
+}
+
 function setupTemplateEditor(node) {
     const container = document.createElement("div");
     container.style.cssText = "max-height:340px;overflow-y:auto;padding:2px;font-size:11px;";
+    stopWheel(container);
     const uiState = { images: [], browsing: false, templates: [] };
 
     node._symbioticaEditor = {
