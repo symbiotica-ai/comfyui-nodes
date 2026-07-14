@@ -576,15 +576,21 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
                     continue
                 add_ref(region, _pil_to_tensor(img))
 
-        # Generic batch: contain-pad every ref onto a common canvas so plain
-        # IMAGE-batch edit nodes (Nano Banana 2 etc.) accept them.
+        # Generic batch: one tensor must share one size, so smaller crops are
+        # CENTERED on a canvas filled with the sheet's background color (its
+        # top-left pixel) — no black bars, previews read like mini-sheets.
+        # image_refs keeps every crop at its true size.
         if refs:
             max_h = max(int(r.shape[1]) for r in refs)
             max_w = max(int(r.shape[2]) for r in refs)
+            fill = base_sheet[0, 0, 0, :3]
             padded = []
             for r in refs:
-                canvas = torch.zeros((1, max_h, max_w, 3), dtype=r.dtype)
-                canvas[:, : int(r.shape[1]), : int(r.shape[2]), :] = r[..., :3]
+                canvas = fill.expand(1, max_h, max_w, 3).clone().to(r.dtype)
+                rh, rw = int(r.shape[1]), int(r.shape[2])
+                oy = (max_h - rh) // 2
+                ox = (max_w - rw) // 2
+                canvas[:, oy:oy + rh, ox:ox + rw, :] = r[..., :3]
                 padded.append(canvas)
             refs_batch = torch.cat(padded, dim=0)
         else:
