@@ -240,3 +240,37 @@ def test_draw_task_refs_honors_selection_and_pair_flip(tmp_path):
     assert sheet.getpixel((16, 32))[:3] == (0, 255, 0)
     # Cell 2 draws the SAME image mirrored: left quarter now red.
     assert sheet.getpixel((128 + 16, 32))[:3] == (255, 0, 0)
+
+
+def test_draw_task_refs_two_checked_refs_no_baked_flip(tmp_path):
+    from pipeline.compose import _draw_task_refs, _paint_background
+
+    refs = tmp_path / "refs"
+    os.makedirs(refs, exist_ok=True)
+    # Asymmetric pair: left-green/right-red and its pre-mirrored counterpart.
+    a = Image.new("RGB", (64, 64), (0, 255, 0))
+    for x in range(32, 64):
+        for y in range(64):
+            a.putpixel((x, y), (255, 0, 0))
+    a.save(refs / "Cart.png")
+    a.transpose(Image.FLIP_LEFT_RIGHT).save(refs / "Cart_1.png")
+
+    regions = [{
+        "id": "region:spec:Cart", "name": "Cart",
+        "x": 0, "y": 0, "w": 0.5, "h": 0.25,
+        "taskRefs": {"paths": ["D/Cart/Cart.png", "D/Cart/Cart_1.png"],
+                     "mode": "meta"},
+        "members": [
+            {"spriteId": "D/Cart/Cart.png", "x": 0.0, "y": 0.0,
+             "w": 0.125, "h": 0.125},
+            # Born as a flip pair: baked flipX must NOT apply to explicit picks.
+            {"spriteId": "D/Cart/Cart.png", "x": 0.125, "y": 0.0,
+             "w": 0.125, "h": 0.125, "flipX": True},
+        ],
+    }]
+    sheet = _paint_background(512, 512, "#808080")
+    _draw_task_refs(sheet, regions, str(refs), 512, 512)
+    # Cell 1: Cart.png unflipped -> left quarter green.
+    assert sheet.getpixel((16, 32))[:3] == (0, 255, 0)
+    # Cell 2: Cart_1.png (pre-mirrored) drawn AS-IS -> left quarter red.
+    assert sheet.getpixel((64 + 16, 32))[:3] == (255, 0, 0)

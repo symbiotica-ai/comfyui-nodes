@@ -350,9 +350,11 @@ async function openEditorForNode(node, uiState) {
                 if (projectRels.length === 1) {
                     return { url: thumbUrl(root, projectRels[0]), flip: pairFlip };
                 }
-                // One picked sprite per cell, in click order.
+                // One picked sprite per cell, in click order. Explicit per-cell
+                // picks are final art (often pre-mirrored pairs): never apply
+                // the baked pair flip on top.
                 const rel = projectRels[Math.min(i, projectRels.length - 1)];
-                return { url: thumbUrl(root, rel), flip: Boolean(member.flipX) };
+                return { url: thumbUrl(root, rel), flip: false };
             }
             const paths = region.taskRefs?.paths;
             if (paths?.length && refsRoot) {
@@ -360,8 +362,9 @@ async function openEditorForNode(node, uiState) {
                     const file = paths[0].split("/").pop();
                     return { url: thumbUrl(refsRoot, file), flip: pairFlip };
                 }
+                // Multiple checked refs are explicit per-cell art — no baked flip.
                 const file = paths[Math.min(i, paths.length - 1)].split("/").pop();
-                return { url: thumbUrl(refsRoot, file), flip: Boolean(member.flipX) };
+                return { url: thumbUrl(refsRoot, file), flip: false };
             }
             if (member.spriteId && refsRoot) {
                 return { url: thumbUrl(refsRoot, member.spriteId.split("/").pop()),

@@ -205,7 +205,10 @@ def _draw_task_refs(sheet: Image.Image, regions: list[dict], refs_root: str,
                     filename = paths[0].split("/")[-1]
                     flip = len(members) == 2 and i == 1
                 else:
+                    # Multiple checked refs are explicit per-cell art (often a
+                    # pre-mirrored pair) — never apply the baked pair flip.
                     filename = paths[min(i, len(paths) - 1)].split("/")[-1]
+                    flip = False
             else:
                 sprite = member.get("spriteId")
                 if not sprite:
