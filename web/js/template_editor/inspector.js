@@ -85,6 +85,58 @@ export function renderInspector(state, host, opts) {
         skill.append(skillLabel, skillVal);
         frag.appendChild(skill);
 
+        // SCALE row: double or halve the region and its cells in place
+        // (use case: 128px food icons rendered at 256).
+        const scaleRow = el("div", "display:flex;align-items:center;gap:6px;margin:2px 0;");
+        scaleRow.appendChild(el("span",
+            "font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.6;flex:1;",
+            "Scale"));
+        for (const [factor, label] of [[0.5, "×½"], [2, "×2"]]) {
+            const btn = el("button", "flex:none;", label);
+            btn.title = factor === 2
+                ? "Double the region and its sprites"
+                : "Halve the region and its sprites";
+            btn.addEventListener("click", () => state.scaleRegion(region.id, factor));
+            scaleRow.appendChild(btn);
+        }
+        frag.appendChild(scaleRow);
+
+        // CELLS strip: reorder the items of a multi-cell region (visual
+        // left-to-right order; arrows swap the content mapping, cells stay put).
+        const members = region.members ?? [];
+        if (members.length > 1) {
+            frag.appendChild(sectionTitle(`Cells · ${members.length} — reorder items`));
+            const strip = el("div", "display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 6px;");
+            const visual = members
+                .map((m, idx) => ({ m, idx }))
+                .sort((a, b) => (a.m.y - b.m.y) || (a.m.x - b.m.x));
+            visual.forEach((entry, vi) => {
+                const cell = el("div",
+                    "display:flex;flex-direction:column;align-items:center;gap:2px;" +
+                    "border:1px solid #333;border-radius:5px;padding:3px;");
+                const resolved = opts.resolveMemberUrl?.(region, entry.m);
+                const url = typeof resolved === "string" ? resolved : resolved?.url;
+                const img = el("img",
+                    "width:40px;height:40px;object-fit:contain;background:#111;border-radius:3px;");
+                if (url) img.src = url;
+                cell.appendChild(img);
+                const arrows = el("div", "display:flex;gap:2px;");
+                const mk = (txt, delta) => {
+                    const b = el("button", "padding:0 5px;font-size:10px;", txt);
+                    const target = visual[vi + delta];
+                    b.disabled = !target;
+                    b.addEventListener("click", () => {
+                        if (target) state.swapMemberContent(region.id, entry.idx, target.idx);
+                    });
+                    return b;
+                };
+                arrows.append(mk("←", -1), mk("→", 1));
+                cell.appendChild(arrows);
+                strip.appendChild(cell);
+            });
+            frag.appendChild(strip);
+        }
+
         // KIND segmented control
         frag.appendChild(sectionTitle("Kind"));
         const seg = el("div", "display:flex;gap:6px;margin:2px 0 6px;");

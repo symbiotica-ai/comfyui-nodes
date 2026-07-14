@@ -47,6 +47,9 @@ export function createEditorState(init = {}) {
         // viewport
         view: { zoom: 1, panX: 0, panY: 0 },
 
+        // double-click member-edit mode: region whose cells drag individually
+        memberEditRegionId: null,
+
         // events -------------------------------------------------------------
         on(event, cb) {
             if (!listeners.has(event)) listeners.set(event, new Set());
@@ -84,6 +87,48 @@ export function createEditorState(init = {}) {
                 m.y += dy;
             }
             state.emit("regions");
+        },
+        setMemberEdit(id) {
+            state.memberEditRegionId = id;
+            state.emit("regions");
+        },
+        swapMemberContent(regionId, i, j) {
+            // Reorder the ITEMS in a multi-cell region: cells keep their
+            // positions, the content mapping swaps — spriteId/flipX on the
+            // members plus the index-mapped taskRefs/projectPaths entries.
+            const r = state.regions.find((v) => v.id === regionId);
+            const m = r?.members;
+            if (!m || !m[i] || !m[j]) return;
+            for (const key of ["spriteId", "flipX"]) {
+                const tmp = m[i][key];
+                m[i][key] = m[j][key];
+                m[j][key] = tmp;
+            }
+            const paths = r.taskRefs?.paths;
+            if (paths && paths[i] !== undefined && paths[j] !== undefined) {
+                [paths[i], paths[j]] = [paths[j], paths[i]];
+            }
+            const proj = r.projectPaths;
+            if (proj && proj[i] !== undefined && proj[j] !== undefined) {
+                [proj[i], proj[j]] = [proj[j], proj[i]];
+            }
+            state.emit("regions");
+        },
+        scaleRegion(id, factor) {
+            // Scale the region and its cells around the region's top-left,
+            // clamped inside the sheet (use case: 128px food icons at x2).
+            const r = state.regions.find((v) => v.id === id);
+            if (!r) return;
+            let w = r.w * factor;
+            let h = r.h * factor;
+            if (w > 1 || h > 1) {
+                const cap = Math.min(1 / r.w, 1 / r.h);
+                w = r.w * Math.min(factor, cap);
+                h = r.h * Math.min(factor, cap);
+            }
+            const x = Math.max(0, Math.min(r.x, 1 - w));
+            const y = Math.max(0, Math.min(r.y, 1 - h));
+            state.resizeRegion(id, { x, y, w, h });
         },
         resizeRegion(id, rect) {
             // Scale member cells proportionally within the region box.

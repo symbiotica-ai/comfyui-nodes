@@ -25,7 +25,7 @@ export function createCanvasPanel(state, host, opts) {
         footer.textContent =
             `${state.sheetW}×${state.sheetH} px · scroll to zoom · ` +
             `space-drag to pan · drag empty to draw · click select · ` +
-            `drag move · corner resize`;
+            `drag move · corner resize · double-click to move sprites inside`;
     };
     syncFooter();
 
@@ -207,6 +207,21 @@ export function createCanvasPanel(state, host, opts) {
                     ctx.strokeRect(cx - HANDLE / 2, cy - HANDLE / 2, HANDLE, HANDLE);
                 }
             }
+
+            // member-edit mode: dashed outlines around the individual cells
+            if (region.id === state.memberEditRegionId) {
+                ctx.save();
+                ctx.setLineDash([4, 3]);
+                ctx.strokeStyle = "#fff";
+                ctx.lineWidth = 1;
+                for (const m of region.members ?? []) {
+                    const mp = sheetToScreen(m.x * state.sheetW, m.y * state.sheetH);
+                    ctx.strokeRect(mp.x, mp.y,
+                                   m.w * state.sheetW * view.zoom,
+                                   m.h * state.sheetH * view.zoom);
+                }
+                ctx.restore();
+            }
         }
 
         // smart-guide lines (sheet px -> screen)
@@ -301,6 +316,19 @@ export function createCanvasPanel(state, host, opts) {
         return best;
     }
 
+    function memberAt(region, sheetPt) {
+        // Topmost member cell of `region` containing the sheet-space point.
+        const members = region.members ?? [];
+        for (let i = members.length - 1; i >= 0; i--) {
+            const m = members[i];
+            const x = m.x * state.sheetW, y = m.y * state.sheetH;
+            const w = m.w * state.sheetW, h = m.h * state.sheetH;
+            if (sheetPt.x >= x && sheetPt.x <= x + w &&
+                sheetPt.y >= y && sheetPt.y <= y + h) return i;
+        }
+        return -1;
+    }
+
     // ---- pointer interactions -----------------------------------------------
     let drag = null;      // active drag descriptor
     let spaceDown = false;
@@ -335,6 +363,25 @@ export function createCanvasPanel(state, host, opts) {
             drag = { mode: "pan", start: pt, startPan: { x: view.panX, y: view.panY }, guides: { xs: [], ys: [] } };
             canvas.style.cursor = "grabbing";
             return;
+        }
+
+        // Member-edit mode (entered by double-click): drag individual cells
+        // of that region instead of the region itself.
+        if (state.memberEditRegionId) {
+            const region = state.regions.find((r) => r.id === state.memberEditRegionId);
+            const idx = region ? memberAt(region, sp) : -1;
+            if (region && idx >= 0) {
+                const m = region.members[idx];
+                drag = {
+                    mode: "member", regionId: region.id, index: idx,
+                    startSheet: sp,
+                    origin: { x: m.x * state.sheetW, y: m.y * state.sheetH },
+                    guides: { xs: [], ys: [] },
+                };
+                return;
+            }
+            // Click outside the edited region's cells exits the mode.
+            state.setMemberEdit(null);
         }
 
         const corner = handleAt(pt);
@@ -388,6 +435,23 @@ export function createCanvasPanel(state, host, opts) {
                 h: Math.abs(sp.y - drag.startSheet.y),
             };
             requestRedraw();
+            return;
+        }
+
+        if (drag.mode === "member") {
+            const region = state.regions.find((r) => r.id === drag.regionId);
+            const m = region?.members?.[drag.index];
+            if (!m) return;
+            let nx = drag.origin.x + (sp.x - drag.startSheet.x);
+            let ny = drag.origin.y + (sp.y - drag.startSheet.y);
+            const snap = state.settings.snap;
+            if (snap > 0) {
+                nx = Math.round(nx / snap) * snap;
+                ny = Math.round(ny / snap) * snap;
+            }
+            m.x = nx / state.sheetW;
+            m.y = ny / state.sheetH;
+            state.emit("regions");
             return;
         }
 
@@ -464,6 +528,16 @@ export function createCanvasPanel(state, host, opts) {
     }
     canvas.addEventListener("pointerup", endDrag);
     canvas.addEventListener("pointercancel", endDrag);
+
+    canvas.addEventListener("dblclick", (e) => {
+        // Double-click a region: edit its cells individually (drag each
+        // sprite); double-click elsewhere (or Escape / click outside) exits.
+        const pt = localPoint(e);
+        const sp = screenToSheet(pt.x, pt.y);
+        const hit = regionAt(sp);
+        state.setMemberEdit(hit && (hit.members?.length ?? 0) > 0 ? hit.id : null);
+        if (hit) state.selectRegion(hit.id);
+    });
 
     // ---- keyboard --------------------------------------------------------------
     function editableTarget(e) {

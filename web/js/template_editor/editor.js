@@ -168,13 +168,16 @@ export function openTemplateEditor(opts) {
     renderRail(state, rail, opts);
     renderInspector(state, inspector, opts);
 
-    // esc closes
+    // esc: leave member-edit mode first, close the editor otherwise
     const onKey = (e) => {
-        if (e.key === "Escape") {
-            overlay.remove();
-            document.removeEventListener("keydown", onKey);
-            opts.onClose?.(state);
+        if (e.key !== "Escape") return;
+        if (state.memberEditRegionId) {
+            state.setMemberEdit(null);
+            return;
         }
+        overlay.remove();
+        document.removeEventListener("keydown", onKey);
+        opts.onClose?.(state);
     };
     document.addEventListener("keydown", onKey);
 
