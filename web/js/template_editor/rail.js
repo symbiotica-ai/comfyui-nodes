@@ -91,6 +91,16 @@ export function renderRail(state, host, opts) {
     });
     host.appendChild(prefillBtn);
 
+    // Repack: relayout the current regions under the pack settings, KEEPING
+    // user edits and scales (unlike Prefill, which is a full reset).
+    const repackBtn = el("button", "width:100%;margin-bottom:6px;", "⟲ Repack regions");
+    repackBtn.disabled = state.taskAssets.length === 0;
+    repackBtn.addEventListener("click", () => {
+        if (!state.regions.some((r) => String(r.id).startsWith("region:spec:"))) return;
+        state.setRegions(rebuildSpecRegions(state));
+    });
+    host.appendChild(repackBtn);
+
     function taskAssetsWithRefs() {
         return state.taskAssets.filter(
             (a) => a.assetName && (a.refFiles?.length ?? 0) > 0);

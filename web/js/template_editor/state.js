@@ -117,8 +117,11 @@ export function createEditorState(init = {}) {
         scaleRegion(id, factor) {
             // Scale the region and its cells around the region's top-left,
             // clamped inside the sheet (use case: 128px food icons at x2).
+            // The cumulative factor persists on the region so repacks and
+            // saves keep the user's scale.
             const r = state.regions.find((v) => v.id === id);
             if (!r) return;
+            r.scale = (r.scale ?? 1) * factor;
             let w = r.w * factor;
             let h = r.h * factor;
             if (w > 1 || h > 1) {

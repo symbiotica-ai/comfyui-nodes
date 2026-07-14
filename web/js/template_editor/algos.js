@@ -419,6 +419,7 @@ function regionAt(row, xPx, yPx, sheetW, sheetH) {
         text: "",
         zIndex: 0,
         assetType: row.asset.category,
+        scale: row.scale ?? 1,
         members,
         taskRefs: { paths: row.paths, mode: "meta" },
     };
@@ -429,7 +430,10 @@ function regionAt(row, xPx, yPx, sheetW, sheetH) {
 // settings, strips run through the packer (overflow stacks below, visible);
 // without, strips stack as centered rows distributed evenly down the sheet.
 // orderAssets: [{assetName, category, canvas, prompt, refFiles}]
-export function prefillRegions(orderAssets, sheetW, sheetH, chosen = null, settings = null) {
+export function prefillRegions(orderAssets, sheetW, sheetH, chosen = null, settings = null,
+                               scales = null) {
+    // `scales`: per-asset user scale ({assetName: factor}) — the packer lays
+    // strips out at the SCALED size so repacks respect ×2 regions.
     const rows = [];
     for (const asset of orderAssets) {
         const picked = (chosen ?? {})[asset.assetName];
@@ -438,12 +442,14 @@ export function prefillRegions(orderAssets, sheetW, sheetH, chosen = null, setti
             : asset.refFiles.map((f) => `${asset.category}/${asset.assetName}/${f}`);
         if (!paths.length) continue;
         const spec = canvasSpecOf(asset.canvas);
+        const k = scales?.[asset.assetName] ?? 1;
         rows.push({
             asset,
-            cellW: spec?.w ?? FALLBACK_CELL,
-            cellH: spec?.h ?? FALLBACK_CELL,
+            cellW: (spec?.w ?? FALLBACK_CELL) * k,
+            cellH: (spec?.h ?? FALLBACK_CELL) * k,
             paths,
             flip: paths.length === 1,
+            scale: k,
         });
     }
     if (!rows.length) return { regions: [], overflow: [] };
@@ -514,7 +520,14 @@ const PRESERVED_KEYS = ["desc", "kind", "text", "taskRefs", "projectPaths", "ass
 export function rebuildSpecRegions(state) {
     const assets = (state.taskAssets ?? []).filter(
         (a) => Array.isArray(a.refFiles) && a.refFiles.length > 0);
-    const { regions } = prefillRegions(assets, state.sheetW, state.sheetH, null, state.settings);
+    // Carry each region's user scale into the packer so repacks lay the
+    // strips out at their scaled size instead of resetting to the order's.
+    const scales = {};
+    for (const r of state.regions ?? []) {
+        if (r.name && r.scale && r.scale !== 1) scales[r.name] = r.scale;
+    }
+    const { regions } = prefillRegions(assets, state.sheetW, state.sheetH, null,
+                                       state.settings, scales);
     const oldById = new Map((state.regions ?? []).map((r) => [r.id, r]));
     for (const region of regions) {
         const old = oldById.get(region.id);
