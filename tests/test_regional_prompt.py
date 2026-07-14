@@ -67,3 +67,17 @@ def test_regions_to_pixel_bboxes_erpk_shape():
         {"x": 256, "y": 512, "width": 256, "height": 256},
     ]]
     assert regions_to_pixel_bboxes([], 1024, 1024) == []
+
+
+def test_target_ref_size_formula():
+    from pipeline.regional_prompt import target_ref_size
+
+    # 3-cell food region, 128 canvas scaled x2 -> 768x256.
+    r = {"cellPx": {"w": 256, "h": 256},
+         "members": [{}, {}, {}]}
+    assert target_ref_size(r, 700, 240) == (768, 256)
+    # Pair region, unscaled 128 -> 256x128.
+    r = {"cellPx": {"w": 128, "h": 128}, "members": [{}, {}]}
+    assert target_ref_size(r, 250, 130) == (256, 128)
+    # Old region without cellPx keeps the crop size.
+    assert target_ref_size({"members": [{}]}, 300, 100) == (300, 100)

@@ -49,6 +49,9 @@ def _region_at(row: dict, x_px: float, y_px: float, sheet_w: int, sheet_h: int) 
         "text": "",
         "zIndex": 0,
         "assetType": row["asset"]["category"],
+        # Native cell size in sheet px (canvas x user scale) — the ref-image
+        # resolution formula: n_cells * cellPx.w wide by cellPx.h tall.
+        "cellPx": {"w": row["cellW"], "h": row["cellH"]},
         "members": members,
         "taskRefs": {"paths": row["paths"], "mode": "meta"},
     }

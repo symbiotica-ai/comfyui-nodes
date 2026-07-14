@@ -423,6 +423,8 @@ function regionAt(row, xPx, yPx, sheetW, sheetH) {
         zIndex: 0,
         assetType: row.asset.category,
         scale: row.scale ?? 1,
+        // Native cell size in sheet px (canvas x user scale).
+        cellPx: { w: row.cellW, h: row.cellH },
         members,
         taskRefs: { paths: row.paths, mode: "meta" },
     };

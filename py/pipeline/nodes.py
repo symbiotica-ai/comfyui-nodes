@@ -21,7 +21,11 @@ from .compose import (
     save_sheet,
 )
 from .model_presets import MODEL_PRESETS, preset_dims
-from .regional_prompt import build_regional_prompt, regions_to_pixel_bboxes
+from .regional_prompt import (
+    build_regional_prompt,
+    regions_to_pixel_bboxes,
+    target_ref_size,
+)
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
 from .texture_pack import PackSettings
@@ -561,7 +565,17 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
                 y0 = max(0, min(th - 1, round(region["y"] * th)))
                 x1 = max(x0 + 1, min(tw, round((region["x"] + region["w"]) * tw)))
                 y1 = max(y0 + 1, min(th, round((region["y"] + region["h"]) * th)))
-                add_ref(region, task_sheet[:1, y0:y1, x0:x1, :])
+                crop = task_sheet[:1, y0:y1, x0:x1, :]
+                # Snap the ref to the formula resolution — n_cells x (canvas x
+                # scale) — instead of trusting the crop's sheet pixels (rounding,
+                # fit-scaled layouts, and old baked gaps all drift).
+                want_w, want_h = target_ref_size(region, x1 - x0, y1 - y0)
+                if (want_w, want_h) != (x1 - x0, y1 - y0):
+                    crop = torch.nn.functional.interpolate(
+                        crop[..., :3].permute(0, 3, 1, 2),
+                        size=(want_h, want_w), mode="nearest-exact",
+                    ).permute(0, 2, 3, 1)
+                add_ref(region, crop)
         elif ref_mode == "ref_files":
             from PIL import Image as PILImage
             ref_paths = template.get("refPaths", {})

@@ -124,3 +124,17 @@ def regions_to_pixel_bboxes(regions: list[dict], width: int, height: int) -> lis
          "height": round(r["h"] * height)}
         for r in ordered
     ]]
+
+
+def target_ref_size(region: dict, fallback_w: int, fallback_h: int) -> tuple[int, int]:
+    """The formula resolution for a region's reference image:
+    n_cells * (canvas * scale) wide by (canvas * scale) tall, from the region's
+    recorded cellPx. Regions without cellPx (old templates) keep the fallback
+    (the raw crop size)."""
+    cell = region.get("cellPx") or {}
+    w = cell.get("w")
+    h = cell.get("h")
+    if not w or not h:
+        return max(1, fallback_w), max(1, fallback_h)
+    n = max(1, len(region.get("members") or []))
+    return max(1, round(n * w)), max(1, round(h))
