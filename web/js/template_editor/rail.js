@@ -413,12 +413,13 @@ export function renderRail(state, host, opts) {
                 check.addEventListener("change", () => {
                     if (!sel) return;
                     const cap = Math.max(1, sel.members?.length ?? 1);
-                    let paths = (sel.projectPaths ?? []).filter((p) => !rels.includes(p));
+                    let paths;
                     if (check.checked) {
-                        for (const rel of rels) {
-                            if (paths.length >= cap) break;
-                            paths.push(rel);
-                        }
+                        // Checking a folder REPLACES the region's assignment —
+                        // no need to uncheck the previous folder first.
+                        paths = rels.slice(0, cap);
+                    } else {
+                        paths = (sel.projectPaths ?? []).filter((p) => !rels.includes(p));
                     }
                     state.updateRegion(sel.id, { projectPaths: paths });
                 });
