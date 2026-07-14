@@ -108,7 +108,14 @@ repopulate it after a page reload.
 
 ### API keys
 
-Set via environment variables — no key is ever required for the package to load, only at the moment a node calls a provider.
+Two ways, checked in this order (after any per-node `api_key` widget):
+
+1. **Settings UI (recommended):** ComfyUI Settings → search "Symbiotica" →
+   paste your keys. They are stored in your user's `comfy.settings.json` on
+   the machine — never inside workflow files, so workflows stay safe to
+   share and commit.
+2. **Environment variables** — no key is ever required for the package to
+   load, only at the moment a node calls a provider.
 
 | Variable | Provider |
 |---|---|

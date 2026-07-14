@@ -497,22 +497,17 @@ class NSLLMChat:
         if model_override and model_override.strip():
             model = model_override.strip()
 
-        # Check for API key in environment if not provided
+        # Check the Settings UI (Symbiotica.* keys), then the environment.
         if not api_key or api_key.strip() == "":
+            from ._settings import resolve_key
             if model in gemini_models:
-                api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get(
-                    "GOOGLE_API_KEY"
-                )
+                api_key = resolve_key(["GEMINI_API_KEY", "GOOGLE_API_KEY"])
             elif model in grok_models:
-                api_key = os.environ.get("XAI_API_KEY") or os.environ.get(
-                    "GROK_API_KEY"
-                )
+                api_key = resolve_key(["XAI_API_KEY", "GROK_API_KEY"])
             elif model in openai_models:
-                api_key = os.environ.get("OPENAI_API_KEY")
+                api_key = resolve_key(["OPENAI_API_KEY"])
             else:
-                api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get(
-                    "CLAUDE_API_KEY"
-                )
+                api_key = resolve_key(["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"])
 
         if not api_key:
             if model in gemini_models:

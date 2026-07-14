@@ -32,10 +32,14 @@ OUTPUT_FORMATS = ["png", "jpeg"]
 # --- Helpers ---
 
 def _resolve_key(api_key: str) -> str:
-    key = (api_key or "").strip() or os.environ.get("WAVESPEED_API_KEY", "").strip()
+    key = (api_key or "").strip()
+    if not key:
+        from ._settings import resolve_key as _settings_key
+        key = _settings_key(["WAVESPEED_API_KEY"]) or ""
     if not key:
         raise Exception(
-            "Wavespeed API key required. Set WAVESPEED_API_KEY env var or pass api_key on the node."
+            "Wavespeed API key required. Set it in Settings → Symbiotica, "
+            "the WAVESPEED_API_KEY env var, or pass api_key on the node."
         )
     return key
 

@@ -331,29 +331,32 @@ def call_openai_api(
 
 
 def resolve_api_key(model: str, api_key: str) -> str:
-    """Resolve API key from direct input, then environment variables."""
+    """Resolve API key: direct input, then the ComfyUI Settings UI
+    (Symbiotica.* keys — never stored in workflows), then environment."""
     if api_key and api_key.strip():
         return api_key.strip()
 
+    from ._settings import resolve_key
+
     if model in gemini_models:
-        key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        key = resolve_key(["GEMINI_API_KEY", "GOOGLE_API_KEY"])
         if not key:
-            raise Exception("Gemini API key required. Set GEMINI_API_KEY environment variable.")
+            raise Exception("Gemini API key required. Set it in Settings → Symbiotica, or GEMINI_API_KEY env.")
         return key
     elif model in grok_models:
-        key = os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
+        key = resolve_key(["XAI_API_KEY", "GROK_API_KEY"])
         if not key:
-            raise Exception("xAI API key required. Set XAI_API_KEY environment variable.")
+            raise Exception("xAI API key required. Set it in Settings → Symbiotica, or XAI_API_KEY env.")
         return key
     elif model in openai_models:
-        key = os.environ.get("OPENAI_API_KEY")
+        key = resolve_key(["OPENAI_API_KEY"])
         if not key:
-            raise Exception("OpenAI API key required. Set OPENAI_API_KEY environment variable.")
+            raise Exception("OpenAI API key required. Set it in Settings → Symbiotica, or OPENAI_API_KEY env.")
         return key
     else:
-        key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
+        key = resolve_key(["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"])
         if not key:
-            raise Exception("Claude API key required. Set ANTHROPIC_API_KEY environment variable.")
+            raise Exception("Claude API key required. Set it in Settings → Symbiotica, or ANTHROPIC_API_KEY env.")
         return key
 
 
