@@ -190,7 +190,7 @@ class SymbioticaTemplateBuilder(io.ComfyNode):
                              advanced=True),
                 io.Int.Input("grid_cell", default=0, min=0, max=4096, optional=True,
                              advanced=True),
-                io.Int.Input("columns", default=0, min=0, max=64, optional=True,
+                io.Int.Input("columns", default=1, min=0, max=64, optional=True,
                              advanced=True),
                 io.String.Input("background", default="#808080", optional=True,
                                 tooltip="Hex fill; empty = transparent"),
@@ -209,7 +209,7 @@ class SymbioticaTemplateBuilder(io.ComfyNode):
                 preset_model="nano-banana-pro", resolution="2K", aspect_ratio="1:1",
                 max_width=2048, max_height=2048, algorithm="shelf",
                 distribute_by_folder=True, padding=0, border=0, grid_cell=0,
-                columns=0, background="#808080") -> io.NodeOutput:
+                columns=1, background="#808080") -> io.NodeOutput:
         groups = spec["templates"]
         group = group.strip()
         preset = (None if preset_model == "custom"

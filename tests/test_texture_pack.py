@@ -68,7 +68,7 @@ def test_maxrects_places_all_when_they_fit():
 
 def test_distribute_by_folder_rows_spread_evenly():
     s = PackSettings(preset=None, max_width=100, max_height=100,
-                     distribute_by_folder=True)
+                     distribute_by_folder=True, columns=0)
     res = pack([sprite("a", 20, 10, "Food/A/a.png"), sprite("b", 20, 10, "Food/A/b.png"),
                 sprite("c", 20, 10, "Deco/C/c.png")], s)
     by_id = {p["id"]: p for p in res["placed"]}

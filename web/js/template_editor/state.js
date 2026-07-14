@@ -12,7 +12,7 @@ export const DEFAULT_SETTINGS = {
     powerOfTwo: false,
     gridCell: 0,
     distributeByFolder: true,
-    columns: 0,
+    columns: 1,
     snap: 0,
     smartGuides: true,
     background: { mode: "color", color: "#808080" }, // 'transparent' | 'color'

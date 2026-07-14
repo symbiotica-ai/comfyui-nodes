@@ -19,7 +19,7 @@ class PackSettings:
     power_of_two: bool = False
     grid_cell: int = 0
     distribute_by_folder: bool = False
-    columns: int = 0
+    columns: int = 1
     background: str = "#808080"  # "" = transparent
 
 
