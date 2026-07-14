@@ -449,6 +449,26 @@ export function createCanvasPanel(state, host, opts) {
                 nx = Math.round(nx / snap) * snap;
                 ny = Math.round(ny / snap) * snap;
             }
+            drag.guides = { xs: [], ys: [] };
+            if (state.settings.smartGuides) {
+                // Guides against the parent region's edges/centers and the
+                // sibling cells' edges/centers.
+                const rp = regionPx(region);
+                const xs = [rp.x, rp.x + rp.w / 2, rp.x + rp.w];
+                const ys = [rp.y, rp.y + rp.h / 2, rp.y + rp.h];
+                region.members.forEach((s, i) => {
+                    if (i === drag.index) return;
+                    const sx = s.x * state.sheetW, sy = s.y * state.sheetH;
+                    const sw = s.w * state.sheetW, sh = s.h * state.sheetH;
+                    xs.push(sx, sx + sw / 2, sx + sw);
+                    ys.push(sy, sy + sh / 2, sy + sh);
+                });
+                const mw = m.w * state.sheetW, mh = m.h * state.sheetH;
+                const bx = snapAxis([nx, nx + mw / 2, nx + mw], xs, tol);
+                const by = snapAxis([ny, ny + mh / 2, ny + mh], ys, tol);
+                if (bx) { nx += bx.delta; drag.guides.xs.push(bx.guide); }
+                if (by) { ny += by.delta; drag.guides.ys.push(by.guide); }
+            }
             m.x = nx / state.sheetW;
             m.y = ny / state.sheetH;
             state.emit("regions");
