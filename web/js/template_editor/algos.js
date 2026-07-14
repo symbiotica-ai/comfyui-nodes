@@ -383,6 +383,9 @@ export function canvasSpecOf(canvas) {
 // ---------------------------------------------------------------------------
 
 export const PAD_PX = 16;
+// Gap between the CELLS of one region: zero — a pair region is exactly
+// cell+cell, so its crop lands at the native sprite resolution.
+export const CELL_GAP = 0;
 export const FALLBACK_CELL = 256;
 
 function cellCount(row) {
@@ -391,7 +394,7 @@ function cellCount(row) {
 
 function rowW(row) {
     const n = cellCount(row);
-    return n * row.cellW + (n - 1) * PAD_PX;
+    return n * row.cellW + (n - 1) * CELL_GAP;
 }
 
 function regionAt(row, xPx, yPx, sheetW, sheetH) {
@@ -403,7 +406,7 @@ function regionAt(row, xPx, yPx, sheetW, sheetH) {
             w: row.cellW / sheetW, h: row.cellH / sheetH };
         if (row.flip && i === 1) m.flipX = true;
         members.push(m);
-        x += row.cellW + PAD_PX;
+        x += row.cellW + CELL_GAP;
     });
     const x0 = members[0].x;
     const last = members[members.length - 1];

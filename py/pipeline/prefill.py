@@ -9,6 +9,9 @@ from .order_sheet import canvas_spec_of
 from .texture_pack import PackSettings, pack
 
 PAD_PX = 16
+# Gap between the CELLS of one region: zero — a pair region is exactly
+# cell+cell (256x256 + 256x256), so its crop is the native sprite resolution.
+CELL_GAP = 0
 FALLBACK_CELL = 256
 
 
@@ -18,7 +21,7 @@ def _cell_count(row: dict) -> int:
 
 def _row_w(row: dict) -> float:
     n = _cell_count(row)
-    return n * row["cellW"] + (n - 1) * PAD_PX
+    return n * row["cellW"] + (n - 1) * CELL_GAP
 
 
 def _region_at(row: dict, x_px: float, y_px: float, sheet_w: int, sheet_h: int) -> dict:
@@ -31,7 +34,7 @@ def _region_at(row: dict, x_px: float, y_px: float, sheet_w: int, sheet_h: int) 
         if row["flip"] and i == 1:
             m["flipX"] = True
         members.append(m)
-        x += row["cellW"] + PAD_PX
+        x += row["cellW"] + CELL_GAP
     x0 = members[0]["x"]
     last = members[-1]
     return {
