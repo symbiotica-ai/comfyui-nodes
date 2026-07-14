@@ -335,7 +335,15 @@ export function renderRail(state, host, opts) {
         }
         const assigned = assignmentsByRel();
         const sel = state.selectedRegion();
+        // Assignment targets: the whole multi-selection (checking an asset or
+        // folder assigns it to every selected region at once).
+        const targets = state.regions.filter(
+            (r) => state.isSelected(r.id) || r.id === sel?.id);
         const px = THUMB_SIZES[local.thumb];
+
+        function applyToTargets(fn) {
+            for (const region of targets) fn(region);
+        }
 
         function fileRow(entry, depth) {
             const rel = entry.rel;
@@ -343,20 +351,22 @@ export function renderRail(state, host, opts) {
                 `display:flex;align-items:center;gap:6px;padding:1px 0 1px ${12 * depth}px;`);
             const check = el("input");
             check.type = "checkbox";
-            check.checked = Boolean(sel?.projectPaths?.includes(rel));
-            check.disabled = !sel;
+            check.checked = targets.length > 0 &&
+                targets.every((r) => r.projectPaths?.includes(rel));
+            check.disabled = !targets.length;
             check.addEventListener("change", () => {
-                if (!sel) return;
-                // Multi-cell regions take one sprite per cell (check several,
-                // in click order, capped at the cell count); checking beyond
-                // the cap replaces the last pick.
-                const cap = Math.max(1, sel.members?.length ?? 1);
-                let paths = (sel.projectPaths ?? []).filter((p) => p !== rel);
-                if (check.checked) {
-                    if (paths.length >= cap) paths = paths.slice(0, cap - 1);
-                    paths.push(rel);
-                }
-                state.updateRegion(sel.id, { projectPaths: paths });
+                // Applies to EVERY selected region. Multi-cell regions take one
+                // sprite per cell (click order, capped at the cell count);
+                // checking beyond the cap replaces the last pick.
+                applyToTargets((region) => {
+                    const cap = Math.max(1, region.members?.length ?? 1);
+                    let paths = (region.projectPaths ?? []).filter((p) => p !== rel);
+                    if (check.checked) {
+                        if (paths.length >= cap) paths = paths.slice(0, cap - 1);
+                        paths.push(rel);
+                    }
+                    state.updateRegion(region.id, { projectPaths: paths });
+                });
             });
             row.appendChild(check);
 
@@ -404,24 +414,26 @@ export function renderRail(state, host, opts) {
                 const rels = filesUnder(child);
                 const inSel = (p) => Boolean(sel?.projectPaths?.includes(p));
                 const nChecked = rels.filter(inSel).length;
+                const partial = nChecked > 0 && nChecked < rels.length;
                 const check = el("input");
                 check.type = "checkbox";
                 check.checked = nChecked > 0 && nChecked === rels.length;
-                check.indeterminate = nChecked > 0 && nChecked < rels.length;
-                check.disabled = !sel;
+                check.indeterminate = partial;
+                check.disabled = !targets.length;
                 check.addEventListener("click", (e) => e.stopPropagation());
                 check.addEventListener("change", () => {
-                    if (!sel) return;
-                    const cap = Math.max(1, sel.members?.length ?? 1);
-                    let paths;
-                    if (check.checked) {
-                        // Checking a folder REPLACES the region's assignment —
-                        // no need to uncheck the previous folder first.
-                        paths = rels.slice(0, cap);
-                    } else {
-                        paths = (sel.projectPaths ?? []).filter((p) => !rels.includes(p));
-                    }
-                    state.updateRegion(sel.id, { projectPaths: paths });
+                    // A partially-assigned folder clears on click (the browser
+                    // flips indeterminate -> checked, which read as a no-op).
+                    // Applies to every selected region: check REPLACES each
+                    // region's assignment with this folder's sprites.
+                    const clearing = partial || !check.checked;
+                    applyToTargets((region) => {
+                        const cap = Math.max(1, region.members?.length ?? 1);
+                        const paths = clearing
+                            ? (region.projectPaths ?? []).filter((p) => !rels.includes(p))
+                            : rels.slice(0, cap);
+                        state.updateRegion(region.id, { projectPaths: paths });
+                    });
                 });
                 fh.appendChild(check);
 
