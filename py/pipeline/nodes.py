@@ -21,6 +21,7 @@ from .compose import (
     save_sheet,
 )
 from .model_presets import MODEL_PRESETS, preset_dims
+from .regional_prompt import build_regional_prompt, regions_to_pixel_bboxes
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
 from .texture_pack import PackSettings
@@ -483,6 +484,128 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                              ui=ui.PreviewImage(base_tensor, cls=cls))
 
 
+class SymbioticaRegionalPrompt(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaRegionalPrompt",
+            display_name="Symbiotica Regional Prompt",
+            category="symbiotica/pipeline",
+            description="Turn a template bundle into a layout-aware edit prompt "
+                        "(ERPK Regional Prompt Builder format): numbered box_2d "
+                        "placements per region, base sheet as image 1, per-region "
+                        "reference images numbered from 2. Wires into ERPK's "
+                        "Gemini Image Edit (image_refs) or any edit node via the "
+                        "refs batch.",
+            inputs=[
+                Template.Input("template"),
+                io.Image.Input("base_sheet",
+                               tooltip="The editor's base sheet — becomes image 1"),
+                io.Image.Input("task_sheet", optional=True,
+                               tooltip="The editor's task sheet; region_crop refs "
+                                       "are cut from it"),
+                io.String.Input("scene_prompt", default="", multiline=True,
+                                optional=True,
+                                tooltip="Overrides the bundle's scene prompt"),
+                io.Combo.Input("ref_mode",
+                               options=["region_crop", "ref_files", "none"],
+                               default="region_crop",
+                               tooltip="Per-region reference: crop of the task "
+                                       "sheet at the region's box, the first "
+                                       "checked ref file, or none"),
+            ],
+            outputs=[
+                io.String.Output(display_name="prompt"),
+                io.Image.Output(display_name="image"),
+                io.Custom("ERPK_IMAGE_REFS").Output(
+                    display_name="image_refs",
+                    tooltip="Per-region refs in region order — connect to an "
+                            "ERPK image edit node's image_refs"),
+                io.Image.Output(display_name="refs_batch",
+                                tooltip="Same refs as one IMAGE batch (padded to "
+                                        "a common size) for generic edit nodes"),
+                io.Custom("BOUNDING_BOX").Output(display_name="bboxes"),
+                io.Mask.Output(display_name="masks"),
+                io.Int.Output(display_name="width"),
+                io.Int.Output(display_name="height"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, template, base_sheet, task_sheet=None, scene_prompt="",
+                ref_mode="region_crop") -> io.NodeOutput:
+        regions = sorted(template.get("regions", []),
+                         key=lambda r: r.get("zIndex", 0))
+        if not regions:
+            raise ValueError("the template bundle has no regions — build/save "
+                             "one in the Template Editor first")
+        height = int(base_sheet.shape[1])
+        width = int(base_sheet.shape[2])
+
+        # Per-region reference images, numbered from 2 (base sheet is image 1).
+        refs: list[torch.Tensor] = []
+        ref_numbers: dict[str, int] = {}
+
+        def add_ref(region, tensor):
+            refs.append(tensor)
+            ref_numbers[region.get("id")] = len(refs) + 1
+
+        if ref_mode == "region_crop":
+            if task_sheet is None:
+                raise ValueError("ref_mode=region_crop needs the task_sheet "
+                                 "input (wire the editor's task sheet output)")
+            th = int(task_sheet.shape[1])
+            tw = int(task_sheet.shape[2])
+            for region in regions:
+                x0 = max(0, min(tw - 1, round(region["x"] * tw)))
+                y0 = max(0, min(th - 1, round(region["y"] * th)))
+                x1 = max(x0 + 1, min(tw, round((region["x"] + region["w"]) * tw)))
+                y1 = max(y0 + 1, min(th, round((region["y"] + region["h"]) * th)))
+                add_ref(region, task_sheet[:1, y0:y1, x0:x1, :])
+        elif ref_mode == "ref_files":
+            from PIL import Image as PILImage
+            ref_paths = template.get("refPaths", {})
+            for region in regions:
+                paths = ref_paths.get(region.get("name") or "", [])
+                if not paths:
+                    continue
+                try:
+                    img = PILImage.open(paths[0])
+                    img.load()
+                except OSError:
+                    continue
+                add_ref(region, _pil_to_tensor(img))
+
+        # Generic batch: contain-pad every ref onto a common canvas so plain
+        # IMAGE-batch edit nodes (Nano Banana 2 etc.) accept them.
+        if refs:
+            max_h = max(int(r.shape[1]) for r in refs)
+            max_w = max(int(r.shape[2]) for r in refs)
+            padded = []
+            for r in refs:
+                canvas = torch.zeros((1, max_h, max_w, 3), dtype=r.dtype)
+                canvas[:, : int(r.shape[1]), : int(r.shape[2]), :] = r[..., :3]
+                padded.append(canvas)
+            refs_batch = torch.cat(padded, dim=0)
+        else:
+            refs_batch = torch.zeros((0, height, width, 3))
+
+        masks = torch.zeros((len(regions), height, width))
+        for i, region in enumerate(regions):
+            x0 = max(0, min(width, round(region["x"] * width)))
+            y0 = max(0, min(height, round(region["y"] * height)))
+            x1 = max(x0, min(width, round((region["x"] + region["w"]) * width)))
+            y1 = max(y0, min(height, round((region["y"] + region["h"]) * height)))
+            masks[i, y0:y1, x0:x1] = 1.0
+
+        scene = scene_prompt.strip() or (template.get("scenePrompt") or "").strip()
+        prompt = build_regional_prompt(scene, width, height, regions, ref_numbers)
+        bboxes = regions_to_pixel_bboxes(regions, width, height)
+        return io.NodeOutput(prompt, base_sheet, refs, refs_batch, bboxes,
+                             masks, width, height,
+                             ui=ui.PreviewText(prompt))
+
+
 class SymbioticaTemplatePrompt(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -526,5 +649,6 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
     SymbioticaTemplateEditor,
+    SymbioticaRegionalPrompt,
     SymbioticaTemplatePrompt,
 ]

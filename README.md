@@ -82,6 +82,12 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   output feeds the Template Prompt node.
 - **Symbiotica Template Prompt** — turns the bundle's regions into an edit
   prompt for the Nano Banana edit nodes.
+- **Symbiotica Regional Prompt** — turns the template bundle into a
+  layout-aware edit prompt (ERPK Regional Prompt Builder format): numbered
+  `box_2d` placements per region, base sheet as image 1, per-region reference
+  images (task-sheet crops by default) numbered from 2. Outputs
+  `ERPK_IMAGE_REFS` for the ERPK Gemini edit nodes plus a plain IMAGE refs
+  batch, pixel bboxes, and per-region masks.
 - **Symbiotica Template Editor** — the full template editor / texture packer
   as an in-Comfy app: "Open template editor" launches a full-screen editor
   (hub layout) with a zoom/pan canvas, draggable/resizable numbered regions,
