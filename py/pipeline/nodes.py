@@ -22,6 +22,7 @@ from .compose import (
 )
 from .markers import assign_markers, draw_placement_markers
 from .model_presets import MODEL_PRESETS, preset_dims
+from .prompt_enhancer import ENHANCER_SYSTEM_PROMPT, build_enhancer_task
 from .prompts_split import parse_region_prompts
 from .regional_edit import region_edit_prompt, region_pixel_box
 from .regional_prompt import (
@@ -909,6 +910,99 @@ class SymbioticaPromptsSplit(io.ComfyNode):
         return io.NodeOutput(*parse_region_prompts(prompts, cls.MAX_DESCS))
 
 
+class SymbioticaPromptEnhancer(io.ComfyNode):
+    """One-node LLM enhancer: template + task reference sheet in, one dense
+    production prompt per region out on desc_1..desc_10 — wired straight into
+    ERPK Regional Prompt Builder's desc_N override sockets. The Anthropic call,
+    request framing, and response parsing all live server-side, so there is no
+    system-prompt/user-message wiring to get wrong."""
+
+    MAX_DESCS = 10  # mirrors ERPK's desc_N socket family cap
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaPromptEnhancer",
+            display_name="Symbiotica Prompt Enhancer",
+            category="symbiotica/pipeline",
+            description="Rewrites each template region's client text into a "
+                        "dense production prompt (Claude, grounded in the "
+                        "task reference sheet). desc_N outputs plug into "
+                        "ERPK's desc_N sockets; prompts_json shows the raw "
+                        "list. Key: Settings > Symbiotica > "
+                        "ANTHROPIC_API_KEY.",
+            inputs=[
+                Template.Input("template"),
+                io.Image.Input("task_sheet",
+                               tooltip="The editor's task sheet — the "
+                                       "designs the LLM looks at per region"),
+                io.String.Input("model", default="claude-sonnet-5",
+                                optional=True),
+                io.String.Input("extra_rules", default="", multiline=True,
+                                optional=True,
+                                tooltip="Appended to the enhancer's system "
+                                        "prompt — game/style conventions, "
+                                        "bans, vocabulary"),
+                io.Int.Input("max_tokens", default=4096, min=256, max=16384,
+                             optional=True),
+                io.Int.Input("seed", default=0, min=-1, max=2**31 - 1,
+                             control_after_generate="randomize",
+                             tooltip="Any change re-runs the node"),
+                io.String.Input("api_key", default="", optional=True,
+                                tooltip="Overrides Settings > Symbiotica > "
+                                        "ANTHROPIC_API_KEY"),
+            ],
+            outputs=[
+                *(io.String.Output(display_name=f"desc_{n}")
+                  for n in range(1, cls.MAX_DESCS + 1)),
+                io.String.Output(display_name="prompts_json",
+                                 tooltip="The parsed prompt list, for "
+                                         "preview/debugging"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, template, task_sheet, model="claude-sonnet-5",
+                extra_rules="", max_tokens=4096, seed=0,
+                api_key="") -> io.NodeOutput:
+        import json as _json
+
+        regions = sorted(template.get("regions", []),
+                         key=lambda r: r.get("zIndex", 0))
+        if not regions:
+            raise ValueError("the template bundle has no regions — build/save "
+                             "one in the Template Editor first")
+        key = (api_key or "").strip()
+        if not key:
+            from .._settings import resolve_key
+            key = resolve_key(["ANTHROPIC_API_KEY"]) or ""
+        if not key:
+            raise ValueError("No Anthropic API key. Set it in Settings > "
+                             "Symbiotica > ANTHROPIC_API_KEY (or pass "
+                             "api_key).")
+        from ..llm_api import call_claude_api
+
+        height = int(task_sheet.shape[1])
+        width = int(task_sheet.shape[2])
+        task = build_enhancer_task(regions, width, height)
+        system = ENHANCER_SYSTEM_PROMPT
+        if extra_rules.strip():
+            system = f"{system}\nAdditional rules:\n{extra_rules.strip()}"
+
+        response = call_claude_api(
+            api_key=key, model=model, prompt=task, system_prompt=system,
+            image=task_sheet[:1], max_tokens=max_tokens, temperature=1.0,
+            seed=seed)
+        descs = parse_region_prompts(response, cls.MAX_DESCS)
+        filled = sum(1 for d in descs[:len(regions)] if d)
+        if not filled:
+            raise ValueError("the LLM returned no parseable prompts — raw "
+                             f"response starts: {response[:300]!r}")
+        preview = _json.dumps(
+            [d for d in descs[:max(len(regions), filled)]], indent=1)
+        return io.NodeOutput(*descs, preview, ui=ui.PreviewText(preview))
+
+
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaEventSpecs,
@@ -918,5 +1012,6 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaRegionalEdit,
     SymbioticaRefsSplit,
     SymbioticaPromptsSplit,
+    SymbioticaPromptEnhancer,
     SymbioticaTemplatePrompt,
 ]

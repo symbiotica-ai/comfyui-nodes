@@ -10,6 +10,7 @@ const EDITOR_TYPE = "SymbioticaTemplateEditor";
 const RP_TYPE = "SymbioticaRegionalPrompt";
 const SPLIT_TYPE = "SymbioticaRefsSplit";
 const PROMPTS_SPLIT_TYPE = "SymbioticaPromptsSplit";
+const ENHANCER_TYPE = "SymbioticaPromptEnhancer";
 const MAX_REFS = 10; // ERPK's ref_N / desc_N socket family caps
 
 function toast(severity, summary, detail) {
@@ -116,27 +117,30 @@ function wireRefs(rp, builder, count) {
     return wired;
 }
 
-// Wire an existing Symbiotica Prompts Split's desc_N outputs onto the
-// builder's desc_N sockets — each overrides its region's description with the
-// LLM-enhanced prompt. The split node is user-placed (it needs an LLM feeding
-// it), so unlike refs we never auto-create it.
+// Wire a desc source's desc_N outputs onto the builder's desc_N sockets —
+// each overrides its region's description with the LLM-enhanced prompt.
+// Prefers a Symbiotica Prompt Enhancer (self-contained LLM node), falls back
+// to a Prompts Split; both are user-placed, so never auto-created.
 function wireDescs(builder, count) {
-    const splits = (app.graph._nodes || [])
-        .filter((n) => n.comfyClass === PROMPTS_SPLIT_TYPE);
-    if (splits.length !== 1) return 0;
-    const split = splits[0];
+    const all = app.graph._nodes || [];
+    const source =
+        all.find((n) => n.comfyClass === ENHANCER_TYPE) ||
+        all.find((n) => n.comfyClass === PROMPTS_SPLIT_TYPE);
+    if (!source) return 0;
     if (!builder.properties) builder.properties = {};
     builder.properties.erpk_region_desc =
         Array.from({ length: Math.min(count, MAX_REFS) }, (_, i) => i + 1);
     let wired = 0;
     for (let i = 0; i < Math.min(count, MAX_REFS); i++) {
         const inputName = `desc_${i + 1}`;
+        const outIdx = source.outputs?.findIndex((o) => o.name === inputName);
+        if (outIdx == null || outIdx < 0) continue;
         if (!builder.inputs?.some((inp) => inp.name === inputName)) {
             builder.addInput(inputName, "STRING");
         }
         const input = builder.inputs.find((inp) => inp.name === inputName);
         if (input.link == null) {
-            split.connect(i, builder, inputName);
+            source.connect(outIdx, builder, inputName);
             wired++;
         }
     }
