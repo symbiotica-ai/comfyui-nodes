@@ -553,7 +553,18 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
                 io.String.Input("api_key", default="", optional=True,
                                 tooltip="Overrides Settings > Symbiotica > "
                                         "ANTHROPIC_API_KEY"),
+                io.Combo.Input("ref_framing",
+                               options=["restyle_to_base", "reproduce_exact"],
+                               default="restyle_to_base", optional=True,
+                               tooltip="How the prompt cites each reference: "
+                                       "restyle_to_base = take the DESIGN "
+                                       "from the reference but redraw it in "
+                                       "image 1's art style (design "
+                                       "transfer); reproduce_exact = copy "
+                                       "the reference item as-is (ERPK "
+                                       "parity)"),
             ],
+            hidden=[io.Hidden.unique_id],
             outputs=[
                 io.String.Output(display_name="prompt"),
                 io.Image.Output(display_name="image"),
@@ -585,7 +596,8 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
     def execute(cls, template, base_sheet, task_sheet=None, scene_prompt="",
                 ref_mode="region_crop", placement_markers=True,
                 enhance_prompts=True, llm_model="claude-sonnet-5",
-                extra_rules="", llm_seed=0, api_key="") -> io.NodeOutput:
+                extra_rules="", llm_seed=0, api_key="",
+                ref_framing="restyle_to_base") -> io.NodeOutput:
         regions = sorted(template.get("regions", []),
                          key=lambda r: r.get("zIndex", 0))
         if not regions:
@@ -721,9 +733,16 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
         prompt_regions = [
             {**r, "name": "", "desc": descs[i]} for i, r in enumerate(regions)
         ] if enhance_prompts else regions
+        framing = "restyle" if ref_framing == "restyle_to_base" else "reproduce"
         prompt = build_regional_prompt(scene, width, height, prompt_regions,
-                                       ref_numbers, marks)
+                                       ref_numbers, marks, framing)
         bboxes = regions_to_pixel_bboxes(regions, width, height)
+
+        # Let the browser bridge mirror the final per-region prompts into a
+        # linked ERPK builder's canvas, so hovering a region shows what will
+        # actually run instead of the raw spreadsheet text.
+        _push("symbiotica.region_descs",
+              {"node_id": cls.hidden.unique_id, "descs": descs})
 
         desc_outs = (descs + [""] * 10)[:10]
         gray = torch.full((1, 8, 8, 3), 0.5)

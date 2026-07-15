@@ -4,6 +4,7 @@
 // ABOUTME: contract), sizes the frame, exposes ref sockets, and auto-wires
 // ABOUTME: per-region reference crops through a Symbiotica Refs Split node.
 import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
 
 const BUILDER_TYPE = "RegionalPromptBuilder";
 const EDITOR_TYPE = "SymbioticaTemplateEditor";
@@ -203,8 +204,40 @@ function fillBuilder(builder) {
           + (descsWired ? `, ${descsWired} prompts wired` : ""));
 }
 
+// After each run, mirror the Regional Prompt node's FINAL per-region prompts
+// (LLM-enhanced) into any builder canvas wired to it, so hovering a region
+// shows what actually executes — not the raw spreadsheet text.
+function applyDescsToBuilders(rpId, descs) {
+    for (const builder of app.graph._nodes || []) {
+        if (builder.comfyClass !== BUILDER_TYPE) continue;
+        const src = originNode(builder, "desc_1") || originNode(builder, "image");
+        if (!src || String(src.id) !== String(rpId)) continue;
+        const widget = widgetByName(builder, "regions_data");
+        if (!widget) continue;
+        let doc;
+        try { doc = JSON.parse(widget.value || "{}"); } catch (_) { continue; }
+        const regions = Array.isArray(doc?.regions) ? doc.regions : null;
+        if (!regions) continue;
+        regions.forEach((region, i) => {
+            if (descs[i]) region.content = { ...region.content, desc: descs[i] };
+        });
+        widget.value = JSON.stringify(doc);
+        const ed = builder._erpkRegionEditor;
+        ed?.loadFromWidget?.();
+        ed?.layout?.();
+        builder.setDirtyCanvas?.(true, true);
+    }
+}
+
 app.registerExtension({
     name: "symbiotica.regionsBridge",
+    setup() {
+        api.addEventListener("symbiotica.region_descs", ({ detail }) => {
+            if (detail?.node_id != null && Array.isArray(detail.descs)) {
+                applyDescsToBuilders(detail.node_id, detail.descs);
+            }
+        });
+    },
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== BUILDER_TYPE) return;
         const onNodeCreated = nodeType.prototype.onNodeCreated;

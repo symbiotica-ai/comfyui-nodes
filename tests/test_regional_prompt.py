@@ -69,6 +69,20 @@ def test_regions_to_pixel_bboxes_erpk_shape():
     assert regions_to_pixel_bboxes([], 1024, 1024) == []
 
 
+def test_restyle_framing_header_and_citation():
+    regions = [region("a", "Cart", "a glowing cart", 0.1, 0.1, 0.2, 0.2, 0)]
+    prompt = build_regional_prompt("", 1000, 1000, regions, {"a": 2},
+                                   ref_framing="restyle")
+    assert "cite later images by number as design references" in prompt
+    assert "never paste, trace, or photographically reproduce" in prompt
+    assert ("its design from image 2 (same subject, layout, and palette — "
+            "fully redrawn in image 1's art style, never copied)") in prompt
+    assert "reproduce that exact item" not in prompt
+    # Default framing stays ERPK parity.
+    default = build_regional_prompt("", 1000, 1000, regions, {"a": 2})
+    assert "reproduce that exact item" in default
+
+
 def test_marker_header_and_per_line_clause():
     regions = [region("a", "Cart", "a glowing cart", 0.1, 0.1, 0.2, 0.2, 0)]
     prompt = build_regional_prompt("", 1000, 1000, regions, {"a": 2},

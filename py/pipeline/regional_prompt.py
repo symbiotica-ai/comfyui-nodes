@@ -23,6 +23,20 @@ REFS_HEADER = (
     "adapting it to the scene's lighting and perspective. Keep everything "
     "else in image 1 unchanged."
 )
+# The restyle variant: the reference supplies the DESIGN only; the rendering
+# must be re-executed in image 1's own graphic style. ERPK's header above is
+# an insert-this-exact-object instruction and makes edit models pixel-copy
+# the reference — wrong for a design-transfer pipeline.
+REFS_HEADER_RESTYLE = (
+    "Numbered images accompany this request: image 1 is the image being "
+    "edited, and elements below cite later images by number as design "
+    "references. A reference shows WHAT its element is — subject, "
+    "silhouette, pose, props, palette, story — not how to paint it. Redraw "
+    "every cited element from scratch in the exact graphic style of image "
+    "1's existing artwork, as if the artist of image 1 drew it; never "
+    "paste, trace, or photographically reproduce a reference's pixels or "
+    "rendering. Keep everything else in image 1 unchanged."
+)
 LAYOUT_HEADER = (
     "Layout: place each element exactly where specified. Each position gives a "
     'verbal placement plus its placement area as "box_2d = [ymin, xmin, ymax, xmax]" '
@@ -85,15 +99,24 @@ def box_2d(region: dict) -> list[int]:
 
 
 def element_line(region: dict, ref_number: int | None,
-                 marker: tuple[str, str] | None = None) -> str:
+                 marker: tuple[str, str] | None = None,
+                 ref_framing: str = "reproduce") -> str:
     """One numbered layout line for a region: subject, optional image citation,
     verbal placement, its box_2d, and — when the region carries a placement
-    marker — the ERPK marker clause citing the dot by letter and color."""
+    marker — the ERPK marker clause citing the dot by letter and color.
+    ref_framing picks the citation: "reproduce" (ERPK parity — copy the exact
+    item) or "restyle" (take the design, redraw it in image 1's style)."""
     name = (region.get("name") or "").strip()
     desc = (region.get("desc") or "").strip()
     subject = f"{name}: {desc}" if name and desc else (desc or name or "An element")
     if ref_number is not None:
-        subject = f"{subject}, taken from image {ref_number} (reproduce that exact item)"
+        if ref_framing == "restyle":
+            subject = (f"{subject}, its design from image {ref_number} "
+                       "(same subject, layout, and palette — fully redrawn "
+                       "in image 1's art style, never copied)")
+        else:
+            subject = (f"{subject}, taken from image {ref_number} "
+                       "(reproduce that exact item)")
     placement = placement_phrase(region["x"], region["y"], region["w"], region["h"])
     line = f"{subject}: {placement}. box_2d = {box_2d(region)}"
     if marker is not None:
@@ -105,7 +128,8 @@ def element_line(region: dict, ref_number: int | None,
 def build_regional_prompt(scene: str, width: int, height: int,
                           regions: list[dict],
                           ref_numbers: dict[str, int] | None = None,
-                          markers: dict[str, tuple[str, str]] | None = None) -> str:
+                          markers: dict[str, tuple[str, str]] | None = None,
+                          ref_framing: str = "reproduce") -> str:
     """Assemble the edit prompt: preamble, scene, refs legend (when any region
     cites a reference image), marker legend (when any region carries a drawn
     placement dot), layout header, numbered element lines back to front
@@ -125,7 +149,8 @@ def build_regional_prompt(scene: str, width: int, height: int,
     lines.append(f"The image is {width}x{height} pixels.")
     if any(r.get("id") in ref_numbers for r in ordered):
         lines.append("")
-        lines.append(REFS_HEADER)
+        lines.append(REFS_HEADER_RESTYLE if ref_framing == "restyle"
+                     else REFS_HEADER)
     if any(r.get("id") in markers for r in ordered):
         lines.append("")
         lines.append(MARKER_HEADER)
@@ -135,7 +160,7 @@ def build_regional_prompt(scene: str, width: int, height: int,
         for index, region in enumerate(ordered, start=1):
             rid = region.get("id")
             lines.append(f"{index}. "
-                         f"{element_line(region, ref_numbers.get(rid), markers.get(rid))}")
+                         f"{element_line(region, ref_numbers.get(rid), markers.get(rid), ref_framing)}")
         lines.append("")
         lines.append(LAYOUT_FOOTER)
     return "\n".join(lines)
