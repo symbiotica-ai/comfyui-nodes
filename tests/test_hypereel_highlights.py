@@ -102,3 +102,22 @@ class TestAnalysisPrompt:
         from _hypereel_highlights import build_analysis_prompt
         p = build_analysis_prompt(0, "Find the moments.")
         assert "exactly" not in p and "Find the moments." in p
+
+
+class TestBeatsField:
+    ROW = ("HIGHLIGHT 1 | start=05:28 | end=05:35 | Silent Takedown | "
+           "WHY: Sneaks up and chokes out an attendant. | "
+           "BEATS: slow approach from behind -> choke lands early -> body dragged behind the curtain at the end | "
+           "MOOD: brutal")
+
+    def test_beats_parsed(self):
+        h = parse_highlights(self.ROW)[0]
+        assert "choke lands early" in h["beats"]
+
+    def test_beats_flow_into_the_claude_line(self):
+        h = parse_highlights(self.ROW)[0]
+        assert "BEATS:" in h["line"] and "dragged behind the curtain" in h["line"]
+
+    def test_no_beats_keeps_line_clean(self):
+        h = parse_highlights(SECONDS_SAMPLE)[0]
+        assert h["beats"] == "" and "BEATS:" not in h["line"]

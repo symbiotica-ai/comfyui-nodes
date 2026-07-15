@@ -30,7 +30,7 @@ def parse_highlights(text):
         if any(_HEAD.fullmatch(f) for f in fields if f) and fields[0].strip().upper().startswith("BEST"):
             continue  # "BEST start=.. end=.." recap, not a highlight row
         start = end = None
-        label = why = mood = ""
+        label = why = mood = beats = ""
         for f in fields:
             low = f.lower()
             if low.startswith("start="):
@@ -41,17 +41,25 @@ def parse_highlights(text):
                 why = f[len("why:"):].strip()
             elif low.startswith("mood:"):
                 mood = f[len("mood:"):].strip()
+            elif low.startswith("beats:"):
+                beats = f[len("beats:"):].strip()
             elif f and "=" not in f and not _HEAD.fullmatch(f):
                 label = label or f
         if start is None or end is None:
             continue
+        line = f"HIGHLIGHT | {label} | WHY: {why} | MOOD: {mood}"
+        if beats:
+            # The in-window event order rides along so the script LLM can pace the
+            # reaction against the real beats (order words, never clock numbers).
+            line = f"HIGHLIGHT | {label} | WHY: {why} | BEATS: {beats} | MOOD: {mood}"
         out.append({
             "start": start,
             "end": end,
             "label": label,
             "why": why,
             "mood": mood,
-            "line": f"HIGHLIGHT | {label} | WHY: {why} | MOOD: {mood}",
+            "beats": beats,
+            "line": line,
         })
     return out
 

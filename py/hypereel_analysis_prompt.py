@@ -12,8 +12,10 @@ DEFAULT_TASK = (
     "kills, clutch escapes, funny fails, dramatic reveals), best first, one per line, "
     "exactly:\n\n"
     "HIGHLIGHT <n> | start=MM:SS | end=MM:SS | <punchy label> | WHY: <what happens on "
-    "screen> | EVIDENCE: <exact subtitle/HUD text or visual detail visible at the start "
-    "time> | MOOD: <hype/tense/funny/clutch/brutal/close-call>\n\n"
+    "screen> | BEATS: <the 2-4 events inside the window, in order, position words only "
+    "(opening/early/midway/late/at the end), separated by ' -> '> | EVIDENCE: <exact "
+    "subtitle/HUD text or visual detail visible at the start time> | MOOD: "
+    "<hype/tense/funny/clutch/brutal/close-call>\n\n"
     "Before writing each line, verify: does your EVIDENCE actually appear at that start "
     "time in this video? If not, fix the time or drop the moment."
 )
