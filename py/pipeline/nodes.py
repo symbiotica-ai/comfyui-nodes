@@ -22,6 +22,7 @@ from .compose import (
 )
 from .markers import assign_markers, draw_placement_markers
 from .model_presets import MODEL_PRESETS, preset_dims
+from .prompts_split import parse_region_prompts
 from .regional_edit import region_edit_prompt, region_pixel_box
 from .regional_prompt import (
     build_regional_prompt,
@@ -874,6 +875,40 @@ class SymbioticaRefsSplit(io.ComfyNode):
         return io.NodeOutput(*outs)
 
 
+class SymbioticaPromptsSplit(io.ComfyNode):
+    """Fan an LLM's enhanced per-region prompt list out to individual STRING
+    outputs, one per region, so each can feed a desc_N socket on ERPK's
+    Regional Prompt Builder (which overrides that region's description)."""
+
+    MAX_DESCS = 10  # mirrors ERPK's desc_N socket family cap
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaPromptsSplit",
+            display_name="Symbiotica Prompts Split",
+            category="symbiotica/pipeline",
+            description="Splits an enhanced-prompts list (strict JSON array "
+                        "or numbered lines, region order) into desc_1..desc_10 "
+                        "STRING outputs. Empty slots leave the region's "
+                        "original description untouched downstream.",
+            inputs=[
+                io.String.Input("prompts", default="", multiline=True,
+                                tooltip="LLM output: JSON array of one "
+                                        "prompt per region (region order), "
+                                        "or numbered lines"),
+            ],
+            outputs=[
+                io.String.Output(display_name=f"desc_{n}")
+                for n in range(1, cls.MAX_DESCS + 1)
+            ],
+        )
+
+    @classmethod
+    def execute(cls, prompts="") -> io.NodeOutput:
+        return io.NodeOutput(*parse_region_prompts(prompts, cls.MAX_DESCS))
+
+
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaEventSpecs,
@@ -882,5 +917,6 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaRegionalPrompt,
     SymbioticaRegionalEdit,
     SymbioticaRefsSplit,
+    SymbioticaPromptsSplit,
     SymbioticaTemplatePrompt,
 ]

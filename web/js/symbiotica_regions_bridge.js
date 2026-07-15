@@ -9,7 +9,8 @@ const BUILDER_TYPE = "RegionalPromptBuilder";
 const EDITOR_TYPE = "SymbioticaTemplateEditor";
 const RP_TYPE = "SymbioticaRegionalPrompt";
 const SPLIT_TYPE = "SymbioticaRefsSplit";
-const MAX_REFS = 10; // ERPK's ref_N socket family cap
+const PROMPTS_SPLIT_TYPE = "SymbioticaPromptsSplit";
+const MAX_REFS = 10; // ERPK's ref_N / desc_N socket family caps
 
 function toast(severity, summary, detail) {
     try {
@@ -115,6 +116,33 @@ function wireRefs(rp, builder, count) {
     return wired;
 }
 
+// Wire an existing Symbiotica Prompts Split's desc_N outputs onto the
+// builder's desc_N sockets — each overrides its region's description with the
+// LLM-enhanced prompt. The split node is user-placed (it needs an LLM feeding
+// it), so unlike refs we never auto-create it.
+function wireDescs(builder, count) {
+    const splits = (app.graph._nodes || [])
+        .filter((n) => n.comfyClass === PROMPTS_SPLIT_TYPE);
+    if (splits.length !== 1) return 0;
+    const split = splits[0];
+    if (!builder.properties) builder.properties = {};
+    builder.properties.erpk_region_desc =
+        Array.from({ length: Math.min(count, MAX_REFS) }, (_, i) => i + 1);
+    let wired = 0;
+    for (let i = 0; i < Math.min(count, MAX_REFS); i++) {
+        const inputName = `desc_${i + 1}`;
+        if (!builder.inputs?.some((inp) => inp.name === inputName)) {
+            builder.addInput(inputName, "STRING");
+        }
+        const input = builder.inputs.find((inp) => inp.name === inputName);
+        if (input.link == null) {
+            split.connect(i, builder, inputName);
+            wired++;
+        }
+    }
+    return wired;
+}
+
 function fillBuilder(builder) {
     const { rp, editor } = resolveSources(builder);
     if (!editor) {
@@ -164,10 +192,12 @@ function fillBuilder(builder) {
               "No Symbiotica Regional Prompt node found — regions filled without "
               + "reference images.");
     }
+    const descsWired = wireDescs(builder, doc.regions.length);
     builder.setDirtyCanvas?.(true, true);
     toast("success", "Regions filled",
           `${doc.regions.length} regions from the template`
-          + (wired ? `, ${wired} refs wired` : ""));
+          + (wired ? `, ${wired} refs wired` : "")
+          + (descsWired ? `, ${descsWired} enhanced prompts wired` : ""));
 }
 
 app.registerExtension({
