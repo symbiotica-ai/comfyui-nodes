@@ -1,7 +1,7 @@
 [project]
 name = "symbiotica"
 description = "All-in-one creative pack for ComfyUI: agent-based LLMs (Claude, Gemini, GPT, Grok), Wavespeed image and video generation (Flux, Nano Banana, Qwen, Sora 2, Veo 3, Wan 2.5, SeedDream, InfiniteTalk), audio and transcription (Whisper, ElevenLabs, Submagic), Remotion-rendered overlays and captions, and video composition utilities."
-version = "2.17.0"
+version = "2.18.0"
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"

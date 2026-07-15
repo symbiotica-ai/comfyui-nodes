@@ -579,16 +579,21 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
                 io.Mask.Output(display_name="masks"),
                 io.Int.Output(display_name="width"),
                 io.Int.Output(display_name="height"),
-                *(io.String.Output(
-                    display_name=f"desc_{n}",
-                    tooltip=f"Region {n}'s prompt (enhanced when "
-                            "enhance_prompts is on) — for ERPK desc_N sockets")
-                  for n in range(1, 11)),
-                *(io.Image.Output(
-                    display_name=f"ref_{n}",
-                    tooltip=f"Region {n}'s reference crop — for ERPK ref_N "
-                            "sockets")
-                  for n in range(1, 11)),
+                # desc_N/ref_N come in pairs so the browser can trim the tail
+                # down to the template's region count: an output's slot index
+                # is what the API prompt cites, so only whole trailing pairs
+                # can go without remapping what the remaining wires mean.
+                *[out for n in range(1, 11) for out in (
+                    io.String.Output(
+                        display_name=f"desc_{n}",
+                        tooltip=f"Region {n}'s prompt (enhanced when "
+                                "enhance_prompts is on) — for ERPK desc_N "
+                                "sockets"),
+                    io.Image.Output(
+                        display_name=f"ref_{n}",
+                        tooltip=f"Region {n}'s reference crop — for ERPK "
+                                "ref_N sockets"),
+                )],
             ],
         )
 
@@ -748,8 +753,10 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
         gray = torch.full((1, 8, 8, 3), 0.5)
         ref_outs = [refs[i][..., :3] if i < len(refs) else gray
                     for i in range(10)]
+        pair_outs = [out for n in range(10)
+                     for out in (desc_outs[n], ref_outs[n])]
         return io.NodeOutput(prompt, image_out, refs, refs_batch, bboxes,
-                             masks, width, height, *desc_outs, *ref_outs,
+                             masks, width, height, *pair_outs,
                              ui=ui.PreviewText(prompt))
 
 

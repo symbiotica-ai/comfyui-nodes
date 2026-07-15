@@ -13,6 +13,7 @@ const SPLIT_TYPE = "SymbioticaRefsSplit";
 const PROMPTS_SPLIT_TYPE = "SymbioticaPromptsSplit";
 const ENHANCER_TYPE = "SymbioticaPromptEnhancer";
 const MAX_REFS = 10; // ERPK's ref_N / desc_N socket family caps
+const FAMILY_RE = /^(desc|ref)_(\d+)$/;
 
 function toast(severity, summary, detail) {
     try {
@@ -60,6 +61,63 @@ function resolveSources(builder) {
         if (rps.length === 1) rp = rps[0];
     }
     return { rp, editor };
+}
+
+// The template editor's regions, or [] when the count can't be known here
+// (no editor upstream — e.g. a Template Builder feeds the bundle instead).
+function regionsOf(editor) {
+    if (!editor) return [];
+    try {
+        const parsed = JSON.parse(widgetByName(editor, "regions_json")?.value || "[]");
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+        return [];
+    }
+}
+
+// The Regional Prompt node ships 10 desc_N/ref_N output pairs; the template
+// decides how many are real. Trailing pairs are removed so the node face — and
+// every wire the fill button can draw — matches the region count. Only the
+// tail may go: an output's slot index is what the API prompt cites, so
+// dropping a pair from the middle would silently remap the wires below it.
+function syncRegionOutputs(rp, count) {
+    const n = Math.min(MAX_REFS, count);
+    if (!rp.outputs || n < 1) return;
+    const first = rp.outputs.findIndex((o) => o.name === "desc_1");
+    if (first >= 0) rp._symPairBase = first;
+    const base = rp._symPairBase;
+    if (base == null) return;
+    // A workflow saved before desc_N/ref_N were paired carries the old flat
+    // output order, where the slots no longer mean what their names say.
+    // Rebuilding the whole family is the only honest repair — pressing fill
+    // rewires it.
+    if (rp.outputs[base + 1] && rp.outputs[base + 1].name !== "ref_1") {
+        while (rp.outputs.length > base) rp.removeOutput(rp.outputs.length - 1);
+    }
+    const want = base + 2 * n;
+    while (rp.outputs.length > want) rp.removeOutput(rp.outputs.length - 1);
+    while (rp.outputs.length < want) {
+        const slot = rp.outputs.length - base;
+        const pair = Math.floor(slot / 2) + 1;
+        rp.addOutput(slot % 2 ? `ref_${pair}` : `desc_${pair}`,
+                     slot % 2 ? "IMAGE" : "STRING");
+    }
+}
+
+// Re-sync only when the upstream template's regions actually changed. Polled
+// rather than hooked: the editor writes regions_json from four places (save,
+// close, gallery pick, raw edit) and a string compare per node is cheaper than
+// keeping a hook on each of them honest.
+function syncFromTemplate(rp) {
+    const editor = originNode(rp, "template");
+    const raw = editor?.comfyClass === EDITOR_TYPE
+        ? (widgetByName(editor, "regions_json")?.value ?? "") : "";
+    if (raw === rp._symRegionsRaw) return;
+    rp._symRegionsRaw = raw;
+    const count = regionsOf(editor).length;
+    if (!count) return;
+    syncRegionOutputs(rp, count);
+    rp.setDirtyCanvas?.(true, true);
 }
 
 // Template regions (flat editor shape) -> ERPK regions_data v2 document.
@@ -141,6 +199,21 @@ function wireDescs(rp, builder, count) {
     return wireFamily(source, builder, "desc", "STRING", count);
 }
 
+// ERPK only drops a desc_N/ref_N socket that is neither exposed nor wired, so
+// a fill from a smaller template would otherwise keep the previous template's
+// sockets and wires alive. Clearing the families first makes every fill
+// rebuild them from scratch at exactly the new region count.
+function resetFamilies(builder) {
+    for (let i = (builder.inputs?.length ?? 0) - 1; i >= 0; i--) {
+        if (!FAMILY_RE.test(builder.inputs[i].name || "")) continue;
+        if (builder.inputs[i].link != null) builder.disconnectInput(i);
+        builder.removeInput(i);
+    }
+    if (!builder.properties) builder.properties = {};
+    builder.properties.erpk_region_desc = [];
+    builder.properties.erpk_region_ref = [];
+}
+
 function fillBuilder(builder) {
     const { rp, editor } = resolveSources(builder);
     if (!editor) {
@@ -171,14 +244,18 @@ function fillBuilder(builder) {
     const heightWidget = widgetByName(builder, "height");
     if (widthWidget) widthWidget.value = w;
     if (heightWidget) heightWidget.value = h;
-    if (!builder.properties) builder.properties = {};
-    builder.properties.erpk_region_ref =
-        doc.regions.slice(0, MAX_REFS).map((_, i) => i + 1);
+    const slots = Math.min(doc.regions.length, MAX_REFS);
+    resetFamilies(builder);
+    const family = Array.from({ length: slots }, (_, i) => i + 1);
+    builder.properties.erpk_region_ref = family;
+    builder.properties.erpk_region_desc = [...family];
+    if (rp) syncRegionOutputs(rp, slots);
 
     // The ERPK editor re-reads regions_data through its own loader so the
-    // canvas, sockets, and labels all refresh from the document we just wrote.
+    // canvas, sockets, and labels all refresh from the document we just wrote
+    // — including the desc_N/ref_N sockets, which it re-adds for exactly the
+    // slots exposed above, labelled with each region's real text.
     const erpkEditor = builder._erpkRegionEditor;
-    erpkEditor?.setup?.();
     erpkEditor?.loadFromWidget?.();
     erpkEditor?.layout?.();
 
@@ -237,14 +314,30 @@ app.registerExtension({
                 applyDescsToBuilders(detail.node_id, detail.descs);
             }
         });
+        setInterval(() => {
+            for (const node of app.graph?._nodes || []) {
+                if (node.comfyClass === RP_TYPE) syncFromTemplate(node);
+            }
+        }, 500);
     },
     beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== BUILDER_TYPE) return;
-        const onNodeCreated = nodeType.prototype.onNodeCreated;
-        nodeType.prototype.onNodeCreated = function () {
-            const r = onNodeCreated?.apply(this, arguments);
-            this.addWidget("button", "⇪ Fill from Symbiotica template", null,
-                           () => fillBuilder(this));
+        if (nodeData.name === BUILDER_TYPE) {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const r = onNodeCreated?.apply(this, arguments);
+                this.addWidget("button", "⇪ Fill from Symbiotica template", null,
+                               () => fillBuilder(this));
+                return r;
+            };
+            return;
+        }
+        if (nodeData.name !== RP_TYPE) return;
+        const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+        nodeType.prototype.onConnectionsChange = function () {
+            const r = onConnectionsChange?.apply(this, arguments);
+            // A new template upstream means a new region count; the cached
+            // regions_json is stale by definition.
+            this._symRegionsRaw = undefined;
             return r;
         };
     },
