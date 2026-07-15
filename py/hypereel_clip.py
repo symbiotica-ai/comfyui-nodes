@@ -21,7 +21,7 @@ class HypereelClip:
             "required": {
                 "video": ("VIDEO",),
                 "start_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 359999.0, "step": 0.1}),
-                "duration_sec": ("FLOAT", {"default": 10.0, "min": 0.5, "max": 600.0, "step": 0.1}),
+                "duration_sec": ("FLOAT", {"default": 10.0, "min": 0.5, "max": 359999.0, "step": 0.1}),
             },
             "optional": {
                 "keep_audio": ("BOOLEAN", {"default": True}),
