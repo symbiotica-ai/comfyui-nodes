@@ -115,6 +115,57 @@ def pip_filter(w, h, pip_w, corner):
     )
 
 
+def write_gray_video(ffmpeg, frames, w, h, fps, out):
+    """Writes an (N,H,W) uint8 array as a grayscale video — the mask track for
+    cutout compositing (alphamerge input)."""
+    enc = subprocess.Popen(
+        [ffmpeg, "-y", "-v", "error",
+         "-f", "rawvideo", "-pix_fmt", "gray", "-s", f"{w}x{h}", "-r", f"{fps}", "-i", "-",
+         "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", out],
+        stdin=subprocess.PIPE,
+    )
+    try:
+        for i in range(frames.shape[0]):
+            enc.stdin.write(frames[i].tobytes())
+    finally:
+        enc.stdin.close()
+        rc = enc.wait()
+    if rc != 0:
+        raise RuntimeError("ffmpeg failed writing the mask video")
+
+
+def cutout_filter(w, h, pip_w, corner):
+    """Cutout variant of the corner layouts: the facecam is keyed by a mask video
+    (input 2) via alphamerge, so the streamer's silhouette — not a rectangle —
+    lands in the corner over the full-frame gameplay."""
+    pos = _CORNERS[corner]
+    return (
+        f"[1:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+        f"crop={w}:{h},setsar=1[gpv];"
+        f"[0:v]scale={pip_w}:-2,setsar=1[fcv];"
+        f"[2:v]scale={pip_w}:-2[mkv];"
+        f"[fcv][mkv]alphamerge[fca];"
+        f"[gpv][fca]overlay={pos}[v]"
+    )
+
+
+def layout_video_filter(layout, corner, with_mask=False):
+    """The video filtergraph + canvas for a named layout, cutout-aware. A mask on
+    a stack layout is a wiring mistake — fail loudly rather than ignore it."""
+    spec = LAYOUTS[layout]
+    w, h = spec["canvas"]
+    if with_mask:
+        if spec["mode"] != "pip":
+            raise ValueError(
+                f"a facecam mask needs a corner layout, not '{layout}' - "
+                f"pick one of the 'gameplay full + facecam corner' layouts"
+            )
+        return (cutout_filter(w, h, spec["pip_w"], corner), w, h)
+    if spec["mode"] == "stack":
+        return (vstack_filter(w, spec["facecam_h"], h - spec["facecam_h"]), w, h)
+    return (pip_filter(w, h, spec["pip_w"], corner), w, h)
+
+
 def layout_filter(layout, corner):
     """The video filtergraph + canvas for a named layout. KeyError on unknown
     layout/corner — the node surfaces it as a node error."""
@@ -138,13 +189,15 @@ def clip_cmd(ffmpeg, src, out, start, dur, keep_audio):
     return cmd
 
 
-def _compose_pair(ffmpeg, ffprobe, facecam, gameplay, out, layout, corner, gain, fps, crf):
+def _compose_pair(ffmpeg, ffprobe, facecam, gameplay, out, layout, corner, gain,
+                  fps, crf, mask=None):
     """One cut in the chosen layout; her voice full, game audio mixed at `gain`
-    only when the gameplay actually has a track. Segment = min(facecam, gameplay)."""
+    only when the gameplay actually has a track. A mask video keys the facecam
+    into a cutout (corner layouts only). Segment = min(facecam, gameplay)."""
     fdur = probe_duration(ffprobe, facecam)
     gdur = probe_duration(ffprobe, gameplay)
     dur = min(fdur, gdur) if (fdur and gdur) else (fdur or gdur or 5.0)
-    video, _, _ = layout_filter(layout, corner)
+    video, _, _ = layout_video_filter(layout, corner, with_mask=mask is not None)
     if probe_has_audio(ffprobe, gameplay):
         filtergraph = f"{video};{audio_mix_filter(gain)}"
         amap = ["-map", "[v]", "-map", "[a]"]
@@ -152,8 +205,11 @@ def _compose_pair(ffmpeg, ffprobe, facecam, gameplay, out, layout, corner, gain,
         # Gameplay is silent — carry only the streamer's voice.
         filtergraph = video
         amap = ["-map", "[v]", "-map", "0:a?"]
+    inputs = [ffmpeg, "-y", "-i", facecam, "-i", gameplay]
+    if mask is not None:
+        inputs += ["-i", mask]
     subprocess.run(
-        [ffmpeg, "-y", "-i", facecam, "-i", gameplay, "-filter_complex", filtergraph,
+        [*inputs, "-filter_complex", filtergraph,
          *amap, "-r", f"{fps}", "-c:v", "libx264", "-crf", f"{crf}",
          "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000",
          "-movflags", "+faststart", "-t", f"{dur}", out],
@@ -168,10 +224,12 @@ def compose_pairs(pairs, out, layout=DEFAULT_LAYOUT, corner="bottom-right",
     layout and hard-cut-concat the cuts in order into `out`. Returns the cut count."""
     with tempfile.TemporaryDirectory() as d:
         segs = []
-        for i, (fc, gp) in enumerate(pairs):
+        for i, pair in enumerate(pairs):
+            fc, gp = pair[0], pair[1]
+            mask = pair[2] if len(pair) > 2 else None
             seg = os.path.join(d, f"seg{i}.mp4")
             _compose_pair(ffmpeg, ffprobe, fc, gp, seg, layout, corner,
-                          game_audio_gain, fps, crf)
+                          game_audio_gain, fps, crf, mask=mask)
             segs.append(seg)
         if len(segs) == 1:
             subprocess.run([ffmpeg, "-y", "-i", segs[0], "-c", "copy", out],

@@ -13,9 +13,11 @@ from ._hypereel_ffmpeg import DEFAULT_LAYOUT, LAYOUTS, compose_pairs
 class HypereelStackComposite:
     """Composites facecam + gameplay pairs into one reel in a named layout:
     vertical stacks (facecam over gameplay — the platform's Modal geometry) or
-    gameplay-full layouts with the facecam in a chosen corner. Her voice plays
-    full; game audio is mixed at `game_audio_gain` only when the gameplay has a
-    track. Pairs become cuts, hard-cut-concatenated in order."""
+    gameplay-full layouts with the facecam in a chosen corner. Wire a keyer's
+    MASK into mask_n and that pair's facecam becomes a CUTOUT silhouette in the
+    corner instead of a rectangle (corner layouts only). Her voice plays full;
+    game audio is mixed at `game_audio_gain` only when the gameplay has a track.
+    Pairs become cuts, hard-cut-concatenated in order."""
 
     @classmethod
     def INPUT_TYPES(s):
@@ -32,12 +34,16 @@ class HypereelStackComposite:
                 "crf": ("INT", {"default": 20, "min": 10, "max": 35}),
             },
             "optional": {
+                "mask_1": ("MASK",),
                 "facecam_2": ("VIDEO",),
                 "gameplay_2": ("VIDEO",),
+                "mask_2": ("MASK",),
                 "facecam_3": ("VIDEO",),
                 "gameplay_3": ("VIDEO",),
+                "mask_3": ("MASK",),
                 "facecam_4": ("VIDEO",),
                 "gameplay_4": ("VIDEO",),
+                "mask_4": ("MASK",),
             },
         }
 
@@ -48,7 +54,12 @@ class HypereelStackComposite:
 
     def compose(self, facecam_1, gameplay_1, layout, corner,
                 game_audio_gain, fps, crf, **optional):
+        import numpy as np
+
         from comfy_api.latest import InputImpl
+
+        from ._hypereel_glow import probe_video
+        from ._hypereel_ffmpeg import write_gray_video
 
         videos = {"facecam_1": facecam_1, "gameplay_1": gameplay_1, **optional}
         tempdir = tempfile.mkdtemp(prefix="hypereel_pairs_")
@@ -58,6 +69,7 @@ class HypereelStackComposite:
             for i in range(1, 5):
                 fc = videos.get(f"facecam_{i}")
                 gp = videos.get(f"gameplay_{i}")
+                mk = videos.get(f"mask_{i}")
                 if fc is None and gp is None:
                     continue
                 if fc is None or gp is None:
@@ -67,7 +79,17 @@ class HypereelStackComposite:
                 fc.save_to(fc_path, format="mp4", codec="h264")
                 gp.save_to(gp_path, format="mp4", codec="h264")
                 temp_files += [fc_path, gp_path]
-                pairs.append((fc_path, gp_path))
+                mk_path = None
+                if mk is not None:
+                    # MASK tensor (B,H,W, float 0-1) -> grayscale video at the
+                    # facecam's frame rate, so alphamerge pairs frames 1:1.
+                    frames = (mk.cpu().numpy() * 255.0 + 0.5).astype(np.uint8)
+                    _, _, fps, _ = probe_video(FFPROBE, fc_path)
+                    mk_path = os.path.join(tempdir, f"mask{i}.mp4")
+                    write_gray_video(FFMPEG, frames, frames.shape[2], frames.shape[1],
+                                     fps, mk_path)
+                    temp_files.append(mk_path)
+                pairs.append((fc_path, gp_path, mk_path))
 
             out = os.path.join(
                 folder_paths.get_output_directory(),
