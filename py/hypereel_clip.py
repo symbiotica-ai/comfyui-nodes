@@ -7,7 +7,7 @@ import time
 import folder_paths
 
 from ._bins import FFMPEG, FFPROBE
-from ._hypereel_ffmpeg import clamp_window, clip_cmd, probe_duration
+from ._hypereel_ffmpeg import checked_window, clip_cmd, probe_duration
 
 
 class HypereelClip:
@@ -42,7 +42,7 @@ class HypereelClip:
         try:
             video.save_to(src, format="mp4", codec="h264")
             total = probe_duration(FFPROBE, src)
-            start, dur = clamp_window(start_sec, duration_sec, total)
+            start, dur = checked_window(start_sec, duration_sec, total)
             out = os.path.join(
                 folder_paths.get_output_directory(),
                 f"hypereel_clip_{int(time.time() * 1000)}.mp4",

@@ -155,3 +155,25 @@ class TestPipSmoke:
                  "-show_entries", "stream=width,height", "-of", "csv=p=0", out],
                 check=True, capture_output=True, text=True).stdout.strip()
             assert probe == "1920,1080"
+
+
+class TestClockMismatchGuard:
+    """A start a few seconds past EOF is a legitimate clamp; a start BEYOND the
+    source's whole timeline is a clock mismatch (e.g. absolute timestamps cut
+    against a chapter clip) and must fail loudly, not silently cut the tail."""
+
+    def test_small_overrun_still_clamps(self):
+        from _hypereel_ffmpeg import checked_window
+        # 58 + 5 overruns a 60s clip by 3s -> clamp, as before
+        assert checked_window(58.0, 5.0, 60.0) == (55.0, 5.0)
+
+    def test_start_beyond_source_raises_with_both_clocks(self):
+        from _hypereel_ffmpeg import checked_window
+        with pytest.raises(ValueError) as e:
+            checked_window(1808.0, 9.0, 600.0)
+        msg = str(e.value)
+        assert "1808" in msg and "600" in msg
+
+    def test_unknown_total_passes_through(self):
+        from _hypereel_ffmpeg import checked_window
+        assert checked_window(1808.0, 9.0, 0.0) == (1808.0, 9.0)

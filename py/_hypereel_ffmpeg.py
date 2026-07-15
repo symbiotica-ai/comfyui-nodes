@@ -39,6 +39,20 @@ def clamp_window(start, dur, total):
     return (start, dur)
 
 
+def checked_window(start, dur, total):
+    """clamp_window plus a loud failure for clock mismatches: a start a few
+    seconds past EOF is a legitimate clamp, but a start beyond the source's whole
+    timeline means the timestamps belong to a different video (e.g. absolute
+    full-video times cut against a chapter clip) — silent clamping would just
+    manufacture a tail cut. total 0 = unknown -> pass through."""
+    if total > 0 and float(start) >= total:
+        raise ValueError(
+            f"start {start:.0f}s is beyond the {total:.0f}s source — the timestamps "
+            f"and this video use different clocks (chapter vs full video?)"
+        )
+    return clamp_window(start, dur, total)
+
+
 def vstack_filter(w, fc_h, gp_h):
     """Facecam scaled+center-cropped to w×fc_h on top, gameplay to w×gp_h below
     (center-crop drops a corner channel watermark)."""

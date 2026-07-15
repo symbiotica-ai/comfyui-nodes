@@ -54,3 +54,13 @@ def parse_highlights(text):
             "line": f"HIGHLIGHT | {label} | WHY: {why} | MOOD: {mood}",
         })
     return out
+
+
+def filter_in_range(highlights, source_duration):
+    """Splits highlights into (kept, dropped) by whether their window fits inside
+    a source_duration-second video. 0 = unknown duration -> keep everything."""
+    if not source_duration or source_duration <= 0:
+        return (list(highlights), [])
+    kept = [h for h in highlights if h["start"] < source_duration]
+    dropped = [h for h in highlights if h["start"] >= source_duration]
+    return (kept, dropped)

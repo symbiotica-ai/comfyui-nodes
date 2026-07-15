@@ -61,3 +61,23 @@ class TestParseHighlights:
 
     def test_empty_text(self):
         assert parse_highlights("") == []
+
+
+class TestSourceDurationFilter:
+    def test_out_of_range_highlights_dropped(self):
+        from _hypereel_highlights import filter_in_range
+        hs = parse_highlights(SECONDS_SAMPLE)  # starts at 2674 and 3008
+        kept, dropped = filter_in_range(hs, 600.0)
+        assert kept == [] and len(dropped) == 2
+
+    def test_in_range_kept(self):
+        from _hypereel_highlights import filter_in_range
+        hs = parse_highlights(MMSS_SAMPLE)  # 1808 and 841
+        kept, dropped = filter_in_range(hs, 2000.0)
+        assert len(kept) == 2 and dropped == []
+
+    def test_zero_duration_means_no_filtering(self):
+        from _hypereel_highlights import filter_in_range
+        hs = parse_highlights(SECONDS_SAMPLE)
+        kept, dropped = filter_in_range(hs, 0.0)
+        assert len(kept) == 2 and dropped == []
