@@ -30,6 +30,7 @@ from .regional_prompt import (
     regions_to_pixel_bboxes,
     target_ref_size,
 )
+from .skeleton import build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
 from .texture_pack import PackSettings
@@ -288,6 +289,47 @@ class SymbioticaTemplateBuilder(io.ComfyNode):
                              ui=ui.PreviewImage(tensor, cls=cls))
 
 
+MAX_REGION_REFS = 10
+
+
+def _region_crop(region, task_sheet):
+    """One region's rect cut out of the task sheet, snapped to the formula
+    resolution — the crop's own pixels drift with rounding and fit-scaling."""
+    th = int(task_sheet.shape[1])
+    tw = int(task_sheet.shape[2])
+    x0 = max(0, min(tw - 1, round(region["x"] * tw)))
+    y0 = max(0, min(th - 1, round(region["y"] * th)))
+    x1 = max(x0 + 1, min(tw, round((region["x"] + region["w"]) * tw)))
+    y1 = max(y0 + 1, min(th, round((region["y"] + region["h"]) * th)))
+    crop = task_sheet[:1, y0:y1, x0:x1, :]
+    want_w, want_h = target_ref_size(region, x1 - x0, y1 - y0)
+    if (want_w, want_h) != (x1 - x0, y1 - y0):
+        crop = torch.nn.functional.interpolate(
+            crop[..., :3].permute(0, 3, 1, 2),
+            size=(want_h, want_w), mode="nearest-exact",
+        ).permute(0, 2, 3, 1)
+    return crop[..., :3]
+
+
+def _layout_outputs(bundle, task_tensor):
+    """The editor's LLM-facing tail: skeleton, sheet size, per-region crops.
+
+    Image 1 is the sheet being edited, so the references number from 2 — the
+    same order the Regional Prompt Builder feeds them to the edit node in.
+    """
+    regions = sorted(bundle.get("regions", []), key=lambda r: r.get("zIndex", 0))
+    size = bundle.get("templateSize", {})
+    width = int(size.get("w") or task_tensor.shape[2])
+    height = int(size.get("h") or task_tensor.shape[1])
+    crops = [_region_crop(r, task_tensor) for r in regions]
+    ref_numbers = {r.get("id"): i + 2 for i, r in enumerate(regions)}
+    skeleton = build_skeleton(regions, width, height, ref_numbers) if regions else ""
+    gray = torch.full((1, 8, 8, 3), 0.5)
+    refs = [crops[i] if i < len(crops) else gray
+            for i in range(MAX_REGION_REFS)]
+    return (skeleton, width, height, *refs)
+
+
 class SymbioticaTemplateEditor(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -305,40 +347,68 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                 io.String.Input("assets_root", default="",
                                 tooltip="Project reference folder (set via the "
                                         "node's Browse button)"),
+                # Everything below is set inside the full-screen editor or by
+                # the node's own UI, so it lives behind "Show advanced inputs":
+                # the node face is the editor button, the template list, and
+                # the sheet preview.
                 io.String.Input("assignments", default="{}", multiline=True,
+                                advanced=True,
                                 tooltip="JSON: task asset name -> catalog rel "
                                         "path (managed by the node UI)"),
                 io.String.Input("group", default="", optional=True,
+                                advanced=True,
                                 tooltip="Template group slug filter (empty = "
                                         "all groups with refs)"),
-                io.String.Input("sheet_name", default="", optional=True),
+                io.String.Input("sheet_name", default="", optional=True,
+                                advanced=True),
                 io.Combo.Input("preset_model", options=_MODELS,
-                               default="nano-banana-pro"),
-                io.Combo.Input("resolution", options=_RESOLUTIONS, default="2K"),
-                io.Combo.Input("aspect_ratio", options=_ASPECTS, default="1:1"),
+                               default="nano-banana-pro", advanced=True),
+                io.Combo.Input("resolution", options=_RESOLUTIONS, default="2K",
+                               advanced=True),
+                io.Combo.Input("aspect_ratio", options=_ASPECTS, default="1:1",
+                               advanced=True),
                 io.Int.Input("max_width", default=2048, min=64, max=8192,
                              optional=True, advanced=True,
                              tooltip="Sheet width when preset_model=custom"),
                 io.Int.Input("max_height", default=2048, min=64, max=8192,
                              optional=True, advanced=True),
                 io.Combo.Input("algorithm", options=["shelf", "maxrects", "grid"],
-                               default="shelf"),
-                io.Boolean.Input("distribute_by_folder", default=True),
+                               default="shelf", advanced=True),
+                io.Boolean.Input("distribute_by_folder", default=True,
+                                 advanced=True),
                 io.String.Input("background", default="#808080", optional=True,
+                                advanced=True,
                                 tooltip="Hex fill; empty = transparent"),
                 io.String.Input("sheet_file", default="", optional=True,
+                                advanced=True,
                                 tooltip="Saved editor sheet (managed by the "
                                         "editor)"),
                 io.String.Input("regions_json", default="[]", multiline=True,
-                                optional=True),
+                                optional=True, advanced=True),
                 io.String.Input("scene_prompt", default="", multiline=True,
-                                optional=True),
+                                optional=True, advanced=True),
             ],
             outputs=[
                 Template.Output(display_name="template"),
                 io.Image.Output(display_name="base sheet"),
                 io.Image.Output(display_name="task sheet"),
                 io.String.Output(display_name="bundle_json"),
+                io.String.Output(
+                    display_name="skeleton",
+                    tooltip="The layout facts for an LLM to turn into the edit "
+                            "prompt: one numbered element per region with its "
+                            "box_2d placement, reference image number, and the "
+                            "client's brief. Carries no framing of its own — "
+                            "the LLM's system prompt owns that."),
+                io.Int.Output(display_name="width"),
+                io.Int.Output(display_name="height"),
+                # Per-region task-sheet crops, for the Regional Prompt
+                # Builder's ref_N sockets. The browser trims the tail to the
+                # template's region count.
+                *(io.Image.Output(
+                    display_name=f"ref_{n}",
+                    tooltip=f"Region {n}'s reference crop from the task sheet")
+                  for n in range(1, 11)),
             ],
             hidden=[io.Hidden.unique_id],
             is_output_node=True,
@@ -437,6 +507,7 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         task_tensor = _pil_to_tensor(task_sheet)
         return io.NodeOutput(bundle, base_tensor, task_tensor,
                              json.dumps(bundle, indent=1),
+                             *_layout_outputs(bundle, task_tensor),
                              ui=ui.PreviewImage(base_tensor, cls=cls))
 
     @classmethod
@@ -489,6 +560,7 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         task_tensor = _pil_to_tensor(task_sheet)
         return io.NodeOutput(bundle, base_tensor, task_tensor,
                              json.dumps(bundle, indent=1),
+                             *_layout_outputs(bundle, task_tensor),
                              ui=ui.PreviewImage(base_tensor, cls=cls))
 
 
