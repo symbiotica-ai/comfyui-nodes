@@ -117,11 +117,12 @@ partner node), and stack facecam over real gameplay into a vertical reel.
   VIDEO with ffmpeg. No frame tensors: a 7-minute or 7-hour source costs the same.
   The window is clamped inside the source, so a highlight near EOF still yields a
   full slice
-- `Hypereel Stack Composite (facecam over gameplay)` — the reel layout: facecam
-  scaled + center-cropped on top (1080x768 default), gameplay below (1080x1152),
-  voice at full volume with game audio mixed at a gain only when the gameplay has an
-  audio track (`amix ... normalize=0` so the voice is never halved), up to 4 pairs
-  hard-cut-concatenated in order. Exact port of the platform's Modal compositor
+- `Hypereel Stack Composite (facecam over gameplay)` — named layout templates:
+  vertical facecam-top 40/60 (the platform's Modal geometry), vertical half/half,
+  and gameplay-full layouts (vertical or horizontal) with the facecam PiP in a
+  chosen corner. Voice at full volume with game audio mixed at a gain only when the
+  gameplay has an audio track (`amix ... normalize=0` so the voice is never
+  halved), up to 4 pairs hard-cut-concatenated in order
 
 Runs anywhere ffmpeg exists — local mac (Homebrew) or a Modal image with
 `apt_install("ffmpeg")`.

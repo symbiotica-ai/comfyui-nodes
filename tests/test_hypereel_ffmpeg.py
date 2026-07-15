@@ -91,7 +91,6 @@ class TestComposeSmoke:
             gp2 = self._testclip(d, "gp2.mp4", 2, with_audio=True)
             out = os.path.join(d, "reel.mp4")
             cuts = compose_pairs([(fc1, gp1), (fc2, gp2)], out,
-                                 width=1080, facecam_h=768, gameplay_h=1152,
                                  game_audio_gain=0.3, fps=30, crf=23)
             assert cuts == 2
             probe = subprocess.run(
@@ -100,3 +99,59 @@ class TestComposeSmoke:
                 check=True, capture_output=True, text=True).stdout.strip()
             assert probe == "1080,1920"
             assert probe_duration("ffprobe", out) == pytest.approx(4.0, abs=0.5)
+
+
+class TestLayouts:
+    """Layout templates replace raw pane numbers: named layouts carry the canvas +
+    filtergraph; PiP layouts place the facecam in a chosen corner."""
+
+    def test_vertical_stack_is_the_platform_default(self):
+        from _hypereel_ffmpeg import LAYOUTS, layout_filter
+        f, w, h = layout_filter("vertical · facecam top 40% / gameplay 60%", "bottom-right")
+        assert (w, h) == (1080, 1920)
+        assert "vstack=inputs=2" in f and "scale=1080:768" in f and "crop=1080:1152" in f
+
+    def test_vertical_half_split(self):
+        from _hypereel_ffmpeg import layout_filter
+        f, w, h = layout_filter("vertical · half / half", "top-left")
+        assert (w, h) == (1080, 1920)
+        assert "scale=1080:960" in f and "crop=1080:960" in f
+
+    def test_horizontal_pip_corners(self):
+        from _hypereel_ffmpeg import layout_filter
+        f, w, h = layout_filter("horizontal · gameplay full + facecam corner", "bottom-right")
+        assert (w, h) == (1920, 1080)
+        assert "overlay=" in f and "W-w-24" in f and "H-h-24" in f
+        f_tl, _, _ = layout_filter("horizontal · gameplay full + facecam corner", "top-left")
+        assert "overlay=24:24" in f_tl
+
+    def test_vertical_pip(self):
+        from _hypereel_ffmpeg import layout_filter
+        f, w, h = layout_filter("vertical · gameplay full + facecam corner", "top-right")
+        assert (w, h) == (1080, 1920)
+        assert "overlay=W-w-24:24" in f
+
+    def test_unknown_layout_raises(self):
+        from _hypereel_ffmpeg import layout_filter
+        with pytest.raises(KeyError):
+            layout_filter("diagonal split", "top-left")
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+class TestPipSmoke:
+    def test_horizontal_pip_reel(self):
+        with tempfile.TemporaryDirectory() as d:
+            mk = TestComposeSmoke()
+            fc = mk._testclip(d, "fc.mp4", 2, with_audio=True)
+            gp = mk._testclip(d, "gp.mp4", 2, with_audio=False)
+            out = os.path.join(d, "reel.mp4")
+            cuts = compose_pairs([(fc, gp)], out,
+                                 layout="horizontal · gameplay full + facecam corner",
+                                 corner="bottom-right",
+                                 game_audio_gain=0.3, fps=30, crf=23)
+            assert cuts == 1
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=width,height", "-of", "csv=p=0", out],
+                check=True, capture_output=True, text=True).stdout.strip()
+            assert probe == "1920,1080"

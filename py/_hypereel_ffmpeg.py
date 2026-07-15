@@ -60,6 +60,57 @@ def audio_mix_filter(gain):
     )
 
 
+# Named layout templates — each carries its canvas and how the facecam meets the
+# gameplay. Stack layouts split the canvas; PiP layouts run the gameplay full-frame
+# with the facecam overlaid in a corner (24px margin).
+LAYOUTS = {
+    "vertical · facecam top 40% / gameplay 60%": {
+        "canvas": (1080, 1920), "mode": "stack", "facecam_h": 768,
+    },
+    "vertical · half / half": {
+        "canvas": (1080, 1920), "mode": "stack", "facecam_h": 960,
+    },
+    "vertical · gameplay full + facecam corner": {
+        "canvas": (1080, 1920), "mode": "pip", "pip_w": 460,
+    },
+    "horizontal · gameplay full + facecam corner": {
+        "canvas": (1920, 1080), "mode": "pip", "pip_w": 560,
+    },
+}
+
+DEFAULT_LAYOUT = "vertical · facecam top 40% / gameplay 60%"
+
+# overlay x:y per corner — W/H are the gameplay canvas, w/h the facecam overlay.
+_CORNERS = {
+    "top-left": "24:24",
+    "top-right": "W-w-24:24",
+    "bottom-left": "24:H-h-24",
+    "bottom-right": "W-w-24:H-h-24",
+}
+
+
+def pip_filter(w, h, pip_w, corner):
+    """Gameplay scaled+center-cropped to the full w×h canvas; facecam scaled to
+    pip_w wide (aspect kept) and overlaid in the chosen corner."""
+    pos = _CORNERS[corner]
+    return (
+        f"[1:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+        f"crop={w}:{h},setsar=1[gpv];"
+        f"[0:v]scale={pip_w}:-2,setsar=1[fcv];"
+        f"[gpv][fcv]overlay={pos}[v]"
+    )
+
+
+def layout_filter(layout, corner):
+    """The video filtergraph + canvas for a named layout. KeyError on unknown
+    layout/corner — the node surfaces it as a node error."""
+    spec = LAYOUTS[layout]
+    w, h = spec["canvas"]
+    if spec["mode"] == "stack":
+        return (vstack_filter(w, spec["facecam_h"], h - spec["facecam_h"]), w, h)
+    return (pip_filter(w, h, spec["pip_w"], corner), w, h)
+
+
 def clip_cmd(ffmpeg, src, out, start, dur, keep_audio):
     """Cut [start, start+dur] out of a longer video (input-seek + re-encode for
     frame accuracy)."""
@@ -73,19 +124,19 @@ def clip_cmd(ffmpeg, src, out, start, dur, keep_audio):
     return cmd
 
 
-def _stack_pair(ffmpeg, ffprobe, facecam, gameplay, out, w, fc_h, gp_h, gain, fps, crf):
-    """One cut: facecam over gameplay; her voice full, game audio mixed at `gain`
+def _compose_pair(ffmpeg, ffprobe, facecam, gameplay, out, layout, corner, gain, fps, crf):
+    """One cut in the chosen layout; her voice full, game audio mixed at `gain`
     only when the gameplay actually has a track. Segment = min(facecam, gameplay)."""
     fdur = probe_duration(ffprobe, facecam)
     gdur = probe_duration(ffprobe, gameplay)
     dur = min(fdur, gdur) if (fdur and gdur) else (fdur or gdur or 5.0)
-    vstack = vstack_filter(w, fc_h, gp_h)
+    video, _, _ = layout_filter(layout, corner)
     if probe_has_audio(ffprobe, gameplay):
-        filtergraph = f"{vstack};{audio_mix_filter(gain)}"
+        filtergraph = f"{video};{audio_mix_filter(gain)}"
         amap = ["-map", "[v]", "-map", "[a]"]
     else:
         # Gameplay is silent — carry only the streamer's voice.
-        filtergraph = vstack
+        filtergraph = video
         amap = ["-map", "[v]", "-map", "0:a?"]
     subprocess.run(
         [ffmpeg, "-y", "-i", facecam, "-i", gameplay, "-filter_complex", filtergraph,
@@ -96,16 +147,17 @@ def _stack_pair(ffmpeg, ffprobe, facecam, gameplay, out, w, fc_h, gp_h, gain, fp
     )
 
 
-def compose_pairs(pairs, out, width, facecam_h, gameplay_h, game_audio_gain,
-                  fps, crf, ffmpeg="ffmpeg", ffprobe="ffprobe"):
-    """Stack each (facecam, gameplay) file pair into one cut and hard-cut-concat
-    the cuts in order into `out`. Returns the number of cuts."""
+def compose_pairs(pairs, out, layout=DEFAULT_LAYOUT, corner="bottom-right",
+                  game_audio_gain=0.30, fps=30, crf=20,
+                  ffmpeg="ffmpeg", ffprobe="ffprobe"):
+    """Compose each (facecam, gameplay) file pair into one cut in the chosen
+    layout and hard-cut-concat the cuts in order into `out`. Returns the cut count."""
     with tempfile.TemporaryDirectory() as d:
         segs = []
         for i, (fc, gp) in enumerate(pairs):
             seg = os.path.join(d, f"seg{i}.mp4")
-            _stack_pair(ffmpeg, ffprobe, fc, gp, seg, width, facecam_h,
-                        gameplay_h, game_audio_gain, fps, crf)
+            _compose_pair(ffmpeg, ffprobe, fc, gp, seg, layout, corner,
+                          game_audio_gain, fps, crf)
             segs.append(seg)
         if len(segs) == 1:
             subprocess.run([ffmpeg, "-y", "-i", segs[0], "-c", "copy", out],

@@ -7,15 +7,15 @@ import time
 import folder_paths
 
 from ._bins import FFMPEG, FFPROBE
-from ._hypereel_ffmpeg import compose_pairs
+from ._hypereel_ffmpeg import DEFAULT_LAYOUT, LAYOUTS, compose_pairs
 
 
 class HypereelStackComposite:
-    """The streamer reel layout: facecam scaled+center-cropped on top, real gameplay
-    below (center-crop drops corner watermarks), her voice full + game audio mixed
-    at `game_audio_gain` only when the gameplay has a track. Pairs are stacked into
-    cuts and hard-cut-concatenated in order — same geometry and audio math as the
-    platform's Modal compositor."""
+    """Composites facecam + gameplay pairs into one reel in a named layout:
+    vertical stacks (facecam over gameplay — the platform's Modal geometry) or
+    gameplay-full layouts with the facecam in a chosen corner. Her voice plays
+    full; game audio is mixed at `game_audio_gain` only when the gameplay has a
+    track. Pairs become cuts, hard-cut-concatenated in order."""
 
     @classmethod
     def INPUT_TYPES(s):
@@ -23,9 +23,10 @@ class HypereelStackComposite:
             "required": {
                 "facecam_1": ("VIDEO",),
                 "gameplay_1": ("VIDEO",),
-                "width": ("INT", {"default": 1080, "min": 240, "max": 3840}),
-                "facecam_h": ("INT", {"default": 768, "min": 120, "max": 2160}),
-                "gameplay_h": ("INT", {"default": 1152, "min": 120, "max": 2160}),
+                "layout": (list(LAYOUTS.keys()), {"default": DEFAULT_LAYOUT}),
+                "corner": (["bottom-right", "bottom-left", "top-right", "top-left"],
+                           {"default": "bottom-right",
+                            "tooltip": "Facecam position — used by the corner layouts."}),
                 "game_audio_gain": ("FLOAT", {"default": 0.30, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "fps": ("INT", {"default": 30, "min": 12, "max": 60}),
                 "crf": ("INT", {"default": 20, "min": 10, "max": 35}),
@@ -45,7 +46,7 @@ class HypereelStackComposite:
     FUNCTION = "compose"
     CATEGORY = "Symbiotica/Hypereel"
 
-    def compose(self, facecam_1, gameplay_1, width, facecam_h, gameplay_h,
+    def compose(self, facecam_1, gameplay_1, layout, corner,
                 game_audio_gain, fps, crf, **optional):
         from comfy_api.latest import InputImpl
 
@@ -72,8 +73,8 @@ class HypereelStackComposite:
                 folder_paths.get_output_directory(),
                 f"hypereel_reel_{int(time.time() * 1000)}.mp4",
             )
-            cuts = compose_pairs(pairs, out, width=width, facecam_h=facecam_h,
-                                 gameplay_h=gameplay_h, game_audio_gain=game_audio_gain,
+            cuts = compose_pairs(pairs, out, layout=layout, corner=corner,
+                                 game_audio_gain=game_audio_gain,
                                  fps=fps, crf=crf, ffmpeg=FFMPEG, ffprobe=FFPROBE)
             return (InputImpl.VideoFromFile(out), cuts)
         finally:
