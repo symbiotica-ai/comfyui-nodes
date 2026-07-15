@@ -64,3 +64,25 @@ def filter_in_range(highlights, source_duration):
     kept = [h for h in highlights if h["start"] < source_duration]
     dropped = [h for h in highlights if h["start"] >= source_duration]
     return (kept, dropped)
+
+
+def fmt_mmss(seconds):
+    """Seconds -> MM:SS (H:MM:SS past an hour) — Gemini's native timestamp format."""
+    s = int(round(float(seconds)))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{sec:02d}"
+    return f"{m:02d}:{sec:02d}"
+
+
+def build_analysis_prompt(duration_sec, task):
+    """Prepends the video's real duration as a hard timestamp boundary. Duration 0 =
+    unknown -> just the task (the graph-side source_duration guard still applies)."""
+    if not duration_sec or duration_sec <= 0:
+        return task
+    mmss = fmt_mmss(duration_sec)
+    return (
+        f"This video is exactly {mmss} long. Valid timestamps: 00:00 to {mmss}. "
+        f"Any timestamp beyond {mmss} is a hard error.\n\n{task}"
+    )

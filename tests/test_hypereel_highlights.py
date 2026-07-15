@@ -81,3 +81,24 @@ class TestSourceDurationFilter:
         hs = parse_highlights(SECONDS_SAMPLE)
         kept, dropped = filter_in_range(hs, 0.0)
         assert len(kept) == 2 and dropped == []
+
+
+class TestAnalysisPrompt:
+    def test_mmss_formatting(self):
+        from _hypereel_highlights import fmt_mmss
+        assert fmt_mmss(421) == "07:01"
+        assert fmt_mmss(600) == "10:00"
+        assert fmt_mmss(3723) == "1:02:03"
+        assert fmt_mmss(59.6) == "01:00"
+
+    def test_prompt_carries_real_duration_and_task(self):
+        from _hypereel_highlights import build_analysis_prompt
+        p = build_analysis_prompt(421, "Find the moments.")
+        assert "exactly 07:01 long" in p
+        assert "00:00 to 07:01" in p
+        assert "Find the moments." in p
+
+    def test_zero_duration_omits_the_boundary(self):
+        from _hypereel_highlights import build_analysis_prompt
+        p = build_analysis_prompt(0, "Find the moments.")
+        assert "exactly" not in p and "Find the moments." in p
