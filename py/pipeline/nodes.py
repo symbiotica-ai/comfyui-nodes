@@ -22,6 +22,7 @@ from .compose import (
 )
 from .markers import assign_markers, draw_placement_markers
 from .model_presets import MODEL_PRESETS, preset_dims
+from .regional_edit import region_edit_prompt, region_pixel_box
 from .regional_prompt import (
     build_regional_prompt,
     regions_to_pixel_bboxes,
@@ -689,11 +690,156 @@ class SymbioticaTemplatePrompt(io.ComfyNode):
         return io.NodeOutput("\n".join(lines))
 
 
+class SymbioticaRegionalEdit(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaRegionalEdit",
+            display_name="Symbiotica Regional Edit",
+            category="symbiotica/pipeline",
+            description="Design-transfer the template one region at a time: "
+                        "for each region, the base-sheet crop (style + layout) "
+                        "and the task-sheet crop (client design) go to Gemini "
+                        "as a single small edit, and the result is pasted back "
+                        "at the region's exact pixel box. Sidesteps the "
+                        "fidelity ceiling of one giant whole-sheet edit — no "
+                        "markers, no position drift by construction.",
+            inputs=[
+                Template.Input("template"),
+                io.Image.Input("base_sheet",
+                               tooltip="The editor's base sheet — style source "
+                                       "and the canvas regions are pasted into"),
+                io.Image.Input("task_sheet",
+                               tooltip="The editor's task sheet — each "
+                                       "region's design reference is cropped "
+                                       "from it"),
+                io.Combo.Input("model",
+                               options=["gemini-3.1-flash-image",
+                                        "gemini-2.5-flash-image"],
+                               default="gemini-3.1-flash-image"),
+                io.String.Input("style", default="", multiline=True,
+                                optional=True,
+                                tooltip="Style directive for every region. "
+                                        "Empty = 'the exact graphic style of "
+                                        "image 1' (the base sheet's art)"),
+                io.Float.Input("temperature", default=1.0, min=0.0, max=2.0,
+                               step=0.1, optional=True),
+                io.Int.Input("seed", default=0, min=-1, max=2**31 - 1,
+                             control_after_generate="randomize",
+                             tooltip="-1 sends no seed; any change re-runs "
+                                     "the node"),
+                io.String.Input("api_key", default="", optional=True,
+                                tooltip="Overrides Settings > Symbiotica > "
+                                        "GEMINI_API_KEY"),
+            ],
+            outputs=[
+                io.Image.Output(display_name="sheet",
+                                tooltip="Base sheet with every region "
+                                        "replaced by its edited crop"),
+                io.String.Output(display_name="report",
+                                 tooltip="Per-region status — failed regions "
+                                         "keep their placeholder art"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, template, base_sheet, task_sheet, model,
+                style="", temperature=1.0, seed=0, api_key="") -> io.NodeOutput:
+        regions = sorted(template.get("regions", []),
+                         key=lambda r: r.get("zIndex", 0))
+        if not regions:
+            raise ValueError("the template bundle has no regions — build/save "
+                             "one in the Template Editor first")
+        key = (api_key or "").strip()
+        if not key:
+            from .._settings import resolve_key
+            key = resolve_key(["GEMINI_API_KEY", "GOOGLE_API_KEY"]) or ""
+        if not key:
+            raise ValueError("No Gemini API key. Set it in Settings > "
+                             "Symbiotica > GEMINI_API_KEY (or pass api_key).")
+        try:
+            from google import genai
+            from google.genai import types as genai_types
+        except ImportError as exc:
+            raise ValueError("google-genai is not installed in this ComfyUI "
+                             "environment (pip install google-genai)") from exc
+        from PIL import Image as PILImage
+
+        client = genai.Client(api_key=key)
+        height = int(base_sheet.shape[1])
+        width = int(base_sheet.shape[2])
+        th = int(task_sheet.shape[1])
+        tw = int(task_sheet.shape[2])
+
+        def to_pil(tensor):
+            arr = (tensor[..., :3].cpu().numpy() * 255.0).clip(0, 255)
+            return PILImage.fromarray(arr.astype(np.uint8))
+
+        sheet = base_sheet[:1].clone()
+        report = []
+        for region in regions:
+            name = region.get("name") or region.get("id") or "?"
+            bx0, by0, bx1, by1 = region_pixel_box(region, width, height)
+            tx0, ty0, tx1, ty1 = region_pixel_box(region, tw, th)
+            base_crop = to_pil(base_sheet[0, by0:by1, bx0:bx1, :])
+            ref_crop = to_pil(task_sheet[0, ty0:ty1, tx0:tx1, :])
+            prompt = region_edit_prompt(region, style)
+            config = genai_types.GenerateContentConfig(
+                temperature=temperature,
+                response_modalities=["IMAGE"],
+                seed=seed if seed >= 0 else None,
+            )
+            edited = None
+            error = ""
+            for _attempt in range(2):
+                try:
+                    resp = client.models.generate_content(
+                        model=model,
+                        contents=[base_crop, ref_crop, prompt],
+                        config=config)
+                    edited = _first_inline_image(resp)
+                    if edited is not None:
+                        break
+                    error = "no image in response"
+                except Exception as exc:  # noqa: BLE001 — per-region isolation
+                    error = str(exc)
+            if edited is None:
+                report.append(f"FAIL {name}: {error[:200]}")
+                continue
+            if edited.size != (bx1 - bx0, by1 - by0):
+                edited = edited.resize((bx1 - bx0, by1 - by0),
+                                       PILImage.LANCZOS)
+            patch = _pil_to_tensor(edited).to(sheet.dtype)
+            sheet[:, by0:by1, bx0:bx1, :] = patch
+            report.append(f"OK   {name}: {bx1 - bx0}x{by1 - by0}")
+        return io.NodeOutput(sheet, "\n".join(report),
+                             ui=ui.PreviewImage(sheet, cls=cls))
+
+
+def _first_inline_image(resp):
+    """The first inline image in a Gemini response as PIL RGB, or None."""
+    import base64
+    import io as _io
+    from PIL import Image as PILImage
+    for candidate in getattr(resp, "candidates", None) or []:
+        content = getattr(candidate, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            inline = getattr(part, "inline_data", None)
+            data = getattr(inline, "data", None)
+            if not data:
+                continue
+            if isinstance(data, str):
+                data = base64.b64decode(data)
+            return PILImage.open(_io.BytesIO(data)).convert("RGB")
+    return None
+
+
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
     SymbioticaTemplateEditor,
     SymbioticaRegionalPrompt,
+    SymbioticaRegionalEdit,
     SymbioticaTemplatePrompt,
 ]
