@@ -83,68 +83,61 @@ function toErpkDoc(regions) {
     return { version: 2, order: out.map((r) => r.id), regions: out };
 }
 
-// Route rp.image_refs through a (found or created) Symbiotica Refs Split and
-// wire its per-region outputs onto the builder's ref_N sockets.
-function wireRefs(rp, builder, count) {
-    const graph = app.graph;
-    const LG = window.LiteGraph;
-    let split = (graph._nodes || []).find(
-        (n) => n.comfyClass === SPLIT_TYPE && originNode(n, "image_refs") === rp);
-    if (!split) {
-        split = LG?.createNode?.(SPLIT_TYPE);
-        if (!split) {
-            toast("warn", "Refs not wired",
-                  "SymbioticaRefsSplit node unavailable — update the pack and reboot.");
-            return 0;
-        }
-        split.pos = [builder.pos[0] - 300, builder.pos[1] + 120];
-        graph.add(split);
-        const outIdx = rp.outputs.findIndex((o) => o.name === "image_refs");
-        if (outIdx >= 0) rp.connect(outIdx, split, 0);
-    }
+// Wire a source node's <prefix>_N outputs onto the builder's same-named
+// sockets, adding builder inputs as needed. Returns how many links were made.
+function wireFamily(source, builder, prefix, ioType, count) {
     let wired = 0;
     for (let i = 0; i < Math.min(count, MAX_REFS); i++) {
-        const inputName = `ref_${i + 1}`;
-        if (!builder.inputs?.some((inp) => inp.name === inputName)) {
-            builder.addInput(inputName, "IMAGE");
+        const name = `${prefix}_${i + 1}`;
+        const outIdx = source.outputs?.findIndex((o) => o.name === name);
+        if (outIdx == null || outIdx < 0) continue;
+        if (!builder.inputs?.some((inp) => inp.name === name)) {
+            builder.addInput(name, ioType);
         }
-        const input = builder.inputs.find((inp) => inp.name === inputName);
+        const input = builder.inputs.find((inp) => inp.name === name);
         if (input.link == null) {
-            split.connect(i, builder, inputName);
+            source.connect(outIdx, builder, name);
             wired++;
         }
     }
     return wired;
 }
 
-// Wire a desc source's desc_N outputs onto the builder's desc_N sockets —
-// each overrides its region's description with the LLM-enhanced prompt.
-// Prefers a Symbiotica Prompt Enhancer (self-contained LLM node), falls back
-// to a Prompts Split; both are user-placed, so never auto-created.
-function wireDescs(builder, count) {
+// Refs come straight off the Regional Prompt node's ref_N outputs; the
+// legacy Refs Split route stays as a fallback for older graphs.
+function wireRefs(rp, builder, count) {
+    if (rp.outputs?.some((o) => o.name === "ref_1")) {
+        return wireFamily(rp, builder, "ref", "IMAGE", count);
+    }
+    const graph = app.graph;
+    const LG = window.LiteGraph;
+    let split = (graph._nodes || []).find(
+        (n) => n.comfyClass === SPLIT_TYPE && originNode(n, "image_refs") === rp);
+    if (!split) {
+        split = LG?.createNode?.(SPLIT_TYPE);
+        if (!split) return 0;
+        split.pos = [builder.pos[0] - 300, builder.pos[1] + 120];
+        graph.add(split);
+        const outIdx = rp.outputs.findIndex((o) => o.name === "image_refs");
+        if (outIdx >= 0) rp.connect(outIdx, split, 0);
+    }
+    return wireFamily(split, builder, "ref", "IMAGE", count);
+}
+
+// Descs come straight off the Regional Prompt node's desc_N outputs
+// (LLM-enhanced when its enhance_prompts toggle is on); legacy Enhancer /
+// Prompts Split nodes remain as fallbacks for older graphs.
+function wireDescs(rp, builder, count) {
     const all = app.graph._nodes || [];
     const source =
+        (rp?.outputs?.some((o) => o.name === "desc_1") ? rp : null) ||
         all.find((n) => n.comfyClass === ENHANCER_TYPE) ||
         all.find((n) => n.comfyClass === PROMPTS_SPLIT_TYPE);
     if (!source) return 0;
     if (!builder.properties) builder.properties = {};
     builder.properties.erpk_region_desc =
         Array.from({ length: Math.min(count, MAX_REFS) }, (_, i) => i + 1);
-    let wired = 0;
-    for (let i = 0; i < Math.min(count, MAX_REFS); i++) {
-        const inputName = `desc_${i + 1}`;
-        const outIdx = source.outputs?.findIndex((o) => o.name === inputName);
-        if (outIdx == null || outIdx < 0) continue;
-        if (!builder.inputs?.some((inp) => inp.name === inputName)) {
-            builder.addInput(inputName, "STRING");
-        }
-        const input = builder.inputs.find((inp) => inp.name === inputName);
-        if (input.link == null) {
-            source.connect(outIdx, builder, inputName);
-            wired++;
-        }
-    }
-    return wired;
+    return wireFamily(source, builder, "desc", "STRING", count);
 }
 
 function fillBuilder(builder) {
@@ -190,18 +183,24 @@ function fillBuilder(builder) {
 
     let wired = 0;
     if (rp) {
+        // Base sheet in, refs and descs per region — all from the one node.
+        const imgInput = builder.inputs?.find((inp) => inp.name === "image");
+        if (imgInput && imgInput.link == null) {
+            const outIdx = rp.outputs.findIndex((o) => o.name === "image");
+            if (outIdx >= 0) rp.connect(outIdx, builder, "image");
+        }
         wired = wireRefs(rp, builder, doc.regions.length);
     } else {
         toast("warn", "Refs not wired",
               "No Symbiotica Regional Prompt node found — regions filled without "
               + "reference images.");
     }
-    const descsWired = wireDescs(builder, doc.regions.length);
+    const descsWired = wireDescs(rp, builder, doc.regions.length);
     builder.setDirtyCanvas?.(true, true);
     toast("success", "Regions filled",
           `${doc.regions.length} regions from the template`
           + (wired ? `, ${wired} refs wired` : "")
-          + (descsWired ? `, ${descsWired} enhanced prompts wired` : ""));
+          + (descsWired ? `, ${descsWired} prompts wired` : ""));
 }
 
 app.registerExtension({

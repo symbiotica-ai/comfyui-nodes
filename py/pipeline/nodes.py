@@ -530,6 +530,29 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
                                          "each element on its dot and paints "
                                          "the dot out — the strongest lever "
                                          "against position drift."),
+                io.Boolean.Input("enhance_prompts", default=True,
+                                 optional=True,
+                                 tooltip="Rewrite each region's client text "
+                                         "into a dense production prompt "
+                                         "(Claude, grounded in the task "
+                                         "sheet). Feeds the desc_N outputs "
+                                         "and this node's own prompt. Key: "
+                                         "Settings > Symbiotica > "
+                                         "ANTHROPIC_API_KEY."),
+                io.String.Input("llm_model", default="claude-sonnet-5",
+                                optional=True),
+                io.String.Input("extra_rules", default="", multiline=True,
+                                optional=True,
+                                tooltip="Appended to the enhancer's system "
+                                        "prompt — game/style conventions"),
+                io.Int.Input("llm_seed", default=0, min=0, max=2**31 - 1,
+                             optional=True,
+                             tooltip="Change to re-roll the enhanced prompts "
+                                     "(otherwise they cache with the "
+                                     "template)"),
+                io.String.Input("api_key", default="", optional=True,
+                                tooltip="Overrides Settings > Symbiotica > "
+                                        "ANTHROPIC_API_KEY"),
             ],
             outputs=[
                 io.String.Output(display_name="prompt"),
@@ -545,12 +568,24 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
                 io.Mask.Output(display_name="masks"),
                 io.Int.Output(display_name="width"),
                 io.Int.Output(display_name="height"),
+                *(io.String.Output(
+                    display_name=f"desc_{n}",
+                    tooltip=f"Region {n}'s prompt (enhanced when "
+                            "enhance_prompts is on) — for ERPK desc_N sockets")
+                  for n in range(1, 11)),
+                *(io.Image.Output(
+                    display_name=f"ref_{n}",
+                    tooltip=f"Region {n}'s reference crop — for ERPK ref_N "
+                            "sockets")
+                  for n in range(1, 11)),
             ],
         )
 
     @classmethod
     def execute(cls, template, base_sheet, task_sheet=None, scene_prompt="",
-                ref_mode="region_crop", placement_markers=True) -> io.NodeOutput:
+                ref_mode="region_crop", placement_markers=True,
+                enhance_prompts=True, llm_model="claude-sonnet-5",
+                extra_rules="", llm_seed=0, api_key="") -> io.NodeOutput:
         regions = sorted(template.get("regions", []),
                          key=lambda r: r.get("zIndex", 0))
         if not regions:
@@ -645,12 +680,57 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
                 frames.append(_pil_to_tensor(pil))
             image_out = torch.cat(frames, dim=0).to(base_sheet.dtype)
 
+        # Per-region prompts: the client text, or its LLM rewrite (dense
+        # production language grounded in the task sheet). Both feed the
+        # desc_N outputs AND this node's own assembled prompt.
+        def raw_desc(region):
+            name = (region.get("name") or "").strip()
+            desc = (region.get("desc") or "").strip()
+            return f"{name}: {desc}" if name and desc else (desc or name)
+
+        descs = [raw_desc(r) for r in regions]
+        if enhance_prompts:
+            key = (api_key or "").strip()
+            if not key:
+                from .._settings import resolve_key
+                key = resolve_key(["ANTHROPIC_API_KEY"]) or ""
+            if not key:
+                raise ValueError("enhance_prompts needs an Anthropic API key "
+                                 "— set Settings > Symbiotica > "
+                                 "ANTHROPIC_API_KEY, or turn the toggle off.")
+            from ..llm_api import call_claude_api
+            ref_sheet = task_sheet if task_sheet is not None else base_sheet
+            system = ENHANCER_SYSTEM_PROMPT
+            if extra_rules.strip():
+                system = f"{system}\nAdditional rules:\n{extra_rules.strip()}"
+            if llm_seed:
+                system = f"{system}\n(variation {llm_seed})"
+            task = build_enhancer_task(
+                regions, int(ref_sheet.shape[2]), int(ref_sheet.shape[1]))
+            response = call_claude_api(
+                api_key=key, model=llm_model, prompt=task,
+                system_prompt=system, image=ref_sheet[:1],
+                max_tokens=4096, temperature=1.0)
+            enhanced = parse_region_prompts(response, max(len(regions), 10))
+            if not any(enhanced[:len(regions)]):
+                raise ValueError("the prompt enhancer returned no parseable "
+                                 f"prompts — response starts: {response[:300]!r}")
+            descs = [enhanced[i] or descs[i] for i in range(len(regions))]
+
         scene = scene_prompt.strip() or (template.get("scenePrompt") or "").strip()
-        prompt = build_regional_prompt(scene, width, height, regions,
+        prompt_regions = [
+            {**r, "name": "", "desc": descs[i]} for i, r in enumerate(regions)
+        ] if enhance_prompts else regions
+        prompt = build_regional_prompt(scene, width, height, prompt_regions,
                                        ref_numbers, marks)
         bboxes = regions_to_pixel_bboxes(regions, width, height)
+
+        desc_outs = (descs + [""] * 10)[:10]
+        gray = torch.full((1, 8, 8, 3), 0.5)
+        ref_outs = [refs[i][..., :3] if i < len(refs) else gray
+                    for i in range(10)]
         return io.NodeOutput(prompt, image_out, refs, refs_batch, bboxes,
-                             masks, width, height,
+                             masks, width, height, *desc_outs, *ref_outs,
                              ui=ui.PreviewText(prompt))
 
 
