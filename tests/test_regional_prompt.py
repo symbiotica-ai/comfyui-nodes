@@ -69,6 +69,22 @@ def test_regions_to_pixel_bboxes_erpk_shape():
     assert regions_to_pixel_bboxes([], 1024, 1024) == []
 
 
+def test_marker_header_and_per_line_clause():
+    regions = [region("a", "Cart", "a glowing cart", 0.1, 0.1, 0.2, 0.2, 0)]
+    prompt = build_regional_prompt("", 1000, 1000, regions, {"a": 2},
+                                   {"a": ("magenta", "A")})
+    assert "Solid colored dots have been drawn on the image" in prompt
+    assert ("box_2d = [100, 100, 300, 300] "
+            "Center it on marker A (the magenta dot).") in prompt
+
+
+def test_no_markers_omits_header_and_clause():
+    regions = [region("a", "Cart", "d", 0.1, 0.1, 0.2, 0.2, 0)]
+    prompt = build_regional_prompt("", 1000, 1000, regions, {"a": 2})
+    assert "Solid colored dots" not in prompt
+    assert "Center it on marker" not in prompt
+
+
 def test_target_ref_size_formula():
     from pipeline.regional_prompt import target_ref_size
 

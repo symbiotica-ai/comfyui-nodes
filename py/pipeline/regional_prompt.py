@@ -30,6 +30,20 @@ LAYOUT_HEADER = (
     "front: where placement areas overlap, a later element appears in front of "
     "an earlier one."
 )
+MARKER_HEADER = (
+    "Solid colored dots have been drawn on the image to mark placements — each "
+    "is a filled dot in a unique color with a label letter inside it, and each "
+    "element below names its marker(s) by letter and color. A newly added "
+    "element has one dot: place it centered there. A move has two dots — one "
+    "on the object at its current spot and one at its target — so move that "
+    "object from the first dot onto the second. An object to be removed has "
+    "one dot on it: delete that object and rebuild the background where it "
+    "was. The dots are guides, not part of the scene: paint every dot out "
+    "completely so none of it remains. Each dot is the exact, required "
+    "location for its element — put the element on its dot even if a "
+    "different spot in the scene looks more natural or more typical for it; "
+    "never move it off its dot to a more likely place."
+)
 LAYOUT_FOOTER = (
     "Every element must stay fully inside its placement area and fill most of it. "
     "Put each element exactly at its own box_2d and nowhere else, even if a "
@@ -70,26 +84,36 @@ def box_2d(region: dict) -> list[int]:
     ]
 
 
-def element_line(region: dict, ref_number: int | None) -> str:
+def element_line(region: dict, ref_number: int | None,
+                 marker: tuple[str, str] | None = None) -> str:
     """One numbered layout line for a region: subject, optional image citation,
-    verbal placement, and its box_2d."""
+    verbal placement, its box_2d, and — when the region carries a placement
+    marker — the ERPK marker clause citing the dot by letter and color."""
     name = (region.get("name") or "").strip()
     desc = (region.get("desc") or "").strip()
     subject = f"{name}: {desc}" if name and desc else (desc or name or "An element")
     if ref_number is not None:
         subject = f"{subject}, taken from image {ref_number} (reproduce that exact item)"
     placement = placement_phrase(region["x"], region["y"], region["w"], region["h"])
-    return f"{subject}: {placement}. box_2d = {box_2d(region)}"
+    line = f"{subject}: {placement}. box_2d = {box_2d(region)}"
+    if marker is not None:
+        color, label = marker
+        line += f" Center it on marker {label} (the {color} dot)."
+    return line
 
 
 def build_regional_prompt(scene: str, width: int, height: int,
                           regions: list[dict],
-                          ref_numbers: dict[str, int] | None = None) -> str:
+                          ref_numbers: dict[str, int] | None = None,
+                          markers: dict[str, tuple[str, str]] | None = None) -> str:
     """Assemble the edit prompt: preamble, scene, refs legend (when any region
-    cites a reference image), layout header, numbered element lines back to
-    front (zIndex ascending), and the footer. `ref_numbers` maps region id ->
-    image number (2-based; image 1 is the sheet being edited)."""
+    cites a reference image), marker legend (when any region carries a drawn
+    placement dot), layout header, numbered element lines back to front
+    (zIndex ascending), and the footer. `ref_numbers` maps region id -> image
+    number (2-based; image 1 is the sheet being edited); `markers` maps region
+    id -> (color name, label letter) as drawn on image 1."""
     ref_numbers = ref_numbers or {}
+    markers = markers or {}
     ordered = sorted(regions, key=lambda r: r.get("zIndex", 0))
 
     lines = [EDIT_PREAMBLE]
@@ -102,11 +126,16 @@ def build_regional_prompt(scene: str, width: int, height: int,
     if any(r.get("id") in ref_numbers for r in ordered):
         lines.append("")
         lines.append(REFS_HEADER)
+    if any(r.get("id") in markers for r in ordered):
+        lines.append("")
+        lines.append(MARKER_HEADER)
     if ordered:
         lines.append("")
         lines.append(LAYOUT_HEADER)
         for index, region in enumerate(ordered, start=1):
-            lines.append(f"{index}. {element_line(region, ref_numbers.get(region.get('id')))}")
+            rid = region.get("id")
+            lines.append(f"{index}. "
+                         f"{element_line(region, ref_numbers.get(rid), markers.get(rid))}")
         lines.append("")
         lines.append(LAYOUT_FOOTER)
     return "\n".join(lines)

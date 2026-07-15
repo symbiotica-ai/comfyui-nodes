@@ -20,6 +20,7 @@ from .compose import (
     build_prefill_sheet,
     save_sheet,
 )
+from .markers import assign_markers, draw_placement_markers
 from .model_presets import MODEL_PRESETS, preset_dims
 from .regional_prompt import (
     build_regional_prompt,
@@ -517,6 +518,15 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
                                tooltip="Per-region reference: crop of the task "
                                        "sheet at the region's box, the first "
                                        "checked ref file, or none"),
+                io.Boolean.Input("placement_markers", default=True,
+                                 optional=True,
+                                 tooltip="Draw a labeled colored dot at each "
+                                         "region's center on image 1 and cite "
+                                         "it in that region's prompt line "
+                                         "(set-of-mark). The edit model places "
+                                         "each element on its dot and paints "
+                                         "the dot out — the strongest lever "
+                                         "against position drift."),
             ],
             outputs=[
                 io.String.Output(display_name="prompt"),
@@ -537,7 +547,7 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
 
     @classmethod
     def execute(cls, template, base_sheet, task_sheet=None, scene_prompt="",
-                ref_mode="region_crop") -> io.NodeOutput:
+                ref_mode="region_crop", placement_markers=True) -> io.NodeOutput:
         regions = sorted(template.get("regions", []),
                          key=lambda r: r.get("zIndex", 0))
         if not regions:
@@ -618,10 +628,25 @@ class SymbioticaRegionalPrompt(io.ComfyNode):
             y1 = max(y0, min(height, round((region["y"] + region["h"]) * height)))
             masks[i, y0:y1, x0:x1] = 1.0
 
+        # Set-of-mark dots: drawn on the image 1 output and cited per prompt
+        # line, so the edit model gets a pixel target for every box_2d.
+        marks = assign_markers(regions) if placement_markers else {}
+        image_out = base_sheet
+        if marks:
+            from PIL import Image as PILImage
+            frames = []
+            for i in range(int(base_sheet.shape[0])):
+                arr = (base_sheet[i, ..., :3].cpu().numpy() * 255.0)
+                pil = PILImage.fromarray(arr.clip(0, 255).astype(np.uint8))
+                pil = draw_placement_markers(pil, regions, marks)
+                frames.append(_pil_to_tensor(pil))
+            image_out = torch.cat(frames, dim=0).to(base_sheet.dtype)
+
         scene = scene_prompt.strip() or (template.get("scenePrompt") or "").strip()
-        prompt = build_regional_prompt(scene, width, height, regions, ref_numbers)
+        prompt = build_regional_prompt(scene, width, height, regions,
+                                       ref_numbers, marks)
         bboxes = regions_to_pixel_bboxes(regions, width, height)
-        return io.NodeOutput(prompt, base_sheet, refs, refs_batch, bboxes,
+        return io.NodeOutput(prompt, image_out, refs, refs_batch, bboxes,
                              masks, width, height,
                              ui=ui.PreviewText(prompt))
 
