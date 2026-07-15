@@ -1,8 +1,10 @@
-// ABOUTME: Bridge between the Symbiotica template pipeline and ERPK's Regional
+// ABOUTME: Bridge between the Symbiotica Template Editor and ERPK's Regional
 // ABOUTME: Prompt Builder — a "Fill from Symbiotica template" button on the ERPK
 // ABOUTME: node writes the template's regions into its canvas (regions_data, v2
-// ABOUTME: contract), sizes the frame, exposes ref sockets, and auto-wires
-// ABOUTME: per-region reference crops through a Symbiotica Refs Split node.
+// ABOUTME: contract), sizes the frame, and wires the editor's base sheet plus
+// ABOUTME: one task-sheet crop per region into its image/ref_N sockets. The
+// ABOUTME: edit prompt is NOT wired here: it is written by an LLM node from the
+// ABOUTME: editor's skeleton and goes straight to the image-edit node.
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 
@@ -10,8 +12,6 @@ const BUILDER_TYPE = "RegionalPromptBuilder";
 const EDITOR_TYPE = "SymbioticaTemplateEditor";
 const RP_TYPE = "SymbioticaRegionalPrompt";
 const SPLIT_TYPE = "SymbioticaRefsSplit";
-const PROMPTS_SPLIT_TYPE = "SymbioticaPromptsSplit";
-const ENHANCER_TYPE = "SymbioticaPromptEnhancer";
 const MAX_REFS = 10; // ERPK's ref_N / desc_N socket family caps
 const FAMILY_RE = /^(desc|ref)_(\d+)$/;
 
@@ -75,49 +75,65 @@ function regionsOf(editor) {
     }
 }
 
-// The Regional Prompt node ships 10 desc_N/ref_N output pairs; the template
-// decides how many are real. Trailing pairs are removed so the node face — and
-// every wire the fill button can draw — matches the region count. Only the
-// tail may go: an output's slot index is what the API prompt cites, so
-// dropping a pair from the middle would silently remap the wires below it.
-function syncRegionOutputs(rp, count) {
+// Both node families ship 10 slots' worth of per-region outputs; the template
+// decides how many are real. The rest are trimmed off the TAIL — an output's
+// slot index is what the API prompt cites, so dropping one from the middle
+// would silently remap every wire below it. The editor's refs are a plain
+// run of ref_N (stride 1); the legacy Regional Prompt node interleaves
+// desc_N/ref_N pairs (stride 2) for exactly this reason.
+function syncRegionOutputs(node, count, spec) {
     const n = Math.min(MAX_REFS, count);
-    if (!rp.outputs || n < 1) return;
-    const first = rp.outputs.findIndex((o) => o.name === "desc_1");
-    if (first >= 0) rp._symPairBase = first;
-    const base = rp._symPairBase;
+    if (!node.outputs || n < 1) return;
+    const first = node.outputs.findIndex((o) => o.name === spec.first);
+    if (first >= 0) node._symSlotBase = first;
+    const base = node._symSlotBase;
     if (base == null) return;
-    // A workflow saved before desc_N/ref_N were paired carries the old flat
-    // output order, where the slots no longer mean what their names say.
-    // Rebuilding the whole family is the only honest repair — pressing fill
-    // rewires it.
-    if (rp.outputs[base + 1] && rp.outputs[base + 1].name !== "ref_1") {
-        while (rp.outputs.length > base) rp.removeOutput(rp.outputs.length - 1);
+    // A workflow saved before the outputs took this shape carries the old
+    // order, where the slots no longer mean what their names say. Rebuilding
+    // the family is the only honest repair — pressing fill rewires it.
+    const second = node.outputs[base + 1];
+    if (spec.stride === 2 && second && second.name !== "ref_1") {
+        while (node.outputs.length > base) {
+            node.removeOutput(node.outputs.length - 1);
+        }
     }
-    const want = base + 2 * n;
-    while (rp.outputs.length > want) rp.removeOutput(rp.outputs.length - 1);
-    while (rp.outputs.length < want) {
-        const slot = rp.outputs.length - base;
-        const pair = Math.floor(slot / 2) + 1;
-        rp.addOutput(slot % 2 ? `ref_${pair}` : `desc_${pair}`,
-                     slot % 2 ? "IMAGE" : "STRING");
+    const want = base + spec.stride * n;
+    while (node.outputs.length > want) node.removeOutput(node.outputs.length - 1);
+    while (node.outputs.length < want) {
+        const slot = node.outputs.length - base;
+        const [name, type] = spec.at(slot);
+        node.addOutput(name, type);
     }
 }
 
-// Re-sync only when the upstream template's regions actually changed. Polled
-// rather than hooked: the editor writes regions_json from four places (save,
-// close, gallery pick, raw edit) and a string compare per node is cheaper than
+const REF_RUN = {
+    first: "ref_1",
+    stride: 1,
+    at: (slot) => [`ref_${slot + 1}`, "IMAGE"],
+};
+const DESC_REF_PAIRS = {
+    first: "desc_1",
+    stride: 2,
+    at: (slot) => (slot % 2
+        ? [`ref_${Math.floor(slot / 2) + 1}`, "IMAGE"]
+        : [`desc_${Math.floor(slot / 2) + 1}`, "STRING"]),
+};
+
+// Re-sync only when the template's regions actually changed. Polled rather
+// than hooked: the editor writes regions_json from four places (save, close,
+// gallery pick, raw edit) and a string compare per node is cheaper than
 // keeping a hook on each of them honest.
-function syncFromTemplate(rp) {
-    const editor = originNode(rp, "template");
+function syncFromTemplate(node) {
+    const isEditor = node.comfyClass === EDITOR_TYPE;
+    const editor = isEditor ? node : originNode(node, "template");
     const raw = editor?.comfyClass === EDITOR_TYPE
         ? (widgetByName(editor, "regions_json")?.value ?? "") : "";
-    if (raw === rp._symRegionsRaw) return;
-    rp._symRegionsRaw = raw;
+    if (raw === node._symRegionsRaw) return;
+    node._symRegionsRaw = raw;
     const count = regionsOf(editor).length;
     if (!count) return;
-    syncRegionOutputs(rp, count);
-    rp.setDirtyCanvas?.(true, true);
+    syncRegionOutputs(node, count, isEditor ? REF_RUN : DESC_REF_PAIRS);
+    node.setDirtyCanvas?.(true, true);
 }
 
 // Template regions (flat editor shape) -> ERPK regions_data v2 document.
@@ -140,6 +156,18 @@ function toErpkDoc(regions) {
         };
     });
     return { version: 2, order: out.map((r) => r.id), regions: out };
+}
+
+// Connect one named output to one named input, leaving an existing wire alone.
+// The width/height inputs only exist once ComfyUI has promoted those widgets
+// to sockets, so a missing input is normal, not an error.
+function wireOutput(source, builder, inputName, outputName) {
+    const input = builder.inputs?.find((inp) => inp.name === inputName);
+    if (!input || input.link != null) return false;
+    const outIdx = source.outputs?.findIndex((o) => o.name === outputName);
+    if (outIdx == null || outIdx < 0) return false;
+    source.connect(outIdx, builder, inputName);
+    return true;
 }
 
 // Wire a source node's <prefix>_N outputs onto the builder's same-named
@@ -181,22 +209,6 @@ function wireRefs(rp, builder, count) {
         if (outIdx >= 0) rp.connect(outIdx, split, 0);
     }
     return wireFamily(split, builder, "ref", "IMAGE", count);
-}
-
-// Descs come straight off the Regional Prompt node's desc_N outputs
-// (LLM-enhanced when its enhance_prompts toggle is on); legacy Enhancer /
-// Prompts Split nodes remain as fallbacks for older graphs.
-function wireDescs(rp, builder, count) {
-    const all = app.graph._nodes || [];
-    const source =
-        (rp?.outputs?.some((o) => o.name === "desc_1") ? rp : null) ||
-        all.find((n) => n.comfyClass === ENHANCER_TYPE) ||
-        all.find((n) => n.comfyClass === PROMPTS_SPLIT_TYPE);
-    if (!source) return 0;
-    if (!builder.properties) builder.properties = {};
-    builder.properties.erpk_region_desc =
-        Array.from({ length: Math.min(count, MAX_REFS) }, (_, i) => i + 1);
-    return wireFamily(source, builder, "desc", "STRING", count);
 }
 
 // ERPK only drops a desc_N/ref_N socket that is neither exposed nor wired, so
@@ -246,10 +258,16 @@ function fillBuilder(builder) {
     if (heightWidget) heightWidget.value = h;
     const slots = Math.min(doc.regions.length, MAX_REFS);
     resetFamilies(builder);
-    const family = Array.from({ length: slots }, (_, i) => i + 1);
-    builder.properties.erpk_region_ref = family;
-    builder.properties.erpk_region_desc = [...family];
-    if (rp) syncRegionOutputs(rp, slots);
+    // Refs only: the edit prompt is written by the LLM node downstream, so the
+    // builder's own prompt — and the desc_N sockets that feed it — go unused.
+    builder.properties.erpk_region_ref =
+        Array.from({ length: slots }, (_, i) => i + 1);
+    const refSource = editor.outputs?.some((o) => o.name === "ref_1")
+        ? editor : rp;
+    if (refSource) {
+        syncRegionOutputs(refSource, slots,
+                          refSource === editor ? REF_RUN : DESC_REF_PAIRS);
+    }
 
     // The ERPK editor re-reads regions_data through its own loader so the
     // canvas, sockets, and labels all refresh from the document we just wrote
@@ -260,25 +278,22 @@ function fillBuilder(builder) {
     erpkEditor?.layout?.();
 
     let wired = 0;
-    if (rp) {
-        // Base sheet in, refs and descs per region — all from the one node.
-        const imgInput = builder.inputs?.find((inp) => inp.name === "image");
-        if (imgInput && imgInput.link == null) {
-            const outIdx = rp.outputs.findIndex((o) => o.name === "image");
-            if (outIdx >= 0) rp.connect(outIdx, builder, "image");
-        }
-        wired = wireRefs(rp, builder, doc.regions.length);
+    if (refSource) {
+        // Base sheet in, one task-sheet crop per region — all from the editor.
+        wireOutput(refSource, builder, "image",
+                   refSource === editor ? "base sheet" : "image");
+        wireOutput(refSource, builder, "width", "width");
+        wireOutput(refSource, builder, "height", "height");
+        wired = wireRefs(refSource, builder, doc.regions.length);
     } else {
         toast("warn", "Refs not wired",
-              "No Symbiotica Regional Prompt node found — regions filled without "
-              + "reference images.");
+              "The Template Editor has no ref_N outputs — update the Symbiotica "
+              + "pack and reload the page.");
     }
-    const descsWired = wireDescs(rp, builder, doc.regions.length);
     builder.setDirtyCanvas?.(true, true);
     toast("success", "Regions filled",
           `${doc.regions.length} regions from the template`
-          + (wired ? `, ${wired} refs wired` : "")
-          + (descsWired ? `, ${descsWired} prompts wired` : ""));
+          + (wired ? `, ${wired} refs wired` : ""));
 }
 
 // After each run, mirror the Regional Prompt node's FINAL per-region prompts
@@ -316,7 +331,9 @@ app.registerExtension({
         });
         setInterval(() => {
             for (const node of app.graph?._nodes || []) {
-                if (node.comfyClass === RP_TYPE) syncFromTemplate(node);
+                if (node.comfyClass === EDITOR_TYPE || node.comfyClass === RP_TYPE) {
+                    syncFromTemplate(node);
+                }
             }
         }, 500);
     },
