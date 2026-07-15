@@ -834,6 +834,46 @@ def _first_inline_image(resp):
     return None
 
 
+class SymbioticaRefsSplit(io.ComfyNode):
+    """Fan the Regional Prompt's image_refs list out to individual IMAGE
+    outputs, so each ref can feed one ref_N socket on ERPK's Regional Prompt
+    Builder (which binds references per canvas region, one socket each)."""
+
+    MAX_REFS = 10  # mirrors ERPK's ref_N socket family cap
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaRefsSplit",
+            display_name="Symbiotica Refs Split",
+            category="symbiotica/pipeline",
+            description="Splits ERPK_IMAGE_REFS into ref_1..ref_10 IMAGE "
+                        "outputs (region order). Missing slots emit a small "
+                        "gray placeholder.",
+            inputs=[
+                io.Custom("ERPK_IMAGE_REFS").Input(
+                    "image_refs",
+                    tooltip="The Symbiotica Regional Prompt's image_refs "
+                            "output"),
+            ],
+            outputs=[
+                io.Image.Output(display_name=f"ref_{n}")
+                for n in range(1, cls.MAX_REFS + 1)
+            ],
+        )
+
+    @classmethod
+    def execute(cls, image_refs) -> io.NodeOutput:
+        refs = list(image_refs or [])
+        outs = []
+        for i in range(cls.MAX_REFS):
+            if i < len(refs):
+                outs.append(refs[i][..., :3])
+            else:
+                outs.append(torch.full((1, 8, 8, 3), 0.5))
+        return io.NodeOutput(*outs)
+
+
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaEventSpecs,
@@ -841,5 +881,6 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaTemplateEditor,
     SymbioticaRegionalPrompt,
     SymbioticaRegionalEdit,
+    SymbioticaRefsSplit,
     SymbioticaTemplatePrompt,
 ]
