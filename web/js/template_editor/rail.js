@@ -622,7 +622,7 @@ export function renderRail(state, host, opts) {
         const model = MODEL_PRESETS.find((m) => m.id === modelId);
         if (!model) return null;
         const tier = model.tiers.includes(prev?.tier) ? prev.tier
-            : model.tiers.includes("2K") ? "2K" : model.tiers[0];
+            : model.tiers.includes("1K") ? "1K" : model.tiers[0];
         const ar = model.aspectRatios.includes(prev?.ar) ? prev.ar
             : model.aspectRatios.includes("1:1") ? "1:1" : model.aspectRatios[0];
         return { model: modelId, tier, ar };
