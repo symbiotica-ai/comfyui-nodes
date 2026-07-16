@@ -158,8 +158,17 @@ def call_claude_api(
     if response_data.get("error"):
         raise Exception(response_data.get("error").get("message", "Unknown error"))
 
-    # Extract text response
-    return response_data["content"][0]["text"]
+    # Adaptive-thinking models may lead with a thinking block; the text
+    # block(s) can sit anywhere in content, so join them instead of
+    # indexing [0] (which raised KeyError: 'text').
+    blocks = response_data.get("content") or []
+    texts = [block.get("text", "") for block in blocks
+             if isinstance(block, dict) and block.get("type", "text") == "text"]
+    text = "\n".join(t for t in texts if t)
+    if not text:
+        kinds = [b.get("type") for b in blocks if isinstance(b, dict)]
+        raise Exception(f"Claude response contained no text block (got: {kinds})")
+    return text
 
 
 def call_gemini_api(
