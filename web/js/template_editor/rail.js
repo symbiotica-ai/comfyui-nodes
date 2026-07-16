@@ -104,6 +104,9 @@ export function renderRail(state, host, opts) {
                 state.categoryFilter = value;
                 state.emit("categoryFilter");
                 paintChips();
+                // Switching type is a different region set, so relay the canvas
+                // to it immediately — the point of the chip is to SEE that type.
+                runPrefill();
                 syncActionButtons();
             });
             chips.push({ btn, value });
@@ -115,16 +118,18 @@ export function renderRail(state, host, opts) {
     }
 
     // --- 1. prefill ------------------------------------------------------------
-    const prefillBtn = el("button", "width:100%;margin-bottom:6px;", "⟳ Prefill from specs");
-    prefillBtn.className = "primary";
-    prefillBtn.addEventListener("click", () => {
+    // Full reset: drop everything, lay out the current filter's assets fresh.
+    function runPrefill() {
         const assets = taskAssetsWithRefs();
         if (!assets.length) return;
-        // Full reset (rebuildSpecRegions-style): drop everything, lay out fresh.
         const out = prefillRegions(assets, state.sheetW, state.sheetH, undefined,
                                    state.settings);
         state.setRegions(out.regions);
-    });
+    }
+
+    const prefillBtn = el("button", "width:100%;margin-bottom:6px;", "⟳ Prefill from specs");
+    prefillBtn.className = "primary";
+    prefillBtn.addEventListener("click", runPrefill);
     host.appendChild(prefillBtn);
 
     // Rearrange: relayout the regions ALREADY on the canvas under the pack
