@@ -379,14 +379,17 @@ async function openEditorForNode(node, uiState) {
         },
         loadAssets: (dir) => fetchJson(`/symbiotica/list-assets?dir=${encodeURIComponent(dir)}`),
         listSaved: async () => (await fetchJson("/symbiotica/template-list")).templates ?? [],
-        saveTemplate: async (name) => {
+        // refMode: "project" (default) exports the base sheet — assigned game
+        // art, client refs where unassigned. "task" exports the client refs
+        // laid out, the task-sheet-only deliverable (no project reference).
+        // bindNode=false skips pointing the node's sheet_file at this save,
+        // so a batch ("Save all types") writes many sheets without hijacking
+        // which one the node loads.
+        saveTemplate: async (name, { refMode = "project", bindNode = true } = {}) => {
             const state = handle.state;
             const finalName = (name || state.loadedName || "template").trim();
-            // The saved sheet is ALWAYS the base sheet (assigned project art,
-            // refs where unassigned) regardless of the preview toggle — the
-            // task sheet is composed server-side from the regions at queue time.
             const prevMode = state.refMode;
-            state.refMode = "project";
+            state.refMode = refMode;
             let png;
             try {
                 png = await handle.exportSheet();
@@ -408,12 +411,14 @@ async function openEditorForNode(node, uiState) {
             });
             const data = await resp.json();
             if (!resp.ok || !data.ok) throw new Error(data.error ?? "save failed");
-            const sheetW = widgetOf(node, "sheet_file");
-            if (sheetW) sheetW.value = data.file;
-            const regionsW = widgetOf(node, "regions_json");
-            if (regionsW) regionsW.value = JSON.stringify(state.regions);
-            const sceneW = widgetOf(node, "scene_prompt");
-            if (sceneW) sceneW.value = state.scenePrompt;
+            if (bindNode) {
+                const sheetW = widgetOf(node, "sheet_file");
+                if (sheetW) sheetW.value = data.file;
+                const regionsW = widgetOf(node, "regions_json");
+                if (regionsW) regionsW.value = JSON.stringify(state.regions);
+                const sceneW = widgetOf(node, "scene_prompt");
+                if (sceneW) sceneW.value = state.scenePrompt;
+            }
             uiState.refreshGallery?.();
             return { name: data.name, file: data.file };
         },

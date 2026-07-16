@@ -77,10 +77,46 @@ export function renderRail(state, host, opts) {
 
     host.replaceChildren();
 
+    // --- 0. asset-type filter --------------------------------------------------
+    // Chips gate everything below: pick a type and Prefill / the canvas / Save
+    // all use only that type. "All" (null filter) is the whole order.
+    const filterCats = orderCategories();
+    if (filterCats.length > 1) {
+        const filterWrap = el("div", "margin:2px 0 8px;");
+        filterWrap.appendChild(el("div", "opacity:.55;font-size:11px;margin-bottom:3px;",
+                                  "Asset type"));
+        const chipRow = el("div", "display:flex;flex-wrap:wrap;gap:4px;");
+        const chips = [];
+        function paintChips() {
+            for (const { btn, value } of chips) {
+                const on = state.categoryFilter === value;
+                btn.style.background = on ? "#3a5bd0" : "#1e1e1e";
+                btn.style.borderColor = on ? "#5a7bf0" : "#3a3a3a";
+                btn.style.color = on ? "#fff" : "#bbb";
+            }
+        }
+        for (const [label, value] of [["All", null], ...filterCats.map((c) => [c, c])]) {
+            const btn = el("button",
+                "padding:2px 10px;font-size:11px;border:1px solid #3a3a3a;" +
+                "border-radius:12px;cursor:pointer;background:#1e1e1e;color:#bbb;",
+                label);
+            btn.addEventListener("click", () => {
+                state.categoryFilter = value;
+                state.emit("categoryFilter");
+                paintChips();
+                syncActionButtons();
+            });
+            chips.push({ btn, value });
+            chipRow.appendChild(btn);
+        }
+        paintChips();
+        filterWrap.appendChild(chipRow);
+        host.appendChild(filterWrap);
+    }
+
     // --- 1. prefill ------------------------------------------------------------
     const prefillBtn = el("button", "width:100%;margin-bottom:6px;", "⟳ Prefill from specs");
     prefillBtn.className = "primary";
-    prefillBtn.disabled = state.taskAssets.length === 0;
     prefillBtn.addEventListener("click", () => {
         const assets = taskAssetsWithRefs();
         if (!assets.length) return;
@@ -98,16 +134,35 @@ export function renderRail(state, host, opts) {
     repackBtn.title = "Redistribute the regions on the canvas under the current "
         + "pack settings. Deleted regions stay deleted — use Prefill from specs "
         + "to start over from the order.";
-    repackBtn.disabled = !state.regions.some(
-        (r) => String(r.id).startsWith("region:spec:"));
     repackBtn.addEventListener("click", () => {
         state.setRegions(rebuildSpecRegions(state));
     });
     host.appendChild(repackBtn);
 
-    function taskAssetsWithRefs() {
+    // Prefill follows the filter (only that type's assets); Rearrange follows
+    // the canvas (are there spec regions to move). Re-run on filter/region
+    // change so a chip click or an edit updates the buttons live.
+    function syncActionButtons() {
+        prefillBtn.disabled = taskAssetsWithRefs().length === 0;
+        repackBtn.disabled = !state.regions.some(
+            (r) => String(r.id).startsWith("region:spec:"));
+    }
+    syncActionButtons();
+    state.on("regions", syncActionButtons);
+
+    // Assets that can be laid out: named, with refs. `category` narrows to one
+    // asset type; null (the default) keeps them all. Prefill and the canvas
+    // read the live state.categoryFilter, so picking a chip and pressing
+    // Prefill lays out just that type.
+    function taskAssetsWithRefs(category = state.categoryFilter) {
         return state.taskAssets.filter(
-            (a) => a.assetName && (a.refFiles?.length ?? 0) > 0);
+            (a) => a.assetName && (a.refFiles?.length ?? 0) > 0
+                   && (!category || a.category === category));
+    }
+
+    function orderCategories() {
+        return [...new Set(taskAssetsWithRefs(null).map((a) => a.category)
+                                                   .filter(Boolean))];
     }
 
     // --- 2. name / save / load ---------------------------------------------------
@@ -122,6 +177,60 @@ export function renderRail(state, host, opts) {
 
     const saveError = el("div", "color:#e66;font-size:11px;margin:2px 0;display:none;");
     host.appendChild(saveError);
+
+    // "Save all types": one task sheet per asset type plus the whole order,
+    // auto-named <base>-all / <base>-<type>. Each is laid out fresh from that
+    // type's assets and exported in task mode (client art, no project ref).
+    if (orderCategories().length > 1) {
+        const saveAllBtn = el("button", "width:100%;margin:2px 0 6px;",
+                              "💾 Save all types (separate sheets)");
+        saveAllBtn.title = "Write one task sheet per asset type — food, "
+            + "decorations, wallpaper — and one for the whole order, named from "
+            + "the box above.";
+        saveAllBtn.addEventListener("click", async () => {
+            if (local.saving) return;
+            const base = slugify(nameInput.value.trim()) || state.loadedName || "order";
+            const jobs = [["all", null],
+                          ...orderCategories().map((c) => [slugify(c), c])];
+            local.saving = true;
+            saveAllBtn.disabled = true;
+            saveBtn.disabled = true;
+            saveError.style.color = "#e66";
+            saveError.style.display = "none";
+            const prevRegions = state.regions;
+            const prevFilter = state.categoryFilter;
+            const saved = [];
+            try {
+                for (const [suffix, cat] of jobs) {
+                    const assets = taskAssetsWithRefs(cat);
+                    if (!assets.length) continue;
+                    const { regions } = prefillRegions(
+                        assets, state.sheetW, state.sheetH, undefined, state.settings);
+                    state.setRegions(regions);
+                    const res = await opts.saveTemplate(
+                        `${base}-${suffix}`, { refMode: "task", bindNode: false });
+                    saved.push(res.name);
+                }
+                if (!saved.length) throw new Error("no assets with references to save");
+            } catch (e) {
+                saveError.textContent = `Save all failed: ${e.message ?? e}`;
+                saveError.style.display = "";
+            } finally {
+                state.setRegions(prevRegions);
+                state.categoryFilter = prevFilter;
+                state.emit("template");
+                local.saving = false;
+                saveAllBtn.disabled = false;
+                saveBtn.disabled = false;
+            }
+            if (saved.length) {
+                saveError.style.color = "#6c6";
+                saveError.style.display = "";
+                saveError.textContent = `Saved ${saved.length}: ${saved.join(", ")}`;
+            }
+        });
+        host.appendChild(saveAllBtn);
+    }
 
     const loadPanel = el("div",
         "border:1px solid #333;border-radius:6px;margin:4px 0;padding:4px;" +
