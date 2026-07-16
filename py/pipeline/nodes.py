@@ -30,7 +30,7 @@ from .regional_prompt import (
     regions_to_pixel_bboxes,
     target_ref_size,
 )
-from .skeleton import build_skeleton
+from .skeleton import build_client_prompts, build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
 from .texture_pack import PackSettings
@@ -325,10 +325,11 @@ def _layout_outputs(bundle, task_tensor):
     crops = [_region_crop(r, task_tensor) for r in regions]
     ref_numbers = {r.get("id"): i + 2 for i, r in enumerate(regions)}
     skeleton = build_skeleton(regions, width, height, ref_numbers) if regions else ""
+    prompts = build_client_prompts(regions) if regions else ""
     gray = torch.full((1, 8, 8, 3), 0.5)
     refs = [crops[i] if i < len(crops) else gray
             for i in range(MAX_REGION_REFS)]
-    return (skeleton, width, height, *refs)
+    return (skeleton, prompts, width, height, *refs)
 
 
 class SymbioticaTemplateEditor(io.ComfyNode):
@@ -401,6 +402,12 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                             "box_2d placement, reference image number, and the "
                             "client's brief. Carries no framing of its own — "
                             "the LLM's system prompt owns that."),
+                io.String.Output(
+                    display_name="prompts",
+                    tooltip="The order's client prompts, one recipe per row "
+                            "(\"row 1\\nPrep) … Ready) … Serving) …\") — the "
+                            "text the recipe/grid workflow feeds its LLM "
+                            "alongside the sheet."),
                 io.Int.Output(display_name="width"),
                 io.Int.Output(display_name="height"),
                 # Per-region task-sheet crops, for the Regional Prompt

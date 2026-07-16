@@ -1,6 +1,6 @@
 # ABOUTME: Tests for the Template Editor's layout skeleton — the framing-free
 # ABOUTME: facts an LLM turns into the edit prompt.
-from pipeline.skeleton import build_skeleton, element_block
+from pipeline.skeleton import build_client_prompts, build_skeleton, element_block
 
 
 def region(rid, name, desc, x, y, w, h, z=0):
@@ -43,6 +43,26 @@ def test_build_skeleton_pluralizes_and_skips_ref_line_without_refs():
     assert "2 elements, listed back to front." in out
     assert "reference: image" not in out
     assert "Image 1 is the sheet" not in out
+
+
+def test_client_prompts_number_rows_in_region_order():
+    regions = [region("front", "Spookies", "Prep) a\nReady) b\nServing) c", 0, 0, 1, 0.3, z=5),
+               region("back", "Popsicle", "Prep) x\nReady) y\nServing) z", 0, 0.3, 1, 0.3, z=1)]
+    out = build_client_prompts(regions)
+    # zIndex order: back (z=1) is row 1, front (z=5) is row 2.
+    assert out == ("row 1\nPrep) x\nReady) y\nServing) z\n\n"
+                   "row 2\nPrep) a\nReady) b\nServing) c")
+
+
+def test_client_prompts_skip_empty_and_use_desc_verbatim():
+    regions = [region("a", "A", "", 0, 0, 0.5, 0.5, z=0),
+               region("b", "B", "just a red crate", 0.5, 0, 0.5, 0.5, z=1)]
+    out = build_client_prompts(regions)
+    assert out == "row 1\njust a red crate"
+
+
+def test_client_prompts_empty_when_no_descs():
+    assert build_client_prompts([region("a", "A", "", 0, 0, 1, 1)]) == ""
 
 
 def test_build_skeleton_carries_no_framing_words():

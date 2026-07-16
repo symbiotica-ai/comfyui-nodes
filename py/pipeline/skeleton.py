@@ -19,6 +19,27 @@ def element_block(index, region, ref_number=None):
     return "\n".join(lines)
 
 
+def build_client_prompts(regions):
+    """The order's client prompts, one recipe per row — the exact text the
+    recipe workflow hand-typed into its Client Prompt node.
+
+    Each region's desc is the client's brief verbatim (for food, it already
+    carries the "Prep) … Ready) … Serving) …" stage lines), so this only
+    numbers them "row N" and stacks them in region order. Regions with no
+    brief are skipped.
+    """
+    ordered = sorted(regions, key=lambda r: r.get("zIndex", 0))
+    blocks = []
+    row = 0
+    for r in ordered:
+        desc = (r.get("desc") or "").strip()
+        if not desc:
+            continue
+        row += 1
+        blocks.append(f"row {row}\n{desc}")
+    return "\n\n".join(blocks)
+
+
 def build_skeleton(regions, width, height, ref_numbers=None):
     """The layout facts, in region (back-to-front) order.
 
