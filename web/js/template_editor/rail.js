@@ -91,12 +91,16 @@ export function renderRail(state, host, opts) {
     });
     host.appendChild(prefillBtn);
 
-    // Repack: relayout the current regions under the pack settings, KEEPING
-    // user edits and scales (unlike Prefill, which is a full reset).
-    const repackBtn = el("button", "width:100%;margin-bottom:6px;", "⟲ Repack regions");
-    repackBtn.disabled = state.taskAssets.length === 0;
+    // Rearrange: relayout the regions ALREADY on the canvas under the pack
+    // settings, keeping their edits and scales. Unlike Prefill it never brings
+    // a deleted region back — delete two of five, rearrange the other three.
+    const repackBtn = el("button", "width:100%;margin-bottom:6px;", "⟲ Rearrange regions");
+    repackBtn.title = "Redistribute the regions on the canvas under the current "
+        + "pack settings. Deleted regions stay deleted — use Prefill from specs "
+        + "to start over from the order.";
+    repackBtn.disabled = !state.regions.some(
+        (r) => String(r.id).startsWith("region:spec:"));
     repackBtn.addEventListener("click", () => {
-        if (!state.regions.some((r) => String(r.id).startsWith("region:spec:"))) return;
         state.setRegions(rebuildSpecRegions(state));
     });
     host.appendChild(repackBtn);

@@ -523,9 +523,15 @@ export function prefillRegions(orderAssets, sheetW, sheetH, chosen = null, setti
 const PRESERVED_KEYS = ["desc", "kind", "text", "taskRefs", "projectPaths", "assetType"];
 
 export function rebuildSpecRegions(state) {
+    // The canvas is the truth, not the order: only assets that still HAVE a
+    // region get laid out, so deleting regions and rearranging the rest works.
+    // Rebuilding from taskAssets instead would resurrect every deleted one.
+    const onCanvas = new Set((state.regions ?? []).map((r) => r.id));
     const assets = (state.taskAssets ?? []).filter(
-        (a) => Array.isArray(a.refFiles) && a.refFiles.length > 0);
-    // Carry each region's user scale into the packer so repacks lay the
+        (a) => Array.isArray(a.refFiles) && a.refFiles.length > 0
+               && onCanvas.has(`region:spec:${a.assetName}`));
+    if (!assets.length) return state.regions ?? [];
+    // Carry each region's user scale into the packer so a rearrange lays the
     // strips out at their scaled size instead of resetting to the order's.
     const scales = {};
     for (const r of state.regions ?? []) {
@@ -541,7 +547,12 @@ export function rebuildSpecRegions(state) {
             if (old[key] !== undefined) region[key] = old[key];
         }
     }
-    return regions;
+    // Anything the packer did not lay out — hand-drawn regions, or a spec
+    // region whose asset lost its refs — stays exactly where the user put it.
+    // Rearranging is a move, never a delete.
+    const packed = new Set(regions.map((r) => r.id));
+    const untouched = (state.regions ?? []).filter((r) => !packed.has(r.id));
+    return [...regions, ...untouched];
 }
 
 // --- task-driven asset filtering (port of hub flows/template-filter.ts) --------
