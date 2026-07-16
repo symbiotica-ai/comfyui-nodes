@@ -40,7 +40,8 @@ EventSpec = io.Custom("SYMBIOTICA_EVENT_SPEC")
 Template = io.Custom("SYMBIOTICA_TEMPLATE")
 
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
-_MODELS = ["nano-banana-pro", "nano-banana-2", "imagen-4", "custom"]
+# Derived from the preset table so a new model shows up without editing here.
+_MODELS = [m["id"] for m in MODEL_PRESETS] + ["custom"]
 _ASPECTS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5",
             "21:9", "4:1", "1:4", "8:1", "1:8"]
 

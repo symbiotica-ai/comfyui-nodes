@@ -31,6 +31,24 @@ export const MODEL_PRESETS = [
         tiers: ["1K", "2K"],
         aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4"],
     },
+    {
+        // Qwen emits one fixed native size per aspect ratio (not a tier
+        // long-edge scaled by AR), so `sizes` overrides the computed dims.
+        id: "qwen-image",
+        label: "Qwen Image",
+        endpoint: "fal-ai/qwen-image",
+        tiers: ["1K"],
+        aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+        sizes: {
+            "1:1": { w: 1328, h: 1328 },
+            "16:9": { w: 1664, h: 928 },
+            "9:16": { w: 928, h: 1664 },
+            "4:3": { w: 1472, h: 1104 },
+            "3:4": { w: 1104, h: 1472 },
+            "3:2": { w: 1584, h: 1056 },
+            "2:3": { w: 1056, h: 1584 },
+        },
+    },
 ];
 
 function round8(n) {
@@ -67,6 +85,9 @@ export function presetDims(sel) {
         || !model.aspectRatios.includes(sel.ar)) {
         return null;
     }
+    // A model with fixed per-AR native sizes (e.g. Qwen) overrides the tier
+    // long-edge computation.
+    if (model.sizes?.[sel.ar]) return { ...model.sizes[sel.ar] };
     return aspectDims(sel.ar, sel.tier);
 }
 
