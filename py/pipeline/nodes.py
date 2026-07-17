@@ -379,29 +379,32 @@ class SymbioticaTemplateEditor(io.ComfyNode):
             node_id="SymbioticaTemplateEditor",
             display_name="Symbiotica Template Editor",
             category="symbiotica/pipeline",
-            description="Assign existing game assets from the project reference "
-                        "folder as per-region base art. Emits a base sheet and a "
-                        "task-reference sheet sharing one region layout — wire "
-                        "both into an img2img edit node. Browse the folder and "
-                        "tick assets on the node.",
+            description="Point at one client project folder (with orders/ and "
+                        "reference-assets/), pick a month and event, and build "
+                        "the region sheet — order, layout, and editor in one "
+                        "node. Emits a base sheet + task sheet + the layout "
+                        "skeleton and client prompts.",
             inputs=[
-                # Wire EITHER the whole order (events) and pick the event in
-                # the editor, OR one Event Specs spec. Both optional: with
-                # neither, the editor opens blank for a from-scratch template.
-                OrderEvents.Input("events", optional=True,
-                                  tooltip="The whole order from Order Read — "
-                                          "pick which event to build in the "
-                                          "editor's Event selector"),
-                EventSpec.Input("spec", optional=True,
-                                tooltip="One event's spec (from Event Specs). "
-                                        "Ignored when 'events' is wired"),
-                io.String.Input("assets_root", default="",
-                                tooltip="Project reference folder (set via the "
-                                        "node's Browse button)"),
-                # Everything below is set inside the full-screen editor or by
-                # the node's own UI, so it lives behind "Show advanced inputs":
-                # the node face is the editor button, the template list, and
-                # the sheet preview.
+                # The node reads the order itself: one project folder + a month.
+                io.String.Input("project_path", default="",
+                                tooltip="The client project folder — the one "
+                                        "that contains orders/ and "
+                                        "reference-assets/"),
+                io.String.Input("month", default="",
+                                tooltip="Which month's order to build (the "
+                                        ".xlsx files under orders/)"),
+                # Optional legacy inputs: a wired order still works, but the
+                # project folder above needs no upstream node.
+                OrderEvents.Input("events", optional=True, advanced=True,
+                                  tooltip="Legacy: the whole order from an Order "
+                                          "Read node (else read from project + "
+                                          "month here)"),
+                EventSpec.Input("spec", optional=True, advanced=True,
+                                tooltip="Legacy: one event's spec from Event "
+                                        "Specs (ignored when project/events set)"),
+                io.String.Input("assets_root", default="", advanced=True,
+                                tooltip="Override the sprite catalog (else the "
+                                        "project's reference-assets/ folder)"),
                 io.String.Input("feature", default="", advanced=True,
                                 tooltip="Which event the editor is building "
                                         "(set by the editor's Event selector)"),
@@ -476,31 +479,47 @@ class SymbioticaTemplateEditor(io.ComfyNode):
 
     @classmethod
     @staticmethod
-    def _resolve_spec(spec, events, feature):
-        """One event's spec from whichever input is wired: a direct spec wins;
-        else the chosen (or first) event of the order; else an empty spec for a
-        from-scratch template."""
-        if spec:
-            return spec
-        if events and events.get("events"):
-            evs = events["events"]
-            feat = (feature or "").strip() or evs[0].get("feature", "")
-            try:
-                resolved = event_spec(evs, feat)
-            except ValueError:
-                resolved = event_spec(evs, evs[0].get("feature", ""))
-            return {**resolved, "refsRoot": events.get("refsRoot", "")}
-        return {"feature": "", "templates": [], "refsRoot": ""}
+    def _event_spec_of(events_list, refs_root, feature):
+        feat = (feature or "").strip() or (
+            events_list[0].get("feature", "") if events_list else "")
+        try:
+            resolved = event_spec(events_list, feat)
+        except ValueError:
+            resolved = event_spec(events_list, events_list[0].get("feature", ""))
+        return {**resolved, "refsRoot": refs_root}
 
     @classmethod
-    def execute(cls, assets_root, assignments, events=None, spec=None,
+    def _resolve_spec(cls, spec, events, project_path, month, feature):
+        """One event's spec + the sprite-catalog root. The node reads the order
+        itself from project+month; a wired spec/events still works; with none of
+        them it's an empty spec for a from-scratch template."""
+        if project_path and project_path.strip():
+            from .project_layout import resolve_month
+            r = resolve_month(project_path.strip(), (month or "").strip())
+            if r["order_path"]:
+                loaded = load_order(r["order_path"], r["refs_path"])
+                return (cls._event_spec_of(loaded["events"], r["refs_path"], feature),
+                        r["assets_root"])
+        if spec:
+            return spec, ""
+        if events and events.get("events"):
+            return (cls._event_spec_of(events["events"],
+                                       events.get("refsRoot", ""), feature),
+                    events.get("assetsRoot", ""))
+        return {"feature": "", "templates": [], "refsRoot": ""}, ""
+
+    @classmethod
+    def execute(cls, assignments, project_path="", month="", assets_root="",
+                events=None, spec=None,
                 feature="", group="", sheet_name="",
                 preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
                 max_width=2048, max_height=2048, algorithm="shelf",
                 distribute_by_folder=True, background="#808080",
                 sheet_file="", regions_json="[]",
                 scene_prompt="") -> io.NodeOutput:
-        spec = cls._resolve_spec(spec, events, feature)
+        spec, derived_root = cls._resolve_spec(spec, events, project_path, month,
+                                               feature)
+        assets_root = assets_root or derived_root
         if sheet_file.strip():
             return cls._execute_editor_sheet(
                 spec, sheet_file.strip(), regions_json, scene_prompt,

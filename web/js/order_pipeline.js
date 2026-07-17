@@ -81,6 +81,37 @@ function comboify(node, widgetName, valuesFn) {
     w.options.values = valuesFn; // LiteGraph accepts a function — always fresh
 }
 
+// Turn a node's `month` text widget into a dropdown fed by the months found
+// under its project_path/orders — and keep it fresh when the path changes.
+function wireMonthPicker(node) {
+    node._symMonths = [];
+    comboify(node, "month", () => node._symMonths);
+    const refresh = async () => {
+        const project = widgetOf(node, "project_path")?.value?.trim();
+        if (!project) { node._symMonths = []; return; }
+        try {
+            const data = await fetchJson(
+                "/symbiotica/list-orders?project=" + encodeURIComponent(project));
+            node._symMonths = (data.months ?? []).map((m) => m.label);
+            const monthW = widgetOf(node, "month");
+            if (monthW && !node._symMonths.includes(monthW.value)) {
+                monthW.value = node._symMonths[0] ?? "";
+            }
+        } catch { node._symMonths = []; }
+        node.setDirtyCanvas?.(true, true);
+    };
+    const projectW = widgetOf(node, "project_path");
+    if (projectW) {
+        const prev = projectW.callback;
+        projectW.callback = function () {
+            const r = prev?.apply(this, arguments);
+            refresh();
+            return r;
+        };
+    }
+    refresh();
+}
+
 function refreshCombos(node) {
     for (const specs of downstreamNodes(node, "SymbioticaEventSpecs")) {
         specs.setDirtyCanvas(true, true);
@@ -193,35 +224,8 @@ app.registerExtension({
             const orig = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 orig?.apply(this, arguments);
-                // The month dropdown is filled from the project folder's
-                // orders/ subdir; the value is the friendly label ("October").
-                this._symMonths = [];
-                comboify(this, "month", () => this._symMonths);
-                const refreshMonths = async () => {
-                    const project = widgetOf(this, "project_path")?.value?.trim();
-                    if (!project) { this._symMonths = []; return; }
-                    try {
-                        const data = await fetchJson(
-                            "/symbiotica/list-orders?project="
-                            + encodeURIComponent(project));
-                        this._symMonths = (data.months ?? []).map((m) => m.label);
-                        const monthW = widgetOf(this, "month");
-                        if (monthW && !this._symMonths.includes(monthW.value)) {
-                            monthW.value = this._symMonths[0] ?? "";
-                        }
-                    } catch { this._symMonths = []; }
-                    this.setDirtyCanvas?.(true, true);
-                };
-                const projectW = widgetOf(this, "project_path");
-                if (projectW) {
-                    const prev = projectW.callback;
-                    projectW.callback = function () {
-                        const r = prev?.apply(this, arguments);
-                        refreshMonths();
-                        return r;
-                    };
-                }
-                refreshMonths();
+                // Month dropdown filled from the project folder's orders/.
+                wireMonthPicker(this);
 
                 const container = document.createElement("div");
                 container.style.cssText =
@@ -261,6 +265,8 @@ app.registerExtension({
             const orig = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 orig?.apply(this, arguments);
+                // The editor reads the order itself: project folder + month.
+                wireMonthPicker(this);
                 comboify(this, "group", () => {
                     const ev = pickedEventFor(this);
                     return ev ? templateGroups(ev).map((g) => g.template) : [];
@@ -311,29 +317,38 @@ async function taskDataFor(node) {
     // Parse the order server-side from the upstream Order Read's widgets, so
     // the editor works without queueing first. The route resolves project +
     // month (or explicit order/refs paths) and returns the roots it used.
-    const orderNode = upstreamOrderRead(node);
+    // The node reads the order itself from its own project_path + month; a
+    // legacy upstream Order Read still works as a fallback.
+    const q = new URLSearchParams();
+    let project = widgetOf(node, "project_path")?.value?.trim();
+    let month = widgetOf(node, "month")?.value?.trim();
+    if (project) {
+        if (project) q.set("project", project);
+        if (month) q.set("month", month);
+    } else {
+        const orderNode = upstreamOrderRead(node);
+        if (orderNode) {
+            project = widgetOf(orderNode, "project_path")?.value?.trim();
+            month = widgetOf(orderNode, "month")?.value?.trim();
+            const op = widgetOf(orderNode, "order_path")?.value?.trim();
+            const rp = widgetOf(orderNode, "refs_path")?.value?.trim();
+            if (project) q.set("project", project);
+            if (month) q.set("month", month);
+            if (op) q.set("order_path", op);
+            if (rp) q.set("refs_path", rp);
+        }
+    }
     let refsRoot = "";
     let assetsRoot = "";
     let events = null;
-    if (orderNode) {
-        const q = new URLSearchParams();
-        const project = widgetOf(orderNode, "project_path")?.value?.trim();
-        const month = widgetOf(orderNode, "month")?.value?.trim();
-        const op = widgetOf(orderNode, "order_path")?.value?.trim();
-        const rp = widgetOf(orderNode, "refs_path")?.value?.trim();
-        if (project) q.set("project", project);
-        if (month) q.set("month", month);
-        if (op) q.set("order_path", op);
-        if (rp) q.set("refs_path", rp);
-        if ([...q.keys()].length) {
-            try {
-                const data = await fetchJson(`/symbiotica/parse-order?${q}`);
-                events = data.events;
-                refsRoot = data.refsRoot ?? "";
-                assetsRoot = data.assetsRoot ?? "";
-            } catch (e) {
-                console.warn("[symbiotica] parse-order failed:", e.message);
-            }
+    if ([...q.keys()].length) {
+        try {
+            const data = await fetchJson(`/symbiotica/parse-order?${q}`);
+            events = data.events;
+            refsRoot = data.refsRoot ?? "";
+            assetsRoot = data.assetsRoot ?? "";
+        } catch (e) {
+            console.warn("[symbiotica] parse-order failed:", e.message);
         }
     }
     if (!events) {
