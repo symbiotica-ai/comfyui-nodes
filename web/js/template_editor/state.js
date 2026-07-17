@@ -3,7 +3,7 @@
 
 export const DEFAULT_SETTINGS = {
     algorithm: "shelf", // 'maxrects' | 'shelf' | 'grid'
-    preset: { model: "nano-banana-pro", tier: "1K", ar: "1:1" }, // null = custom
+    preset: { model: "qwen-image", tier: "1K", ar: "1:1" }, // null = custom
     maxWidth: 2048,
     maxHeight: 2048,
     padding: 0,

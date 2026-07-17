@@ -193,6 +193,36 @@ app.registerExtension({
             const orig = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 orig?.apply(this, arguments);
+                // The month dropdown is filled from the project folder's
+                // orders/ subdir; the value is the friendly label ("October").
+                this._symMonths = [];
+                comboify(this, "month", () => this._symMonths);
+                const refreshMonths = async () => {
+                    const project = widgetOf(this, "project_path")?.value?.trim();
+                    if (!project) { this._symMonths = []; return; }
+                    try {
+                        const data = await fetchJson(
+                            "/symbiotica/list-orders?project="
+                            + encodeURIComponent(project));
+                        this._symMonths = (data.months ?? []).map((m) => m.label);
+                        const monthW = widgetOf(this, "month");
+                        if (monthW && !this._symMonths.includes(monthW.value)) {
+                            monthW.value = this._symMonths[0] ?? "";
+                        }
+                    } catch { this._symMonths = []; }
+                    this.setDirtyCanvas?.(true, true);
+                };
+                const projectW = widgetOf(this, "project_path");
+                if (projectW) {
+                    const prev = projectW.callback;
+                    projectW.callback = function () {
+                        const r = prev?.apply(this, arguments);
+                        refreshMonths();
+                        return r;
+                    };
+                }
+                refreshMonths();
+
                 const container = document.createElement("div");
                 container.style.cssText =
                     "max-height:280px;overflow-y:auto;padding:2px;";
@@ -278,24 +308,39 @@ function upstreamOrderRead(node) {
 }
 
 async function taskDataFor(node) {
-    // Parse the order server-side from the upstream nodes' widget values, so
-    // the editor works without queueing first. Falls back to the push cache.
+    // Parse the order server-side from the upstream Order Read's widgets, so
+    // the editor works without queueing first. The route resolves project +
+    // month (or explicit order/refs paths) and returns the roots it used.
     const orderNode = upstreamOrderRead(node);
-    const orderPath = orderNode && widgetOf(orderNode, "order_path")?.value?.trim();
-    const refsRoot = (orderNode && widgetOf(orderNode, "refs_path")?.value?.trim()) ?? "";
+    let refsRoot = "";
+    let assetsRoot = "";
     let events = null;
-    if (orderPath) {
-        try {
-            events = (await fetchJson(
-                `/symbiotica/parse-order?order_path=${encodeURIComponent(orderPath)}` +
-                `&refs_path=${encodeURIComponent(refsRoot)}`)).events;
-        } catch (e) {
-            console.warn("[symbiotica] parse-order failed:", e.message);
+    if (orderNode) {
+        const q = new URLSearchParams();
+        const project = widgetOf(orderNode, "project_path")?.value?.trim();
+        const month = widgetOf(orderNode, "month")?.value?.trim();
+        const op = widgetOf(orderNode, "order_path")?.value?.trim();
+        const rp = widgetOf(orderNode, "refs_path")?.value?.trim();
+        if (project) q.set("project", project);
+        if (month) q.set("month", month);
+        if (op) q.set("order_path", op);
+        if (rp) q.set("refs_path", rp);
+        if ([...q.keys()].length) {
+            try {
+                const data = await fetchJson(`/symbiotica/parse-order?${q}`);
+                events = data.events;
+                refsRoot = data.refsRoot ?? "";
+                assetsRoot = data.assetsRoot ?? "";
+            } catch (e) {
+                console.warn("[symbiotica] parse-order failed:", e.message);
+            }
         }
     }
     if (!events) {
         const cached = orderDataFor(node);
         events = cached?.events ?? [];
+        refsRoot = refsRoot || cached?.refsRoot || "";
+        assetsRoot = assetsRoot || cached?.assetsRoot || "";
     }
     // The editor picks its own event (its `feature` widget, set by the in-
     // editor Event selector); fall back to an upstream Event Specs feature,
@@ -312,12 +357,16 @@ async function taskDataFor(node) {
         prompt: a.prompt,
         refFiles: a.refFiles ?? [],
     }));
-    return { taskAssets, refsRoot, events, feature: ev?.feature ?? feature };
+    return { taskAssets, refsRoot, assetsRoot, events,
+             feature: ev?.feature ?? feature };
 }
 
 async function openEditorForNode(node, uiState) {
-    const root = widgetOf(node, "assets_root")?.value?.trim() ?? "";
-    const { taskAssets, refsRoot, events, feature } = await taskDataFor(node);
+    const { taskAssets, refsRoot, assetsRoot, events, feature } = await taskDataFor(node);
+    // The sprite catalog comes from the project's reference-assets/ folder
+    // (derived by the order), so the editor needs no separate Browse. An
+    // explicit assets_root still wins.
+    const root = (widgetOf(node, "assets_root")?.value?.trim()) || assetsRoot || "";
     if (root && !uiState.images.length) {
         try {
             uiState.images = (await fetchJson(

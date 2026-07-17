@@ -75,14 +75,29 @@ class SymbioticaOrderRead(io.ComfyNode):
             node_id="SymbioticaOrderRead",
             display_name="Symbiotica Order Read",
             category="symbiotica/pipeline",
-            description="Parse a monthly order xlsx + reference-image folder "
-                        "into events. Wire an Event Specs node after this to "
-                        "pick an event to work on.",
+            description="Point at one client project folder (with orders/ and "
+                        "reference-assets/), pick a month, and read that "
+                        "month's order into events. Wire the events into the "
+                        "Template Editor.",
             inputs=[
-                io.String.Input("order_path", default="",
-                                tooltip="Absolute path to the order .xlsx"),
+                io.String.Input("project_path", default="",
+                                tooltip="The client project folder — the one "
+                                        "that contains orders/ and "
+                                        "reference-assets/"),
+                io.String.Input("month", default="",
+                                tooltip="Which month's order to read (the "
+                                        ".xlsx files under orders/)"),
+                # Escape hatch: set either to override the folder-derived path.
+                io.String.Input("order_path", default="", optional=True,
+                                advanced=True,
+                                tooltip="Override: absolute path to the order "
+                                        ".xlsx (else derived from project + "
+                                        "month)"),
                 io.String.Input("refs_path", default="", optional=True,
-                                tooltip="Folder of client reference images"),
+                                advanced=True,
+                                tooltip="Override: client reference-image "
+                                        "folder (else the month's folder in "
+                                        "orders/)"),
             ],
             outputs=[OrderEvents.Output(display_name="events")],
             hidden=[io.Hidden.unique_id],
@@ -90,32 +105,57 @@ class SymbioticaOrderRead(io.ComfyNode):
         )
 
     @classmethod
-    def fingerprint_inputs(cls, order_path, refs_path=""):
-        order_path = order_path.strip()
-        refs_path = (refs_path or "").strip()
-        h = hashlib.sha256(f"{order_path}|{refs_path}".encode())
+    def _paths(cls, project_path, month, order_path, refs_path):
+        """The order xlsx, client-refs folder, and sprite-catalog root — from
+        the explicit overrides where given, else derived from project+month."""
+        project_path = (project_path or "").strip()
+        op = (order_path or "").strip()
+        rp = (refs_path or "").strip()
+        assets_root = ""
+        if project_path:
+            from .project_layout import resolve_month
+            r = resolve_month(project_path, (month or "").strip())
+            op = op or r["order_path"]
+            rp = rp or r["refs_path"]
+            assets_root = r["assets_root"]
+        return op, rp, assets_root
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", month="", order_path="",
+                           refs_path=""):
+        op, rp, _ = cls._paths(project_path, month, order_path, refs_path)
+        h = hashlib.sha256(f"{op}|{rp}".encode())
         try:
-            st = os.stat(order_path)
+            st = os.stat(op)
             h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
         except OSError:
             pass
         try:
-            if refs_path:
-                h.update("\n".join(sorted(os.listdir(refs_path))).encode())
+            if rp:
+                h.update("\n".join(sorted(os.listdir(rp))).encode())
         except OSError:
             pass
         return h.hexdigest()
 
     @classmethod
-    def execute(cls, order_path, refs_path="") -> io.NodeOutput:
-        loaded = load_order(order_path.strip(), refs_path.strip())
+    def execute(cls, project_path="", month="", order_path="",
+                refs_path="") -> io.NodeOutput:
+        op, rp, assets_root = cls._paths(project_path, month, order_path, refs_path)
+        if not op:
+            raise ValueError(
+                "no order file — set the project folder and pick a month, or "
+                "set order_path directly (advanced)")
+        loaded = load_order(op, rp)
         payload = {
             "events": loaded["events"],
             "refFileCount": loaded["refFileCount"],
-            "refsRoot": refs_path.strip(),
+            "refsRoot": rp,
+            "assetsRoot": assets_root,
         }
-        if refs_path.strip():
-            _register_refs_root(refs_path.strip())
+        if rp:
+            _register_refs_root(rp)
+        if assets_root:
+            _register_refs_root(assets_root)
         _push("symbiotica.order_events",
               {"node_id": cls.hidden.unique_id, **payload})
         summary = json.dumps(order_overview(loaded["events"]), indent=1)
@@ -179,7 +219,7 @@ class SymbioticaTemplateBuilder(io.ComfyNode):
                                 tooltip="Saved sheet name (defaults to the "
                                         "group / feature slug)"),
                 io.Combo.Input("preset_model", options=_MODELS,
-                               default="nano-banana-pro"),
+                               default="qwen-image"),
                 io.Combo.Input("resolution", options=_RESOLUTIONS, default="1K"),
                 io.Combo.Input("aspect_ratio", options=_ASPECTS, default="1:1"),
                 io.Int.Input("max_width", default=2048, min=64, max=8192,
@@ -212,7 +252,7 @@ class SymbioticaTemplateBuilder(io.ComfyNode):
 
     @classmethod
     def execute(cls, spec, mode, group="", assets_root="", sheet_name="",
-                preset_model="nano-banana-pro", resolution="2K", aspect_ratio="1:1",
+                preset_model="qwen-image", resolution="2K", aspect_ratio="1:1",
                 max_width=2048, max_height=2048, algorithm="shelf",
                 distribute_by_folder=True, padding=0, border=0, grid_cell=0,
                 columns=1, background="#808080") -> io.NodeOutput:
@@ -376,7 +416,7 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                 io.String.Input("sheet_name", default="", optional=True,
                                 advanced=True),
                 io.Combo.Input("preset_model", options=_MODELS,
-                               default="nano-banana-pro", advanced=True),
+                               default="qwen-image", advanced=True),
                 io.Combo.Input("resolution", options=_RESOLUTIONS, default="1K",
                                advanced=True),
                 io.Combo.Input("aspect_ratio", options=_ASPECTS, default="1:1",
@@ -455,7 +495,7 @@ class SymbioticaTemplateEditor(io.ComfyNode):
     @classmethod
     def execute(cls, assets_root, assignments, events=None, spec=None,
                 feature="", group="", sheet_name="",
-                preset_model="nano-banana-pro", resolution="1K", aspect_ratio="1:1",
+                preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
                 max_width=2048, max_height=2048, algorithm="shelf",
                 distribute_by_folder=True, background="#808080",
                 sheet_file="", regions_json="[]",

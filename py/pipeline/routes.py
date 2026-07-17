@@ -136,14 +136,40 @@ async def browse_dirs(request):
     return web.json_response(info)
 
 
+@PromptServer.instance.routes.get("/symbiotica/list-orders")
+async def list_orders(request):
+    """The months available under a project folder's orders/ subdir, for the
+    Order Read node's month picker."""
+    from .project_layout import list_order_months
+
+    project = request.query.get("project", "").strip()
+    if not project or not os.path.isdir(project):
+        return web.json_response({"months": []})
+    months = list_order_months(project)
+    # The month combo only needs file + label; the paths are re-derived at
+    # execute so a moved folder can't ship stale absolute paths in the graph.
+    return web.json_response(
+        {"months": [{"file": m["file"], "label": m["label"]} for m in months]})
+
+
 @PromptServer.instance.routes.get("/symbiotica/parse-order")
 async def parse_order(request):
     """On-demand order parse for the template editor — same loader the Order
-    Read node uses, so task assets are available without queueing first."""
+    Read node uses, so task assets are available without queueing first.
+    Resolves project+month like the node, or takes explicit order/refs paths."""
     from .order_loader import load_order
+    from .project_layout import resolve_month
 
     order_path = request.query.get("order_path", "").strip()
     refs_path = request.query.get("refs_path", "").strip()
+    project = request.query.get("project", "").strip()
+    month = request.query.get("month", "").strip()
+    assets_root = ""
+    if project:
+        r = resolve_month(project, month)
+        order_path = order_path or r["order_path"]
+        refs_path = refs_path or r["refs_path"]
+        assets_root = r["assets_root"]
     if not order_path:
         return web.json_response({"error": "order_path required"}, status=400)
     try:
@@ -152,6 +178,10 @@ async def parse_order(request):
         return web.json_response({"error": str(e)}, status=400)
     if refs_path:
         register_root(refs_path)
+    if assets_root:
+        register_root(assets_root)
+    loaded["refsRoot"] = refs_path
+    loaded["assetsRoot"] = assets_root
     return web.json_response(loaded)
 
 

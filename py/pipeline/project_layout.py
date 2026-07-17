@@ -1,0 +1,125 @@
+# ABOUTME: Resolve one client project folder into its parts — the monthly
+# ABOUTME: order xlsx files, each month's client-refs folder, and the shared
+# ABOUTME: sprite catalog — so the node takes one path plus a month, not three.
+from __future__ import annotations
+
+import os
+import re
+
+MONTHS = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+]
+
+# Project layout under the one path the node is given:
+#   <project>/orders/            monthly "<...> <Month> <...>.xlsx" + per-month
+#                                 client-refs folders ("<...>-<Month>")
+#   <project>/reference-assets/  the shared game sprite catalog (assets_root)
+ORDERS_DIRS = ("orders",)
+ASSETS_DIRS = ("reference-assets", "reference assets")
+_XLSX_EXTS = (".xlsx", ".xlsm")
+
+
+def _find_subdir(project_path: str, names: tuple[str, ...]) -> str | None:
+    """First existing child directory whose name matches (case-insensitive)."""
+    try:
+        entries = os.listdir(project_path)
+    except OSError:
+        return None
+    lower = {e.lower(): e for e in entries}
+    for name in names:
+        real = lower.get(name)
+        if real and os.path.isdir(os.path.join(project_path, real)):
+            return os.path.join(project_path, real)
+    return None
+
+
+def orders_dir(project_path: str) -> str | None:
+    return _find_subdir(project_path, ORDERS_DIRS)
+
+
+def assets_dir(project_path: str) -> str | None:
+    return _find_subdir(project_path, ASSETS_DIRS)
+
+
+def _month_of(name: str) -> str | None:
+    low = name.lower()
+    for m in MONTHS:
+        if re.search(rf"\b{m}\b", low):
+            return m
+    return None
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def refs_folder_for(orders_path: str, xlsx_name: str) -> str | None:
+    """The client-refs folder that goes with an order file. Matches on the
+    shared month name first ("Bakery October Art.xlsx" -> "Bakery-October"),
+    then falls back to a normalized name overlap."""
+    try:
+        dirs = [d for d in os.listdir(orders_path)
+                if os.path.isdir(os.path.join(orders_path, d))]
+    except OSError:
+        return None
+    month = _month_of(xlsx_name)
+    if month:
+        hits = sorted(d for d in dirs if month in d.lower())
+        if hits:
+            return os.path.join(orders_path, hits[0])
+    stem = _norm(os.path.splitext(xlsx_name)[0])
+    for d in sorted(dirs):
+        dn = _norm(d)
+        if dn and (dn in stem or stem.startswith(dn)):
+            return os.path.join(orders_path, d)
+    return None
+
+
+def list_order_months(project_path: str) -> list[dict]:
+    """The order files in <project>/orders, newest month first, each with a
+    friendly label and its resolved client-refs folder (may be None)."""
+    od = orders_dir(project_path)
+    if not od:
+        return []
+    try:
+        files = [f for f in os.listdir(od)
+                 if f.lower().endswith(_XLSX_EXTS) and not f.startswith((".", "~"))]
+    except OSError:
+        return []
+    out = []
+    for f in sorted(files):
+        month = _month_of(f)
+        refs = refs_folder_for(od, f)
+        out.append({
+            "file": f,
+            "label": month.capitalize() if month else os.path.splitext(f)[0],
+            "month": month or "",
+            "order_path": os.path.join(od, f),
+            "refs_path": refs or "",
+        })
+    # Calendar order when months are known; unknown labels sink to the end.
+    out.sort(key=lambda o: MONTHS.index(o["month"]) if o["month"] in MONTHS else 99)
+    return out
+
+
+def resolve_month(project_path: str, month: str) -> dict:
+    """Resolve the picked month (its xlsx filename, or a month name) to
+    {order_path, refs_path, assets_root}. Empty strings where unresolved."""
+    months = list_order_months(project_path)
+    picked = None
+    m = (month or "").strip().lower()
+    if m:
+        picked = next((o for o in months
+                       if o["file"].lower() == m or o["month"] == m
+                       or o["label"].lower() == m), None)
+    if picked is None and months:
+        picked = months[0]
+    ad = assets_dir(project_path) or ""
+    if picked is None:
+        return {"order_path": "", "refs_path": "", "assets_root": ad}
+    return {
+        "order_path": picked["order_path"],
+        "refs_path": picked["refs_path"],
+        "assets_root": ad,
+    }
