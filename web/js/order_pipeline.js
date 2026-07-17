@@ -378,14 +378,16 @@ async function taskDataFor(node) {
 
 async function openEditorForNode(node, uiState) {
     const { taskAssets, refsRoot, assetsRoot, events, feature } = await taskDataFor(node);
-    // The sprite catalog comes from the project's reference-assets/ folder
-    // (derived by the order), so the editor needs no separate Browse. An
-    // explicit assets_root still wins.
-    const root = (widgetOf(node, "assets_root")?.value?.trim()) || assetsRoot || "";
-    if (root && !uiState.images.length) {
+    // One path in: the sprite catalog is the project's reference-assets/,
+    // derived from project_path — no separate folder field.
+    const root = assetsRoot || "";
+    // Refetch on every open (not just the first) so switching project/month
+    // reloads the catalog instead of showing the previous project's tree.
+    if (root && uiState.imagesRoot !== root) {
         try {
             uiState.images = (await fetchJson(
                 `/symbiotica/list-assets?dir=${encodeURIComponent(root)}`)).images;
+            uiState.imagesRoot = root;
         } catch { /* tree shows the set-folder hint */ }
     }
     let handle = null;
@@ -527,15 +529,9 @@ function setupTemplateEditor(node) {
     const uiState = { images: [], browsing: false, templates: [] };
 
     node._symbioticaEditor = {
-        restore() {
-            const root = widgetOf(node, "assets_root")?.value?.trim();
-            if (root) {
-                fetchJson(`/symbiotica/list-assets?dir=${encodeURIComponent(root)}`)
-                    .then((d) => { uiState.images = d.images; render(); })
-                    .catch(() => render());
-            }
-            refreshGallery();
-        },
+        // The sprite catalog loads when the editor opens (derived from the
+        // project path), so the node UI only needs the saved-template gallery.
+        restore() { refreshGallery(); },
     };
 
     async function refreshGallery() {
@@ -549,74 +545,6 @@ function setupTemplateEditor(node) {
     uiState.refreshGallery = refreshGallery;
     uiState.render = () => render();
 
-    async function renderFolderBrowser(parent) {
-        const panel = document.createElement("div");
-        panel.style.cssText =
-            "border:1px solid #666;border-radius:6px;margin:4px 0;padding:4px;background:#222;";
-        parent.appendChild(panel);
-
-        async function show(path) {
-            let info;
-            try {
-                info = await fetchJson(
-                    `/symbiotica/browse-dirs?path=${encodeURIComponent(path ?? "")}`);
-            } catch (e) {
-                panel.textContent = `Browse failed: ${e.message}`;
-                return;
-            }
-            panel.replaceChildren();
-            const cur = document.createElement("div");
-            cur.style.cssText = "opacity:.8;margin-bottom:4px;word-break:break-all;";
-            cur.textContent = info.path;
-            panel.appendChild(cur);
-            const list = document.createElement("div");
-            list.style.cssText = "max-height:180px;overflow-y:auto;";
-            if (info.parent) {
-                const up = document.createElement("div");
-                up.textContent = "⬑ ..";
-                up.style.cssText = "cursor:pointer;padding:1px 4px;";
-                up.addEventListener("click", () => show(info.parent));
-                list.appendChild(up);
-            }
-            for (const d of info.dirs) {
-                const row = document.createElement("div");
-                row.textContent = `📁 ${d}`;
-                row.style.cssText = "cursor:pointer;padding:1px 4px;white-space:nowrap;" +
-                    "overflow:hidden;text-overflow:ellipsis;";
-                row.addEventListener("click", () => show(`${info.path}/${d}`));
-                list.appendChild(row);
-            }
-            panel.appendChild(list);
-            const actions = document.createElement("div");
-            actions.style.cssText = "display:flex;gap:6px;margin-top:4px;";
-            const use = document.createElement("button");
-            use.textContent = "Use this folder";
-            use.addEventListener("click", async () => {
-                const w = widgetOf(node, "assets_root");
-                if (w) w.value = info.path;
-                uiState.browsing = false;
-                try {
-                    const d = await fetchJson(
-                        `/symbiotica/list-assets?dir=${encodeURIComponent(info.path)}`);
-                    uiState.images = d.images;
-                } catch {
-                    uiState.images = [];
-                }
-                render();
-            });
-            const cancel = document.createElement("button");
-            cancel.textContent = "Cancel";
-            cancel.addEventListener("click", () => {
-                uiState.browsing = false;
-                render();
-            });
-            actions.appendChild(use);
-            actions.appendChild(cancel);
-            panel.appendChild(actions);
-        }
-        await show(widgetOf(node, "assets_root")?.value?.trim() || undefined);
-    }
-
     function render() {
         container.replaceChildren();
 
@@ -629,28 +557,17 @@ function setupTemplateEditor(node) {
             "padding:4px 10px;cursor:pointer;";
         open.addEventListener("click", () => openEditorForNode(node, uiState));
         bar.appendChild(open);
-        const browse = document.createElement("button");
-        const root = widgetOf(node, "assets_root")?.value?.trim();
-        browse.textContent = root ? "Change project folder…" : "Set project folder…";
-        browse.addEventListener("click", () => {
-            uiState.browsing = !uiState.browsing;
-            render();
-        });
-        bar.appendChild(browse);
         container.appendChild(bar);
 
-        if (root) {
+        const project = widgetOf(node, "project_path")?.value?.trim();
+        if (project) {
             const path = document.createElement("div");
             path.style.cssText =
                 "opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" +
                 "direction:rtl;margin:2px 0;";
-            path.textContent = root;
-            path.title = root;
+            path.textContent = project;
+            path.title = project;
             container.appendChild(path);
-        }
-        if (uiState.browsing) {
-            renderFolderBrowser(container);
-            return;
         }
 
         const sheetFile = widgetOf(node, "sheet_file")?.value;

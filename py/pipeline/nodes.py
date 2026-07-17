@@ -402,9 +402,6 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                 EventSpec.Input("spec", optional=True, advanced=True,
                                 tooltip="Legacy: one event's spec from Event "
                                         "Specs (ignored when project/events set)"),
-                io.String.Input("assets_root", default="", advanced=True,
-                                tooltip="Override the sprite catalog (else the "
-                                        "project's reference-assets/ folder)"),
                 io.String.Input("feature", default="", advanced=True,
                                 tooltip="Which event the editor is building "
                                         "(set by the editor's Event selector)"),
@@ -477,7 +474,6 @@ class SymbioticaTemplateEditor(io.ComfyNode):
             is_output_node=True,
         )
 
-    @classmethod
     @staticmethod
     def _event_spec_of(events_list, refs_root, feature):
         feat = (feature or "").strip() or (
@@ -509,7 +505,7 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         return {"feature": "", "templates": [], "refsRoot": ""}, ""
 
     @classmethod
-    def execute(cls, assignments, project_path="", month="", assets_root="",
+    def execute(cls, assignments, project_path="", month="",
                 events=None, spec=None,
                 feature="", group="", sheet_name="",
                 preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
@@ -517,9 +513,9 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                 distribute_by_folder=True, background="#808080",
                 sheet_file="", regions_json="[]",
                 scene_prompt="") -> io.NodeOutput:
-        spec, derived_root = cls._resolve_spec(spec, events, project_path, month,
-                                               feature)
-        assets_root = assets_root or derived_root
+        # One path in: the sprite catalog is the project's reference-assets/.
+        spec, assets_root = cls._resolve_spec(spec, events, project_path, month,
+                                              feature)
         if sheet_file.strip():
             return cls._execute_editor_sheet(
                 spec, sheet_file.strip(), regions_json, scene_prompt,
@@ -527,8 +523,10 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         assets_root = assets_root.strip()
         if not assets_root or not os.path.isdir(assets_root):
             raise ValueError(
-                "assets_root is not a folder — use the node's Browse button to "
-                "pick the project reference folder")
+                "no sprite catalog — set project_path to a folder that has a "
+                "reference-assets/ subfolder (this path is for building fresh "
+                "from the catalog; the usual editor flow saves a sheet_file "
+                "instead)")
         try:
             assigned = json.loads(assignments or "{}")
         except json.JSONDecodeError as e:
