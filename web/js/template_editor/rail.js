@@ -155,6 +155,69 @@ export function renderRail(state, host, opts) {
         host.appendChild(filterWrap);
     }
 
+    // --- 0.5 required assets (order thumbnails) --------------------------------
+    // The month's order, shown like the Order Read node: each asset with its
+    // client reference thumbnails, grouped by type, honoring the type filter.
+    function renderRequiredAssets() {
+        // The whole event's assets (not filtered by the type chips) — an
+        // overview, like the Order Read node. Grouped by type below.
+        const assets = state.taskAssets.filter((a) => a.assetName);
+        if (!assets.length) return;
+        const wrap = el("div", "margin:2px 0 8px;border:1px solid #2c2c2c;"
+            + "border-radius:6px;background:#161616;");
+        const head = el("div", "display:flex;justify-content:space-between;"
+            + "padding:4px 8px;cursor:pointer;font-size:11px;", "");
+        head.appendChild(el("span", "opacity:.8;",
+            `Required assets · ${assets.length}`));
+        const caret = el("span", "opacity:.5;", "▾");
+        head.appendChild(caret);
+        const body = el("div", "padding:2px 8px 6px;");
+        const byCat = new Map();
+        for (const a of assets) {
+            const k = a.category || "—";
+            if (!byCat.has(k)) byCat.set(k, []);
+            byCat.get(k).push(a);
+        }
+        for (const [cat, list] of byCat) {
+            body.appendChild(el("div",
+                "margin-top:4px;opacity:.6;text-transform:uppercase;font-size:10px;",
+                `${cat} · ${list.length}`));
+            for (const a of list) {
+                const row = el("div",
+                    "display:flex;align-items:center;gap:4px;margin:2px 0;");
+                row.appendChild(el("span",
+                    "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                    `${a.assetName}${a.canvas ? ` · ${a.canvas}` : ""}`));
+                const refs = a.refFiles ?? [];
+                if (!refs.length) {
+                    row.appendChild(el("span", "opacity:.4;font-size:10px;", "no refs"));
+                } else {
+                    for (const f of refs.slice(0, 5)) {
+                        const url = opts.refImageUrl?.(f);
+                        if (!url) continue;
+                        const img = el("img", "width:22px;height:22px;"
+                            + "object-fit:contain;background:#111;border-radius:3px;");
+                        img.src = url;
+                        row.appendChild(img);
+                    }
+                    if (refs.length > 5) {
+                        row.appendChild(el("span", "opacity:.5;font-size:10px;",
+                            `+${refs.length - 5}`));
+                    }
+                }
+                body.appendChild(row);
+            }
+        }
+        head.addEventListener("click", () => {
+            const open = body.style.display !== "none";
+            body.style.display = open ? "none" : "";
+            caret.textContent = open ? "▸" : "▾";
+        });
+        wrap.append(head, body);
+        host.appendChild(wrap);
+    }
+    renderRequiredAssets();
+
     // --- 1. prefill ------------------------------------------------------------
     // Full reset: drop everything, lay out the current filter's assets fresh.
     function runPrefill() {
