@@ -345,7 +345,16 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                         "both into an img2img edit node. Browse the folder and "
                         "tick assets on the node.",
             inputs=[
-                EventSpec.Input("spec"),
+                # Wire EITHER the whole order (events) and pick the event in
+                # the editor, OR one Event Specs spec. Both optional: with
+                # neither, the editor opens blank for a from-scratch template.
+                OrderEvents.Input("events", optional=True,
+                                  tooltip="The whole order from Order Read — "
+                                          "pick which event to build in the "
+                                          "editor's Event selector"),
+                EventSpec.Input("spec", optional=True,
+                                tooltip="One event's spec (from Event Specs). "
+                                        "Ignored when 'events' is wired"),
                 io.String.Input("assets_root", default="",
                                 tooltip="Project reference folder (set via the "
                                         "node's Browse button)"),
@@ -353,6 +362,9 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                 # the node's own UI, so it lives behind "Show advanced inputs":
                 # the node face is the editor button, the template list, and
                 # the sheet preview.
+                io.String.Input("feature", default="", advanced=True,
+                                tooltip="Which event the editor is building "
+                                        "(set by the editor's Event selector)"),
                 io.String.Input("assignments", default="{}", multiline=True,
                                 advanced=True,
                                 tooltip="JSON: task asset name -> catalog rel "
@@ -423,12 +435,32 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, spec, assets_root, assignments, group="", sheet_name="",
-                preset_model="nano-banana-pro", resolution="2K", aspect_ratio="1:1",
+    @staticmethod
+    def _resolve_spec(spec, events, feature):
+        """One event's spec from whichever input is wired: a direct spec wins;
+        else the chosen (or first) event of the order; else an empty spec for a
+        from-scratch template."""
+        if spec:
+            return spec
+        if events and events.get("events"):
+            evs = events["events"]
+            feat = (feature or "").strip() or evs[0].get("feature", "")
+            try:
+                resolved = event_spec(evs, feat)
+            except ValueError:
+                resolved = event_spec(evs, evs[0].get("feature", ""))
+            return {**resolved, "refsRoot": events.get("refsRoot", "")}
+        return {"feature": "", "templates": [], "refsRoot": ""}
+
+    @classmethod
+    def execute(cls, assets_root, assignments, events=None, spec=None,
+                feature="", group="", sheet_name="",
+                preset_model="nano-banana-pro", resolution="1K", aspect_ratio="1:1",
                 max_width=2048, max_height=2048, algorithm="shelf",
                 distribute_by_folder=True, background="#808080",
                 sheet_file="", regions_json="[]",
                 scene_prompt="") -> io.NodeOutput:
+        spec = cls._resolve_spec(spec, events, feature)
         if sheet_file.strip():
             return cls._execute_editor_sheet(
                 spec, sheet_file.strip(), regions_json, scene_prompt,

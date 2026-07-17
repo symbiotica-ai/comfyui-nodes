@@ -43,6 +43,8 @@ export function createEditorState(init = {}) {
         root: init.root ?? "",           // project reference folder (abs)
         images: init.images ?? [],       // rel image paths under root
         taskAssets: init.taskAssets ?? [], // [{assetName, category, canvas, prompt, refFiles}]
+        events: init.events ?? [],       // whole order: [{feature, assets:[…]}] (event picker)
+        feature: init.feature ?? "",     // which event the editor is building
         categoryFilter: init.categoryFilter ?? null, // null = all types; else one category
         refsRoot: init.refsRoot ?? "",   // order refs folder (abs)
         assignments: init.assignments ?? {}, // assetName/regionId -> project rel path

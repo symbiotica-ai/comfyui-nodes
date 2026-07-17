@@ -172,7 +172,9 @@ export function openTemplateEditor(opts) {
     const canvas = createCanvasPanel(state, center, {
         resolveMemberUrl: opts.resolveMemberUrl,
     });
-    renderRail(state, rail, opts);
+    // The event picker rebuilds the rail in place (new event = new assets).
+    opts.rerenderRail = () => renderRail(state, rail, opts);
+    opts.rerenderRail();
     renderInspector(state, inspector, opts);
 
     // esc: leave member-edit mode first, close the editor otherwise

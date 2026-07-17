@@ -75,7 +75,45 @@ export function renderRail(state, host, opts) {
         error: "",
     };
 
+    // The rail re-renders in place when the event changes, so drop the prior
+    // render's state subscriptions first — `on()` re-registers them fresh.
+    (host._railUnsub || []).forEach((off) => off());
+    host._railUnsub = [];
+    const on = (event, cb) => host._railUnsub.push(state.on(event, cb));
+
     host.replaceChildren();
+
+    // --- -1. event picker ------------------------------------------------------
+    // The whole order (Order Read -> Editor) lets you pick which event to build
+    // right here. Switching loads that event's assets and clears the canvas —
+    // save first. Hidden when a single Event Specs spec feeds the node.
+    function selectEvent(feature) {
+        const ev = (state.events || []).find((e) => e.feature === feature);
+        if (!ev) return;
+        state.feature = feature;
+        state.taskAssets = (ev.assets || [])
+            .filter((a) => a.assetName)
+            .map((a) => ({
+                assetName: a.assetName, category: a.category, canvas: a.canvas,
+                prompt: a.prompt, refFiles: a.refFiles || [],
+            }));
+        state.categoryFilter = null;
+        state.setRegions([]);            // a new event is a fresh canvas
+        opts.onEventChange?.(feature);   // persist the choice on the node
+        opts.rerenderRail?.();           // rebuild the rail for the new assets
+    }
+
+    if ((state.events || []).length > 1) {
+        const evWrap = el("div", "margin:2px 0 8px;");
+        evWrap.appendChild(el("div", "opacity:.55;font-size:11px;margin-bottom:3px;",
+                              "Event"));
+        const options = state.events.map((e) => [e.feature,
+            `${e.feature}${e.eventName ? ` — ${e.eventName}` : ""}`]);
+        const cur = state.events.some((e) => e.feature === state.feature)
+            ? state.feature : state.events[0].feature;
+        evWrap.appendChild(selectInput(options, cur, selectEvent));
+        host.appendChild(evWrap);
+    }
 
     // --- 0. asset-type filter --------------------------------------------------
     // Chips gate everything below: pick a type and Prefill / the canvas / Save
@@ -153,7 +191,7 @@ export function renderRail(state, host, opts) {
             (r) => String(r.id).startsWith("region:spec:"));
     }
     syncActionButtons();
-    state.on("regions", syncActionButtons);
+    on("regions", syncActionButtons);
 
     // Assets that can be laid out: named, with refs. `category` narrows to one
     // asset type; null (the default) keeps them all. Prefill and the canvas
@@ -194,7 +232,8 @@ export function renderRail(state, host, opts) {
             + "the box above.";
         saveAllBtn.addEventListener("click", async () => {
             if (local.saving) return;
-            const base = slugify(nameInput.value.trim()) || state.loadedName || "order";
+            const base = slugify(nameInput.value.trim()) || slugify(state.feature)
+                         || state.loadedName || "order";
             const jobs = [["all", null],
                           ...orderCategories().map((c) => [slugify(c), c])];
             local.saving = true;
@@ -245,15 +284,15 @@ export function renderRail(state, host, opts) {
     function syncTemplateRow() {
         nameInput.placeholder = state.loadedName
             ? `${state.loadedName} (current)`
-            : "template name";
+            : (slugify(state.feature) || "template name");
     }
     syncTemplateRow();
-    state.on("template", syncTemplateRow);
+    on("template", syncTemplateRow);
 
     saveBtn.addEventListener("click", async () => {
         if (local.saving) return;
         const typed = nameInput.value.trim();
-        const name = typed ? slugify(typed) : state.loadedName;
+        const name = typed ? slugify(typed) : (state.loadedName || slugify(state.feature));
         if (!name) {
             saveError.textContent = "Give the template a name first.";
             saveError.style.display = "";
@@ -608,8 +647,8 @@ export function renderRail(state, host, opts) {
     }
 
     renderTree();
-    state.on("selection", focusSelection);
-    state.on("regions", renderTree);
+    on("selection", focusSelection);
+    on("regions", renderTree);
 
     // --- 6. pack settings ------------------------------------------------------------
     const packHead = el("div");
@@ -733,11 +772,11 @@ export function renderRail(state, host, opts) {
         }
     }
     renderPack();
-    state.on("settings", renderPack);
+    on("settings", renderPack);
 
     // --- 7. relayout spec regions on any settings change ------------------------------
     let suppressRelayout = false;
-    state.on("settings", () => {
+    on("settings", () => {
         if (suppressRelayout) return;
         if (state.regions.some((r) => String(r.id).startsWith("region:spec:"))) {
             state.setRegions(rebuildSpecRegions(state));

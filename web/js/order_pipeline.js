@@ -53,11 +53,12 @@ function downstreamNodes(node, type) {
 const SPEC_INPUT_NODES = new Set(["SymbioticaTemplateBuilder", "SymbioticaTemplateEditor"]);
 
 function orderDataFor(node) {
-    // Walk up: Specs -> Order Read; Template/Editor -> Specs -> Order Read.
+    // Walk up to Order Read: the editor may wire it straight in (events) or go
+    // through Event Specs (spec -> events). Try a direct events wire first.
     let cur = node;
-    for (let hop = 0; hop < 3 && cur; hop++) {
+    for (let hop = 0; hop < 4 && cur; hop++) {
         if (cur.comfyClass === "SymbioticaOrderRead") return orderCache.get(cur.id);
-        cur = upstreamNode(cur, SPEC_INPUT_NODES.has(cur.comfyClass) ? "spec" : "events");
+        cur = upstreamNode(cur, "events") || upstreamNode(cur, "spec");
     }
     return undefined;
 }
@@ -266,11 +267,12 @@ function parseJsonWidget(node, name, fallback) {
 }
 
 function upstreamOrderRead(node) {
-    // Editor -> (spec) EventSpecs -> (events) OrderRead, by widgets not cache.
+    // Editor -> (events) OrderRead directly, or -> (spec) EventSpecs ->
+    // (events) OrderRead. By widgets, not cache.
     let cur = node;
-    for (let hop = 0; hop < 3 && cur; hop++) {
+    for (let hop = 0; hop < 4 && cur; hop++) {
         if (cur.comfyClass === "SymbioticaOrderRead") return cur;
-        cur = upstreamNode(cur, SPEC_INPUT_NODES.has(cur.comfyClass) ? "spec" : "events");
+        cur = upstreamNode(cur, "events") || upstreamNode(cur, "spec");
     }
     return null;
 }
@@ -295,9 +297,14 @@ async function taskDataFor(node) {
         const cached = orderDataFor(node);
         events = cached?.events ?? [];
     }
-    const specs = upstreamNode(node, "spec");
-    const feature = specs?.widgets?.find((w) => w.name === "feature")?.value;
-    const ev = events.find((e) => e.feature === feature);
+    // The editor picks its own event (its `feature` widget, set by the in-
+    // editor Event selector); fall back to an upstream Event Specs feature,
+    // then the first event of the order.
+    const ownFeature = widgetOf(node, "feature")?.value?.trim();
+    const specFeature = upstreamNode(node, "spec")?.widgets
+        ?.find((w) => w.name === "feature")?.value;
+    const feature = ownFeature || specFeature || events[0]?.feature || "";
+    const ev = events.find((e) => e.feature === feature) || events[0];
     const taskAssets = (ev?.assets ?? []).filter((a) => a.assetName).map((a) => ({
         assetName: a.assetName,
         category: a.category,
@@ -305,12 +312,12 @@ async function taskDataFor(node) {
         prompt: a.prompt,
         refFiles: a.refFiles ?? [],
     }));
-    return { taskAssets, refsRoot };
+    return { taskAssets, refsRoot, events, feature: ev?.feature ?? feature };
 }
 
 async function openEditorForNode(node, uiState) {
     const root = widgetOf(node, "assets_root")?.value?.trim() ?? "";
-    const { taskAssets, refsRoot } = await taskDataFor(node);
+    const { taskAssets, refsRoot, events, feature } = await taskDataFor(node);
     if (root && !uiState.images.length) {
         try {
             uiState.images = (await fetchJson(
@@ -328,8 +335,16 @@ async function openEditorForNode(node, uiState) {
             images: uiState.images,
             taskAssets,
             refsRoot,
+            events: events ?? [],
+            feature: feature ?? "",
             loadedName: (widgetOf(node, "sheet_file")?.value ?? "")
                 .split("/").pop()?.replace(/\.png$/, "") ?? "",
+        },
+        // The in-editor Event selector persists its choice on the node, so a
+        // queued run (and the next open) build the same event.
+        onEventChange: (feat) => {
+            const w = widgetOf(node, "feature");
+            if (w) w.value = feat;
         },
         imageUrl: (r, rel) => thumbUrl(r, rel),
         refImageUrl: (file) => (refsRoot ? thumbUrl(refsRoot, file) : null),
