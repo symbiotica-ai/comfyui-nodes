@@ -591,41 +591,107 @@ export function renderRail(state, host, opts) {
         loadPanel.style.display = "none";
     }
 
-    // --- 3+4. saved sheets — thumbnails, click to load into the canvas ----------
-    // Replaces the old hint + task-assets chip. Every Save / Save all types /
-    // Save each asset lands here as a clickable thumbnail.
+    // --- 3+4. saved sheets — click to load, tick to batch-export ---------------
+    // Replaces the old hint + task-assets chip. Click a thumb to load it into
+    // the canvas; tick its checkbox to add it to the node's 'sheets' output
+    // (a batch of img2img bases / Save Image). "Current" filters to this event.
     const savedWrap = el("div", "margin:8px 0;");
-    savedWrap.appendChild(el("div", "opacity:.55;font-size:11px;margin-bottom:3px;",
-        "Saved sheets — click to load & edit"));
+    const savedHead = el("div",
+        "display:flex;align-items:center;gap:6px;margin-bottom:3px;");
+    savedHead.appendChild(el("div", "opacity:.55;font-size:11px;flex:1;",
+        "Saved sheets — click load · tick to export"));
+    // All / Current filter chips.
+    const filterChips = [];
+    for (const [label, value] of [["Current", "current"], ["All", "all"]]) {
+        const c = el("button",
+            "padding:1px 8px;font-size:10px;border:1px solid #3a3a3a;"
+            + "border-radius:10px;cursor:pointer;background:#1e1e1e;color:#bbb;",
+            label);
+        c.addEventListener("click", () => {
+            state.sheetFilter = value;
+            filterChips.forEach(({ btn, v }) => {
+                const on = state.sheetFilter === v;
+                btn.style.background = on ? "#3a5bd0" : "#1e1e1e";
+                btn.style.color = on ? "#fff" : "#bbb";
+            });
+            refreshSavedGrid();
+        });
+        filterChips.push({ btn: c, v: value });
+        savedHead.appendChild(c);
+    }
+    filterChips.forEach(({ btn, v }) => {
+        const on = state.sheetFilter === v;
+        btn.style.background = on ? "#3a5bd0" : "#1e1e1e";
+        btn.style.color = on ? "#fff" : "#bbb";
+    });
+    savedWrap.appendChild(savedHead);
+    const selCount = el("div", "font-size:10px;opacity:.6;margin-bottom:3px;", "");
+    savedWrap.appendChild(selCount);
     const savedGrid = el("div",
         "display:grid;grid-template-columns:repeat(3,1fr);gap:4px;");
     savedWrap.appendChild(savedGrid);
     host.appendChild(savedWrap);
 
+    function eventPrefix() {
+        return slugify(state.feature || "");
+    }
+    function isCurrentSheet(name) {
+        const p = eventPrefix();
+        return !p || name === p || String(name).startsWith(p + "-");
+    }
+    function syncSelCount() {
+        const n = state.selectedSheets.size;
+        selCount.textContent = n
+            ? `${n} selected → 'sheets' output` : "";
+        opts.onSelectedSheets?.([...state.selectedSheets]);
+    }
+
     async function refreshSavedGrid() {
         let items = [];
         try { items = await opts.listSaved(); } catch { /* empty */ }
+        if (state.sheetFilter === "current") {
+            items = items.filter((it) => isCurrentSheet(it.name));
+        }
         savedGrid.replaceChildren();
         if (!items.length) {
             savedGrid.appendChild(el("div", "opacity:.4;font-size:11px;",
-                "No saved sheets yet."));
+                state.sheetFilter === "current"
+                    ? "No saved sheets for this event yet."
+                    : "No saved sheets yet."));
+            syncSelCount();
             return;
         }
         for (const item of items) {
-            const cell = el("div", "cursor:pointer;border:1px solid #2c2c2c;"
-                + "border-radius:5px;overflow:hidden;background:#111;");
+            const picked = state.selectedSheets.has(item.file);
+            const cell = el("div", "position:relative;cursor:pointer;border:1px "
+                + `solid ${picked ? "#5a7bf0" : "#2c2c2c"};border-radius:5px;`
+                + "overflow:hidden;background:#111;");
             cell.title = item.name;
             const img = el("img", "width:100%;aspect-ratio:1;object-fit:contain;"
                 + "background:#161616;display:block;");
             img.loading = "lazy";
             img.src = opts.sheetThumbUrl?.(item.file) ?? "";
+            // Tick to add/remove from the batch output.
+            const box = el("input");
+            box.type = "checkbox";
+            box.checked = picked;
+            box.style.cssText = "position:absolute;top:3px;left:3px;margin:0;"
+                + "width:15px;height:15px;cursor:pointer;";
+            box.addEventListener("click", (e) => {
+                e.stopPropagation();
+                if (box.checked) state.selectedSheets.add(item.file);
+                else state.selectedSheets.delete(item.file);
+                cell.style.borderColor = box.checked ? "#5a7bf0" : "#2c2c2c";
+                syncSelCount();
+            });
             const cap = el("div", "font-size:9px;padding:2px 3px;overflow:hidden;"
                 + "text-overflow:ellipsis;white-space:nowrap;opacity:.75;",
                 item.name);
-            cell.append(img, cap);
+            cell.append(box, img, cap);
             cell.addEventListener("click", () => applySaved(item));
             savedGrid.appendChild(cell);
         }
+        syncSelCount();
     }
     refreshSavedGrid();
 

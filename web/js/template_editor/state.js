@@ -47,6 +47,8 @@ export function createEditorState(init = {}) {
         feature: init.feature ?? "",     // which event the editor is building
         project: init.project ?? "",     // client project folder (order source)
         month: init.month ?? "",         // which month's order
+        selectedSheets: new Set(init.selectedSheets ?? []), // saved sheets ticked for the batch output
+        sheetFilter: init.sheetFilter ?? "current", // 'all' | 'current' (this event)
         categoryFilter: init.categoryFilter ?? null, // null = all types; else one category
         refsRoot: init.refsRoot ?? "",   // order refs folder (abs)
         assignments: init.assignments ?? {}, // assetName/regionId -> project rel path

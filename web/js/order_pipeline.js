@@ -401,6 +401,7 @@ async function openEditorForNode(node, uiState) {
             feature: feature ?? "",
             project: widgetOf(node, "project_path")?.value ?? "",
             month: widgetOf(node, "month")?.value ?? "",
+            selectedSheets: parseJsonWidget(node, "selected_sheets", []),
             loadedName: (widgetOf(node, "sheet_file")?.value ?? "")
                 .split("/").pop()?.replace(/\.png$/, "") ?? "",
         },
@@ -409,6 +410,12 @@ async function openEditorForNode(node, uiState) {
         onEventChange: (feat) => {
             const w = widgetOf(node, "feature");
             if (w) w.value = feat;
+        },
+        // The editor's saved-sheet ticks persist to the node so the 'sheets'
+        // output emits them on a queued run.
+        onSelectedSheets: (files) => {
+            const w = widgetOf(node, "selected_sheets");
+            if (w) w.value = JSON.stringify(files);
         },
         // Project/month set from inside the editor: persist on the node, then
         // reopen so the catalog, refs, and event list all reload cleanly.
