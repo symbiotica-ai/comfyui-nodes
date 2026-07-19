@@ -130,10 +130,23 @@ function syncFromTemplate(node) {
         ? (widgetByName(editor, "regions_json")?.value ?? "") : "";
     if (raw === node._symRegionsRaw) return;
     node._symRegionsRaw = raw;
-    const count = regionsOf(editor).length;
-    if (!count) return;
-    syncRegionOutputs(node, count, isEditor ? REF_RUN : DESC_REF_PAIRS);
+    const regions = regionsOf(editor);
+    if (!regions.length) return;
+    syncRegionOutputs(node, regions.length, isEditor ? REF_RUN : DESC_REF_PAIRS);
+    labelRefOutputs(node, regions);
     node.setDirtyCanvas?.(true, true);
+}
+
+// Show each ref_N output as its region's asset name (Food, Decoration, the
+// asset), so a wired ref is recognizable at a glance instead of "ref_3".
+function labelRefOutputs(node, regions) {
+    const ordered = [...regions].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
+    for (const output of node.outputs || []) {
+        const m = /^ref_(\d+)$/.exec(output.name || "");
+        if (!m) continue;
+        const region = ordered[+m[1] - 1];
+        output.label = region ? (region.name || output.name) : output.name;
+    }
 }
 
 // Template regions (flat editor shape) -> ERPK regions_data v2 document.

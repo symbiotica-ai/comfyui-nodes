@@ -239,10 +239,32 @@ export function renderInspector(state, host, opts) {
                 cb.checked = currentPaths.includes(path);
                 cb.style.flex = "none";
                 cb.addEventListener("change", () => {
-                    const paths = (state.selectedRegion()?.taskRefs?.paths ?? []).filter((p) => p !== path);
-                    if (cb.checked) paths.push(path);
-                    state.updateRegion(region.id, {
-                        taskRefs: paths.length ? { paths, mode: "meta" } : undefined,
+                    const reg = state.selectedRegion();
+                    if (!reg) return;
+                    // Which refs are ticked now — kept in this asset's ref order
+                    // (the region is one asset) so cells stay left-to-right.
+                    const checked = new Set(reg.taskRefs?.paths ?? []);
+                    if (cb.checked) checked.add(path); else checked.delete(path);
+                    const owner = (state.taskAssets ?? [])
+                        .find((a) => a.assetName === reg.name);
+                    const ordered = owner
+                        ? owner.refFiles
+                            .map((f) => `${owner.category}/${owner.assetName}/${f}`)
+                            .filter((p) => checked.has(p))
+                        : [...checked];
+                    // Rebuild the region's cells to match the ticked count —
+                    // one cell per selected ref, at the region's cell size.
+                    const cw = reg.members?.[0]?.w
+                        ?? (reg.cellPx ? reg.cellPx.w / state.sheetW : reg.w);
+                    const ch = reg.members?.[0]?.h ?? reg.h;
+                    const members = ordered.map((spriteId, i) => ({
+                        spriteId, x: reg.x + i * cw, y: reg.y, w: cw, h: ch,
+                    }));
+                    state.updateRegion(reg.id, {
+                        taskRefs: ordered.length ? { paths: ordered, mode: "meta" } : undefined,
+                        members,
+                        w: ordered.length ? ordered.length * cw : reg.w,
+                        h: ch,
                     });
                 });
                 row.appendChild(cb);

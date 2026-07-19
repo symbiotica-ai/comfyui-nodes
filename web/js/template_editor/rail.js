@@ -1,6 +1,6 @@
 // ABOUTME: Left rail of the template editor — prefill/save/load, project asset
 // ABOUTME: tree with region assignment checkboxes, and the pack settings panel.
-import { prefillRegions, rebuildSpecRegions, singleAssetSheet, MODEL_PRESETS,
+import { prefillRegions, rebuildSpecRegions, MODEL_PRESETS,
          presetDims, slugify, matchCategory, categoryCanvasSizes,
          flattenSpritePath, canvasSpecOf }
     from "./algos.js";
@@ -227,9 +227,37 @@ export function renderRail(state, host, opts) {
             byCat.get(k).push(a);
         }
         for (const [cat, list] of byCat) {
-            body.appendChild(el("div",
-                "margin-top:4px;opacity:.6;text-transform:uppercase;font-size:10px;",
+            const catHead = el("div", "display:flex;align-items:center;gap:6px;"
+                + "margin-top:4px;");
+            catHead.appendChild(el("div",
+                "flex:1;opacity:.6;text-transform:uppercase;font-size:10px;",
                 `${cat} · ${list.length}`));
+            const catBtn = el("button",
+                "font-size:10px;padding:0 6px;border:1px solid #3a3a3a;"
+                + "border-radius:4px;background:#1e1e1e;color:#bbb;cursor:pointer;",
+                "💾 sheet");
+            catBtn.title = `Save all ${cat} assets on one model-resolution sheet`;
+            catBtn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                if (local.saving) return;
+                local.saving = true;
+                catBtn.disabled = true;
+                try {
+                    const name = await saveCategorySheet(cat);
+                    saveError.style.color = name ? "#6c6" : "#e66";
+                    saveError.style.display = "";
+                    saveError.textContent = name ? `Saved ${name}` : "nothing to save";
+                } catch (err) {
+                    saveError.style.color = "#e66";
+                    saveError.style.display = "";
+                    saveError.textContent = `Save failed: ${err.message ?? err}`;
+                } finally {
+                    local.saving = false;
+                    catBtn.disabled = false;
+                }
+            });
+            catHead.appendChild(catBtn);
+            body.appendChild(catHead);
             for (const a of list) {
                 const row = el("div",
                     "display:flex;align-items:center;gap:4px;margin:2px 0;");
@@ -416,30 +444,54 @@ export function renderRail(state, host, opts) {
         host.appendChild(saveAllBtn);
     }
 
-    // Export one asset on its own tight canvas (its stages/flip together) in
-    // task mode, without disturbing the on-screen sheet. Returns the saved name.
+    // Export one asset on a FULL model-resolution sheet (Qwen native, not the
+    // asset's pixel size), the sprite laid out to scale — the right base for
+    // img2img. Task mode, without disturbing the on-screen sheet.
     function baseName() {
         return slugify(nameInput.value.trim()) || slugify(state.feature)
                || state.loadedName || "order";
     }
-    async function saveOneAsset(asset, base) {
-        const sheet = singleAssetSheet(asset);
-        if (!sheet) return null;
+    // The model's native sheet size (Qwen 1328² etc), independent of whatever
+    // sheet is loaded on the canvas — every export sheet is model-resolution.
+    function modelSheet() {
+        return presetDims(state.settings.preset)
+            || { w: state.sheetW, h: state.sheetH };
+    }
+    // Lay `assets` out on a model-resolution sheet, export in task mode, save
+    // `<name>`, then restore the on-screen sheet. Returns the saved name.
+    async function saveSheetOf(assets, name) {
+        if (!assets.length) return null;
+        const dims = modelSheet();
+        const { regions } = prefillRegions(assets, dims.w, dims.h,
+                                           undefined, state.settings);
+        if (!regions.length) return null;
         const prevW = state.sheetW;
         const prevH = state.sheetH;
         const prevRegions = state.regions;
-        state.sheetW = sheet.sheetW;
-        state.sheetH = sheet.sheetH;
-        state.setRegions(sheet.regions);
+        state.sheetW = dims.w;
+        state.sheetH = dims.h;
+        state.setRegions(regions);
         try {
-            const res = await opts.saveTemplate(
-                `${base}-${slugify(asset.assetName)}`,
-                { refMode: "task", bindNode: false });
+            const res = await opts.saveTemplate(name,
+                                                { refMode: "task", bindNode: false });
             return res.name;
         } finally {
             state.sheetW = prevW;
             state.sheetH = prevH;
             state.setRegions(prevRegions);
+        }
+    }
+    function saveOneAsset(asset, base) {
+        return saveSheetOf([asset], `${base}-${slugify(asset.assetName)}`);
+    }
+    // Save a whole asset type on one model-resolution sheet, e.g. "save food".
+    async function saveCategorySheet(cat) {
+        const assets = state.taskAssets.filter((a) => a.assetName
+            && (a.refFiles?.length ?? 0) > 0 && a.category === cat);
+        try {
+            return await saveSheetOf(assets, `${baseName()}-${slugify(cat)}`);
+        } finally {
+            refreshSavedGrid();
         }
     }
 
