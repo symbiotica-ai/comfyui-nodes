@@ -45,6 +45,8 @@ export function createEditorState(init = {}) {
         taskAssets: init.taskAssets ?? [], // [{assetName, category, canvas, prompt, refFiles}]
         events: init.events ?? [],       // whole order: [{feature, assets:[…]}] (event picker)
         feature: init.feature ?? "",     // which event the editor is building
+        project: init.project ?? "",     // client project folder (order source)
+        month: init.month ?? "",         // which month's order
         categoryFilter: init.categoryFilter ?? null, // null = all types; else one category
         refsRoot: init.refsRoot ?? "",   // order refs folder (abs)
         assignments: init.assignments ?? {}, // assetName/regionId -> project rel path

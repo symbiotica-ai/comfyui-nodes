@@ -194,5 +194,10 @@ export function openTemplateEditor(opts) {
     };
     document.addEventListener("keydown", onKey);
 
-    return { state, overlay, exportSheet: () => canvas.exportSheet() };
+    return {
+        state,
+        overlay,
+        exportSheet: () => canvas.exportSheet(),
+        close: () => { overlay.remove(); opts.onClose?.(state); },
+    };
 }

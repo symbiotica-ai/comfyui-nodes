@@ -403,6 +403,8 @@ async function openEditorForNode(node, uiState) {
             refsRoot,
             events: events ?? [],
             feature: feature ?? "",
+            project: widgetOf(node, "project_path")?.value ?? "",
+            month: widgetOf(node, "month")?.value ?? "",
             loadedName: (widgetOf(node, "sheet_file")?.value ?? "")
                 .split("/").pop()?.replace(/\.png$/, "") ?? "",
         },
@@ -411,6 +413,26 @@ async function openEditorForNode(node, uiState) {
         onEventChange: (feat) => {
             const w = widgetOf(node, "feature");
             if (w) w.value = feat;
+        },
+        // Project/month set from inside the editor: persist on the node, then
+        // reopen so the catalog, refs, and event list all reload cleanly.
+        listMonths: async (project) => {
+            if (!project?.trim()) return [];
+            try {
+                return ((await fetchJson("/symbiotica/list-orders?project="
+                    + encodeURIComponent(project.trim()))).months ?? [])
+                    .map((m) => m.label);
+            } catch { return []; }
+        },
+        reloadProject: async (project, month) => {
+            const pw = widgetOf(node, "project_path");
+            if (pw) pw.value = project;
+            const mw = widgetOf(node, "month");
+            if (mw) mw.value = month;
+            uiState.imagesRoot = null;
+            uiState.images = [];
+            handle?.close?.();
+            await openEditorForNode(node, uiState);
         },
         imageUrl: (r, rel) => thumbUrl(r, rel),
         refImageUrl: (file) => (refsRoot ? thumbUrl(refsRoot, file) : null),

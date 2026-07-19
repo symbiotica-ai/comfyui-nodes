@@ -83,6 +83,53 @@ export function renderRail(state, host, opts) {
 
     host.replaceChildren();
 
+    // --- -2. project + month ---------------------------------------------------
+    // The order source, editable right here — paste the project folder, pick a
+    // month. Changing either reopens the editor on that month's order.
+    {
+        const wrap = el("div", "margin:2px 0 8px;");
+        wrap.appendChild(el("div", "opacity:.55;font-size:11px;margin-bottom:3px;",
+                            "Project folder"));
+        const pathInput = el("input", "width:100%;box-sizing:border-box;"
+            + "font-size:11px;");
+        pathInput.type = "text";
+        pathInput.placeholder = "…/Clients/Imperia/Projects/Bakery story";
+        pathInput.value = state.project || "";
+        const monthWrap = el("div", "margin-top:4px;");
+        async function reload(project, month) {
+            if (!project?.trim()) return;
+            await opts.reloadProject?.(project.trim(), month || "");
+        }
+        async function refreshMonthSelect() {
+            monthWrap.replaceChildren();
+            const months = await (opts.listMonths?.(pathInput.value) ?? []);
+            if (!months.length) {
+                monthWrap.appendChild(el("div", "opacity:.5;font-size:11px;",
+                    pathInput.value.trim()
+                        ? "no orders/ found in that folder"
+                        : "paste the project folder above"));
+                return;
+            }
+            const cur = months.includes(state.month) ? state.month : months[0];
+            monthWrap.appendChild(labeledRow("month",
+                selectInput(months.map((m) => [m, m]), cur,
+                            (m) => reload(pathInput.value, m))));
+        }
+        // User set a new folder: refresh the month list and load the first one
+        // (reopens the editor). Only here, never on render, so no reopen loop.
+        pathInput.addEventListener("change", async () => {
+            await refreshMonthSelect();
+            const months = await (opts.listMonths?.(pathInput.value) ?? []);
+            if (months.length) {
+                reload(pathInput.value,
+                       months.includes(state.month) ? state.month : months[0]);
+            }
+        });
+        wrap.append(pathInput, monthWrap);
+        host.appendChild(wrap);
+        refreshMonthSelect();
+    }
+
     // --- -1. event picker ------------------------------------------------------
     // The whole order (Order Read -> Editor) lets you pick which event to build
     // right here. Switching loads that event's assets and clears the canvas —
