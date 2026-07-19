@@ -1,7 +1,8 @@
 // ABOUTME: Left rail of the template editor — prefill/save/load, project asset
 // ABOUTME: tree with region assignment checkboxes, and the pack settings panel.
-import { prefillRegions, rebuildSpecRegions, MODEL_PRESETS, presetDims, slugify,
-         matchCategory, categoryCanvasSizes, flattenSpritePath, canvasSpecOf }
+import { prefillRegions, rebuildSpecRegions, singleAssetSheet, MODEL_PRESETS,
+         presetDims, slugify, matchCategory, categoryCanvasSizes,
+         flattenSpritePath, canvasSpecOf }
     from "./algos.js";
 
 const THUMB_SIZES = { S: 18, M: 28, L: 44, XL: 64 };
@@ -251,6 +252,33 @@ export function renderRail(state, host, opts) {
                         row.appendChild(el("span", "opacity:.5;font-size:10px;",
                             `+${refs.length - 5}`));
                     }
+                    // Save just this one asset on its own canvas.
+                    const one = el("button",
+                        "font-size:11px;padding:0 5px;border:1px solid #3a3a3a;"
+                        + "border-radius:4px;background:#1e1e1e;color:#bbb;"
+                        + "cursor:pointer;", "⬇");
+                    one.title = `Save "${a.assetName}" as its own image`;
+                    one.addEventListener("click", async (e) => {
+                        e.stopPropagation();
+                        if (local.saving) return;
+                        local.saving = true;
+                        one.disabled = true;
+                        try {
+                            const name = await saveOneAsset(a, baseName());
+                            saveError.style.color = name ? "#6c6" : "#e66";
+                            saveError.style.display = "";
+                            saveError.textContent = name
+                                ? `Saved ${name}` : "no refs to save";
+                        } catch (err) {
+                            saveError.style.color = "#e66";
+                            saveError.style.display = "";
+                            saveError.textContent = `Save failed: ${err.message ?? err}`;
+                        } finally {
+                            local.saving = false;
+                            one.disabled = false;
+                        }
+                    });
+                    row.appendChild(one);
                 }
                 body.appendChild(row);
             }
@@ -384,6 +412,77 @@ export function renderRail(state, host, opts) {
             }
         });
         host.appendChild(saveAllBtn);
+    }
+
+    // Export one asset on its own tight canvas (its stages/flip together) in
+    // task mode, without disturbing the on-screen sheet. Returns the saved name.
+    function baseName() {
+        return slugify(nameInput.value.trim()) || slugify(state.feature)
+               || state.loadedName || "order";
+    }
+    async function saveOneAsset(asset, base) {
+        const sheet = singleAssetSheet(asset);
+        if (!sheet) return null;
+        const prevW = state.sheetW;
+        const prevH = state.sheetH;
+        const prevRegions = state.regions;
+        state.sheetW = sheet.sheetW;
+        state.sheetH = sheet.sheetH;
+        state.setRegions(sheet.regions);
+        try {
+            const res = await opts.saveTemplate(
+                `${base}-${slugify(asset.assetName)}`,
+                { refMode: "task", bindNode: false });
+            return res.name;
+        } finally {
+            state.sheetW = prevW;
+            state.sheetH = prevH;
+            state.setRegions(prevRegions);
+        }
+    }
+
+    // "Save each asset": one image per asset (honoring the type filter) — each
+    // asset alone on its own canvas. For food that's a recipe with its stages.
+    const assetsForEach = () => state.taskAssets.filter((a) => a.assetName
+        && (a.refFiles?.length ?? 0) > 0
+        && (!state.categoryFilter || a.category === state.categoryFilter));
+    if (assetsForEach().length) {
+        const eachBtn = el("button", "width:100%;margin:2px 0 6px;",
+                           "🧩 Save each asset (separate images)");
+        eachBtn.title = "One image per asset — each asset (with its stages or "
+            + "flipped pair) on its own canvas. Respects the asset-type filter "
+            + "above, so filter to Food first to export only the recipes.";
+        eachBtn.addEventListener("click", async () => {
+            if (local.saving) return;
+            const assets = assetsForEach();
+            const base = baseName();
+            local.saving = true;
+            eachBtn.disabled = true;
+            saveBtn.disabled = true;
+            saveError.style.color = "#e66";
+            saveError.style.display = "none";
+            const saved = [];
+            try {
+                for (const a of assets) {
+                    const name = await saveOneAsset(a, base);
+                    if (name) saved.push(name);
+                }
+                if (!saved.length) throw new Error("no assets with references");
+            } catch (e) {
+                saveError.textContent = `Save each failed: ${e.message ?? e}`;
+                saveError.style.display = "";
+            } finally {
+                local.saving = false;
+                eachBtn.disabled = false;
+                saveBtn.disabled = false;
+            }
+            if (saved.length) {
+                saveError.style.color = "#6c6";
+                saveError.style.display = "";
+                saveError.textContent = `Saved ${saved.length}: ${saved.join(", ")}`;
+            }
+        });
+        host.appendChild(eachBtn);
     }
 
     const loadPanel = el("div",

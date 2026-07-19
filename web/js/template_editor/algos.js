@@ -456,6 +456,30 @@ function regionAt(row, xPx, yPx, sheetW, sheetH) {
 // settings, strips run through the packer (overflow stacks below, visible);
 // without, strips stack as centered rows distributed evenly down the sheet.
 // orderAssets: [{assetName, category, canvas, prompt, refFiles}]
+// One asset on its own tight canvas: its cells laid side by side, sized to fit
+// exactly. A food recipe keeps its stages together (one canvas so the plate /
+// cutting board stay consistent); a single-ref decoration gets its flipped
+// pair. Returns { sheetW, sheetH, regions:[one] } or null when it has no refs.
+export function singleAssetSheet(asset, scale = 1) {
+    const paths = (asset.refFiles ?? [])
+        .map((f) => `${asset.category}/${asset.assetName}/${f}`);
+    if (!paths.length) return null;
+    const spec = canvasSpecOf(asset.canvas);
+    const row = {
+        asset,
+        cellW: (spec?.w ?? FALLBACK_CELL) * scale,
+        cellH: (spec?.h ?? FALLBACK_CELL) * scale,
+        paths,
+        flip: paths.length === 1,
+        scale,
+    };
+    const sheetW = Math.round(rowW(row));
+    const sheetH = Math.round(row.cellH);
+    const region = regionAt(row, 0, 0, sheetW, sheetH);
+    region.zIndex = 0;
+    return { sheetW, sheetH, regions: [region] };
+}
+
 export function prefillRegions(orderAssets, sheetW, sheetH, chosen = null, settings = null,
                                scales = null) {
     // `scales`: per-asset user scale ({assetName: factor}) — the packer lays
