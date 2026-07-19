@@ -67,6 +67,7 @@ export function openTemplateEditor(opts) {
     const state = createEditorState(opts.init ?? {});
     const overlay = document.createElement("div");
     overlay.className = "sym-editor-overlay sym-editor";
+    overlay._symState = state; // handle for the headless verify harness
 
     // ---- header ----
     const header = document.createElement("div");
