@@ -276,6 +276,7 @@ export function renderRail(state, host, opts) {
                         } finally {
                             local.saving = false;
                             one.disabled = false;
+                            refreshSavedGrid();
                         }
                     });
                     row.appendChild(one);
@@ -404,6 +405,7 @@ export function renderRail(state, host, opts) {
                 local.saving = false;
                 saveAllBtn.disabled = false;
                 saveBtn.disabled = false;
+                refreshSavedGrid();
             }
             if (saved.length) {
                 saveError.style.color = "#6c6";
@@ -475,6 +477,7 @@ export function renderRail(state, host, opts) {
                 local.saving = false;
                 eachBtn.disabled = false;
                 saveBtn.disabled = false;
+                refreshSavedGrid();
             }
             if (saved.length) {
                 saveError.style.color = "#6c6";
@@ -522,6 +525,7 @@ export function renderRail(state, host, opts) {
         } finally {
             local.saving = false;
             saveBtn.disabled = false;
+            refreshSavedGrid();
         }
     });
 
@@ -566,6 +570,13 @@ export function renderRail(state, host, opts) {
                 Object.assign(state.settings, item.settings);
                 state.emit("settings");
             }
+            // Size the canvas to the saved sheet (per-asset sheets are tight,
+            // whole-order sheets are square) before loading its regions.
+            if (item.size?.w && item.size?.h) {
+                state.sheetW = item.size.w;
+                state.sheetH = item.size.h;
+                state.emit("sheet");
+            }
             state.setRegions(structuredClone(item.regions ?? []));
         } finally {
             suppressRelayout = false;
@@ -580,21 +591,43 @@ export function renderRail(state, host, opts) {
         loadPanel.style.display = "none";
     }
 
-    // --- 3. hint -----------------------------------------------------------------
-    host.appendChild(el("div", "opacity:.55;font-size:11px;margin:6px 0;",
-        "Select a region, then check an asset to make it the region's base. " +
-        "Checks show what's assigned; uncheck to go back to the reference."));
+    // --- 3+4. saved sheets — thumbnails, click to load into the canvas ----------
+    // Replaces the old hint + task-assets chip. Every Save / Save all types /
+    // Save each asset lands here as a clickable thumbnail.
+    const savedWrap = el("div", "margin:8px 0;");
+    savedWrap.appendChild(el("div", "opacity:.55;font-size:11px;margin-bottom:3px;",
+        "Saved sheets — click to load & edit"));
+    const savedGrid = el("div",
+        "display:grid;grid-template-columns:repeat(3,1fr);gap:4px;");
+    savedWrap.appendChild(savedGrid);
+    host.appendChild(savedWrap);
 
-    // --- 4. task assets chip -------------------------------------------------------
-    const categories = [...new Set(
-        state.taskAssets.map((a) => a.category).filter(Boolean))];
-    const chipLine = el("div", "margin:4px 0;");
-    const chip = el("span",
-        "display:inline-block;border:1px solid #c33;color:#f66;border-radius:10px;" +
-        "padding:1px 8px;font-size:10px;",
-        `Task assets (${categories.join(", ")})`);
-    chipLine.appendChild(chip);
-    host.appendChild(chipLine);
+    async function refreshSavedGrid() {
+        let items = [];
+        try { items = await opts.listSaved(); } catch { /* empty */ }
+        savedGrid.replaceChildren();
+        if (!items.length) {
+            savedGrid.appendChild(el("div", "opacity:.4;font-size:11px;",
+                "No saved sheets yet."));
+            return;
+        }
+        for (const item of items) {
+            const cell = el("div", "cursor:pointer;border:1px solid #2c2c2c;"
+                + "border-radius:5px;overflow:hidden;background:#111;");
+            cell.title = item.name;
+            const img = el("img", "width:100%;aspect-ratio:1;object-fit:contain;"
+                + "background:#161616;display:block;");
+            img.loading = "lazy";
+            img.src = opts.sheetThumbUrl?.(item.file) ?? "";
+            const cap = el("div", "font-size:9px;padding:2px 3px;overflow:hidden;"
+                + "text-overflow:ellipsis;white-space:nowrap;opacity:.75;",
+                item.name);
+            cell.append(img, cap);
+            cell.addEventListener("click", () => applySaved(item));
+            savedGrid.appendChild(cell);
+        }
+    }
+    refreshSavedGrid();
 
     // --- 5. project assets tree ------------------------------------------------------
     const treeHead = el("div");
