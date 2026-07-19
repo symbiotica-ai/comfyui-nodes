@@ -330,12 +330,8 @@ async function taskDataFor(node) {
         if (orderNode) {
             project = widgetOf(orderNode, "project_path")?.value?.trim();
             month = widgetOf(orderNode, "month")?.value?.trim();
-            const op = widgetOf(orderNode, "order_path")?.value?.trim();
-            const rp = widgetOf(orderNode, "refs_path")?.value?.trim();
             if (project) q.set("project", project);
             if (month) q.set("month", month);
-            if (op) q.set("order_path", op);
-            if (rp) q.set("refs_path", rp);
         }
     }
     let refsRoot = "";
