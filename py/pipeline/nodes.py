@@ -87,17 +87,6 @@ class SymbioticaOrderRead(io.ComfyNode):
                 io.String.Input("month", default="",
                                 tooltip="Which month's order to read (the "
                                         ".xlsx files under orders/)"),
-                # Escape hatch: set either to override the folder-derived path.
-                io.String.Input("order_path", default="", optional=True,
-                                advanced=True,
-                                tooltip="Override: absolute path to the order "
-                                        ".xlsx (else derived from project + "
-                                        "month)"),
-                io.String.Input("refs_path", default="", optional=True,
-                                advanced=True,
-                                tooltip="Override: client reference-image "
-                                        "folder (else the month's folder in "
-                                        "orders/)"),
             ],
             outputs=[OrderEvents.Output(display_name="events")],
             hidden=[io.Hidden.unique_id],
@@ -105,25 +94,22 @@ class SymbioticaOrderRead(io.ComfyNode):
         )
 
     @classmethod
-    def _paths(cls, project_path, month, order_path, refs_path):
-        """The order xlsx, client-refs folder, and sprite-catalog root — from
-        the explicit overrides where given, else derived from project+month."""
+    def _paths(cls, project_path, month):
+        """The order xlsx, client-refs folder, and sprite-catalog root, all
+        derived from the project folder and the picked month."""
         project_path = (project_path or "").strip()
-        op = (order_path or "").strip()
-        rp = (refs_path or "").strip()
-        assets_root = ""
+        op = rp = assets_root = ""
         if project_path:
             from .project_layout import resolve_month
             r = resolve_month(project_path, (month or "").strip())
-            op = op or r["order_path"]
-            rp = rp or r["refs_path"]
+            op = r["order_path"]
+            rp = r["refs_path"]
             assets_root = r["assets_root"]
         return op, rp, assets_root
 
     @classmethod
-    def fingerprint_inputs(cls, project_path="", month="", order_path="",
-                           refs_path=""):
-        op, rp, _ = cls._paths(project_path, month, order_path, refs_path)
+    def fingerprint_inputs(cls, project_path="", month=""):
+        op, rp, _ = cls._paths(project_path, month)
         h = hashlib.sha256(f"{op}|{rp}".encode())
         try:
             st = os.stat(op)
@@ -138,13 +124,12 @@ class SymbioticaOrderRead(io.ComfyNode):
         return h.hexdigest()
 
     @classmethod
-    def execute(cls, project_path="", month="", order_path="",
-                refs_path="") -> io.NodeOutput:
-        op, rp, assets_root = cls._paths(project_path, month, order_path, refs_path)
+    def execute(cls, project_path="", month="") -> io.NodeOutput:
+        op, rp, assets_root = cls._paths(project_path, month)
         if not op:
             raise ValueError(
-                "no order file — set the project folder and pick a month, or "
-                "set order_path directly (advanced)")
+                "no order file — set the project folder (the one with an "
+                "orders/ subfolder of .xlsx files) and pick a month")
         loaded = load_order(op, rp)
         payload = {
             "events": loaded["events"],
@@ -297,7 +282,7 @@ class SymbioticaTemplateBuilder(io.ComfyNode):
             if not assets:
                 raise ValueError(
                     "no assets with reference files to prefill — check the "
-                    "Order Read refs_path")
+                    "Order Read project folder's month refs")
             from .texture_pack import effective_max
             dims = effective_max(settings)
             sheet_w, sheet_h = dims["w"], dims["h"]
@@ -562,7 +547,7 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         assets = [a for g in groups for a in g["assets"] if a["refFiles"]]
         if not assets:
             raise ValueError("no assets with reference files — check the "
-                             "Order Read refs_path")
+                             "Order Read project folder's month refs")
 
         from .texture_pack import effective_max
         dims = effective_max(settings)
