@@ -395,11 +395,15 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                         "skeleton and client prompts.",
             inputs=[
                 # The node reads the order itself: one project folder + a month.
-                io.String.Input("project_path", default="",
+                # Both are advanced: the node face is the Template Editor button
+                # only, and the editor's own rail sets the project + month (they
+                # persist back here, hidden, so a queued run still resolves the
+                # order).
+                io.String.Input("project_path", default="", advanced=True,
                                 tooltip="The client project folder — the one "
                                         "that contains orders/ and "
                                         "reference-assets/"),
-                io.String.Input("month", default="",
+                io.String.Input("month", default="", advanced=True,
                                 tooltip="Which month's order to build (the "
                                         ".xlsx files under orders/)"),
                 # Optional legacy inputs: a wired order still works, but the

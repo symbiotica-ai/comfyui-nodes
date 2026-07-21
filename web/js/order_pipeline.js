@@ -272,6 +272,17 @@ app.registerExtension({
                     return ev ? templateGroups(ev).map((g) => g.template) : [];
                 });
                 setupTemplateEditor(this);
+                // The node face is the editor button, nothing else. Every
+                // config/state input (project, month, presets, editor-managed
+                // regions/sheet/prompt…) stays on the node but hidden, so its
+                // value still serializes into the workflow and reaches the
+                // Python execute() — the editor owns all of them from inside.
+                for (const w of this.widgets ?? []) {
+                    if (w.name !== "template_editor") w.hidden = true;
+                }
+                // Initial size was computed with the widgets visible (core sizes
+                // before onNodeCreated); re-fit now that only the button shows.
+                this.setSize(this.computeSize());
             };
             const origLoaded = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function () {
@@ -559,93 +570,30 @@ function stopWheel(elem) {
 
 function setupTemplateEditor(node) {
     const container = document.createElement("div");
-    container.style.cssText = "max-height:340px;overflow-y:auto;padding:2px;font-size:11px;";
+    container.style.cssText = "padding:2px;";
     stopWheel(container);
-    const uiState = { images: [], browsing: false, templates: [] };
+    // openEditorForNode caches the loaded sprite catalog across opens.
+    const uiState = { images: [], imagesRoot: null };
 
-    node._symbioticaEditor = {
-        // The sprite catalog loads when the editor opens (derived from the
-        // project path), so the node UI only needs the saved-template gallery.
-        restore() { refreshGallery(); },
-    };
+    // Everything the editor needs — project, month, saved-sheet picking,
+    // presets — lives inside the editor now. onConfigure still calls restore();
+    // there is nothing on the node face to re-list, so it is a no-op.
+    node._symbioticaEditor = { restore() {} };
 
-    async function refreshGallery() {
-        try {
-            uiState.templates = (await fetchJson("/symbiotica/template-list")).templates ?? [];
-        } catch {
-            uiState.templates = [];
-        }
-        render();
-    }
-    uiState.refreshGallery = refreshGallery;
-    uiState.render = () => render();
-
-    function render() {
+    const render = () => {
         container.replaceChildren();
-
-        const bar = document.createElement("div");
-        bar.style.cssText = "display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
         const open = document.createElement("button");
-        open.textContent = "↗ Open template editor";
+        open.textContent = "Template Editor";
         open.style.cssText =
-            "border:1px solid #c33;color:#f66;background:#2a2a2a;border-radius:6px;" +
-            "padding:4px 10px;cursor:pointer;";
+            "width:100%;border:1px solid #c33;color:#f66;background:#2a2a2a;" +
+            "border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px;";
         open.addEventListener("click", () => openEditorForNode(node, uiState));
-        bar.appendChild(open);
-        container.appendChild(bar);
-
-        const project = widgetOf(node, "project_path")?.value?.trim();
-        if (project) {
-            const path = document.createElement("div");
-            path.style.cssText =
-                "opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" +
-                "direction:rtl;margin:2px 0;";
-            path.textContent = project;
-            path.title = project;
-            container.appendChild(path);
-        }
-
-        const sheetFile = widgetOf(node, "sheet_file")?.value;
-        const cur = document.createElement("div");
-        cur.style.cssText = "margin:4px 0;opacity:.8;";
-        cur.textContent = sheetFile
-            ? `current: ${sheetFile}`
-            : "no saved template — open the editor, prefill from specs, save";
-        container.appendChild(cur);
-
-        const gh = document.createElement("div");
-        gh.style.cssText = "margin:6px 0 2px;opacity:.7;text-transform:uppercase;font-size:10px;";
-        gh.textContent = `saved templates · ${uiState.templates.length}`;
-        container.appendChild(gh);
-        for (const t of uiState.templates) {
-            const row = document.createElement("div");
-            const active = sheetFile === t.file;
-            row.style.cssText =
-                "display:flex;gap:6px;align-items:center;padding:2px 4px;cursor:pointer;" +
-                `border-radius:4px;border:1px solid ${active ? "#c33" : "transparent"};`;
-            const label = document.createElement("span");
-            label.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-            label.textContent = t.name;
-            const count = document.createElement("span");
-            count.style.opacity = "0.6";
-            count.textContent = `${t.spriteCount ?? (t.regions?.length ?? 0)} regions`;
-            row.append(label, count);
-            row.addEventListener("click", () => {
-                const sheetW = widgetOf(node, "sheet_file");
-                if (sheetW) sheetW.value = t.file;
-                const regionsW = widgetOf(node, "regions_json");
-                if (regionsW) regionsW.value = JSON.stringify(t.regions ?? []);
-                const sceneW = widgetOf(node, "scene_prompt");
-                if (sceneW && t.scenePrompt) sceneW.value = t.scenePrompt;
-                render();
-            });
-            container.appendChild(row);
-        }
-    }
+        container.appendChild(open);
+    };
+    uiState.render = render;
 
     render();
-    refreshGallery();
     node.addDOMWidget("template_editor", "custom", container,
                       { serialize: false, hideOnZoom: true });
-    node.size[0] = Math.max(node.size[0], 380);
+    node.size[0] = Math.max(node.size[0], 240);
 }
