@@ -42,11 +42,47 @@ from .skeleton import build_client_prompts
 from .texture_pack import PackSettings
 
 
+def _is_variant(asset):
+    """A directional asset (rotation 2 or 4) whose refs are distinct VARIANTS,
+    not a food recipe's stages (rotation '-'). Only these get split."""
+    rot = str(asset.get("rotation", "")).strip()
+    return rot.isdigit() and int(rot) >= 2
+
+
+def _variant_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
+                    base_name, category, cap=3):
+    """One sheet per variant ref (up to `cap`) for each variant asset: a
+    rotation=2 asset mirrors each ref (ref + horizontal flip); rotation=4 draws
+    the single ref (a flip can't stand in for 4 directions). Food is skipped."""
+    out = []
+    for a in assets:
+        if not a.get("refFiles") or not _is_variant(a):
+            continue
+        if category != "All" and a.get("category") != category:
+            continue
+        mirror = str(a.get("rotation", "")).strip() == "2"
+        for i, ref in enumerate(a["refFiles"][:cap], 1):
+            synth = {**a, "refFiles": [ref]}
+            if not mirror:
+                synth["noMirror"] = True
+            sheet, regions, _ov = build_prefill_sheet(
+                [synth], refs_root, sheet_w, sheet_h, settings, scales=scales)
+            if not regions:
+                continue
+            out.append({
+                "image": sheet, "regions": regions,
+                "prompts": build_client_prompts(regions),
+                "name": f"{base_name}-{slugify(a['assetName'])}-v{i}",
+            })
+    return out
+
+
 def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
                    max_rows=4, background="#808080", category="All",
                    base_name="order", scale=1.0, algorithm="shelf",
                    distribute_by_folder=False, padding=0, border=0,
-                   scale_max_canvas=256):
+                   scale_max_canvas=256, combined_sheet=True,
+                   split_variants=False):
     """The whole order as ready-to-run sheets: plan_sheets chunks similar
     assets, each chunk is prefilled + drawn on its own sheet, and each
     sheet's client prompts come from the SAME chunk's regions — so item i
@@ -56,21 +92,17 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
     mirror the Template Editor's Pack Settings so a wired Auto Packer Settings
     node reproduces an editor sheet. `scale` enlarges a cell uniformly, but
     only for assets whose canvas max edge is <= `scale_max_canvas` — small
-    sprites (food, 256 decorations) grow, already-large 512+ ones stay native."""
-    chunks = plan_sheets(assets, columns, max_rows, category=category)
-    if not chunks:
-        cats = sorted({a.get("category", "") for a in assets if a.get("refFiles")})
-        raise ValueError(
-            f"no assets to pack for category {category!r} — this event has "
-            f"referenced assets in: {', '.join(cats) or '(none at all)'}")
-    canvases_per_cat: dict[str, set] = {}
-    for c in chunks:
-        canvases_per_cat.setdefault(c["category"], set()).add(c["canvas"])
+    sprites (food, 256 decorations) grow, already-large 512+ ones stay native.
+
+    Two independent outputs: `combined_sheet` (the paginated grouped sheets —
+    today's behavior) and `split_variants` (one mirrored sheet per variant ref
+    of each directional asset). Both can be on."""
     settings = PackSettings(algorithm=algorithm, columns=max(1, int(columns)),
                             background=background, padding=max(0, int(padding)),
                             border=max(0, int(border)),
                             distribute_by_folder=bool(distribute_by_folder),
                             max_width=sheet_w, max_height=sheet_h)
+
     def _under_cutoff(a):
         spec = canvas_spec_of(a.get("canvas", "")) or {}
         return max(spec.get("w", 256), spec.get("h", 256)) <= scale_max_canvas
@@ -79,20 +111,31 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
                if a.get("assetName") and _under_cutoff(a)} or None
               if scale and scale != 1 else None)
     out = []
-    for chunk in chunks:
-        sheet, regions, _overflow = build_prefill_sheet(
-            chunk["assets"], refs_root, sheet_w, sheet_h, settings, scales=scales)
-        if not regions:
-            continue
-        out.append({
-            "image": sheet,
-            "regions": regions,
-            "prompts": build_client_prompts(regions),
-            "name": sheet_name(base_name, chunk,
-                               len(canvases_per_cat[chunk["category"]]) > 1),
-        })
+    if combined_sheet:
+        chunks = plan_sheets(assets, columns, max_rows, category=category)
+        canvases_per_cat: dict[str, set] = {}
+        for c in chunks:
+            canvases_per_cat.setdefault(c["category"], set()).add(c["canvas"])
+        for chunk in chunks:
+            sheet, regions, _overflow = build_prefill_sheet(
+                chunk["assets"], refs_root, sheet_w, sheet_h, settings,
+                scales=scales)
+            if not regions:
+                continue
+            out.append({
+                "image": sheet,
+                "regions": regions,
+                "prompts": build_client_prompts(regions),
+                "name": sheet_name(base_name, chunk,
+                                   len(canvases_per_cat[chunk["category"]]) > 1),
+            })
+    if split_variants:
+        out.extend(_variant_sheets(assets, refs_root, sheet_w, sheet_h,
+                                   settings, scales, base_name, category))
     if not out:
+        cats = sorted({a.get("category", "") for a in assets if a.get("refFiles")})
         raise ValueError(
-            f"no assets to pack for category {category!r} — every chunk came "
-            "back empty (missing reference files on disk?)")
+            f"no assets to pack for category {category!r} — nothing to draw "
+            f"(referenced asset types: {', '.join(cats) or '(none at all)'}; "
+            f"variants split: {split_variants})")
     return out

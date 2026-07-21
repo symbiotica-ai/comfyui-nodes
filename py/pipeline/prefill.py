@@ -107,7 +107,7 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
             "cellW": (spec or {}).get("w", FALLBACK_CELL) * k,
             "cellH": (spec or {}).get("h", FALLBACK_CELL) * k,
             "paths": paths,
-            "flip": len(paths) == 1,
+            "flip": len(paths) == 1 and not asset.get("noMirror"),
             "scale": k,
         })
     if not rows:

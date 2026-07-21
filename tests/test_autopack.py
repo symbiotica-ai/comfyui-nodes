@@ -135,6 +135,60 @@ def test_autopack_scale_gated_by_canvas(tmp_path):
     assert big == 512     # 512 > 256 cutoff — left native
 
 
+def _variant(name, refs, rotation, category="Decoration", canvas="256x256"):
+    return {**asset(name, refs=refs, category=category, canvas=canvas),
+            "rotation": rotation}
+
+
+def test_autopack_split_variants_mirrors_rotation2(tmp_path):
+    a = _variant("Stall", ("s0.png", "s1.png"), "2")
+    root = _make_refs(tmp_path, [a])
+    out = autopack_order([a], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=False, split_variants=True)
+    assert [o["name"] for o in out] == ["order-stall-v1", "order-stall-v2"]
+    for o in out:  # each variant sheet = ref + horizontal mirror
+        ms = o["regions"][0]["members"]
+        assert len(ms) == 2 and ms[1].get("flipX") is True
+
+
+def test_autopack_split_variants_rotation4_no_mirror(tmp_path):
+    a = _variant("Sign", ("d0.png", "d1.png"), "4")
+    root = _make_refs(tmp_path, [a])
+    out = autopack_order([a], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=False, split_variants=True)
+    assert len(out) == 2
+    for o in out:
+        assert len(o["regions"][0]["members"]) == 1  # no mirror for 4-way
+
+
+def test_autopack_split_caps_at_three(tmp_path):
+    a = _variant("Many", ("a.png", "b.png", "c.png", "d.png"), "2")
+    root = _make_refs(tmp_path, [a])
+    out = autopack_order([a], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=False, split_variants=True)
+    assert [o["name"] for o in out] == ["order-many-v1", "order-many-v2",
+                                        "order-many-v3"]
+
+
+def test_autopack_split_skips_food_rotation_dash(tmp_path):
+    food = _variant("Cake", ("c0.png", "c1.png", "c2.png"), "-",
+                    category="Food - 3 stages", canvas="128x128")
+    root = _make_refs(tmp_path, [food])
+    with pytest.raises(ValueError):  # food is not a variant → nothing to split
+        autopack_order([food], root, sheet_w=512, sheet_h=512,
+                       combined_sheet=False, split_variants=True)
+
+
+def test_autopack_combined_and_split_together(tmp_path):
+    a = _variant("Stall", ("s0.png", "s1.png"), "2")
+    root = _make_refs(tmp_path, [a])
+    names = [o["name"] for o in autopack_order(
+        [a], root, sheet_w=1024, sheet_h=1024,
+        combined_sheet=True, split_variants=True)]
+    assert "order-decoration" in names            # combined
+    assert "order-stall-v1" in names and "order-stall-v2" in names
+
+
 def test_autopack_distribute_by_folder_stacks_categories(tmp_path):
     # distribute_by_folder=True lays each category's strip on its own row —
     # accepted as a keyword and drives the pack without error.

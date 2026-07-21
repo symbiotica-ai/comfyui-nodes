@@ -285,6 +285,15 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
                              tooltip="Gap between packed strips (px)"),
                 io.Int.Input("border", default=0, min=0, max=512,
                              tooltip="Margin around the packed block (px)"),
+                io.Boolean.Input("combined_sheet", default=True,
+                                 tooltip="Emit the grouped, paginated sheets "
+                                         "(the normal output). Off = only the "
+                                         "split-variant sheets below."),
+                io.Boolean.Input("split_variants", default=False,
+                                 tooltip="For directional assets (xlsx rotation "
+                                         "2/4), emit one sheet per variant ref "
+                                         "(max 3) — mirrored for rotation 2. "
+                                         "Food (rotation -) is never split."),
             ],
             outputs=[PackSettingsWire.Output(display_name="settings")],
         )
@@ -293,7 +302,8 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
 
     @classmethod
     def execute(cls, scale="1x", scale_max_canvas="256", algorithm="shelf",
-                distribute_by_folder=True, padding=0, border=0) -> io.NodeOutput:
+                distribute_by_folder=True, padding=0, border=0,
+                combined_sheet=True, split_variants=False) -> io.NodeOutput:
         cutoff = 10 ** 9 if scale_max_canvas == "all" else int(scale_max_canvas)
         return io.NodeOutput({
             "scale": cls._SCALE.get(scale, 1.0),
@@ -302,6 +312,8 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
             "distribute_by_folder": bool(distribute_by_folder),
             "padding": int(padding),
             "border": int(border),
+            "combined_sheet": bool(combined_sheet),
+            "split_variants": bool(split_variants),
         })
 
 
@@ -382,7 +394,9 @@ class SymbioticaAutoPacker(io.ComfyNode):
             scale_max_canvas=s.get("scale_max_canvas", 256),
             algorithm=s.get("algorithm", "shelf"),
             distribute_by_folder=s.get("distribute_by_folder", False),
-            padding=s.get("padding", 0), border=s.get("border", 0))
+            padding=s.get("padding", 0), border=s.get("border", 0),
+            combined_sheet=s.get("combined_sheet", True),
+            split_variants=s.get("split_variants", False))
         return io.NodeOutput(
             [_pil_to_tensor(p["image"]) for p in packed],
             [p["prompts"] for p in packed],
