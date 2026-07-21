@@ -40,6 +40,7 @@ EventSpec = io.Custom("SYMBIOTICA_EVENT_SPEC")
 Template = io.Custom("SYMBIOTICA_TEMPLATE")
 Order = io.Custom("SYMBIOTICA_ORDER")
 PackSettingsWire = io.Custom("SYMBIOTICA_PACK_SETTINGS")
+ModelPresetWire = io.Custom("SYMBIOTICA_MODEL_PRESET")
 
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
@@ -253,6 +254,33 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         return io.NodeOutput(payload)
 
 
+class SymbioticaModelPreset(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaModelPreset",
+            display_name="Symbiotica Model Preset",
+            category="symbiotica/pipeline",
+            description="Shared model/resolution/aspect for the Auto Packer — "
+                        "wire 'preset' into one or many Auto Packers to change "
+                        "their sheet size from a single node.",
+            inputs=[
+                io.Combo.Input("preset_model", options=_MODELS,
+                               default="qwen-image"),
+                io.Combo.Input("resolution", options=_RESOLUTIONS,
+                               default="1K"),
+                io.Combo.Input("aspect_ratio", options=_ASPECTS, default="1:1"),
+            ],
+            outputs=[ModelPresetWire.Output(display_name="preset")],
+        )
+
+    @classmethod
+    def execute(cls, preset_model="qwen-image", resolution="1K",
+                aspect_ratio="1:1") -> io.NodeOutput:
+        return io.NodeOutput({"model": preset_model, "tier": resolution,
+                              "ar": aspect_ratio})
+
+
 class SymbioticaAutoPackerSettings(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -357,6 +385,7 @@ class SymbioticaAutoPacker(io.ComfyNode):
                 io.String.Input("overrides", default="{}",
                                 tooltip="Per-asset hide/reorder, set from the "
                                         "node's Assets panel (JSON)"),
+                ModelPresetWire.Input("preset", optional=True),
                 PackSettingsWire.Input("settings", optional=True),
             ],
             outputs=[
@@ -378,16 +407,18 @@ class SymbioticaAutoPacker(io.ComfyNode):
     def execute(cls, order, columns=1, max_rows_per_sheet=4,
                 preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
                 background="#808080", category="All", overrides="{}",
-                settings=None) -> io.NodeOutput:
+                preset=None, settings=None) -> io.NodeOutput:
         if not isinstance(order, dict) or "assets" not in order:
             raise ValueError("order input must come from Symbiotica Order "
                              "Specs")
-        dims = preset_dims({"model": preset_model, "tier": resolution,
-                            "ar": aspect_ratio})
+        # A wired Model Preset node overrides this node's own model widgets.
+        p = preset if isinstance(preset, dict) else {}
+        model = p.get("model", preset_model)
+        tier = p.get("tier", resolution)
+        ar = p.get("ar", aspect_ratio)
+        dims = preset_dims({"model": model, "tier": tier, "ar": ar})
         if not dims:
-            raise ValueError(
-                f"invalid preset: {preset_model} / {resolution} / "
-                f"{aspect_ratio}")
+            raise ValueError(f"invalid preset: {model} / {tier} / {ar}")
         # Optional pack-settings node (unwired = today's defaults: shelf, no
         # distribute, scale 1 — nothing regresses).
         s = settings if isinstance(settings, dict) else {}
@@ -1604,6 +1635,7 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
+    SymbioticaModelPreset,
     SymbioticaAutoPackerSettings,
     SymbioticaAutoPacker,
     SymbioticaEventSpecs,
