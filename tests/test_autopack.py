@@ -135,27 +135,23 @@ def test_autopack_scale_gated_by_canvas(tmp_path):
     assert big == 512     # 512 > 256 cutoff — left native
 
 
-def test_reorder_refs_swaps_and_keeps_all():
-    from pipeline.autopack import reorder_refs
-    assert reorder_refs(["a", "b", "c"], "1,3,2") == ["a", "c", "b"]
-    assert reorder_refs(["a", "b", "c"], "3,2,1") == ["c", "b", "a"]
-    # out-of-range index skipped, 2-ref asset
-    assert reorder_refs(["a", "b"], "2,1,3") == ["b", "a"]
-    # partial pattern: omitted originals appended in order
-    assert reorder_refs(["a", "b", "c"], "2") == ["b", "a", "c"]
-    # identity / empty = unchanged
-    assert reorder_refs(["a", "b", "c"], "1,2,3") == ["a", "b", "c"]
+def test_select_cells_reorder_and_drop():
+    from pipeline.autopack import select_cells
+    assert select_cells(["a", "b", "c"], [1, 3, 2]) == ["a", "c", "b"]  # reorder
+    assert select_cells(["a", "b", "c"], [1, 3]) == ["a", "c"]          # drop b
+    assert select_cells(["a", "b"], [2, 1, 3]) == ["b", "a"]            # oor skip
+    assert select_cells(["a", "b", "c"], []) == []                      # keep none
 
 
 def test_apply_overrides_multi():
     from pipeline.autopack import apply_overrides
     assets = [asset("A", refs=("a0", "a1", "a2")), asset("B"),
-              asset("C", refs=("c0", "c1"))]
+              asset("C", refs=("c0", "c1", "c2"))]
     out = apply_overrides(assets, {"hidden": ["B"],
-                                   "reorder": {"A": "1,3,2", "C": "2,1"}})
+                                   "cells": {"A": [1, 3], "C": [3, 1, 2]}})
     assert [a["assetName"] for a in out] == ["A", "C"]
-    assert out[0]["refFiles"] == ["a0", "a2", "a1"]
-    assert out[1]["refFiles"] == ["c1", "c0"]
+    assert out[0]["refFiles"] == ["a0", "a2"]        # dropped the duplicate a1
+    assert out[1]["refFiles"] == ["c2", "c0", "c1"]  # reordered, none dropped
     assert apply_overrides(assets, {}) == assets
 
 
@@ -165,18 +161,6 @@ def test_apply_removal_drops_named_asset():
     assert [a["assetName"] for a in apply_removal(assets, "B")] == ["A", "C"]
     assert apply_removal(assets, "none") is assets
     assert apply_removal(assets, "") is assets
-
-
-def test_apply_reorder_targets_one_asset():
-    from pipeline.autopack import apply_reorder
-    assets = [asset("A", refs=("a0", "a1", "a2")),
-              asset("B", refs=("b0", "b1"))]
-    out = apply_reorder(assets, "A", "1,3,2")
-    assert out[0]["refFiles"] == ["a0", "a2", "a1"]
-    assert out[1]["refFiles"] == ["b0", "b1"]  # untouched
-    # no-op cases return input unchanged
-    assert apply_reorder(assets, "none", "1,3,2") is assets
-    assert apply_reorder(assets, "A", "1,2,3") is assets
 
 
 def _variant(name, refs, rotation, category="Decoration", canvas="256x256"):

@@ -43,13 +43,18 @@ from .texture_pack import PackSettings
 
 
 def apply_overrides(assets, overrides):
-    """Apply the per-asset panel overrides: drop hidden assets and reorder
-    cells. `overrides` = {"hidden": [name, ...], "reorder": {name: "1,3,2"}}."""
+    """Apply the per-asset panel overrides: drop hidden assets and pick/reorder
+    each asset's cells. `overrides` = {"hidden": [name, ...],
+    "cells": {name: [kept 1-based ref indices, in order]}} — the cells list is
+    reorder + duplicate-removal in one."""
     out = assets
     for name in (overrides or {}).get("hidden", []) or []:
         out = apply_removal(out, name)
-    for name, pattern in ((overrides or {}).get("reorder") or {}).items():
-        out = apply_reorder(out, name, pattern)
+    cells = (overrides or {}).get("cells") or {}
+    if cells:
+        out = [({**a, "refFiles": select_cells(a.get("refFiles", []),
+                                               cells[a["assetName"]])}
+                if a.get("assetName") in cells else a) for a in out]
     return out
 
 
@@ -62,31 +67,10 @@ def apply_removal(assets, asset_name):
     return [a for a in assets if a.get("assetName") != name]
 
 
-def reorder_refs(refs, pattern):
-    """Reorder a ref list by a 1-based index pattern like '1,3,2'. Out-of-range
-    indices are skipped; any refs the pattern omits are appended in original
-    order so nothing is ever dropped."""
-    idx = [int(x) for x in str(pattern).split(",") if x.strip().isdigit()]
-    seen, out = set(), []
-    for i in idx:
-        if 1 <= i <= len(refs) and i not in seen:
-            out.append(refs[i - 1])
-            seen.add(i)
-    for i in range(1, len(refs) + 1):
-        if i not in seen:
-            out.append(refs[i - 1])
-    return out
-
-
-def apply_reorder(assets, asset_name, pattern):
-    """Return `assets` with one named asset's refFiles reordered per `pattern`.
-    No-op (returns the same list) when nothing is selected or the pattern is the
-    identity '1,2,3'."""
-    name = (asset_name or "").strip()
-    if not name or name == "none" or not pattern or str(pattern) == "1,2,3":
-        return assets
-    return [({**a, "refFiles": reorder_refs(a.get("refFiles", []), pattern)}
-             if a.get("assetName") == name else a) for a in assets]
+def select_cells(refs, indices):
+    """Keep the given 1-based ref indices, in that order — reorder AND drop in
+    one pass. Out-of-range indices are skipped; an empty selection keeps none."""
+    return [refs[i - 1] for i in (indices or []) if 1 <= i <= len(refs)]
 
 
 def _is_variant(asset):

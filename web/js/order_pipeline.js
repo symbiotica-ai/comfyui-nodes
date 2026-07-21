@@ -236,8 +236,8 @@ function symImg(src, px) {
 // ({hidden:[name], reorder:{name:"1,3,2"}}) — supports many hides + reorders.
 function assetsPanel(node) {
     const ovW = widgetOf(node, "overrides");
-    let state = { hidden: [], reorder: {} };
-    try { state = { hidden: [], reorder: {}, ...JSON.parse(ovW?.value || "{}") }; }
+    let state = { hidden: [], cells: {} };
+    try { state = { hidden: [], cells: {}, ...JSON.parse(ovW?.value || "{}") }; }
     catch { /* keep default */ }
 
     const container = document.createElement("div");
@@ -293,35 +293,35 @@ function assetsPanel(node) {
             row.appendChild(head);
             // cells: reorder arrows for multi-ref assets
             if (!hidden && refs.length > 1 && refsRoot) {
-                const order = (state.reorder[a.assetName]
-                    ? state.reorder[a.assetName].split(",").map(Number)
+                // Explicit cell list (reorder + drop). If stored, use as-is —
+                // do NOT re-add missing indices, or a removed cell comes back.
+                const stored = state.cells[a.assetName];
+                const order = (stored ? stored.slice()
                     : refs.map((_, i) => i + 1)).filter((i) => i >= 1 && i <= refs.length);
-                for (let i = 1; i <= refs.length; i++) if (!order.includes(i)) order.push(i);
+                const commit = () => { state.cells[a.assetName] = order.slice(); save(); render(); };
                 const cells = document.createElement("div");
                 cells.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;";
                 order.forEach((refIdx, pos) => {
                     const cell = document.createElement("div");
                     cell.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:1px;";
                     cell.appendChild(symImg(thumbUrl(refsRoot, refs[refIdx - 1]), 30));
-                    const arrows = document.createElement("div");
-                    arrows.style.cssText = "display:flex;gap:2px;";
-                    const mk = (txt, d) => {
+                    const btns = document.createElement("div");
+                    btns.style.cssText = "display:flex;gap:2px;";
+                    const mk = (txt, fn, danger) => {
                         const b = document.createElement("button");
                         b.textContent = txt;
-                        b.style.cssText = "font-size:10px;padding:0 4px;border-radius:3px;cursor:pointer;"
-                            + "border:1px solid #555;background:#333;color:#ccc;";
-                        b.addEventListener("pointerdown", (e) => {
-                            e.stopPropagation();
-                            const j = pos + d;
-                            if (j < 0 || j >= order.length) return;
-                            [order[pos], order[j]] = [order[j], order[pos]];
-                            state.reorder[a.assetName] = order.join(",");
-                            save(); render();
-                        });
+                        b.style.cssText = "font-size:11px;line-height:1;padding:1px 5px;border-radius:3px;"
+                            + `cursor:pointer;border:1px solid #555;color:#ccc;`
+                            + `background:${danger ? "#5a2a2a" : "#333"};`;
+                        b.addEventListener("pointerdown", (e) => { e.stopPropagation(); fn(); });
                         return b;
                     };
-                    arrows.append(mk("←", -1), mk("→", 1));
-                    cell.appendChild(arrows);
+                    btns.append(
+                        mk("←", () => { if (pos > 0) { [order[pos], order[pos - 1]] = [order[pos - 1], order[pos]]; commit(); } }),
+                        mk("→", () => { if (pos < order.length - 1) { [order[pos], order[pos + 1]] = [order[pos + 1], order[pos]]; commit(); } }),
+                        mk("−", () => { if (order.length > 1) { order.splice(pos, 1); commit(); } }, true),
+                    );
+                    cell.appendChild(btns);
                     cells.appendChild(cell);
                 });
                 row.appendChild(cells);
