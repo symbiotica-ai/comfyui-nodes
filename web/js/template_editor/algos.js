@@ -451,6 +451,25 @@ function regionAt(row, xPx, yPx, sheetW, sheetH) {
     };
 }
 
+function centerBlock(regions) {
+    // Parity with py prefill._center_block: translate the packed block to the
+    // sheet centre (both axes); an axis bigger than the sheet anchors at 0.
+    // Region boxes AND their member cells move together (the draw uses members).
+    if (!regions.length) return;
+    const minX = Math.min(...regions.map((r) => r.x));
+    const maxX = Math.max(...regions.map((r) => r.x + r.w));
+    const minY = Math.min(...regions.map((r) => r.y));
+    const maxY = Math.max(...regions.map((r) => r.y + r.h));
+    const offX = (maxX - minX) >= 1 ? -minX : (1 - (maxX - minX)) / 2 - minX;
+    const offY = (maxY - minY) >= 1 ? -minY : (1 - (maxY - minY)) / 2 - minY;
+    if (offX === 0 && offY === 0) return;
+    for (const r of regions) {
+        r.x += offX;
+        r.y += offY;
+        for (const m of r.members ?? []) { m.x += offX; m.y += offY; }
+    }
+}
+
 // One region per asset. Single-ref assets show the ref plus a flipped copy
 // (the in-game pair convention); multi-ref assets one cell per ref. With
 // settings, strips run through the packer (overflow stacks below, visible);
@@ -533,6 +552,7 @@ export function prefillRegions(orderAssets, sheetW, sheetH, chosen = null, setti
             regions.push(regionAt(row, PAD_PX, y, sheetW, sheetH));
             yPx = y + row.cellH + PAD_PX;
         }
+        centerBlock(regions);
         regions.sort((a, b) => (a.y - b.y) || (a.x - b.x));
         regions.forEach((r, i) => { r.zIndex = i; });
         return { regions, overflow };
