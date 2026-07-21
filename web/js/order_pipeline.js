@@ -148,6 +148,11 @@ async function refreshOrderSpecs(node) {
     if (featW && featW.value && !features.includes(featW.value)) {
         featW.value = features[0] ?? "";
     }
+    // Re-render any downstream Auto Packer asset panels now that the event's
+    // assets (and refsRoot) are known.
+    for (const ap of downstreamNodes(node, "SymbioticaAutoPacker")) {
+        ap._symRenderAssets?.();
+    }
     node.setDirtyCanvas?.(true, true);
 }
 
@@ -156,8 +161,9 @@ function wireOrderSpecs(node) {
     wireMonthPicker(node); // month combo, refreshed on project_path change
     comboify(node, "feature", () => (node._symEvents ?? []).map((e) => e.feature));
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
-    // own project_path hook — both fire).
-    for (const name of ["project_path", "month"]) {
+    // own project_path hook — both fire). `feature` too, so a downstream Auto
+    // Packer panel re-renders for the newly picked event.
+    for (const name of ["project_path", "month", "feature"]) {
         const w = widgetOf(node, name);
         if (!w) continue;
         const prev = w.callback;
@@ -186,124 +192,141 @@ function eventCategoriesFor(node) {
     return ["All", ...cats];
 }
 
-// "none" + the named assets of the event an Auto Packer's upstream Order Specs
-// has picked — for the reorder_asset combo.
+// The selected event's assets + refsRoot for an Auto Packer, filtered to the
+// node's chosen `category` (All = every type). Empty when no upstream yet.
 function eventAssetsFor(node) {
     const specs = upstreamNode(node, "order");
-    if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs") return ["none"];
-    const events = specs._symEvents ?? [];
-    if (!events.length) { refreshOrderSpecs(specs); return ["none"]; }
-    const feature = widgetOf(specs, "feature")?.value?.trim();
-    const ev = events.find((e) => e.feature === feature) || events[0];
-    const names = ev ? ev.assets.filter((a) => a.assetName).map((a) => a.assetName) : [];
-    return ["none", ...names];
-}
-
-// [{value,label,thumb}] for the Auto Packer's asset pickers: "none" + the
-// upstream event's assets, each with its first reference image as a thumbnail.
-function assetItemsFor(node) {
-    const none = [{ value: "none", label: "none", thumb: "" }];
-    const specs = upstreamNode(node, "order");
-    // On graph load onNodeCreated runs before links are wired — no upstream yet.
-    if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs") return none;
+    if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs")
+        return { assets: [], refsRoot: "" };
     const events = specs._symEvents ?? [];
     if (!events.length) refreshOrderSpecs(specs);
-    const refsRoot = specs?._symRefsRoot ?? "";
     const feature = widgetOf(specs, "feature")?.value?.trim();
     const ev = events.find((e) => e.feature === feature) || events[0];
-    const items = [{ value: "none", label: "none", thumb: "" }];
-    for (const a of ev?.assets ?? []) {
-        if (!a.assetName) continue;
-        const f = (a.refFiles ?? [])[0];
-        items.push({ value: a.assetName, label: `${a.assetName} · ${a.canvas}`,
-                     thumb: f && refsRoot ? thumbUrl(refsRoot, f) : "" });
-    }
-    return items;
+    const cat = widgetOf(node, "category")?.value?.trim() || "All";
+    const assets = (ev?.assets ?? []).filter(
+        (a) => a.assetName && (cat === "All" || a.category === cat));
+    return { assets, refsRoot: specs._symRefsRoot ?? "" };
 }
 
-// A picker widget whose dropdown shows a thumbnail beside each asset name, so a
-// long list can be matched by image (native litegraph combos are text-only).
-// Replaces a STRING widget in the same slot; the chosen value serializes back.
-function thumbnailPicker(node, widgetName, itemsFn) {
-    const i = node.widgets?.findIndex((x) => x.name === widgetName);
-    if (i == null || i < 0) return;
-    const start = node.widgets[i].value;
-    node.widgets.splice(i, 1);
+function symImg(src, px) {
+    const img = document.createElement("img");
+    img.src = src;
+    img.style.cssText = `width:${px}px;height:${px}px;object-fit:contain;`
+        + "background:#111;border-radius:3px;flex:none;";
+    return img;
+}
 
-    const field = document.createElement("div");
-    field.style.cssText = "display:flex;align-items:center;gap:6px;height:22px;"
-        + "padding:0 6px;background:#222;border:1px solid #444;border-radius:6px;"
-        + "cursor:pointer;font-size:12px;overflow:hidden;color:#ddd;";
-    const w = node.addDOMWidget(widgetName, "sym_thumb_pick", field, {
-        serialize: true,
-        getValue: () => w._value,
-        setValue: (v) => { w._value = v; paint(); },
-    });
-    w._value = start ?? "none";
-    w.serializeValue = () => w._value;
-    node.widgets = node.widgets.filter((x) => x !== w); // move back to slot i
-    node.widgets.splice(i, 0, w);
+// An interactive Assets panel on the Auto Packer: the chosen category's assets
+// with thumbnails, a hide toggle per asset, and per-cell reorder arrows for
+// multi-reference assets. Drives the hidden `overrides` widget
+// ({hidden:[name], reorder:{name:"1,3,2"}}) — supports many hides + reorders.
+function assetsPanel(node) {
+    const ovW = widgetOf(node, "overrides");
+    let state = { hidden: [], reorder: {} };
+    try { state = { hidden: [], reorder: {}, ...JSON.parse(ovW?.value || "{}") }; }
+    catch { /* keep default */ }
 
-    const thumb = (src, px) => {
-        const img = document.createElement("img");
-        img.src = src;
-        img.style.cssText = `width:${px}px;height:${px}px;object-fit:contain;`
-            + "background:#111;border-radius:3px;flex:none;";
-        return img;
+    const container = document.createElement("div");
+    container.style.cssText = "max-height:320px;overflow-y:auto;padding:2px 2px 4px;"
+        + "font-size:11px;";
+    stopWheel(container);
+    node.addDOMWidget("assets_panel", "sym_assets", container,
+                      { serialize: false, hideOnZoom: true });
+    node.size[0] = Math.max(node.size[0], 320);
+
+    const save = () => {
+        if (ovW) ovW.value = JSON.stringify(state);
+        node.setDirtyCanvas?.(true, true);
     };
-    function paint() {
-        field.replaceChildren();
-        const it = itemsFn().find((x) => x.value === w._value)
-            || { value: w._value, label: w._value, thumb: "" };
-        if (it.thumb) field.appendChild(thumb(it.thumb, 18));
-        const t = document.createElement("span");
-        t.textContent = it.label ?? it.value;
-        t.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;"
-            + "white-space:nowrap;";
-        field.appendChild(t);
-        const caret = document.createElement("span");
-        caret.textContent = "▾"; caret.style.opacity = ".6";
-        field.appendChild(caret);
-    }
-    field.addEventListener("pointerdown", (e) => { e.stopPropagation(); openMenu(); });
-    function openMenu() {
-        document.querySelectorAll(".sym-thumb-menu").forEach((m) => m.remove());
-        const menu = document.createElement("div");
-        menu.className = "sym-thumb-menu";
-        const r = field.getBoundingClientRect();
-        menu.style.cssText = `position:fixed;left:${r.left}px;top:${r.bottom + 2}px;`
-            + `min-width:${Math.max(200, r.width)}px;max-height:340px;overflow:auto;`
-            + "background:#1e1e1e;border:1px solid #555;border-radius:6px;z-index:10000;"
-            + "box-shadow:0 8px 24px rgba(0,0,0,.55);padding:3px;";
-        for (const it of itemsFn()) {
-            const row = document.createElement("div");
-            row.style.cssText = "display:flex;align-items:center;gap:6px;padding:3px 5px;"
-                + "cursor:pointer;border-radius:4px;font-size:12px;color:#ddd;";
-            row.addEventListener("mouseenter", () => { row.style.background = "#333"; });
-            row.addEventListener("mouseleave", () => { row.style.background = ""; });
-            if (it.thumb) row.appendChild(thumb(it.thumb, 24));
-            const t = document.createElement("span");
-            t.textContent = it.label ?? it.value;
-            row.appendChild(t);
-            row.addEventListener("pointerdown", (e) => {
-                e.stopPropagation();
-                w._value = it.value; paint();
-                node.setDirtyCanvas?.(true, true);
-                menu.remove();
-            });
-            menu.appendChild(row);
+
+    node._symRenderAssets = () => render();
+    function render() {
+        container.replaceChildren();
+        const { assets, refsRoot } = eventAssetsFor(node);
+        if (!assets.length) {
+            container.textContent = "Wire an Order Specs and pick an event.";
+            container.style.opacity = ".6";
+            return;
         }
-        document.body.appendChild(menu);
-        const close = (e) => {
-            if (!menu.contains(e.target)) {
-                menu.remove();
-                window.removeEventListener("pointerdown", close, true);
+        container.style.opacity = "1";
+        for (const a of assets) {
+            const hidden = state.hidden.includes(a.assetName);
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;flex-direction:column;gap:3px;"
+                + "border:1px solid #3a3a3a;border-radius:6px;padding:4px 5px;"
+                + `margin:3px 0;background:${hidden ? "#241a1a" : "#2a2a2a"};`
+                + `opacity:${hidden ? ".5" : "1"};`;
+            // header: name + hide toggle
+            const head = document.createElement("div");
+            head.style.cssText = "display:flex;align-items:center;gap:6px;";
+            const refs = a.refFiles ?? [];
+            if (refs[0] && refsRoot) head.appendChild(symImg(thumbUrl(refsRoot, refs[0]), 18));
+            const name = document.createElement("span");
+            name.textContent = `${a.assetName} · ${a.canvas}`;
+            name.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+            head.appendChild(name);
+            const eye = document.createElement("button");
+            eye.textContent = hidden ? "hidden" : "hide";
+            eye.style.cssText = "font-size:10px;padding:1px 6px;border-radius:4px;cursor:pointer;"
+                + `border:1px solid #555;background:${hidden ? "#7a3a3a" : "#333"};color:#ddd;`;
+            eye.addEventListener("pointerdown", (e) => {
+                e.stopPropagation();
+                state.hidden = hidden ? state.hidden.filter((n) => n !== a.assetName)
+                                      : [...state.hidden, a.assetName];
+                save(); render();
+            });
+            head.appendChild(eye);
+            row.appendChild(head);
+            // cells: reorder arrows for multi-ref assets
+            if (!hidden && refs.length > 1 && refsRoot) {
+                const order = (state.reorder[a.assetName]
+                    ? state.reorder[a.assetName].split(",").map(Number)
+                    : refs.map((_, i) => i + 1)).filter((i) => i >= 1 && i <= refs.length);
+                for (let i = 1; i <= refs.length; i++) if (!order.includes(i)) order.push(i);
+                const cells = document.createElement("div");
+                cells.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;";
+                order.forEach((refIdx, pos) => {
+                    const cell = document.createElement("div");
+                    cell.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:1px;";
+                    cell.appendChild(symImg(thumbUrl(refsRoot, refs[refIdx - 1]), 30));
+                    const arrows = document.createElement("div");
+                    arrows.style.cssText = "display:flex;gap:2px;";
+                    const mk = (txt, d) => {
+                        const b = document.createElement("button");
+                        b.textContent = txt;
+                        b.style.cssText = "font-size:10px;padding:0 4px;border-radius:3px;cursor:pointer;"
+                            + "border:1px solid #555;background:#333;color:#ccc;";
+                        b.addEventListener("pointerdown", (e) => {
+                            e.stopPropagation();
+                            const j = pos + d;
+                            if (j < 0 || j >= order.length) return;
+                            [order[pos], order[j]] = [order[j], order[pos]];
+                            state.reorder[a.assetName] = order.join(",");
+                            save(); render();
+                        });
+                        return b;
+                    };
+                    arrows.append(mk("←", -1), mk("→", 1));
+                    cell.appendChild(arrows);
+                    cells.appendChild(cell);
+                });
+                row.appendChild(cells);
             }
-        };
-        setTimeout(() => window.addEventListener("pointerdown", close, true), 0);
+            container.appendChild(row);
+        }
     }
-    paint();
-    return w;
+
+    // Re-render when the category changes.
+    const catW = widgetOf(node, "category");
+    if (catW) {
+        const prev = catW.callback;
+        catW.callback = function () {
+            const r = prev?.apply(this, arguments);
+            render();
+            return r;
+        };
+    }
+    render();
 }
 
 function refreshCombos(node) {
@@ -447,9 +470,15 @@ app.registerExtension({
                 orig?.apply(this, arguments);
                 // "All" + the categories of the upstream Order Specs' event.
                 comboify(this, "category", () => eventCategoriesFor(this));
-                // Thumbnail pickers so long asset lists are matched by image.
-                thumbnailPicker(this, "remove_asset", () => assetItemsFor(this));
-                thumbnailPicker(this, "reorder_asset", () => assetItemsFor(this));
+                // The Assets panel drives the hidden `overrides` widget.
+                const ovW = widgetOf(this, "overrides");
+                if (ovW) { ovW.hidden = true; ovW.computeSize = () => [0, -4]; }
+                assetsPanel(this);
+            };
+            const origCfg = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                origCfg?.apply(this, arguments);
+                queueMicrotask(() => this._symRenderAssets?.());
             };
         }
 

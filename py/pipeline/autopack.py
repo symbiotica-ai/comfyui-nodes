@@ -42,6 +42,17 @@ from .skeleton import build_client_prompts
 from .texture_pack import PackSettings
 
 
+def apply_overrides(assets, overrides):
+    """Apply the per-asset panel overrides: drop hidden assets and reorder
+    cells. `overrides` = {"hidden": [name, ...], "reorder": {name: "1,3,2"}}."""
+    out = assets
+    for name in (overrides or {}).get("hidden", []) or []:
+        out = apply_removal(out, name)
+    for name, pattern in ((overrides or {}).get("reorder") or {}).items():
+        out = apply_reorder(out, name, pattern)
+    return out
+
+
 def apply_removal(assets, asset_name):
     """Return `assets` without the one named asset (drop a duplicate). No-op
     (same list) when nothing is selected."""

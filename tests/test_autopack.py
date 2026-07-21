@@ -147,6 +147,18 @@ def test_reorder_refs_swaps_and_keeps_all():
     assert reorder_refs(["a", "b", "c"], "1,2,3") == ["a", "b", "c"]
 
 
+def test_apply_overrides_multi():
+    from pipeline.autopack import apply_overrides
+    assets = [asset("A", refs=("a0", "a1", "a2")), asset("B"),
+              asset("C", refs=("c0", "c1"))]
+    out = apply_overrides(assets, {"hidden": ["B"],
+                                   "reorder": {"A": "1,3,2", "C": "2,1"}})
+    assert [a["assetName"] for a in out] == ["A", "C"]
+    assert out[0]["refFiles"] == ["a0", "a2", "a1"]
+    assert out[1]["refFiles"] == ["c1", "c0"]
+    assert apply_overrides(assets, {}) == assets
+
+
 def test_apply_removal_drops_named_asset():
     from pipeline.autopack import apply_removal
     assets = [asset("A"), asset("B"), asset("C")]
