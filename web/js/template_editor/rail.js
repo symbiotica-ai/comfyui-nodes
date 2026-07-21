@@ -736,10 +736,28 @@ export function renderRail(state, host, opts) {
                 cell.style.borderColor = box.checked ? "#5a7bf0" : "#2c2c2c";
                 syncSelCount();
             });
+            // Delete this saved template (PNG + sidecar) — prune duplicates/bad ones.
+            const del = el("div",
+                "position:absolute;top:2px;right:2px;width:18px;height:18px;"
+                + "display:flex;align-items:center;justify-content:center;cursor:pointer;"
+                + "background:#000a;border-radius:4px;font-size:11px;line-height:1;", "🗑");
+            del.title = `Delete ${item.name}`;
+            del.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                if (!window.confirm(`Delete saved sheet "${item.name}"? This removes the file.`)) return;
+                try {
+                    await opts.deleteTemplate?.(item.file);
+                } catch (err) {
+                    window.alert(`Delete failed: ${err.message ?? err}`);
+                    return;
+                }
+                state.selectedSheets.delete(item.file);
+                refreshSavedGrid();
+            });
             const cap = el("div", "font-size:9px;padding:2px 3px;overflow:hidden;"
                 + "text-overflow:ellipsis;white-space:nowrap;opacity:.75;",
                 item.name);
-            cell.append(box, img, cap);
+            cell.append(box, img, del, cap);
             cell.addEventListener("click", () => applySaved(item));
             savedGrid.appendChild(cell);
         }

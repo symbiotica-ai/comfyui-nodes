@@ -501,6 +501,15 @@ async function openEditorForNode(node, uiState) {
         },
         loadAssets: (dir) => fetchJson(`/symbiotica/list-assets?dir=${encodeURIComponent(dir)}`),
         listSaved: async () => (await fetchJson("/symbiotica/template-list")).templates ?? [],
+        deleteTemplate: async (file) => {
+            const res = await api.fetchApi("/symbiotica/template-delete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ file }),
+            });
+            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "delete failed");
+            return res.json();
+        },
         // refMode: "project" (default) exports the base sheet — assigned game
         // art, client refs where unassigned. "task" exports the client refs
         // laid out, the task-sheet-only deliverable (no project reference).

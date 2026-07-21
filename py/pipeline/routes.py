@@ -262,6 +262,34 @@ async def template_list(request):
     return web.json_response({"templates": list_templates(_template_dir())})
 
 
+@PromptServer.instance.routes.post("/symbiotica/template-delete")
+async def template_delete(request):
+    """Delete a saved template — its PNG + JSON sidecar — from output/templates,
+    so the editor's grid can prune duplicates and bad sheets. basename-guarded to
+    that dir (no traversal). Missing files are a no-op, not an error."""
+    out_dir = _template_dir()
+    if out_dir is None:
+        return web.json_response({"error": "output dir unavailable"}, status=500)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    stem = os.path.splitext(os.path.basename(str(body.get("file") or "")))[0]
+    if not stem:
+        return web.json_response({"error": "file required"}, status=400)
+    root = os.path.realpath(out_dir)
+    removed = []
+    for ext in (".png", ".json"):
+        path = os.path.realpath(os.path.join(root, stem + ext))
+        if (path == root or path.startswith(root + os.sep)) and os.path.isfile(path):
+            try:
+                os.remove(path)
+                removed.append(os.path.basename(path))
+            except OSError:
+                pass
+    return web.json_response({"ok": True, "removed": removed})
+
+
 @PromptServer.instance.routes.get("/symbiotica/template-image")
 async def template_image(request):
     """Serve a saved template PNG from output/templates by its rel key
