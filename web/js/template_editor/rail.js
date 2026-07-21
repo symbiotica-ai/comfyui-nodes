@@ -850,6 +850,12 @@ export function renderRail(state, host, opts) {
                 "Set the project folder on the node first."));
             return;
         }
+        if (state.assetsLoading && !state.images.length) {
+            treeBody.appendChild(el("div", "opacity:.6;font-size:11px;",
+                "⏳ Loading sprite catalog… (the editor is ready; assets appear "
+                + "as they load)"));
+            return;
+        }
         const assigned = assignmentsByRel();
         const sel = state.selectedRegion();
         // Assignment targets: the whole multi-selection (checking an asset or

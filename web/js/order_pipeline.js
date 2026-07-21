@@ -389,15 +389,6 @@ async function openEditorForNode(node, uiState) {
     // One path in: the sprite catalog is the project's reference-assets/,
     // derived from project_path — no separate folder field.
     const root = assetsRoot || "";
-    // Refetch on every open (not just the first) so switching project/month
-    // reloads the catalog instead of showing the previous project's tree.
-    if (root && uiState.imagesRoot !== root) {
-        try {
-            uiState.images = (await fetchJson(
-                `/symbiotica/list-assets?dir=${encodeURIComponent(root)}`)).images;
-            uiState.imagesRoot = root;
-        } catch { /* tree shows the set-folder hint */ }
-    }
     let handle = null;
 
     const opts = {
@@ -406,7 +397,9 @@ async function openEditorForNode(node, uiState) {
             regions: parseJsonWidget(node, "regions_json", []),
             scenePrompt: widgetOf(node, "scene_prompt")?.value ?? "",
             root,
-            images: uiState.images,
+            // Open with whatever catalog we already have; a fresh open loads it
+            // below AFTER the overlay is up, so the button never hangs.
+            images: uiState.imagesRoot === root ? (uiState.images ?? []) : [],
             taskAssets,
             refsRoot,
             events: events ?? [],
@@ -561,6 +554,24 @@ async function openEditorForNode(node, uiState) {
         },
     };
     handle = openTemplateEditor(opts);
+    // The overlay is up — now load the sprite catalog (a big folder off a FUSE
+    // Volume, slow) and refresh the asset tree when it lands. On a fresh open the
+    // rail shows "loading…" until then instead of the whole editor hanging.
+    if (root && uiState.imagesRoot !== root) {
+        handle.state.assetsLoading = true;
+        opts.rerenderRail?.();
+        fetchJson(`/symbiotica/list-assets?dir=${encodeURIComponent(root)}`)
+            .then((data) => {
+                uiState.images = data.images ?? [];
+                uiState.imagesRoot = root;
+                handle.state.images = uiState.images;
+            })
+            .catch(() => { /* tree keeps the set-folder hint */ })
+            .finally(() => {
+                handle.state.assetsLoading = false;
+                opts.rerenderRail?.();
+            });
+    }
     return handle;
 }
 

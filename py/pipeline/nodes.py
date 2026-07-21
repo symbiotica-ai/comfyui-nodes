@@ -337,15 +337,32 @@ def _region_crop(region, task_sheet):
     return crop[..., :3]
 
 
+def _sheet_client_prompts(png_path):
+    """The client prompts for one saved sheet, built from its .json sidecar's
+    regions (the same "row N / Prep) … Ready) … Serving)" text the whole-order
+    `prompts` output uses, but scoped to this sheet). Empty when the sidecar is
+    missing or unreadable."""
+    sidecar = os.path.splitext(png_path)[0] + ".json"
+    try:
+        with open(sidecar) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    regions = data.get("regions") if isinstance(data, dict) else None
+    return build_client_prompts(regions) if isinstance(regions, list) else ""
+
+
 def _load_selected_sheets(selected_json):
-    """The saved sheets ticked in the editor's grid, loaded as an IMAGE list
-    (one tensor per sheet) for a batch of img2img bases / Save Image."""
+    """The ticked sheets as two index-aligned lists: the sheet IMAGE (one tensor
+    each, for a Save Image / img2img batch) and that sheet's client PROMPTS (for
+    Show Text). A sheet joins both lists only if its PNG loads, so `sheets` and
+    `sheet_prompts` stay paired — sheets[i] is the picture for sheet_prompts[i]."""
     from PIL import Image as PILImage
     try:
         files = json.loads(selected_json or "[]")
     except (ValueError, TypeError):
         files = []
-    out = []
+    images, prompts = [], []
     base = folder_paths.get_output_directory()
     for rel in files if isinstance(files, list) else []:
         if not isinstance(rel, str) or not rel:
@@ -356,13 +373,14 @@ def _load_selected_sheets(selected_json):
             img.load()
         except OSError:
             continue
-        out.append(_pil_to_tensor(img))
-    return out
+        images.append(_pil_to_tensor(img))
+        prompts.append(_sheet_client_prompts(path))
+    return images, prompts
 
 
-def _layout_outputs(bundle, task_tensor, sheet_batch):
+def _layout_outputs(bundle, task_tensor, sheet_batch, sheet_prompts):
     """The editor's LLM-facing tail: skeleton, sheet size, the selected-sheet
-    batch, and per-region crops.
+    batch + its per-sheet prompts, and per-region crops.
 
     Image 1 is the sheet being edited, so the references number from 2 — the
     same order the Regional Prompt Builder feeds them to the edit node in.
@@ -378,7 +396,7 @@ def _layout_outputs(bundle, task_tensor, sheet_batch):
     gray = torch.full((1, 8, 8, 3), 0.5)
     refs = [crops[i] if i < len(crops) else gray
             for i in range(MAX_REGION_REFS)]
-    return (skeleton, prompts, width, height, sheet_batch, *refs)
+    return (skeleton, prompts, width, height, sheet_batch, sheet_prompts, *refs)
 
 
 class SymbioticaTemplateEditor(io.ComfyNode):
@@ -484,6 +502,13 @@ class SymbioticaTemplateEditor(io.ComfyNode):
                     tooltip="The saved sheets ticked in the editor's grid, as a "
                             "batch — wire to Save Image, or use each as an "
                             "img2img base. Downstream runs once per sheet."),
+                io.String.Output(
+                    display_name="sheet_prompts", is_output_list=True,
+                    tooltip="Client prompts for each ticked sheet, 1:1 with "
+                            "`sheets` (same order). Wire to Show Text next to "
+                            "`sheets`→Save Image: one save + one prompt block per "
+                            "sheet, however many you ticked (food, decorations, "
+                            "appliances…)."),
                 # Per-region task-sheet crops, for the Regional Prompt
                 # Builder's ref_N sockets. The browser trims the tail to the
                 # template's region count. `sheets` sits BEFORE these so the
@@ -539,11 +564,11 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         # One path in: the sprite catalog is the project's reference-assets/.
         spec, assets_root = cls._resolve_spec(spec, events, project_path, month,
                                               feature)
-        sheet_batch = _load_selected_sheets(selected_sheets)
+        sheet_batch, sheet_prompts = _load_selected_sheets(selected_sheets)
         if sheet_file.strip():
             return cls._execute_editor_sheet(
                 spec, sheet_file.strip(), regions_json, scene_prompt,
-                sheet_name, background, sheet_batch)
+                sheet_name, background, sheet_batch, sheet_prompts)
         assets_root = assets_root.strip()
         if not assets_root or not os.path.isdir(assets_root):
             raise ValueError(
@@ -628,12 +653,14 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         task_tensor = _pil_to_tensor(task_sheet)
         return io.NodeOutput(bundle, base_tensor, task_tensor,
                              json.dumps(bundle, indent=1),
-                             *_layout_outputs(bundle, task_tensor, sheet_batch),
+                             *_layout_outputs(bundle, task_tensor, sheet_batch,
+                                              sheet_prompts),
                              ui=ui.PreviewImage(base_tensor, cls=cls))
 
     @classmethod
     def _execute_editor_sheet(cls, spec, sheet_file, regions_json, scene_prompt,
-                              sheet_name, background, sheet_batch) -> io.NodeOutput:
+                              sheet_name, background, sheet_batch,
+                              sheet_prompts) -> io.NodeOutput:
         """Editor-saved sheet branch: the saved PNG IS the base sheet and the
         editor's regions ARE the layout — no assets_root or packing needed.
         The task sheet is repainted from the client refs on the same layout."""
@@ -681,7 +708,8 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         task_tensor = _pil_to_tensor(task_sheet)
         return io.NodeOutput(bundle, base_tensor, task_tensor,
                              json.dumps(bundle, indent=1),
-                             *_layout_outputs(bundle, task_tensor, sheet_batch),
+                             *_layout_outputs(bundle, task_tensor, sheet_batch,
+                                              sheet_prompts),
                              ui=ui.PreviewImage(base_tensor, cls=cls))
 
 
