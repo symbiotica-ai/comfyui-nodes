@@ -20,23 +20,40 @@ def element_block(index, region, ref_number=None):
 
 
 def build_client_prompts(regions):
-    """The order's client prompts, one recipe per row — the exact text the
-    recipe workflow hand-typed into its Client Prompt node.
+    """The order's client prompts, grouped under an asset-type header so each
+    block is legible instead of an anonymous "row 1" stack:
 
-    Each region's desc is the client's brief verbatim (for food, it already
-    carries the "Prep) … Ready) … Serving) …" stage lines), so this only
-    numbers them "row N" and stacks them in region order. Regions with no
-    brief are skipped.
+        Decoration
+        <the brief>
+
+        Food
+        row 1
+        <brief>
+
+        row 2
+        <brief>
+
+    A single-asset type prints just its brief; a multi-asset type (e.g. a food
+    sheet's recipes) numbers them row 1..N under the header. Each region's desc
+    is the client's brief verbatim (for food it already carries the
+    "Prep) … Ready) … Serving) …" stage lines). Regions with no brief are
+    skipped; groups keep first-seen (region/z-index) order.
     """
     ordered = sorted(regions, key=lambda r: r.get("zIndex", 0))
-    blocks = []
-    row = 0
+    groups: dict[str, list[str]] = {}
     for r in ordered:
         desc = (r.get("desc") or "").strip()
         if not desc:
             continue
-        row += 1
-        blocks.append(f"row {row}\n{desc}")
+        cat = (r.get("assetType") or r.get("category") or "").strip() or "Assets"
+        groups.setdefault(cat, []).append(desc)
+    blocks = []
+    for cat, descs in groups.items():
+        if len(descs) == 1:
+            blocks.append(f"{cat}\n{descs[0]}")
+        else:
+            body = "\n\n".join(f"row {i}\n{d}" for i, d in enumerate(descs, 1))
+            blocks.append(f"{cat}\n{body}")
     return "\n\n".join(blocks)
 
 
