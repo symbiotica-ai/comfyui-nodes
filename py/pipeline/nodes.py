@@ -261,14 +261,18 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
                         "sheet (e.g. recipes stacked per row at 2x scale). Wire "
                         "'settings' into the Auto Packer.",
             inputs=[
-                io.Float.Input("scale", default=1.0, min=0.25, max=4.0, step=0.25,
-                               tooltip="Enlarge small sprites (2.0 = the "
-                                       "editor's x2). Only assets at/under "
-                                       "scale_max_canvas grow."),
-                io.Int.Input("scale_max_canvas", default=256, min=0, max=4096,
-                             tooltip="Only scale assets whose canvas max edge "
-                                     "is <= this (px). 256 = grow food/128/256, "
-                                     "leave 512+ native"),
+                io.Combo.Input("scale", options=["0.5x", "1x", "2x"],
+                               default="1x",
+                               tooltip="Enlarge small sprites (the editor's "
+                                       "half / x2). Only assets at/under the "
+                                       "cutoff grow."),
+                io.Combo.Input("scale_max_canvas",
+                               options=["128", "256", "512", "1024", "all"],
+                               default="256",
+                               tooltip="Only scale assets whose canvas max edge "
+                                       "is <= this (px) — the asset "
+                                       "resolutions. 256 = grow food/128/256, "
+                                       "leave 512+ native. 'all' = every size."),
                 io.Combo.Input("algorithm",
                                options=["shelf", "maxrects", "grid"],
                                default="shelf",
@@ -285,12 +289,15 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
             outputs=[PackSettingsWire.Output(display_name="settings")],
         )
 
+    _SCALE = {"0.5x": 0.5, "1x": 1.0, "2x": 2.0}
+
     @classmethod
-    def execute(cls, scale=1.0, scale_max_canvas=256, algorithm="shelf",
+    def execute(cls, scale="1x", scale_max_canvas="256", algorithm="shelf",
                 distribute_by_folder=True, padding=0, border=0) -> io.NodeOutput:
+        cutoff = 10 ** 9 if scale_max_canvas == "all" else int(scale_max_canvas)
         return io.NodeOutput({
-            "scale": float(scale),
-            "scale_max_canvas": int(scale_max_canvas),
+            "scale": cls._SCALE.get(scale, 1.0),
+            "scale_max_canvas": cutoff,
             "algorithm": algorithm,
             "distribute_by_folder": bool(distribute_by_folder),
             "padding": int(padding),
