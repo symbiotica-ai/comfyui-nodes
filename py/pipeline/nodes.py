@@ -38,6 +38,7 @@ from .texture_pack import PackSettings
 OrderEvents = io.Custom("SYMBIOTICA_ORDER_EVENTS")
 EventSpec = io.Custom("SYMBIOTICA_EVENT_SPEC")
 Template = io.Custom("SYMBIOTICA_TEMPLATE")
+Order = io.Custom("SYMBIOTICA_ORDER")
 
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
@@ -145,6 +146,105 @@ class SymbioticaOrderRead(io.ComfyNode):
               {"node_id": cls.hidden.unique_id, **payload})
         summary = json.dumps(order_overview(loaded["events"]), indent=1)
         return io.NodeOutput(payload, ui=ui.PreviewText(summary))
+
+
+class SymbioticaOrderSpecs(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaOrderSpecs",
+            display_name="Symbiotica Order Specs",
+            category="symbiotica/pipeline",
+            description="Pick a project, month, and event — outputs ONE "
+                        "order wire carrying that event's assets, client "
+                        "reference paths, and catalog root. Feed it to the "
+                        "Auto Packer (and any task-prompt/task-image taps).",
+            inputs=[
+                io.String.Input("project_path", default="",
+                                tooltip="The client project folder — the one "
+                                        "that contains orders/ and "
+                                        "reference-assets/"),
+                io.String.Input("month", default="",
+                                tooltip="Which month's order to read"),
+                io.String.Input("feature", default="",
+                                tooltip="Which event to build (empty = the "
+                                        "order's first event)"),
+            ],
+            outputs=[Order.Output(display_name="order")],
+        )
+
+    @classmethod
+    def _paths(cls, project_path, month):
+        project_path = (project_path or "").strip()
+        op = rp = assets_root = ""
+        if project_path:
+            from .project_layout import resolve_month
+            r = resolve_month(project_path, (month or "").strip())
+            op, rp, assets_root = r["order_path"], r["refs_path"], r["assets_root"]
+        return op, rp, assets_root
+
+    @classmethod
+    def _guide(cls, project_path):
+        path = os.path.join((project_path or "").strip(), "order-guide.md")
+        try:
+            with open(path, encoding="utf-8") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", month="", feature=""):
+        op, rp, _ = cls._paths(project_path, month)
+        h = hashlib.sha256(f"{op}|{rp}|{feature}".encode())
+        try:
+            st = os.stat(op)
+            h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
+        except OSError:
+            pass
+        try:
+            if rp:
+                h.update("\n".join(sorted(os.listdir(rp))).encode())
+        except OSError:
+            pass
+        h.update((cls._guide(project_path) or "").encode())
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, project_path="", month="", feature="") -> io.NodeOutput:
+        op, rp, assets_root = cls._paths(project_path, month)
+        if not op:
+            raise ValueError(
+                "no order file — set the project folder (the one with an "
+                "orders/ subfolder of .xlsx files) and pick a month")
+        loaded = load_order(op, rp)
+        events = loaded["events"]
+        if not events:
+            raise ValueError(f"no events found in {op}")
+        feature = (feature or "").strip() or events[0].get("feature", "")
+        # event_spec returns {feature, eventName, templates}; it raises an
+        # actionable ValueError listing the available features when not found.
+        spec = event_spec(events, feature)
+        # ORDER carries a FLAT asset list (the AutoPacker's contract); flatten
+        # the template groups back out, named assets only, spec order kept.
+        assets = [a for g in spec["templates"] for a in g["assets"]]
+        if not assets:
+            names = ", ".join(e.get("feature", "?") for e in events)
+            raise ValueError(
+                f"event {feature!r} has no named assets — this order's "
+                f"events: {names}")
+        if rp:
+            _register_refs_root(rp)
+        if assets_root:
+            _register_refs_root(assets_root)
+        payload = {
+            "feature": spec.get("feature", ""),
+            "eventName": spec.get("eventName", ""),
+            "assets": assets,
+            "refsRoot": rp,
+            "assetsRoot": assets_root,
+            "guide": cls._guide(project_path),
+        }
+        return io.NodeOutput(payload)
 
 
 class SymbioticaEventSpecs(io.ComfyNode):
@@ -1332,6 +1432,7 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
 
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
+    SymbioticaOrderSpecs,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
     SymbioticaTemplateEditor,
