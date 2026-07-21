@@ -247,6 +247,81 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         return io.NodeOutput(payload)
 
 
+class SymbioticaAutoPacker(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaAutoPacker",
+            display_name="Symbiotica Auto Packer",
+            category="symbiotica/pipeline",
+            description="The whole order as ready-to-run template sheets: "
+                        "similar assets grouped 1-2 columns x 3-4 rows per "
+                        "sheet, each sheet paired with its client prompts. "
+                        "Wire sheets -> img2img and sheet_prompts -> your "
+                        "LLM/prompt input; downstream runs once per sheet.",
+            inputs=[
+                Order.Input("order"),
+                io.Int.Input("columns", default=1, min=1, max=4,
+                             tooltip="Assets side by side per row"),
+                io.Int.Input("max_rows_per_sheet", default=4, min=1, max=12,
+                             tooltip="Rows per sheet before starting a new "
+                                     "sheet"),
+                # Copied verbatim from SymbioticaTemplateEditor's schema so the
+                # option lists + defaults match the editor exactly.
+                io.Combo.Input("preset_model", options=_MODELS,
+                               default="qwen-image"),
+                io.Combo.Input("resolution", options=_RESOLUTIONS,
+                               default="1K"),
+                io.Combo.Input("aspect_ratio", options=_ASPECTS,
+                               default="1:1"),
+                io.String.Input("background", default="#808080",
+                                tooltip="Sheet background color; empty = "
+                                        "transparent"),
+                io.String.Input("category", default="All",
+                                tooltip="One asset type, or All"),
+            ],
+            outputs=[
+                io.Image.Output(display_name="sheets", is_output_list=True,
+                                tooltip="One template sheet per chunk of "
+                                        "similar assets"),
+                io.String.Output(display_name="sheet_prompts",
+                                 is_output_list=True,
+                                 tooltip="Client prompts for sheet i — "
+                                         "index-aligned with sheets"),
+                io.String.Output(display_name="sheet_names",
+                                 is_output_list=True,
+                                 tooltip="Slug per sheet — wire into Save "
+                                         "Image filename_prefix"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, order, columns=1, max_rows_per_sheet=4,
+                preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
+                background="#808080", category="All") -> io.NodeOutput:
+        if not isinstance(order, dict) or "assets" not in order:
+            raise ValueError("order input must come from Symbiotica Order "
+                             "Specs")
+        dims = preset_dims({"model": preset_model, "tier": resolution,
+                            "ar": aspect_ratio})
+        if not dims:
+            raise ValueError(
+                f"invalid preset: {preset_model} / {resolution} / "
+                f"{aspect_ratio}")
+        from .autopack import autopack_order
+        base = slugify(order.get("feature", "")) or "order"
+        packed = autopack_order(
+            order["assets"], order.get("refsRoot", ""),
+            sheet_w=dims["w"], sheet_h=dims["h"], columns=columns,
+            max_rows=max_rows_per_sheet, background=background,
+            category=(category or "All").strip() or "All", base_name=base)
+        return io.NodeOutput(
+            [_pil_to_tensor(p["image"]) for p in packed],
+            [p["prompts"] for p in packed],
+            [p["name"] for p in packed],
+        )
+
+
 class SymbioticaEventSpecs(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1433,6 +1508,7 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
+    SymbioticaAutoPacker,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
     SymbioticaTemplateEditor,
