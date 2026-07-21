@@ -76,10 +76,11 @@ month, event, required-assets list with client-ref thumbnails).
   fast Python parser. The guide-driven LLM parse (xlsx text dump + guide →
   structured ORDER, cached) is phase 4, designed when a real second-game xlsx
   exists.
-- **Face JS:** reuse the existing month-combo + required-assets rendering
-  patterns from `order_pipeline.js` / `rail.js` (`renderRequiredAssets`), scoped
-  down. Thumbnails via the existing `/symbiotica/local-image` route with
-  registered refsRoot.
+- **Face JS (phase 1):** month + event combos only (reuse the Order Read
+  month-combo pattern in `order_pipeline.js`). The required-assets panel with
+  client-ref thumbnails (mirroring the editor's rail, via
+  `/symbiotica/local-image`) is phase-3 polish — the combos are enough to run
+  the pipeline.
 - **Errors:** unreadable project/month → actionable error naming the path
   tried. Event not found → actionable error listing available events.
 
@@ -126,6 +127,8 @@ ORDER in → the whole collection as paired sheets + prompts out.
   with TaskPrompts of the same category.
 - **Spawn button on OrderSpecs:** JS creates one pre-wired TaskImages per
   detected category (precedent: the regions bridge auto-creates RefsSplit).
+- **Required-assets panel on the OrderSpecs face** (thumbnails per category,
+  mirroring the editor rail) — moved here from phase 1.
 
 ## Phase 4 / parked
 
