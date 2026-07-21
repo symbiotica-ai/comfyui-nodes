@@ -42,6 +42,15 @@ from .skeleton import build_client_prompts
 from .texture_pack import PackSettings
 
 
+def apply_removal(assets, asset_name):
+    """Return `assets` without the one named asset (drop a duplicate). No-op
+    (same list) when nothing is selected."""
+    name = (asset_name or "").strip()
+    if not name or name == "none":
+        return assets
+    return [a for a in assets if a.get("assetName") != name]
+
+
 def reorder_refs(refs, pattern):
     """Reorder a ref list by a 1-based index pattern like '1,3,2'. Out-of-range
     indices are skipped; any refs the pattern omits are appended in original

@@ -147,6 +147,14 @@ def test_reorder_refs_swaps_and_keeps_all():
     assert reorder_refs(["a", "b", "c"], "1,2,3") == ["a", "b", "c"]
 
 
+def test_apply_removal_drops_named_asset():
+    from pipeline.autopack import apply_removal
+    assets = [asset("A"), asset("B"), asset("C")]
+    assert [a["assetName"] for a in apply_removal(assets, "B")] == ["A", "C"]
+    assert apply_removal(assets, "none") is assets
+    assert apply_removal(assets, "") is assets
+
+
 def test_apply_reorder_targets_one_asset():
     from pipeline.autopack import apply_reorder
     assets = [asset("A", refs=("a0", "a1", "a2")),

@@ -138,7 +138,9 @@ async function refreshOrderSpecs(node) {
     const q = new URLSearchParams({ project });
     if (month) q.set("month", month);
     try {
-        node._symEvents = (await fetchJson(`/symbiotica/parse-order?${q}`)).events ?? [];
+        const data = await fetchJson(`/symbiotica/parse-order?${q}`);
+        node._symEvents = data.events ?? [];
+        node._symRefsRoot = data.refsRoot ?? "";
     } catch { node._symEvents = []; }
     // Keep the feature value valid; empty means "the order's first event".
     const featW = widgetOf(node, "feature");
@@ -195,6 +197,110 @@ function eventAssetsFor(node) {
     const ev = events.find((e) => e.feature === feature) || events[0];
     const names = ev ? ev.assets.filter((a) => a.assetName).map((a) => a.assetName) : [];
     return ["none", ...names];
+}
+
+// [{value,label,thumb}] for the Auto Packer's asset pickers: "none" + the
+// upstream event's assets, each with its first reference image as a thumbnail.
+function assetItemsFor(node) {
+    const specs = upstreamNode(node, "order");
+    const events = specs?._symEvents ?? [];
+    if (specs && !events.length) refreshOrderSpecs(specs);
+    const refsRoot = specs?._symRefsRoot ?? "";
+    const feature = widgetOf(specs, "feature")?.value?.trim();
+    const ev = events.find((e) => e.feature === feature) || events[0];
+    const items = [{ value: "none", label: "none", thumb: "" }];
+    for (const a of ev?.assets ?? []) {
+        if (!a.assetName) continue;
+        const f = (a.refFiles ?? [])[0];
+        items.push({ value: a.assetName, label: `${a.assetName} · ${a.canvas}`,
+                     thumb: f && refsRoot ? thumbUrl(refsRoot, f) : "" });
+    }
+    return items;
+}
+
+// A picker widget whose dropdown shows a thumbnail beside each asset name, so a
+// long list can be matched by image (native litegraph combos are text-only).
+// Replaces a STRING widget in the same slot; the chosen value serializes back.
+function thumbnailPicker(node, widgetName, itemsFn) {
+    const i = node.widgets?.findIndex((x) => x.name === widgetName);
+    if (i == null || i < 0) return;
+    const start = node.widgets[i].value;
+    node.widgets.splice(i, 1);
+
+    const field = document.createElement("div");
+    field.style.cssText = "display:flex;align-items:center;gap:6px;height:22px;"
+        + "padding:0 6px;background:#222;border:1px solid #444;border-radius:6px;"
+        + "cursor:pointer;font-size:12px;overflow:hidden;color:#ddd;";
+    const w = node.addDOMWidget(widgetName, "sym_thumb_pick", field, {
+        serialize: true,
+        getValue: () => w._value,
+        setValue: (v) => { w._value = v; paint(); },
+    });
+    w._value = start ?? "none";
+    w.serializeValue = () => w._value;
+    node.widgets = node.widgets.filter((x) => x !== w); // move back to slot i
+    node.widgets.splice(i, 0, w);
+
+    const thumb = (src, px) => {
+        const img = document.createElement("img");
+        img.src = src;
+        img.style.cssText = `width:${px}px;height:${px}px;object-fit:contain;`
+            + "background:#111;border-radius:3px;flex:none;";
+        return img;
+    };
+    function paint() {
+        field.replaceChildren();
+        const it = itemsFn().find((x) => x.value === w._value)
+            || { value: w._value, label: w._value, thumb: "" };
+        if (it.thumb) field.appendChild(thumb(it.thumb, 18));
+        const t = document.createElement("span");
+        t.textContent = it.label ?? it.value;
+        t.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;"
+            + "white-space:nowrap;";
+        field.appendChild(t);
+        const caret = document.createElement("span");
+        caret.textContent = "▾"; caret.style.opacity = ".6";
+        field.appendChild(caret);
+    }
+    field.addEventListener("pointerdown", (e) => { e.stopPropagation(); openMenu(); });
+    function openMenu() {
+        document.querySelectorAll(".sym-thumb-menu").forEach((m) => m.remove());
+        const menu = document.createElement("div");
+        menu.className = "sym-thumb-menu";
+        const r = field.getBoundingClientRect();
+        menu.style.cssText = `position:fixed;left:${r.left}px;top:${r.bottom + 2}px;`
+            + `min-width:${Math.max(200, r.width)}px;max-height:340px;overflow:auto;`
+            + "background:#1e1e1e;border:1px solid #555;border-radius:6px;z-index:10000;"
+            + "box-shadow:0 8px 24px rgba(0,0,0,.55);padding:3px;";
+        for (const it of itemsFn()) {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;align-items:center;gap:6px;padding:3px 5px;"
+                + "cursor:pointer;border-radius:4px;font-size:12px;color:#ddd;";
+            row.addEventListener("mouseenter", () => { row.style.background = "#333"; });
+            row.addEventListener("mouseleave", () => { row.style.background = ""; });
+            if (it.thumb) row.appendChild(thumb(it.thumb, 24));
+            const t = document.createElement("span");
+            t.textContent = it.label ?? it.value;
+            row.appendChild(t);
+            row.addEventListener("pointerdown", (e) => {
+                e.stopPropagation();
+                w._value = it.value; paint();
+                node.setDirtyCanvas?.(true, true);
+                menu.remove();
+            });
+            menu.appendChild(row);
+        }
+        document.body.appendChild(menu);
+        const close = (e) => {
+            if (!menu.contains(e.target)) {
+                menu.remove();
+                window.removeEventListener("pointerdown", close, true);
+            }
+        };
+        setTimeout(() => window.addEventListener("pointerdown", close, true), 0);
+    }
+    paint();
+    return w;
 }
 
 function refreshCombos(node) {
@@ -338,8 +444,9 @@ app.registerExtension({
                 orig?.apply(this, arguments);
                 // "All" + the categories of the upstream Order Specs' event.
                 comboify(this, "category", () => eventCategoriesFor(this));
-                // "none" + the event's assets, for the cell-reorder override.
-                comboify(this, "reorder_asset", () => eventAssetsFor(this));
+                // Thumbnail pickers so long asset lists are matched by image.
+                thumbnailPicker(this, "remove_asset", () => assetItemsFor(this));
+                thumbnailPicker(this, "reorder_asset", () => assetItemsFor(this));
             };
         }
 

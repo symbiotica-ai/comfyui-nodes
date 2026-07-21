@@ -349,6 +349,9 @@ class SymbioticaAutoPacker(io.ComfyNode):
                                         "transparent"),
                 io.String.Input("category", default="All",
                                 tooltip="One asset type, or All"),
+                io.String.Input("remove_asset", default="none",
+                                tooltip="Optional: one asset to drop from the "
+                                        "pack (e.g. a duplicate)"),
                 io.String.Input("reorder_asset", default="none",
                                 tooltip="Optional: one asset whose cell order to "
                                         "override (dropdown from the order)"),
@@ -378,8 +381,9 @@ class SymbioticaAutoPacker(io.ComfyNode):
     @classmethod
     def execute(cls, order, columns=1, max_rows_per_sheet=4,
                 preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
-                background="#808080", category="All", reorder_asset="none",
-                reorder_to="1,2,3", settings=None) -> io.NodeOutput:
+                background="#808080", category="All", remove_asset="none",
+                reorder_asset="none", reorder_to="1,2,3",
+                settings=None) -> io.NodeOutput:
         if not isinstance(order, dict) or "assets" not in order:
             raise ValueError("order input must come from Symbiotica Order "
                              "Specs")
@@ -392,9 +396,10 @@ class SymbioticaAutoPacker(io.ComfyNode):
         # Optional pack-settings node (unwired = today's defaults: shelf, no
         # distribute, scale 1 — nothing regresses).
         s = settings if isinstance(settings, dict) else {}
-        from .autopack import apply_reorder, autopack_order
+        from .autopack import apply_removal, apply_reorder, autopack_order
         base = slugify(order.get("feature", "")) or "order"
-        assets = apply_reorder(order["assets"], reorder_asset, reorder_to)
+        assets = apply_removal(order["assets"], remove_asset)
+        assets = apply_reorder(assets, reorder_asset, reorder_to)
         packed = autopack_order(
             assets, order.get("refsRoot", ""),
             sheet_w=dims["w"], sheet_h=dims["h"], columns=columns,
