@@ -277,8 +277,9 @@ app.registerExtension({
                 // regions/sheet/prompt…) stays on the node but hidden, so its
                 // value still serializes into the workflow and reaches the
                 // Python execute() — the editor owns all of them from inside.
+                // The button (a native "button" widget) is the one we keep.
                 for (const w of this.widgets ?? []) {
-                    if (w.name !== "template_editor") w.hidden = true;
+                    if (w.type !== "button") w.hidden = true;
                 }
                 // Initial size was computed with the widgets visible (core sizes
                 // before onNodeCreated); re-fit now that only the button shows.
@@ -570,9 +571,6 @@ function stopWheel(elem) {
 }
 
 function setupTemplateEditor(node) {
-    const container = document.createElement("div");
-    container.style.cssText = "padding:2px;";
-    stopWheel(container);
     // openEditorForNode caches the loaded sprite catalog across opens.
     const uiState = { images: [], imagesRoot: null };
 
@@ -580,21 +578,14 @@ function setupTemplateEditor(node) {
     // presets — lives inside the editor now. onConfigure still calls restore();
     // there is nothing on the node face to re-list, so it is a no-op.
     node._symbioticaEditor = { restore() {} };
+    uiState.render = () => {};
 
-    const render = () => {
-        container.replaceChildren();
-        const open = document.createElement("button");
-        open.textContent = "Template Editor";
-        open.style.cssText =
-            "width:100%;border:1px solid #c33;color:#f66;background:#2a2a2a;" +
-            "border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px;";
-        open.addEventListener("click", () => openEditorForNode(node, uiState));
-        container.appendChild(open);
-    };
-    uiState.render = render;
-
-    render();
-    node.addDOMWidget("template_editor", "custom", container,
-                      { serialize: false, hideOnZoom: true });
+    // A native LiteGraph button, NOT a DOM widget: a DOM widget's element
+    // mis-sizes when the node is part of a multi-select drag (it grows wide and
+    // never resets on resize). Native buttons are canvas-drawn, so LiteGraph
+    // owns their width and that bug can't happen. This node needs only the one.
+    const btn = node.addWidget("button", "Template Editor", null,
+                               () => openEditorForNode(node, uiState));
+    btn.serialize = false;
     node.size[0] = Math.max(node.size[0], 240);
 }
