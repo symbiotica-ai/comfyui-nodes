@@ -74,11 +74,26 @@ function pickedEventFor(node) {
 
 // --- widget upgrades ---------------------------------------------------------
 function comboify(node, widgetName, valuesFn) {
-    const w = node.widgets?.find((x) => x.name === widgetName);
-    if (!w) return;
-    w.type = "combo";
-    w.options = w.options ?? {};
-    w.options.values = valuesFn; // LiteGraph accepts a function — always fresh
+    const i = node.widgets?.findIndex((x) => x.name === widgetName);
+    if (i == null || i < 0) return;
+    const existing = node.widgets[i];
+    if (existing.type === "combo") {
+        existing.options = existing.options ?? {};
+        existing.options.values = valuesFn; // LiteGraph accepts a function
+        return existing;
+    }
+    // The classic (non-Vue) node UI won't turn a text widget into a dropdown by
+    // mutating `.type` — it keeps the text-prompt behavior. Recreate it as a
+    // REAL combo widget in the same slot so both UIs show a dropdown. Preserve
+    // the value + serialization so the string still reaches the Python node.
+    const value = existing.value;
+    node.widgets.splice(i, 1);
+    const w = node.addWidget("combo", widgetName, value,
+                             (v) => { w.value = v; }, { values: valuesFn });
+    node.widgets = node.widgets.filter((x) => x !== w); // move it back to slot i
+    node.widgets.splice(i, 0, w);
+    w.serializeValue = () => w.value;
+    return w;
 }
 
 // Turn a node's `month` text widget into a dropdown fed by the months found
