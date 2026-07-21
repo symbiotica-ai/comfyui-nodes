@@ -109,3 +109,26 @@ def test_autopack_empty_raises_actionable(tmp_path):
     with pytest.raises(ValueError, match="no assets"):
         autopack_order([asset("norefs", refs=())], str(tmp_path),
                        sheet_w=256, sheet_h=256, category="Food - 3 stages")
+
+
+def test_autopack_scale_enlarges_cells(tmp_path):
+    assets = [asset("A", refs=("a.png",))]
+    root = _make_refs(tmp_path, assets)
+    small = autopack_order(assets, root, sheet_w=1000, sheet_h=1000)
+    big = autopack_order(assets, root, sheet_w=1000, sheet_h=1000, scale=2)
+    sw = small[0]["regions"][0]["members"][0]["w"]
+    bw = big[0]["regions"][0]["members"][0]["w"]
+    assert bw > sw
+
+
+def test_autopack_distribute_by_folder_stacks_categories(tmp_path):
+    # distribute_by_folder=True lays each category's strip on its own row —
+    # accepted as a keyword and drives the pack without error.
+    assets = [asset("f1", category="Food - 3 stages"),
+              asset("f2", category="Food - 3 stages")]
+    root = _make_refs(tmp_path, assets)
+    out = autopack_order(assets, root, sheet_w=1000, sheet_h=1000,
+                         distribute_by_folder=True, algorithm="shelf",
+                         padding=0, border=0)
+    assert len(out) == 1
+    assert len(out[0]["regions"]) == 2

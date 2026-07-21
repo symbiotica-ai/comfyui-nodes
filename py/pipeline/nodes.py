@@ -39,6 +39,7 @@ OrderEvents = io.Custom("SYMBIOTICA_ORDER_EVENTS")
 EventSpec = io.Custom("SYMBIOTICA_EVENT_SPEC")
 Template = io.Custom("SYMBIOTICA_TEMPLATE")
 Order = io.Custom("SYMBIOTICA_ORDER")
+PackSettingsWire = io.Custom("SYMBIOTICA_PACK_SETTINGS")
 
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
@@ -247,6 +248,50 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         return io.NodeOutput(payload)
 
 
+class SymbioticaAutoPackerSettings(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaAutoPackerSettings",
+            display_name="Symbiotica Auto Packer Settings",
+            category="symbiotica/pipeline",
+            description="Optional pack-settings knobs for the Auto Packer — the "
+                        "same layout controls as the Template Editor's Pack "
+                        "Settings, so a hands-off run can reproduce an editor "
+                        "sheet (e.g. recipes stacked per row at 2x scale). Wire "
+                        "'settings' into the Auto Packer.",
+            inputs=[
+                io.Float.Input("scale", default=1.0, min=0.25, max=4.0, step=0.25,
+                               tooltip="Enlarge every sprite uniformly (2.0 = "
+                                       "the editor's x2)"),
+                io.Combo.Input("algorithm",
+                               options=["shelf", "maxrects", "grid"],
+                               default="shelf",
+                               tooltip="Packing algorithm (Shelf/Strip = one "
+                                       "strip per row)"),
+                io.Boolean.Input("distribute_by_folder", default=True,
+                                 tooltip="Lay each asset type's strip on its own "
+                                         "row (the editor default)"),
+                io.Int.Input("padding", default=0, min=0, max=512,
+                             tooltip="Gap between packed strips (px)"),
+                io.Int.Input("border", default=0, min=0, max=512,
+                             tooltip="Margin around the packed block (px)"),
+            ],
+            outputs=[PackSettingsWire.Output(display_name="settings")],
+        )
+
+    @classmethod
+    def execute(cls, scale=1.0, algorithm="shelf", distribute_by_folder=True,
+                padding=0, border=0) -> io.NodeOutput:
+        return io.NodeOutput({
+            "scale": float(scale),
+            "algorithm": algorithm,
+            "distribute_by_folder": bool(distribute_by_folder),
+            "padding": int(padding),
+            "border": int(border),
+        })
+
+
 class SymbioticaAutoPacker(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -279,6 +324,7 @@ class SymbioticaAutoPacker(io.ComfyNode):
                                         "transparent"),
                 io.String.Input("category", default="All",
                                 tooltip="One asset type, or All"),
+                PackSettingsWire.Input("settings", optional=True),
             ],
             outputs=[
                 io.Image.Output(display_name="sheets", is_output_list=True,
@@ -298,7 +344,8 @@ class SymbioticaAutoPacker(io.ComfyNode):
     @classmethod
     def execute(cls, order, columns=1, max_rows_per_sheet=4,
                 preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
-                background="#808080", category="All") -> io.NodeOutput:
+                background="#808080", category="All",
+                settings=None) -> io.NodeOutput:
         if not isinstance(order, dict) or "assets" not in order:
             raise ValueError("order input must come from Symbiotica Order "
                              "Specs")
@@ -308,13 +355,19 @@ class SymbioticaAutoPacker(io.ComfyNode):
             raise ValueError(
                 f"invalid preset: {preset_model} / {resolution} / "
                 f"{aspect_ratio}")
+        # Optional pack-settings node (unwired = today's defaults: shelf, no
+        # distribute, scale 1 — nothing regresses).
+        s = settings if isinstance(settings, dict) else {}
         from .autopack import autopack_order
         base = slugify(order.get("feature", "")) or "order"
         packed = autopack_order(
             order["assets"], order.get("refsRoot", ""),
             sheet_w=dims["w"], sheet_h=dims["h"], columns=columns,
             max_rows=max_rows_per_sheet, background=background,
-            category=(category or "All").strip() or "All", base_name=base)
+            category=(category or "All").strip() or "All", base_name=base,
+            scale=s.get("scale", 1.0), algorithm=s.get("algorithm", "shelf"),
+            distribute_by_folder=s.get("distribute_by_folder", False),
+            padding=s.get("padding", 0), border=s.get("border", 0))
         return io.NodeOutput(
             [_pil_to_tensor(p["image"]) for p in packed],
             [p["prompts"] for p in packed],
@@ -1508,6 +1561,7 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
+    SymbioticaAutoPackerSettings,
     SymbioticaAutoPacker,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,

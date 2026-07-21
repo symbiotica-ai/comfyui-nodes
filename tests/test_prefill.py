@@ -113,3 +113,19 @@ def test_packed_block_centered_symmetric():
     max_y = max(r["y"] + r["h"] for r in regs)
     assert abs(min_x - (1 - max_x)) < 0.01   # symmetric horizontally
     assert abs(min_y - (1 - max_y)) < 0.01   # symmetric vertically
+
+
+def test_scales_enlarge_cells():
+    # Parity with the JS resolver's `scales`: a per-asset factor multiplies the
+    # cell size (a big sheet so nothing overflows/fit-scales).
+    s = PackSettings(algorithm="shelf", preset=None, max_width=2000,
+                     max_height=2000, distribute_by_folder=False)
+    base = prefill_regions([asset("Cart", ["Cart.png"], canvas="128x128")],
+                           2000, 2000, settings=s)
+    scaled = prefill_regions([asset("Cart", ["Cart.png"], canvas="128x128")],
+                             2000, 2000, settings=s, scales={"Cart": 2})
+    b = base["regions"][0]["members"][0]
+    sc = scaled["regions"][0]["members"][0]
+    assert abs(sc["w"] - 2 * b["w"]) < 1e-6
+    assert abs(sc["h"] - 2 * b["h"]) < 1e-6
+    assert scaled["regions"][0]["scale"] == 2

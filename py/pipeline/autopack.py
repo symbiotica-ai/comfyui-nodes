@@ -44,11 +44,16 @@ from .texture_pack import PackSettings
 
 def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
                    max_rows=4, background="#808080", category="All",
-                   base_name="order"):
+                   base_name="order", scale=1.0, algorithm="shelf",
+                   distribute_by_folder=False, padding=0, border=0):
     """The whole order as ready-to-run sheets: plan_sheets chunks similar
     assets, each chunk is prefilled + drawn on its own sheet, and each
     sheet's client prompts come from the SAME chunk's regions — so item i
-    of the images and item i of the prompts always describe each other."""
+    of the images and item i of the prompts always describe each other.
+
+    The pack knobs (scale, algorithm, distribute_by_folder, padding, border)
+    mirror the Template Editor's Pack Settings so a wired Auto Packer Settings
+    node reproduces an editor sheet. `scale` enlarges every cell uniformly."""
     chunks = plan_sheets(assets, columns, max_rows, category=category)
     if not chunks:
         cats = sorted({a.get("category", "") for a in assets if a.get("refFiles")})
@@ -58,13 +63,17 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
     canvases_per_cat: dict[str, set] = {}
     for c in chunks:
         canvases_per_cat.setdefault(c["category"], set()).add(c["canvas"])
-    settings = PackSettings(algorithm="shelf", columns=max(1, int(columns)),
-                            background=background,
+    settings = PackSettings(algorithm=algorithm, columns=max(1, int(columns)),
+                            background=background, padding=max(0, int(padding)),
+                            border=max(0, int(border)),
+                            distribute_by_folder=bool(distribute_by_folder),
                             max_width=sheet_w, max_height=sheet_h)
+    scales = {a["assetName"]: scale for a in assets
+              if a.get("assetName")} if scale and scale != 1 else None
     out = []
     for chunk in chunks:
         sheet, regions, _overflow = build_prefill_sheet(
-            chunk["assets"], refs_root, sheet_w, sheet_h, settings)
+            chunk["assets"], refs_root, sheet_w, sheet_h, settings, scales=scales)
         if not regions:
             continue
         out.append({

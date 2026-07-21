@@ -223,12 +223,13 @@ def _draw_task_refs(sheet: Image.Image, regions: list[dict], refs_root: str,
 
 
 def build_prefill_sheet(assets: list[dict], refs_root: str, sheet_w: int,
-                        sheet_h: int, settings: PackSettings, chosen=None):
+                        sheet_h: int, settings: PackSettings, chosen=None,
+                        scales=None):
     """Prefill-from-specs sheet: regions via prefill_regions, each member cell
     drawing its reference image contain-fit (flipX mirrors the single-ref pair).
     Returns (PIL.Image, regions, overflow_names)."""
     result = prefill_regions(assets, sheet_w, sheet_h, chosen=chosen,
-                             settings=settings)
+                             settings=settings, scales=scales)
     sheet = _paint_background(sheet_w, sheet_h, settings.background)
     _draw_task_refs(sheet, result["regions"], refs_root, sheet_w, sheet_h)
     return sheet, result["regions"], result["overflow"]

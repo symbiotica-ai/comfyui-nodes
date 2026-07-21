@@ -48,6 +48,7 @@ def _region_at(row: dict, x_px: float, y_px: float, sheet_w: int, sheet_h: int) 
         "desc": row["asset"].get("prompt") or "",
         "text": "",
         "zIndex": 0,
+        "scale": row.get("scale", 1),
         "assetType": row["asset"]["category"],
         # Native cell size in sheet px (canvas x user scale) — the ref-image
         # resolution formula: n_cells * cellPx.w wide by cellPx.h tall.
@@ -82,11 +83,15 @@ def _center_block(regions: list[dict]) -> None:
 
 def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
                     chosen: dict[str, list[str]] | None = None,
-                    settings: PackSettings | None = None) -> dict:
+                    settings: PackSettings | None = None,
+                    scales: dict[str, float] | None = None) -> dict:
     """One region per asset. Single-ref assets show the ref plus a flipped copy
     (the in-game pair convention); multi-ref assets one cell per ref. With
     settings, strips run through the packer (overflow stacks below, visible);
-    without, strips stack as centered rows distributed evenly down the sheet."""
+    without, strips stack as centered rows distributed evenly down the sheet.
+
+    `scales`: per-asset user scale ({assetName: factor}, mirrors the JS
+    resolver) — the packer lays strips out at the SCALED cell size."""
     rows: list[dict] = []
     for asset in order_assets:
         picked = (chosen or {}).get(asset["assetName"])
@@ -96,12 +101,14 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
         if not paths:
             continue
         spec = canvas_spec_of(asset["canvas"])
+        k = (scales or {}).get(asset["assetName"], 1)
         rows.append({
             "asset": asset,
-            "cellW": (spec or {}).get("w", FALLBACK_CELL),
-            "cellH": (spec or {}).get("h", FALLBACK_CELL),
+            "cellW": (spec or {}).get("w", FALLBACK_CELL) * k,
+            "cellH": (spec or {}).get("h", FALLBACK_CELL) * k,
             "paths": paths,
             "flip": len(paths) == 1,
+            "scale": k,
         })
     if not rows:
         return {"regions": [], "overflow": []}
