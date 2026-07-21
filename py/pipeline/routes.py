@@ -260,3 +260,26 @@ async def template_save(request):
 @PromptServer.instance.routes.get("/symbiotica/template-list")
 async def template_list(request):
     return web.json_response({"templates": list_templates(_template_dir())})
+
+
+@PromptServer.instance.routes.get("/symbiotica/template-image")
+async def template_image(request):
+    """Serve a saved template PNG from output/templates by its rel key
+    ("templates/<slug>.png" or "<slug>.png"). A local /symbiotica route on
+    purpose: the editor's own thumbnails must be served from the editor's disk.
+    ComfyUI's /view?type=output would work standalone, but behind the Modal
+    canvas proxy that path is routed to the GPU render sandbox (stubbed empty
+    while idle), which blanks the saved-sheet grid."""
+    out_dir = _template_dir()
+    if out_dir is None:
+        return web.json_response({"error": "output dir unavailable"}, status=500)
+    # basename drops any "templates/" prefix and defeats "../" traversal — only
+    # a file directly under output/templates can be reached.
+    name = os.path.basename(request.query.get("file", ""))
+    if os.path.splitext(name)[1].lower() not in ALLOWED_EXTS:
+        return web.json_response({"error": "not an image"}, status=403)
+    root = os.path.realpath(out_dir)
+    path = os.path.realpath(os.path.join(root, name))
+    if not (path == root or path.startswith(root + os.sep)) or not os.path.isfile(path):
+        return web.json_response({"error": "not found"}, status=404)
+    return web.FileResponse(path, headers={"Cache-Control": "private, max-age=60"})

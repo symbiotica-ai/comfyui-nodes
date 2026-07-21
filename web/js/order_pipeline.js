@@ -451,14 +451,15 @@ async function openEditorForNode(node, uiState) {
         imageUrl: (r, rel) => thumbUrl(r, rel),
         refImageUrl: (file) => (refsRoot ? thumbUrl(refsRoot, file) : null),
         // A saved sheet ("templates/<name>.png") served from the output dir,
-        // for the editor's saved-sheets thumbnail grid.
+        // for the editor's saved-sheets thumbnail grid. Uses the pack's own
+        // /symbiotica route (served at server root, hence the /api strip) rather
+        // than /view?type=output: behind the Modal canvas proxy an output view
+        // is routed to the GPU sandbox and stubbed empty, blanking the grid.
         sheetThumbUrl: (file) => {
             if (!file) return "";
-            const i = file.lastIndexOf("/");
-            const subfolder = i >= 0 ? file.slice(0, i) : "";
-            const filename = i >= 0 ? file.slice(i + 1) : file;
-            return api.apiURL(`/view?filename=${encodeURIComponent(filename)}`
-                + `&subfolder=${encodeURIComponent(subfolder)}&type=output`);
+            return api.apiURL(
+                `/symbiotica/template-image?file=${encodeURIComponent(file)}`
+            ).replace("/api/", "/");
         },
         resolveMemberUrl: (region, member) => {
             // Which image fills a member cell depends on the reference mode:
