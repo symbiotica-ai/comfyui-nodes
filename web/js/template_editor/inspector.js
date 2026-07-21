@@ -200,6 +200,62 @@ export function renderInspector(state, host, opts) {
             "Description wins over the reference — keep it consistent with the attached image, or clear one of them."
         ));
 
+        // Rebuild a region's cells from its ticked task-ref paths. With
+        // mirrorPair on, ONE ref makes a two-cell pair — cell 1 the ref, cell 2
+        // its horizontal mirror; the 2-cell / 1-path shape is exactly what makes
+        // both the canvas preview and the baked sheet flip the second cell.
+        const cellsFor = (reg, paths) => {
+            const cw = reg.members?.[0]?.w
+                ?? (reg.cellPx ? reg.cellPx.w / state.sheetW : reg.w);
+            const ch = reg.members?.[0]?.h ?? reg.h;
+            if (reg.mirrorPair && paths.length) {
+                const spriteId = paths[0];
+                return {
+                    members: [
+                        { spriteId, x: reg.x, y: reg.y, w: cw, h: ch },
+                        { spriteId, flipX: true, x: reg.x + cw, y: reg.y, w: cw, h: ch },
+                    ],
+                    paths: [spriteId], w: 2 * cw, h: ch,
+                };
+            }
+            return {
+                members: paths.map((spriteId, i) => ({
+                    spriteId, x: reg.x + i * cw, y: reg.y, w: cw, h: ch,
+                })),
+                paths, w: paths.length ? paths.length * cw : reg.w, h: ch,
+            };
+        };
+        const applyRefs = (reg, paths) => {
+            const c = cellsFor(reg, paths);
+            state.updateRegion(reg.id, {
+                taskRefs: c.paths.length ? { paths: c.paths, mode: "meta" } : undefined,
+                members: c.members, w: c.w, h: c.h,
+            });
+        };
+
+        // Mirror-pair toggle: use one decoration image as a flipped pair instead
+        // of needing a pre-mirrored second reference.
+        const mirrorRow = el("div",
+            "display:flex;align-items:center;gap:6px;margin:2px 0 6px;");
+        const mirrorCb = document.createElement("input");
+        mirrorCb.type = "checkbox";
+        mirrorCb.checked = !!region.mirrorPair;
+        mirrorCb.style.flex = "none";
+        mirrorCb.addEventListener("change", () => {
+            const reg = state.selectedRegion();
+            if (!reg) return;
+            const paths = reg.taskRefs?.paths ?? [];
+            const c = cellsFor({ ...reg, mirrorPair: mirrorCb.checked }, paths);
+            state.updateRegion(reg.id, {
+                mirrorPair: mirrorCb.checked,
+                taskRefs: c.paths.length ? { paths: c.paths, mode: "meta" } : undefined,
+                members: c.members, w: c.w, h: c.h,
+            });
+        });
+        mirrorRow.append(mirrorCb,
+            el("span", "font-size:11px;", "Mirror pair — flip a single ref"));
+        frag.appendChild(mirrorRow);
+
         // TASK REFERENCES tree
         const assets = state.taskAssets ?? [];
         const totalRefs = assets.reduce((n, a) => n + (a.refFiles?.length ?? 0), 0);
@@ -241,6 +297,12 @@ export function renderInspector(state, host, opts) {
                 cb.addEventListener("change", () => {
                     const reg = state.selectedRegion();
                     if (!reg) return;
+                    if (reg.mirrorPair) {
+                        // Mirror mode: one ref drives the pair — this click picks
+                        // it (or clears the region).
+                        applyRefs(reg, cb.checked ? [path] : []);
+                        return;
+                    }
                     // Which refs are ticked now — kept in this asset's ref order
                     // (the region is one asset) so cells stay left-to-right.
                     const checked = new Set(reg.taskRefs?.paths ?? []);
@@ -252,20 +314,7 @@ export function renderInspector(state, host, opts) {
                             .map((f) => `${owner.category}/${owner.assetName}/${f}`)
                             .filter((p) => checked.has(p))
                         : [...checked];
-                    // Rebuild the region's cells to match the ticked count —
-                    // one cell per selected ref, at the region's cell size.
-                    const cw = reg.members?.[0]?.w
-                        ?? (reg.cellPx ? reg.cellPx.w / state.sheetW : reg.w);
-                    const ch = reg.members?.[0]?.h ?? reg.h;
-                    const members = ordered.map((spriteId, i) => ({
-                        spriteId, x: reg.x + i * cw, y: reg.y, w: cw, h: ch,
-                    }));
-                    state.updateRegion(reg.id, {
-                        taskRefs: ordered.length ? { paths: ordered, mode: "meta" } : undefined,
-                        members,
-                        w: ordered.length ? ordered.length * cw : reg.w,
-                        h: ch,
-                    });
+                    applyRefs(reg, ordered);
                 });
                 row.appendChild(cb);
                 const thumbUrl = opts.refImageUrl?.(file) ?? null;
