@@ -42,6 +42,33 @@ from .skeleton import build_client_prompts
 from .texture_pack import PackSettings
 
 
+def reorder_refs(refs, pattern):
+    """Reorder a ref list by a 1-based index pattern like '1,3,2'. Out-of-range
+    indices are skipped; any refs the pattern omits are appended in original
+    order so nothing is ever dropped."""
+    idx = [int(x) for x in str(pattern).split(",") if x.strip().isdigit()]
+    seen, out = set(), []
+    for i in idx:
+        if 1 <= i <= len(refs) and i not in seen:
+            out.append(refs[i - 1])
+            seen.add(i)
+    for i in range(1, len(refs) + 1):
+        if i not in seen:
+            out.append(refs[i - 1])
+    return out
+
+
+def apply_reorder(assets, asset_name, pattern):
+    """Return `assets` with one named asset's refFiles reordered per `pattern`.
+    No-op (returns the same list) when nothing is selected or the pattern is the
+    identity '1,2,3'."""
+    name = (asset_name or "").strip()
+    if not name or name == "none" or not pattern or str(pattern) == "1,2,3":
+        return assets
+    return [({**a, "refFiles": reorder_refs(a.get("refFiles", []), pattern)}
+             if a.get("assetName") == name else a) for a in assets]
+
+
 def _is_variant(asset):
     """A directional asset (rotation 2 or 4) whose refs are distinct VARIANTS,
     not a food recipe's stages (rotation '-'). Only these get split."""

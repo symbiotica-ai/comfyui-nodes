@@ -135,6 +135,30 @@ def test_autopack_scale_gated_by_canvas(tmp_path):
     assert big == 512     # 512 > 256 cutoff — left native
 
 
+def test_reorder_refs_swaps_and_keeps_all():
+    from pipeline.autopack import reorder_refs
+    assert reorder_refs(["a", "b", "c"], "1,3,2") == ["a", "c", "b"]
+    assert reorder_refs(["a", "b", "c"], "3,2,1") == ["c", "b", "a"]
+    # out-of-range index skipped, 2-ref asset
+    assert reorder_refs(["a", "b"], "2,1,3") == ["b", "a"]
+    # partial pattern: omitted originals appended in order
+    assert reorder_refs(["a", "b", "c"], "2") == ["b", "a", "c"]
+    # identity / empty = unchanged
+    assert reorder_refs(["a", "b", "c"], "1,2,3") == ["a", "b", "c"]
+
+
+def test_apply_reorder_targets_one_asset():
+    from pipeline.autopack import apply_reorder
+    assets = [asset("A", refs=("a0", "a1", "a2")),
+              asset("B", refs=("b0", "b1"))]
+    out = apply_reorder(assets, "A", "1,3,2")
+    assert out[0]["refFiles"] == ["a0", "a2", "a1"]
+    assert out[1]["refFiles"] == ["b0", "b1"]  # untouched
+    # no-op cases return input unchanged
+    assert apply_reorder(assets, "none", "1,3,2") is assets
+    assert apply_reorder(assets, "A", "1,2,3") is assets
+
+
 def _variant(name, refs, rotation, category="Decoration", canvas="256x256"):
     return {**asset(name, refs=refs, category=category, canvas=canvas),
             "rotation": rotation}

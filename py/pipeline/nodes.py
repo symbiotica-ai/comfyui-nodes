@@ -349,6 +349,15 @@ class SymbioticaAutoPacker(io.ComfyNode):
                                         "transparent"),
                 io.String.Input("category", default="All",
                                 tooltip="One asset type, or All"),
+                io.String.Input("reorder_asset", default="none",
+                                tooltip="Optional: one asset whose cell order to "
+                                        "override (dropdown from the order)"),
+                io.Combo.Input("reorder_to",
+                               options=["1,2,3", "1,3,2", "2,1,3", "2,3,1",
+                                        "3,1,2", "3,2,1"],
+                               default="1,2,3",
+                               tooltip="New cell order for reorder_asset "
+                                       "(1,2,3 = unchanged)"),
                 PackSettingsWire.Input("settings", optional=True),
             ],
             outputs=[
@@ -369,8 +378,8 @@ class SymbioticaAutoPacker(io.ComfyNode):
     @classmethod
     def execute(cls, order, columns=1, max_rows_per_sheet=4,
                 preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
-                background="#808080", category="All",
-                settings=None) -> io.NodeOutput:
+                background="#808080", category="All", reorder_asset="none",
+                reorder_to="1,2,3", settings=None) -> io.NodeOutput:
         if not isinstance(order, dict) or "assets" not in order:
             raise ValueError("order input must come from Symbiotica Order "
                              "Specs")
@@ -383,10 +392,11 @@ class SymbioticaAutoPacker(io.ComfyNode):
         # Optional pack-settings node (unwired = today's defaults: shelf, no
         # distribute, scale 1 — nothing regresses).
         s = settings if isinstance(settings, dict) else {}
-        from .autopack import autopack_order
+        from .autopack import apply_reorder, autopack_order
         base = slugify(order.get("feature", "")) or "order"
+        assets = apply_reorder(order["assets"], reorder_asset, reorder_to)
         packed = autopack_order(
-            order["assets"], order.get("refsRoot", ""),
+            assets, order.get("refsRoot", ""),
             sheet_w=dims["w"], sheet_h=dims["h"], columns=columns,
             max_rows=max_rows_per_sheet, background=background,
             category=(category or "All").strip() or "All", base_name=base,

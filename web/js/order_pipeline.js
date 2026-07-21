@@ -184,6 +184,19 @@ function eventCategoriesFor(node) {
     return ["All", ...cats];
 }
 
+// "none" + the named assets of the event an Auto Packer's upstream Order Specs
+// has picked — for the reorder_asset combo.
+function eventAssetsFor(node) {
+    const specs = upstreamNode(node, "order");
+    if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs") return ["none"];
+    const events = specs._symEvents ?? [];
+    if (!events.length) { refreshOrderSpecs(specs); return ["none"]; }
+    const feature = widgetOf(specs, "feature")?.value?.trim();
+    const ev = events.find((e) => e.feature === feature) || events[0];
+    const names = ev ? ev.assets.filter((a) => a.assetName).map((a) => a.assetName) : [];
+    return ["none", ...names];
+}
+
 function refreshCombos(node) {
     for (const specs of downstreamNodes(node, "SymbioticaEventSpecs")) {
         specs.setDirtyCanvas(true, true);
@@ -325,6 +338,8 @@ app.registerExtension({
                 orig?.apply(this, arguments);
                 // "All" + the categories of the upstream Order Specs' event.
                 comboify(this, "category", () => eventCategoriesFor(this));
+                // "none" + the event's assets, for the cell-reorder override.
+                comboify(this, "reorder_asset", () => eventAssetsFor(this));
             };
         }
 
