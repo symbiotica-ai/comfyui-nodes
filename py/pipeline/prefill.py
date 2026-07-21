@@ -57,6 +57,29 @@ def _region_at(row: dict, x_px: float, y_px: float, sheet_w: int, sheet_h: int) 
     }
 
 
+def _center_block(regions: list[dict]) -> None:
+    """Translate the whole placed block so it sits centered on the sheet (both
+    axes). An axis whose content is wider/taller than the sheet anchors at 0
+    (top-left) instead — nothing is pushed off-edge. Region boxes AND their
+    member cells move together (the sheet draw uses members)."""
+    if not regions:
+        return
+    min_x = min(r["x"] for r in regions)
+    max_x = max(r["x"] + r["w"] for r in regions)
+    min_y = min(r["y"] for r in regions)
+    max_y = max(r["y"] + r["h"] for r in regions)
+    off_x = -min_x if (max_x - min_x) >= 1 else (1 - (max_x - min_x)) / 2 - min_x
+    off_y = -min_y if (max_y - min_y) >= 1 else (1 - (max_y - min_y)) / 2 - min_y
+    if off_x == 0 and off_y == 0:
+        return
+    for r in regions:
+        r["x"] += off_x
+        r["y"] += off_y
+        for m in r.get("members", []):
+            m["x"] += off_x
+            m["y"] += off_y
+
+
 def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
                     chosen: dict[str, list[str]] | None = None,
                     settings: PackSettings | None = None) -> dict:
@@ -112,6 +135,7 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
             y = max(0, min(y_px, sheet_h - row["cellH"]))
             regions.append(_region_at(row, PAD_PX, y, sheet_w, sheet_h))
             y_px = y + row["cellH"] + PAD_PX
+        _center_block(regions)
         regions.sort(key=lambda r: (r["y"], r["x"]))
         for i, r in enumerate(regions):
             r["zIndex"] = i

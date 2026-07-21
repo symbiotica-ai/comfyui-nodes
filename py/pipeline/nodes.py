@@ -38,6 +38,7 @@ from .texture_pack import PackSettings
 OrderEvents = io.Custom("SYMBIOTICA_ORDER_EVENTS")
 EventSpec = io.Custom("SYMBIOTICA_EVENT_SPEC")
 Template = io.Custom("SYMBIOTICA_TEMPLATE")
+Order = io.Custom("SYMBIOTICA_ORDER")
 
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
@@ -145,6 +146,180 @@ class SymbioticaOrderRead(io.ComfyNode):
               {"node_id": cls.hidden.unique_id, **payload})
         summary = json.dumps(order_overview(loaded["events"]), indent=1)
         return io.NodeOutput(payload, ui=ui.PreviewText(summary))
+
+
+class SymbioticaOrderSpecs(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaOrderSpecs",
+            display_name="Symbiotica Order Specs",
+            category="symbiotica/pipeline",
+            description="Pick a project, month, and event — outputs ONE "
+                        "order wire carrying that event's assets, client "
+                        "reference paths, and catalog root. Feed it to the "
+                        "Auto Packer (and any task-prompt/task-image taps).",
+            inputs=[
+                io.String.Input("project_path", default="",
+                                tooltip="The client project folder — the one "
+                                        "that contains orders/ and "
+                                        "reference-assets/"),
+                io.String.Input("month", default="",
+                                tooltip="Which month's order to read"),
+                io.String.Input("feature", default="",
+                                tooltip="Which event to build (empty = the "
+                                        "order's first event)"),
+            ],
+            outputs=[Order.Output(display_name="order")],
+        )
+
+    @classmethod
+    def _paths(cls, project_path, month):
+        project_path = (project_path or "").strip()
+        op = rp = assets_root = ""
+        if project_path:
+            from .project_layout import resolve_month
+            r = resolve_month(project_path, (month or "").strip())
+            op, rp, assets_root = r["order_path"], r["refs_path"], r["assets_root"]
+        return op, rp, assets_root
+
+    @classmethod
+    def _guide(cls, project_path):
+        path = os.path.join((project_path or "").strip(), "order-guide.md")
+        try:
+            with open(path, encoding="utf-8") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", month="", feature=""):
+        op, rp, _ = cls._paths(project_path, month)
+        h = hashlib.sha256(f"{op}|{rp}|{feature}".encode())
+        try:
+            st = os.stat(op)
+            h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
+        except OSError:
+            pass
+        try:
+            if rp:
+                h.update("\n".join(sorted(os.listdir(rp))).encode())
+        except OSError:
+            pass
+        h.update((cls._guide(project_path) or "").encode())
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, project_path="", month="", feature="") -> io.NodeOutput:
+        op, rp, assets_root = cls._paths(project_path, month)
+        if not op:
+            raise ValueError(
+                "no order file — set the project folder (the one with an "
+                "orders/ subfolder of .xlsx files) and pick a month")
+        loaded = load_order(op, rp)
+        events = loaded["events"]
+        if not events:
+            raise ValueError(f"no events found in {op}")
+        feature = (feature or "").strip() or events[0].get("feature", "")
+        # event_spec returns {feature, eventName, templates}; it raises an
+        # actionable ValueError listing the available features when not found.
+        spec = event_spec(events, feature)
+        # ORDER carries a FLAT asset list (the AutoPacker's contract); flatten
+        # the template groups back out, named assets only, spec order kept.
+        assets = [a for g in spec["templates"] for a in g["assets"]]
+        if not assets:
+            names = ", ".join(e.get("feature", "?") for e in events)
+            raise ValueError(
+                f"event {feature!r} has no named assets — this order's "
+                f"events: {names}")
+        if rp:
+            _register_refs_root(rp)
+        if assets_root:
+            _register_refs_root(assets_root)
+        payload = {
+            "feature": spec.get("feature", ""),
+            "eventName": spec.get("eventName", ""),
+            "assets": assets,
+            "refsRoot": rp,
+            "assetsRoot": assets_root,
+            "guide": cls._guide(project_path),
+        }
+        return io.NodeOutput(payload)
+
+
+class SymbioticaAutoPacker(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaAutoPacker",
+            display_name="Symbiotica Auto Packer",
+            category="symbiotica/pipeline",
+            description="The whole order as ready-to-run template sheets: "
+                        "similar assets grouped 1-2 columns x 3-4 rows per "
+                        "sheet, each sheet paired with its client prompts. "
+                        "Wire sheets -> img2img and sheet_prompts -> your "
+                        "LLM/prompt input; downstream runs once per sheet.",
+            inputs=[
+                Order.Input("order"),
+                io.Int.Input("columns", default=1, min=1, max=4,
+                             tooltip="Assets side by side per row"),
+                io.Int.Input("max_rows_per_sheet", default=4, min=1, max=12,
+                             tooltip="Rows per sheet before starting a new "
+                                     "sheet"),
+                # Copied verbatim from SymbioticaTemplateEditor's schema so the
+                # option lists + defaults match the editor exactly.
+                io.Combo.Input("preset_model", options=_MODELS,
+                               default="qwen-image"),
+                io.Combo.Input("resolution", options=_RESOLUTIONS,
+                               default="1K"),
+                io.Combo.Input("aspect_ratio", options=_ASPECTS,
+                               default="1:1"),
+                io.String.Input("background", default="#808080",
+                                tooltip="Sheet background color; empty = "
+                                        "transparent"),
+                io.String.Input("category", default="All",
+                                tooltip="One asset type, or All"),
+            ],
+            outputs=[
+                io.Image.Output(display_name="sheets", is_output_list=True,
+                                tooltip="One template sheet per chunk of "
+                                        "similar assets"),
+                io.String.Output(display_name="sheet_prompts",
+                                 is_output_list=True,
+                                 tooltip="Client prompts for sheet i — "
+                                         "index-aligned with sheets"),
+                io.String.Output(display_name="sheet_names",
+                                 is_output_list=True,
+                                 tooltip="Slug per sheet — wire into Save "
+                                         "Image filename_prefix"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, order, columns=1, max_rows_per_sheet=4,
+                preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
+                background="#808080", category="All") -> io.NodeOutput:
+        if not isinstance(order, dict) or "assets" not in order:
+            raise ValueError("order input must come from Symbiotica Order "
+                             "Specs")
+        dims = preset_dims({"model": preset_model, "tier": resolution,
+                            "ar": aspect_ratio})
+        if not dims:
+            raise ValueError(
+                f"invalid preset: {preset_model} / {resolution} / "
+                f"{aspect_ratio}")
+        from .autopack import autopack_order
+        base = slugify(order.get("feature", "")) or "order"
+        packed = autopack_order(
+            order["assets"], order.get("refsRoot", ""),
+            sheet_w=dims["w"], sheet_h=dims["h"], columns=columns,
+            max_rows=max_rows_per_sheet, background=background,
+            category=(category or "All").strip() or "All", base_name=base)
+        return io.NodeOutput(
+            [_pil_to_tensor(p["image"]) for p in packed],
+            [p["prompts"] for p in packed],
+            [p["name"] for p in packed],
+        )
 
 
 class SymbioticaEventSpecs(io.ComfyNode):
@@ -1332,6 +1507,8 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
 
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
+    SymbioticaOrderSpecs,
+    SymbioticaAutoPacker,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
     SymbioticaTemplateEditor,

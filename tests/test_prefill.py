@@ -82,3 +82,34 @@ def test_packed_layout_with_settings_and_overflow_stacks_below():
     assert len(res["regions"]) == 2  # overflowed strip still becomes a region
     zs = [r["zIndex"] for r in sorted(res["regions"], key=lambda r: (r["y"], r["x"]))]
     assert zs == [0, 1]
+
+
+def test_packed_single_region_centered_both_axes():
+    # A small strip on a big sheet: the packer drops it top-left; centering
+    # must move it (and its member cells) to the middle of the sheet.
+    settings = PackSettings(algorithm="shelf", preset=None, max_width=1000,
+                            max_height=1000, distribute_by_folder=False)
+    res = prefill_regions([asset("Cart", ["Cart.png"], canvas="128x128")],
+                          1000, 1000, settings=settings)
+    (region,) = res["regions"]
+    assert abs(region["x"] + region["w"] / 2 - 0.5) < 0.01
+    assert abs(region["y"] + region["h"] / 2 - 0.5) < 0.01
+    # a member cell moved with its region (same row → same vertical center)
+    m = region["members"][0]
+    assert abs(m["y"] + m["h"] / 2 - 0.5) < 0.01
+
+
+def test_packed_block_centered_symmetric():
+    # Two strips: the block's bounding box is centered — left margin equals
+    # right margin, top equals bottom.
+    settings = PackSettings(algorithm="shelf", preset=None, max_width=1000,
+                            max_height=1000, distribute_by_folder=False)
+    res = prefill_regions([asset("A", ["A.png"]), asset("B", ["B.png"])],
+                          1000, 1000, settings=settings)
+    regs = res["regions"]
+    min_x = min(r["x"] for r in regs)
+    max_x = max(r["x"] + r["w"] for r in regs)
+    min_y = min(r["y"] for r in regs)
+    max_y = max(r["y"] + r["h"] for r in regs)
+    assert abs(min_x - (1 - max_x)) < 0.01   # symmetric horizontally
+    assert abs(min_y - (1 - max_y)) < 0.01   # symmetric vertically
