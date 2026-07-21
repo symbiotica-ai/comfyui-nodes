@@ -195,6 +195,19 @@ def test_autopack_split_variants_mirrors_rotation2(tmp_path):
         assert len(ms) == 2 and ms[1].get("flipX") is True
 
 
+def test_autopack_split_skips_single_ref_no_duplicate(tmp_path):
+    # A 1-ref variant asset has nothing to split — it must NOT get a redundant
+    # variant sheet (was duplicating the combined sheet). combined keeps it once.
+    single = _variant("Solo", ("s0.png",), "2")
+    root = _make_refs(tmp_path, [single])
+    with pytest.raises(ValueError):  # split-only: nothing to split
+        autopack_order([single], root, sheet_w=1024, sheet_h=1024,
+                       combined_sheet=False, split_variants=True)
+    out = autopack_order([single], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=True, split_variants=True)
+    assert len(out) == 1  # combined only, no duplicate variant sheet
+
+
 def test_autopack_split_variants_rotation4_no_mirror(tmp_path):
     a = _variant("Sign", ("d0.png", "d1.png"), "4")
     root = _make_refs(tmp_path, [a])

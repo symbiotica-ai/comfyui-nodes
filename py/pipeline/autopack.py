@@ -100,10 +100,14 @@ def _variant_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
                     base_name, category, cap=3):
     """One sheet per variant ref (up to `cap`) for each variant asset: a
     rotation=2 asset mirrors each ref (ref + horizontal flip); rotation=4 draws
-    the single ref (a flip can't stand in for 4 directions). Food is skipped."""
+    the single ref (a flip can't stand in for 4 directions). Food is skipped.
+
+    Only assets with 2+ references are split — a single-ref asset has one
+    variant, nothing to separate, so it stays in the combined sheet instead of
+    producing a redundant duplicate sheet."""
     out = []
     for a in assets:
-        if not a.get("refFiles") or not _is_variant(a):
+        if len(a.get("refFiles") or []) < 2 or not _is_variant(a):
             continue
         if category != "All" and a.get("category") != category:
             continue
