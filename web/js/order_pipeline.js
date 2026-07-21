@@ -202,9 +202,12 @@ function eventAssetsFor(node) {
 // [{value,label,thumb}] for the Auto Packer's asset pickers: "none" + the
 // upstream event's assets, each with its first reference image as a thumbnail.
 function assetItemsFor(node) {
+    const none = [{ value: "none", label: "none", thumb: "" }];
     const specs = upstreamNode(node, "order");
-    const events = specs?._symEvents ?? [];
-    if (specs && !events.length) refreshOrderSpecs(specs);
+    // On graph load onNodeCreated runs before links are wired — no upstream yet.
+    if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs") return none;
+    const events = specs._symEvents ?? [];
+    if (!events.length) refreshOrderSpecs(specs);
     const refsRoot = specs?._symRefsRoot ?? "";
     const feature = widgetOf(specs, "feature")?.value?.trim();
     const ev = events.find((e) => e.feature === feature) || events[0];
@@ -513,7 +516,7 @@ async function fetchJson(route) {
 }
 
 function widgetOf(node, name) {
-    return node.widgets?.find((w) => w.name === name);
+    return node?.widgets?.find((w) => w.name === name);
 }
 
 function parseJsonWidget(node, name, fallback) {
