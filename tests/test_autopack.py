@@ -121,6 +121,20 @@ def test_autopack_scale_enlarges_cells(tmp_path):
     assert bw > sw
 
 
+def test_autopack_scale_gated_by_canvas(tmp_path):
+    # scale_max_canvas=256: the 128 sprite scales x2, the 512 one is left native.
+    assets = [asset("small", canvas="128x128"),
+              asset("big", canvas="512x512")]
+    root = _make_refs(tmp_path, assets)
+    out = autopack_order(assets, root, sheet_w=4096, sheet_h=4096, scale=2,
+                         scale_max_canvas=256)
+    cells = {o["name"]: o["regions"][0]["cellPx"]["w"] for o in out}
+    small = next(v for k, v in cells.items() if "128x128" in k)
+    big = next(v for k, v in cells.items() if "512x512" in k)
+    assert small == 256   # 128 * 2 — under the cutoff, scaled
+    assert big == 512     # 512 > 256 cutoff — left native
+
+
 def test_autopack_distribute_by_folder_stacks_categories(tmp_path):
     # distribute_by_folder=True lays each category's strip on its own row —
     # accepted as a keyword and drives the pack without error.

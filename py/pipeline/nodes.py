@@ -262,8 +262,13 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
                         "'settings' into the Auto Packer.",
             inputs=[
                 io.Float.Input("scale", default=1.0, min=0.25, max=4.0, step=0.25,
-                               tooltip="Enlarge every sprite uniformly (2.0 = "
-                                       "the editor's x2)"),
+                               tooltip="Enlarge small sprites (2.0 = the "
+                                       "editor's x2). Only assets at/under "
+                                       "scale_max_canvas grow."),
+                io.Int.Input("scale_max_canvas", default=256, min=0, max=4096,
+                             tooltip="Only scale assets whose canvas max edge "
+                                     "is <= this (px). 256 = grow food/128/256, "
+                                     "leave 512+ native"),
                 io.Combo.Input("algorithm",
                                options=["shelf", "maxrects", "grid"],
                                default="shelf",
@@ -281,10 +286,11 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, scale=1.0, algorithm="shelf", distribute_by_folder=True,
-                padding=0, border=0) -> io.NodeOutput:
+    def execute(cls, scale=1.0, scale_max_canvas=256, algorithm="shelf",
+                distribute_by_folder=True, padding=0, border=0) -> io.NodeOutput:
         return io.NodeOutput({
             "scale": float(scale),
+            "scale_max_canvas": int(scale_max_canvas),
             "algorithm": algorithm,
             "distribute_by_folder": bool(distribute_by_folder),
             "padding": int(padding),
@@ -365,7 +371,9 @@ class SymbioticaAutoPacker(io.ComfyNode):
             sheet_w=dims["w"], sheet_h=dims["h"], columns=columns,
             max_rows=max_rows_per_sheet, background=background,
             category=(category or "All").strip() or "All", base_name=base,
-            scale=s.get("scale", 1.0), algorithm=s.get("algorithm", "shelf"),
+            scale=s.get("scale", 1.0),
+            scale_max_canvas=s.get("scale_max_canvas", 256),
+            algorithm=s.get("algorithm", "shelf"),
             distribute_by_folder=s.get("distribute_by_folder", False),
             padding=s.get("padding", 0), border=s.get("border", 0))
         return io.NodeOutput(
