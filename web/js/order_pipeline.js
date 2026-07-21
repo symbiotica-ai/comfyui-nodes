@@ -112,6 +112,63 @@ function wireMonthPicker(node) {
     refresh();
 }
 
+// Order Specs is a leaf picker (no upstream): it reads its own project + month.
+// Parse the order server-side and cache the events on the node, so its own
+// `feature` combo and a downstream Auto Packer's `category` combo can read the
+// event list synchronously.
+async function refreshOrderSpecs(node) {
+    const project = widgetOf(node, "project_path")?.value?.trim();
+    const month = widgetOf(node, "month")?.value?.trim();
+    if (!project) { node._symEvents = []; node.setDirtyCanvas?.(true, true); return; }
+    const q = new URLSearchParams({ project });
+    if (month) q.set("month", month);
+    try {
+        node._symEvents = (await fetchJson(`/symbiotica/parse-order?${q}`)).events ?? [];
+    } catch { node._symEvents = []; }
+    // Keep the feature value valid; empty means "the order's first event".
+    const featW = widgetOf(node, "feature");
+    const features = node._symEvents.map((e) => e.feature);
+    if (featW && featW.value && !features.includes(featW.value)) {
+        featW.value = features[0] ?? "";
+    }
+    node.setDirtyCanvas?.(true, true);
+}
+
+function wireOrderSpecs(node) {
+    node._symEvents = [];
+    wireMonthPicker(node); // month combo, refreshed on project_path change
+    comboify(node, "feature", () => (node._symEvents ?? []).map((e) => e.feature));
+    // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
+    // own project_path hook — both fire).
+    for (const name of ["project_path", "month"]) {
+        const w = widgetOf(node, name);
+        if (!w) continue;
+        const prev = w.callback;
+        w.callback = function () {
+            const r = prev?.apply(this, arguments);
+            refreshOrderSpecs(node);
+            return r;
+        };
+    }
+    refreshOrderSpecs(node);
+}
+
+// The categories of the event an Auto Packer's upstream Order Specs has picked
+// (named assets only), for its `category` combo. Opportunistically re-parses
+// upstream when its cache is empty so the next open is populated.
+function eventCategoriesFor(node) {
+    const specs = upstreamNode(node, "order");
+    if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs") return ["All"];
+    const events = specs._symEvents ?? [];
+    if (!events.length) { refreshOrderSpecs(specs); return ["All"]; }
+    const feature = widgetOf(specs, "feature")?.value?.trim();
+    const ev = events.find((e) => e.feature === feature) || events[0];
+    const cats = ev
+        ? [...new Set(ev.assets.filter((a) => a.assetName).map((a) => a.category))]
+        : [];
+    return ["All", ...cats];
+}
+
 function refreshCombos(node) {
     for (const specs of downstreamNodes(node, "SymbioticaEventSpecs")) {
         specs.setDirtyCanvas(true, true);
@@ -236,6 +293,23 @@ app.registerExtension({
                 this.addDOMWidget("events_browser", "custom", container,
                                   { serialize: false, hideOnZoom: true });
                 this.size[0] = Math.max(this.size[0], 320);
+            };
+        }
+
+        if (nodeData.name === "SymbioticaOrderSpecs") {
+            const orig = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                orig?.apply(this, arguments);
+                wireOrderSpecs(this);
+            };
+        }
+
+        if (nodeData.name === "SymbioticaAutoPacker") {
+            const orig = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                orig?.apply(this, arguments);
+                // "All" + the categories of the upstream Order Specs' event.
+                comboify(this, "category", () => eventCategoriesFor(this));
             };
         }
 
