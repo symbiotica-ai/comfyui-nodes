@@ -221,7 +221,12 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         events = loaded["events"]
         if not events:
             raise ValueError(f"no events found in {op}")
-        feature = (feature or "").strip() or events[0].get("feature", "")
+        feature = (feature or "").strip()
+        # The JS combo labels events "Feature — Event Name"; accept that form as
+        # well as the bare feature (saved workflows keep the bare value).
+        if feature and feature not in {e.get("feature") for e in events}:
+            feature = feature.split(" — ")[0].strip()
+        feature = feature or events[0].get("feature", "")
         # event_spec returns {feature, eventName, templates}; it raises an
         # actionable ValueError listing the available features when not found.
         spec = event_spec(events, feature)

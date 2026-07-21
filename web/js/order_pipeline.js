@@ -30,6 +30,16 @@ function templateGroups(event) {
     return [...groups.values()];
 }
 
+// Event combo label ("Mini 1 — Ghostly Goodies") vs the stored key ("Mini 1").
+// The value may be either form (saved workflows keep the plain feature); the
+// key strips the " — <name>" the combo appends.
+function eventLabel(e) {
+    return e.eventName ? `${e.feature} — ${e.eventName}` : e.feature;
+}
+function featureKey(value) {
+    return String(value ?? "").split(" — ")[0].trim();
+}
+
 // --- graph helpers -----------------------------------------------------------
 function upstreamNode(node, inputName) {
     const input = node.inputs?.find((i) => i.name === inputName);
@@ -142,11 +152,15 @@ async function refreshOrderSpecs(node) {
         node._symEvents = data.events ?? [];
         node._symRefsRoot = data.refsRoot ?? "";
     } catch { node._symEvents = []; }
-    // Keep the feature value valid; empty means "the order's first event".
+    // Keep the feature value valid (accept the plain feature OR the labelled
+    // form); empty means "the order's first event". Never reset a value that
+    // still matches an event by key — that would clobber a saved workflow.
     const featW = widgetOf(node, "feature");
-    const features = node._symEvents.map((e) => e.feature);
-    if (featW && featW.value && !features.includes(featW.value)) {
-        featW.value = features[0] ?? "";
+    if (featW && featW.value) {
+        const key = featureKey(featW.value);
+        if (!node._symEvents.some((e) => e.feature === key)) {
+            featW.value = node._symEvents[0] ? eventLabel(node._symEvents[0]) : "";
+        }
     }
     // Re-render any downstream Auto Packer asset panels now that the event's
     // assets (and refsRoot) are known.
@@ -159,7 +173,7 @@ async function refreshOrderSpecs(node) {
 function wireOrderSpecs(node) {
     node._symEvents = [];
     wireMonthPicker(node); // month combo, refreshed on project_path change
-    comboify(node, "feature", () => (node._symEvents ?? []).map((e) => e.feature));
+    comboify(node, "feature", () => (node._symEvents ?? []).map(eventLabel));
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
     // own project_path hook — both fire). `feature` too, so a downstream Auto
     // Packer panel re-renders for the newly picked event.
@@ -184,7 +198,7 @@ function eventCategoriesFor(node) {
     if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs") return ["All"];
     const events = specs._symEvents ?? [];
     if (!events.length) { refreshOrderSpecs(specs); return ["All"]; }
-    const feature = widgetOf(specs, "feature")?.value?.trim();
+    const feature = featureKey(widgetOf(specs, "feature")?.value);
     const ev = events.find((e) => e.feature === feature) || events[0];
     const cats = ev
         ? [...new Set(ev.assets.filter((a) => a.assetName).map((a) => a.category))]
@@ -200,7 +214,7 @@ function eventAssetsFor(node) {
         return { assets: [], refsRoot: "" };
     const events = specs._symEvents ?? [];
     if (!events.length) refreshOrderSpecs(specs);
-    const feature = widgetOf(specs, "feature")?.value?.trim();
+    const feature = featureKey(widgetOf(specs, "feature")?.value);
     const ev = events.find((e) => e.feature === feature) || events[0];
     const cat = widgetOf(node, "category")?.value?.trim() || "All";
     const assets = (ev?.assets ?? []).filter(
