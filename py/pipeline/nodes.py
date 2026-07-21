@@ -261,7 +261,7 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
                         "sheet (e.g. recipes stacked per row at 2x scale). Wire "
                         "'settings' into the Auto Packer.",
             inputs=[
-                io.Combo.Input("scale", options=["0.5x", "1x", "2x"],
+                io.Combo.Input("scale", options=["0.5x", "1x", "2x", "3x"],
                                default="1x",
                                tooltip="Enlarge small sprites (the editor's "
                                        "half / x2). Only assets at/under the "
@@ -289,7 +289,7 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
             outputs=[PackSettingsWire.Output(display_name="settings")],
         )
 
-    _SCALE = {"0.5x": 0.5, "1x": 1.0, "2x": 2.0}
+    _SCALE = {"0.5x": 0.5, "1x": 1.0, "2x": 2.0, "3x": 3.0}
 
     @classmethod
     def execute(cls, scale="1x", scale_max_canvas="256", algorithm="shelf",
