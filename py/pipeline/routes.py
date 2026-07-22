@@ -125,6 +125,22 @@ async def local_image(request):
                             headers={"Cache-Control": "private, max-age=60"})
 
 
+@PromptServer.instance.routes.get("/symbiotica/ref-image")
+async def ref_image(request):
+    """Serve the reference image a member path denotes, using the SAME
+    resolution rule as compose._draw_task_refs (exact rel under root, else
+    flat basename) — so the JS canvas shows exactly what the queued sheet
+    will draw. Root must already be registered (a node execute did it)."""
+    from .compose import resolve_ref
+    root = request.query.get("root", "")
+    rel = request.query.get("rel", "")
+    resolved = is_allowed(resolve_ref(root, rel))
+    if resolved is None:
+        return web.json_response({"error": "not an allowed image path"}, status=403)
+    return web.FileResponse(resolved,
+                            headers={"Cache-Control": "private, max-age=60"})
+
+
 @PromptServer.instance.routes.get("/symbiotica/browse-dirs")
 async def browse_dirs(request):
     """Folder browser for picking a project reference folder. Lists directory

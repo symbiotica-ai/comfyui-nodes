@@ -412,6 +412,15 @@ function thumbUrl(refsRoot, file) {
     );
 }
 
+function refUrl(refsRoot, rel) {
+    // Task-ref cells resolve through /symbiotica/ref-image, which applies the
+    // SAME rule as the Python compositor (exact rel under refsRoot, else flat
+    // basename) — the canvas preview and the queued sheet cannot disagree.
+    return api.apiURL(
+        `/symbiotica/ref-image?root=${encodeURIComponent(refsRoot)}&rel=${encodeURIComponent(rel)}`
+    );
+}
+
 function renderBrowser(container, data) {
     container.replaceChildren();
     if (!data) {
@@ -815,15 +824,14 @@ async function openEditorForNode(node, uiState) {
             const paths = region.taskRefs?.paths;
             if (paths?.length && refsRoot) {
                 if (paths.length === 1) {
-                    const file = paths[0].split("/").pop();
-                    return { url: thumbUrl(refsRoot, file), flip: pairFlip };
+                    return { url: refUrl(refsRoot, paths[0]), flip: pairFlip };
                 }
                 // Multiple checked refs are explicit per-cell art — no baked flip.
-                const file = paths[Math.min(i, paths.length - 1)].split("/").pop();
-                return { url: thumbUrl(refsRoot, file), flip: false };
+                const rel = paths[Math.min(i, paths.length - 1)];
+                return { url: refUrl(refsRoot, rel), flip: false };
             }
             if (member.spriteId && refsRoot) {
-                return { url: thumbUrl(refsRoot, member.spriteId.split("/").pop()),
+                return { url: refUrl(refsRoot, member.spriteId),
                          flip: Boolean(member.flipX) };
             }
             if (projectRels.length && root) {
