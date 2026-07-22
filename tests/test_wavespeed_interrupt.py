@@ -96,3 +96,48 @@ def test_a_failed_task_reports_instead_of_polling_on(polling, monkeypatch):
         polling.wait_for_task("task-1", polling_interval=1, timeout=300)
     assert "content policy" in str(err.value)
     assert polling.polls == 1, f"retried a failed task ({polling.polls} polls)"
+
+
+def test_a_cancel_survives_the_caller_nodes(monkeypatch):
+    """Around forty nodes wrap the wait in `except Exception as e: raise
+    Exception(...)`. A cancel only reaches ComfyUI as a cancel because its
+    interrupt derives from BaseException, which that clause does not catch.
+
+    Nothing in this package enforces that — it is ComfyUI's choice, and if it
+    ever became an Exception every one of those nodes would quietly turn a
+    cancel into a red error. This is the test that would notice."""
+    import importlib
+    import sys
+    import types
+
+    class InterruptProcessingException(BaseException):
+        pass
+
+    mm = types.ModuleType("comfy.model_management")
+    mm.InterruptProcessingException = InterruptProcessingException
+    mm.processing_interrupted = lambda: True
+    comfy = types.ModuleType("comfy")
+    comfy.__path__ = []
+    comfy.model_management = mm
+    monkeypatch.setitem(sys.modules, "comfy", comfy)
+    monkeypatch.setitem(sys.modules, "comfy.model_management", mm)
+
+    fresh = importlib.reload(importlib.import_module("wavespeed_api.client"))
+    try:
+        assert issubclass(fresh.WaveSpeedInterrupted, BaseException)
+        assert not issubclass(fresh.WaveSpeedInterrupted, Exception), (
+            "a caller's `except Exception` would swallow the cancel")
+
+        raised = None
+        try:
+            try:
+                raise fresh.WaveSpeedInterrupted("cancelled")
+            except Exception as e:                      # the caller-node shape
+                raised = Exception(f"Async task failed: {e}")
+        except fresh.WaveSpeedInterrupted:
+            pass
+        assert raised is None, "a caller node re-wrapped the cancel"
+    finally:
+        # Leave the module as the rest of the suite expects to find it.
+        monkeypatch.undo()
+        importlib.reload(importlib.import_module("wavespeed_api.client"))
