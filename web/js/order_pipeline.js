@@ -355,9 +355,13 @@ function refreshCombos(node) {
 
 // --- events browser ----------------------------------------------------------
 function thumbUrl(refsRoot, file) {
+    // Keep the /api/ prefix: it works locally (ComfyUI mirrors custom routes
+    // under /api/) AND behind the Modal gateway, which proxies /api/* only — a
+    // root-level /symbiotica/* never reaches the editor sandbox there, so
+    // stripping /api/ blanked every thumbnail on Modal.
     return api.apiURL(
         `/symbiotica/local-image?path=${encodeURIComponent(`${refsRoot}/${file}`)}`
-    ).replace("/api/", "/"); // route registered at server root, not under /api
+    );
 }
 
 function renderBrowser(container, data) {
@@ -728,7 +732,7 @@ async function openEditorForNode(node, uiState) {
             if (!file) return "";
             return api.apiURL(
                 `/symbiotica/template-image?file=${encodeURIComponent(file)}`
-            ).replace("/api/", "/");
+            ); // /api/-prefixed so the Modal gateway (proxies /api/* only) serves it
         },
         resolveMemberUrl: (region, member) => {
             // Which image fills a member cell depends on the reference mode:
