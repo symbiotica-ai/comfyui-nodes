@@ -261,24 +261,36 @@ class SymbioticaModelPreset(io.ComfyNode):
             node_id="SymbioticaModelPreset",
             display_name="Symbiotica Model Preset",
             category="symbiotica/pipeline",
-            description="Shared model/resolution/aspect for the Auto Packer — "
-                        "wire 'preset' into one or many Auto Packers to change "
-                        "their sheet size from a single node.",
+            description="Shared sheet preset for the Auto Packer — model, "
+                        "resolution, aspect, layout (columns / rows) and "
+                        "background. Wire 'preset' into one or many Auto "
+                        "Packers to drive them all from a single node.",
             inputs=[
                 io.Combo.Input("preset_model", options=_MODELS,
                                default="qwen-image"),
                 io.Combo.Input("resolution", options=_RESOLUTIONS,
                                default="1K"),
                 io.Combo.Input("aspect_ratio", options=_ASPECTS, default="1:1"),
+                io.Int.Input("columns", default=1, min=1, max=4,
+                             tooltip="Assets side by side per row"),
+                io.Int.Input("max_rows_per_sheet", default=4, min=1, max=12,
+                             tooltip="Rows per sheet before a new sheet"),
+                io.String.Input("background", default="#808080",
+                                tooltip="Sheet background color; empty = "
+                                        "transparent"),
             ],
             outputs=[ModelPresetWire.Output(display_name="preset")],
         )
 
     @classmethod
     def execute(cls, preset_model="qwen-image", resolution="1K",
-                aspect_ratio="1:1") -> io.NodeOutput:
-        return io.NodeOutput({"model": preset_model, "tier": resolution,
-                              "ar": aspect_ratio})
+                aspect_ratio="1:1", columns=1, max_rows_per_sheet=4,
+                background="#808080") -> io.NodeOutput:
+        return io.NodeOutput({
+            "model": preset_model, "tier": resolution, "ar": aspect_ratio,
+            "columns": int(columns), "max_rows": int(max_rows_per_sheet),
+            "background": background,
+        })
 
 
 class SymbioticaAutoPackerSettings(io.ComfyNode):
@@ -364,22 +376,9 @@ class SymbioticaAutoPacker(io.ComfyNode):
                         "LLM/prompt input; downstream runs once per sheet.",
             inputs=[
                 Order.Input("order"),
-                io.Int.Input("columns", default=1, min=1, max=4,
-                             tooltip="Assets side by side per row"),
-                io.Int.Input("max_rows_per_sheet", default=4, min=1, max=12,
-                             tooltip="Rows per sheet before starting a new "
-                                     "sheet"),
-                # Copied verbatim from SymbioticaTemplateEditor's schema so the
-                # option lists + defaults match the editor exactly.
-                io.Combo.Input("preset_model", options=_MODELS,
-                               default="qwen-image"),
-                io.Combo.Input("resolution", options=_RESOLUTIONS,
-                               default="1K"),
-                io.Combo.Input("aspect_ratio", options=_ASPECTS,
-                               default="1:1"),
-                io.String.Input("background", default="#808080",
-                                tooltip="Sheet background color; empty = "
-                                        "transparent"),
+                # Sheet size / layout / background come from a Model Preset
+                # node (or defaults); pack behaviour from a Settings node. Only
+                # the category picker + per-asset panel live on this node.
                 io.String.Input("category", default="All",
                                 tooltip="One asset type, or All"),
                 io.String.Input("overrides", default="{}",
@@ -404,18 +403,20 @@ class SymbioticaAutoPacker(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, order, columns=1, max_rows_per_sheet=4,
-                preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
-                background="#808080", category="All", overrides="{}",
+    def execute(cls, order, category="All", overrides="{}",
                 preset=None, settings=None) -> io.NodeOutput:
         if not isinstance(order, dict) or "assets" not in order:
             raise ValueError("order input must come from Symbiotica Order "
                              "Specs")
-        # A wired Model Preset node overrides this node's own model widgets.
+        # Sheet size / layout / background come from a wired Model Preset node
+        # (or these defaults when it is unwired).
         p = preset if isinstance(preset, dict) else {}
-        model = p.get("model", preset_model)
-        tier = p.get("tier", resolution)
-        ar = p.get("ar", aspect_ratio)
+        model = p.get("model", "qwen-image")
+        tier = p.get("tier", "1K")
+        ar = p.get("ar", "1:1")
+        columns = int(p.get("columns", 1))
+        max_rows_per_sheet = int(p.get("max_rows", 4))
+        background = p.get("background", "#808080")
         dims = preset_dims({"model": model, "tier": tier, "ar": ar})
         if not dims:
             raise ValueError(f"invalid preset: {model} / {tier} / {ar}")
