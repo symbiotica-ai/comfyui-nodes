@@ -220,13 +220,39 @@ def test_autopack_split_skips_food_rotation_dash(tmp_path):
                        combined_sheet=False, split_variants=True)
 
 
+def test_autopack_combined_variant_paginated_by_ref(tmp_path):
+    # Two 2-ref rotation-2 decorations, same canvas → the combined sheet splits
+    # BY reference index: sheet v1 = each asset's ref1, v2 = each asset's ref2.
+    a = _variant("GBQ", ("g0.png", "g1.png"), "2", canvas="512x512")
+    b = _variant("WCT", ("w0.png", "w1.png"), "2", canvas="512x512")
+    root = _make_refs(tmp_path, [a, b])
+    out = autopack_order([a, b], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=True, split_variants=False)
+    assert [o["name"] for o in out] == ["order-decoration-v1",
+                                        "order-decoration-v2"]
+    for o in out:  # 2 assets' k-th ref, each a rotation-2 mirror pair
+        assert len(o["regions"]) == 2
+        assert len(o["regions"][0]["members"]) == 2
+
+
+def test_autopack_combined_food_stays_whole(tmp_path):
+    # Food (rotation '-') keeps its stages together — NOT paginated by ref.
+    f = _variant("Cake", ("c0.png", "c1.png", "c2.png"), "-",
+                 category="Food - 3 stages", canvas="128x128")
+    root = _make_refs(tmp_path, [f])
+    out = autopack_order([f], root, sheet_w=512, sheet_h=512,
+                         combined_sheet=True, split_variants=False)
+    assert [o["name"] for o in out] == ["order-food-3-stages"]
+    assert len(out[0]["regions"][0]["members"]) == 3  # all 3 stages one region
+
+
 def test_autopack_combined_and_split_together(tmp_path):
     a = _variant("Stall", ("s0.png", "s1.png"), "2")
     root = _make_refs(tmp_path, [a])
     names = [o["name"] for o in autopack_order(
         [a], root, sheet_w=1024, sheet_h=1024,
         combined_sheet=True, split_variants=True)]
-    assert "order-decoration" in names            # combined
+    assert "order-decoration-v1" in names and "order-decoration-v2" in names
     assert "order-stall-v1" in names and "order-stall-v2" in names
 
 

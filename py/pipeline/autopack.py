@@ -112,6 +112,67 @@ def _variant_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
     return out
 
 
+def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
+                     base_name, category, columns, max_rows):
+    """The grouped 'combined' sheets, one (category, canvas) group at a time.
+
+    A VARIANT group (directional decorations, rotation 2/4) is paginated BY
+    reference index — sheet v1 gathers every asset's 1st ref, v2 the 2nd, and
+    so on (rotation-2 refs drawn as their left/right mirror pair). A STAGE group
+    (food, rotation '-') keeps each recipe's stages together in one region, many
+    assets packed per sheet. Both paginate to columns x max_rows per sheet."""
+    per_sheet = max(1, int(columns)) * max(1, int(max_rows))
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for a in assets:
+        if not a.get("refFiles"):
+            continue
+        if category != "All" and a.get("category") != category:
+            continue
+        groups.setdefault((a.get("category", ""), a.get("canvas", "")),
+                          []).append(a)
+    canvases_per_cat: dict[str, set] = {}
+    for cat, canvas in groups:
+        canvases_per_cat.setdefault(cat, set()).add(canvas)
+
+    def emit(cat, canvas, page_assets, suffix, out):
+        sheet, regions, _ov = build_prefill_sheet(
+            page_assets, refs_root, sheet_w, sheet_h, settings, scales=scales)
+        if not regions:
+            return
+        name = f"{base_name}-{slugify(cat)}"
+        if len(canvases_per_cat[cat]) > 1:
+            name += f"-{canvas}"
+        name += suffix
+        out.append({"image": sheet, "regions": regions,
+                    "prompts": build_client_prompts(regions), "name": name})
+
+    out = []
+    for (cat, canvas), group in groups.items():
+        if any(_is_variant(a) for a in group):
+            max_refs = max(len(a["refFiles"]) for a in group)
+            for k in range(1, max_refs + 1):
+                variant_assets = []
+                for a in group:
+                    if len(a["refFiles"]) < k:
+                        continue
+                    synth = {**a, "refFiles": [a["refFiles"][k - 1]]}
+                    if str(a.get("rotation", "")).strip() != "2":
+                        synth["noMirror"] = True  # only rotation-2 mirrors
+                    variant_assets.append(synth)
+                pages = [variant_assets[i:i + per_sheet]
+                         for i in range(0, len(variant_assets), per_sheet)]
+                for pi, page in enumerate(pages, 1):
+                    suffix = f"-v{k}" + (f"-{pi}" if len(pages) > 1 else "")
+                    emit(cat, canvas, page, suffix, out)
+        else:
+            pages = [group[i:i + per_sheet]
+                     for i in range(0, len(group), per_sheet)]
+            for pi, page in enumerate(pages, 1):
+                suffix = f"-{pi}" if len(pages) > 1 else ""
+                emit(cat, canvas, page, suffix, out)
+    return out
+
+
 def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
                    max_rows=4, background="#808080", category="All",
                    base_name="order", scale=1.0, algorithm="shelf",
@@ -147,23 +208,9 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
               if scale and scale != 1 else None)
     out = []
     if combined_sheet:
-        chunks = plan_sheets(assets, columns, max_rows, category=category)
-        canvases_per_cat: dict[str, set] = {}
-        for c in chunks:
-            canvases_per_cat.setdefault(c["category"], set()).add(c["canvas"])
-        for chunk in chunks:
-            sheet, regions, _overflow = build_prefill_sheet(
-                chunk["assets"], refs_root, sheet_w, sheet_h, settings,
-                scales=scales)
-            if not regions:
-                continue
-            out.append({
-                "image": sheet,
-                "regions": regions,
-                "prompts": build_client_prompts(regions),
-                "name": sheet_name(base_name, chunk,
-                                   len(canvases_per_cat[chunk["category"]]) > 1),
-            })
+        out.extend(_combined_sheets(assets, refs_root, sheet_w, sheet_h,
+                                    settings, scales, base_name, category,
+                                    columns, max_rows))
     if split_variants:
         out.extend(_variant_sheets(assets, refs_root, sheet_w, sheet_h,
                                    settings, scales, base_name, category))
