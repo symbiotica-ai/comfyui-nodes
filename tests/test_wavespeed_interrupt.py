@@ -141,3 +141,28 @@ def test_a_cancel_survives_the_caller_nodes(monkeypatch):
         # Leave the module as the rest of the suite expects to find it.
         monkeypatch.undo()
         importlib.reload(importlib.import_module("wavespeed_api.client"))
+
+
+def test_the_resolver_finds_ComfyUI_own_flag(monkeypatch):
+    """Every other test replaces the resolver, which leaves the one line that
+    reaches ComfyUI untested — and its `except Exception` would swallow a
+    typo'd import, disabling cancel in production with the suite still green."""
+    import sys
+    import types
+
+    flag = lambda: True
+    mm = types.ModuleType("comfy.model_management")
+    mm.processing_interrupted = flag
+    mm.InterruptProcessingException = type("InterruptProcessingException",
+                                           (BaseException,), {})
+    comfy = types.ModuleType("comfy")
+    comfy.__path__ = []
+    comfy.model_management = mm
+    monkeypatch.setitem(sys.modules, "comfy", comfy)
+    monkeypatch.setitem(sys.modules, "comfy.model_management", mm)
+
+    assert client_mod._resolve_interrupt_checker() is flag, (
+        "the resolver did not reach ComfyUI's flag")
+    monkeypatch.undo()
+    assert client_mod._resolve_interrupt_checker()() is False, (
+        "outside ComfyUI the resolver must report 'not cancelled'")
