@@ -119,3 +119,10 @@ class TestStoreFollow:
     def test_ssrf_rejected_at_entry(self):
         with pytest.raises(ValueError):
             scrape_product("http://169.254.169.254/", fetch=lambda u: "")
+
+
+class TestEntityUnescape:
+    def test_html_entities_decoded_in_name(self):
+        html = '<html><head><title>Bakery Story &#8211; Imperia &amp; Co</title></head><body><img src="/a_logo_100x100.png"></body></html>'
+        a = extract_product_assets(html, "https://x.com/p")
+        assert a["name"] == "Bakery Story – Imperia & Co"

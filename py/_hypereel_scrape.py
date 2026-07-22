@@ -1,5 +1,6 @@
 # ABOUTME: Product-page scraper — extracts name, description, logo and screenshots
 # ABOUTME: from a product/app page. Port of the platform's field-hardened scrape-product.
+import html as html_mod
 import ipaddress
 import re
 from urllib.parse import urljoin, urlparse
@@ -83,7 +84,8 @@ def extract_product_assets(html, page_url):
     if not name:
         m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
         name = (m.group(1) if m else "").strip()
-    description = _meta(html, "og:description") or _meta(html, "description")
+    name = html_mod.unescape(name)
+    description = html_mod.unescape(_meta(html, "og:description") or _meta(html, "description"))
     og_image = _absolutize(_meta(html, "og:image"), page_url) or ""
 
     # App-store pages: og:image is the app icon (de-facto logo); screenshots
