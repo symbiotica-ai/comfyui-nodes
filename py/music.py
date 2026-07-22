@@ -82,6 +82,11 @@ class NSMusic:
 
     def _call_elevenlabs_music(self, api_key, prompt, duration_ms, force_instrumental, seed, temp_files):
         """Call ElevenLabs music API, return path to downloaded MP3."""
+        from ._settings import resolve_provider_key
+        # Resolved here rather than in execute(): a node with nothing to do
+        # returns before this and never needs a key.
+        api_key = resolve_provider_key(api_key, ["ELEVENLABS_API_KEY"],
+                                       "ElevenLabs")
         payload = {
             "prompt": prompt,
             "music_length_ms": duration_ms,
@@ -115,9 +120,6 @@ class NSMusic:
 
     def execute(self, music_prompt, api_key, duration_sec=30.0, video=None,
                 volume=0.3, force_instrumental=True, duck=True, duck_ratio=4.0, seed=0):
-        from ._settings import resolve_provider_key
-        api_key = resolve_provider_key(api_key, ["ELEVENLABS_API_KEY"],
-                                       "ElevenLabs")
         from comfy_api.latest import InputImpl
 
         if not music_prompt.strip():

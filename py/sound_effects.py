@@ -54,6 +54,11 @@ class NSSoundEffects:
 
     def _call_elevenlabs(self, api_key, sfx_text, duration, prompt_influence, temp_files):
         """Call ElevenLabs sound-generation API, return path to downloaded MP3."""
+        from ._settings import resolve_provider_key
+        # Resolved here rather than in execute(): a node with nothing to do
+        # returns before this and never needs a key.
+        api_key = resolve_provider_key(api_key, ["ELEVENLABS_API_KEY"],
+                                       "ElevenLabs")
         payload = {"text": sfx_text, "prompt_influence": prompt_influence}
         if duration is not None:
             clamped = max(0.5, min(22.0, float(duration)))
@@ -110,9 +115,6 @@ class NSSoundEffects:
         return ";".join(parts)
 
     def execute(self, video, sfx_cues, api_key, volume=0.8, prompt_influence=0.7):
-        from ._settings import resolve_provider_key
-        api_key = resolve_provider_key(api_key, ["ELEVENLABS_API_KEY"],
-                                       "ElevenLabs")
         from comfy_api.latest import InputImpl
 
         # Strip markdown fences if present
