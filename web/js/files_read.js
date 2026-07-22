@@ -88,6 +88,16 @@ function openBrowser(node) {
     const groupOf = (folderKey) => groups.find((g) => g.folder === folderKey);
     const save = () => { writeSelection(node, groups); renderGroups(); };
 
+    // Loose files at the tree root have no folder to name their group after, so
+    // fall back to the refs folder's own basename (not the "(root)" sentinel).
+    const rootBase = root.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "refs";
+    const seedGroup = (folderKey) => folderKey === "(root)"
+        ? { folder: folderKey, name: rootBase, category: rootBase,
+            files: [], desc: "", variants: false }
+        : { folder: folderKey, name: folderKey.split("/").pop(),
+            category: proposeCategory(folderKey), files: [], desc: "",
+            variants: false };
+
     // --- filters -----------------------------------------------------------
     const filterBar = el("div",
         "display:flex;gap:6px;align-items:center;padding:6px 12px;" +
@@ -169,10 +179,7 @@ function openBrowser(node) {
             check.addEventListener("change", () => {
                 let g2 = groupOf(folderKey);
                 if (!g2) {
-                    const name = folderKey.split("/").pop();
-                    g2 = { folder: folderKey, name,
-                           category: proposeCategory(folderKey), files: [],
-                           desc: "", variants: false };
+                    g2 = seedGroup(folderKey);
                     groups.push(g2);
                 }
                 g2.files = g2.files.filter((p) => p !== entry.rel);
@@ -228,7 +235,10 @@ function openBrowser(node) {
                         renderTree();
                         return;
                     }
-                    const clearing = nChecked > 0;
+                    // Tri-state: a FULLY-checked folder clears; none OR partial
+                    // completes to all direct files (a partial click adds the
+                    // rest, matching the browser's own indeterminate→checked).
+                    const clearing = nChecked === direct.length;
                     let g2 = groupOf(key);
                     if (clearing) {
                         if (g2) {
@@ -239,9 +249,7 @@ function openBrowser(node) {
                         }
                     } else {
                         if (!g2) {
-                            g2 = { folder: key, name: dirName,
-                                   category: proposeCategory(key), files: [],
-                                   desc: "", variants: false };
+                            g2 = seedGroup(key);
                             groups.push(g2);
                         }
                         g2.files = [...new Set([...g2.files, ...direct])];
@@ -369,6 +377,9 @@ function openBrowser(node) {
             images = data.images ?? [];
             renderSizeChips();
             renderTree();
+            // list-assets registered the root; re-render the group cards so any
+            // thumbnails that 403'd before registration now load.
+            renderGroups();
         })
         .catch((e) => {
             treePane.replaceChildren(
