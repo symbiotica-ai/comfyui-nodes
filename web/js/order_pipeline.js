@@ -187,8 +187,11 @@ function publishOrder(node, result, events, refsRoot) {
     // Keep the feature value valid (accept the plain feature OR the labelled
     // form); empty means "the order's first event". Never reset a value that
     // still matches an event by key — that would clobber a saved workflow.
+    // `result` is null when there is no project to parse: nothing was asked, so
+    // nothing says the current pick is wrong, and clearing the path to type a
+    // new one must not throw the pick away.
     const featW = widgetOf(node, "feature");
-    if (featW && featW.value) {
+    if (result !== null && featW && featW.value) {
         const key = featureKey(featW.value);
         if (!events.some((e) => e.feature === key)) {
             featW.value = events[0] ? eventLabel(events[0]) : "";

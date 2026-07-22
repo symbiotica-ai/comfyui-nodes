@@ -109,6 +109,75 @@ test("invalidate lets a remembered failure be retried", async () => {
     assert.equal(fetcher.calls.length, 2);
 });
 
+test("a rate limit is retried, not remembered as final", async () => {
+    // 429 and 408 are 4xx but explicitly temporary. Filing them next to 404
+    // would leave the panel empty for the rest of the session over a burst
+    // that cleared in seconds.
+    for (const status of [408, 429]) {
+        const fetcher = failing(status);
+        let clock = 1_000;
+        const cache = createOrderCache(
+            { fetcher, now: () => clock, baseBackoffMs: 1_000 });
+
+        await cache.get("bakery|October");
+        clock += 1_100;
+        await cache.get("bakery|October");
+
+        assert.equal(fetcher.calls.length, 2, `${status} was cached as final`);
+    }
+});
+
+test("get() resolves rather than throwing when the fetcher throws outright", async () => {
+    // A fetcher that throws before returning a promise would otherwise escape
+    // the cache entirely — no coalescing, no memory, and every render path
+    // asking again.
+    const calls = [];
+    const cache = createOrderCache({
+        fetcher: (key) => { calls.push(key); throw new Error("bad route"); },
+    });
+
+    const first = await cache.get("bakery|October");
+    const second = await cache.get("bakery|October");
+
+    assert.equal(first.ok, false);
+    assert.equal(calls.length, 1);
+    assert.equal(first, second);
+});
+
+test("invalidating mid-request discards that request's answer", async () => {
+    // The user retries while a parse is still in flight. Joining the doomed
+    // request would cache its failure after the invalidate, so the deliberate
+    // retry is lost and a second edit is needed to recover.
+    let healthy = false;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const calls = [];
+    const fetcher = async (key) => {
+        calls.push(key);
+        if (!healthy) {
+            await gate;
+            const err = new Error("order_path required");
+            err.status = 400;
+            throw err;
+        }
+        return { events: [{ feature: "Mini 1" }] };
+    };
+    const cache = createOrderCache({ fetcher });
+
+    const doomed = cache.get("bakery|October");
+    healthy = true;
+    cache.invalidate("bakery|October");
+    const retried = cache.get("bakery|October");
+    release();
+    await doomed;
+
+    assert.equal((await retried).ok, true, "the retry joined the doomed request");
+    assert.equal(calls.length, 2, "the retry did not reach the fetcher");
+    // The superseded failure must not land in the cache behind the retry.
+    assert.equal((await cache.get("bakery|October")).ok, true,
+                 "the discarded failure was cached anyway");
+});
+
 test("a different key is fetched separately", async () => {
     const fetcher = counting();
     const cache = createOrderCache({ fetcher });

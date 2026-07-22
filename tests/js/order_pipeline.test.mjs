@@ -136,6 +136,29 @@ test("editing a widget retries a project that previously failed", async () => {
                  "a widget edit did not re-ask the server");
 });
 
+test("clearing the project path keeps the picked feature", async () => {
+    // Clearing the field to paste a new path must not throw away the chosen
+    // event — there is no order to reconcile against while it is blank, so
+    // there is nothing to say the pick is invalid.
+    reset();
+    setLatency(1);
+    setResponder(always({ ok: true, status: 200,
+                          body: { events: [ONE_EVENT], refsRoot: "/refs" } }));
+
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: ABSENT_PROJECT, month: "October", feature: "Mini 1" });
+    specs.onNodeCreated();
+    for (let f = 0; f < 10; f++) await tick();
+
+    const projectWidget = specs.widgets.find((w) => w.name === "project_path");
+    projectWidget.value = "";
+    projectWidget.callback.call(projectWidget, "");
+    for (let f = 0; f < 10; f++) await tick();
+
+    const feature = specs.widgets.find((w) => w.name === "feature").value;
+    assert.notEqual(feature, "", "blanking the project wiped the feature");
+});
+
 test("repainting the category combo alone does not fetch", async () => {
     // The combo's values function runs on every repaint, and it asks for the
     // order when the event list is empty — a request source that never touches
