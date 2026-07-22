@@ -35,6 +35,42 @@ done
 If an open PR holds a higher version than the one about to be released, decide
 the merge order deliberately — see the ordering hazard below.
 
+## Check what merged since the last release, and whether anyone read it
+
+Reviewing the release diff itself is close to useless here: code reaches `main`
+through PRs, so by the time a release runs the only pending change is the
+version line. The code that is about to be published merged earlier, possibly
+weeks earlier, possibly unread. That is the gap to close.
+
+List the PRs this release will publish and how each was reviewed:
+
+```bash
+PREV=$(git tag --list 'v*' --sort=-version:refname | head -1)
+BOUNDARY=${PREV:-$(git log --format=%H -G'^version = ' -- pyproject.toml | head -1)}
+for n in $(git log "$BOUNDARY"..HEAD --merges --oneline | grep -oE '#[0-9]+' | tr -d '#'); do
+  gh pr view "$n" --json number,title,author,reviewDecision --jq '
+    (.reviewDecision // "") as $r
+    | "  #\(.number) by \(.author.login)  [\(if $r == "" then "UNREVIEWED" else $r end)]  \(.title[0:40])"'
+done
+```
+
+`BOUNDARY` is the previous release tag; before tags existed it falls back to the
+last commit that changed the version line.
+
+Anything marked `UNREVIEWED` is code about to reach every user of the pack that
+no second person has read. That is not automatically a stop — a one-line fix
+from a maintainer is different from a first contribution from outside. Judge it
+on what the PR actually contains:
+
+- **From outside the org, or large, or touching node inputs/outputs/ids** — run
+  `/code-review` over it (`gh pr diff <n>`) before continuing, and fix or drop
+  anything confirmed. Do not publish an unread contribution.
+- **Small, from a maintainer, already covered by tests** — note it in the
+  release notes and carry on.
+
+`CHANGES_REQUESTED` is a stop regardless: the release would ship a change
+someone objected to.
+
 ## Versioning: calver, with a caveat that matters
 
 The scheme is `calver-build` — `YYYY.M.BUILD`, unpadded month, build resets each
