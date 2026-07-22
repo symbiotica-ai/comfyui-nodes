@@ -29,7 +29,8 @@ class NSSoundEffects:
             "required": {
                 "video": ("VIDEO",),
                 "sfx_cues": ("STRING", {"multiline": True}),
-                "api_key": ("STRING", {"multiline": False}),
+                "api_key": ("STRING", {"multiline": False, "default": "",
+                                       "tooltip": "Leave empty to use Settings → Symbiotica → ElevenLabs API key. A key typed here is saved into the workflow file."}),
             },
             "optional": {
                 "volume": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 2.0, "step": 0.05}),
@@ -109,6 +110,9 @@ class NSSoundEffects:
         return ";".join(parts)
 
     def execute(self, video, sfx_cues, api_key, volume=0.8, prompt_influence=0.7):
+        from ._settings import resolve_provider_key
+        api_key = resolve_provider_key(api_key, ["ELEVENLABS_API_KEY"],
+                                       "ElevenLabs")
         from comfy_api.latest import InputImpl
 
         # Strip markdown fences if present

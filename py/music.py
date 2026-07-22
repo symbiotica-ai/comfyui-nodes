@@ -29,7 +29,8 @@ class NSMusic:
         return {
             "required": {
                 "music_prompt": ("STRING", {"multiline": True}),
-                "api_key": ("STRING", {"multiline": False}),
+                "api_key": ("STRING", {"multiline": False, "default": "",
+                                       "tooltip": "Leave empty to use Settings → Symbiotica → ElevenLabs API key. A key typed here is saved into the workflow file."}),
                 "duration_sec": ("FLOAT", {"default": 30.0, "min": 3.0, "max": 600.0, "step": 1.0}),
             },
             "optional": {
@@ -114,6 +115,9 @@ class NSMusic:
 
     def execute(self, music_prompt, api_key, duration_sec=30.0, video=None,
                 volume=0.3, force_instrumental=True, duck=True, duck_ratio=4.0, seed=0):
+        from ._settings import resolve_provider_key
+        api_key = resolve_provider_key(api_key, ["ELEVENLABS_API_KEY"],
+                                       "ElevenLabs")
         from comfy_api.latest import InputImpl
 
         if not music_prompt.strip():
