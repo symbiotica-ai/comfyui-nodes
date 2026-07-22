@@ -59,3 +59,29 @@ def test_a_failed_job_reports_instead_of_polling_on(polling, monkeypatch):
         polling.wait_for_video("req-1", polling_interval=5, timeout=600)
     assert "content policy" in str(err.value)
     assert polling.polls == 1, f"retried a failed job ({polling.polls} polls)"
+
+
+def test_the_resolver_finds_ComfyUI_own_flag(monkeypatch):
+    """Every other test replaces the resolver, which leaves the one line that
+    reaches ComfyUI untested — and its `except Exception` would swallow a
+    typo'd import, disabling cancel in production with the suite still green."""
+
+    import sys
+    import types
+
+    flag = lambda: True
+    mm = types.ModuleType("comfy.model_management")
+    mm.processing_interrupted = flag
+    mm.InterruptProcessingException = type("InterruptProcessingException",
+                                           (BaseException,), {})
+    comfy = types.ModuleType("comfy")
+    comfy.__path__ = []
+    comfy.model_management = mm
+    monkeypatch.setitem(sys.modules, "comfy", comfy)
+    monkeypatch.setitem(sys.modules, "comfy.model_management", mm)
+
+    assert client_mod._resolve_interrupt_checker() is flag, (
+        "the resolver did not reach ComfyUI's flag")
+    monkeypatch.undo()
+    assert client_mod._resolve_interrupt_checker()() is False, (
+        "outside ComfyUI the resolver must report 'not cancelled'")
