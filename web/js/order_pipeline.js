@@ -202,6 +202,7 @@ function eventCategoriesFor(node) {
     const ev = events.find((e) => e.feature === feature) || events[0];
     const cats = ev
         ? [...new Set(ev.assets.filter((a) => a.assetName).map((a) => a.category))]
+              .sort((a, b) => a.localeCompare(b))
         : [];
     return ["All", ...cats];
 }
