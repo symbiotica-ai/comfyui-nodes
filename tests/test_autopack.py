@@ -235,6 +235,25 @@ def test_autopack_combined_variant_paginated_by_ref(tmp_path):
         assert len(o["regions"][0]["members"]) == 2
 
 
+def test_autopack_combined_mixed_group_keeps_pair(tmp_path):
+    # A rotation-BLANK single-ref decoration sharing a (category, canvas) group
+    # with a rotation-2 asset must KEEP its in-game mirror pair on the variant
+    # sheets — only true multi-direction variants (rotation >= 3) suppress it.
+    variant = _variant("Stall", ("s0.png", "s1.png"), "2")
+    plain = _variant("Lamp", ("l0.png",), "")     # blank rotation, 1 ref
+    four = _variant("Sign", ("d0.png", "d1.png"), "4")
+    root = _make_refs(tmp_path, [variant, plain, four])
+    out = autopack_order([variant, plain, four], root,
+                         sheet_w=2048, sheet_h=2048,
+                         combined_sheet=True, split_variants=False)
+    v1 = next(o for o in out if o["name"].endswith("-v1"))
+    members = {r["name"]: r["members"] for r in v1["regions"]}
+    assert len(members["Lamp"]) == 2                    # pair kept
+    assert members["Lamp"][1].get("flipX") is True
+    assert len(members["Stall"]) == 2                   # rotation-2 mirrors
+    assert len(members["Sign"]) == 1                    # rotation-4: no mirror
+
+
 def test_autopack_combined_food_stays_whole(tmp_path):
     # Food (rotation '-') keeps its stages together — NOT paginated by ref.
     f = _variant("Cake", ("c0.png", "c1.png", "c2.png"), "-",

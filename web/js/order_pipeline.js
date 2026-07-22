@@ -492,6 +492,23 @@ app.registerExtension({
             const origCfg = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function () {
                 origCfg?.apply(this, arguments);
+                // Migrate pre-v2.40 workflows: the packer's layout widgets
+                // moved to the Model Preset node, so old widgets_values map
+                // positionally onto [category, overrides] — category gets the
+                // old `columns` int, overrides the old `max_rows`. Real
+                // categories are never bare numbers and overrides must be a
+                // JSON object; anything else is remap debris → reset it.
+                const catW = widgetOf(this, "category");
+                if (catW && /^\d+$/.test(String(catW.value).trim())) {
+                    catW.value = "All";
+                }
+                const ovW = widgetOf(this, "overrides");
+                if (ovW) {
+                    try {
+                        const v = JSON.parse(ovW.value || "{}");
+                        if (typeof v !== "object" || v === null) throw 0;
+                    } catch { ovW.value = "{}"; }
+                }
                 queueMicrotask(() => this._symRenderAssets?.());
             };
         }

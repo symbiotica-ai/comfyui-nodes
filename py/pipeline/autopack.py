@@ -156,8 +156,14 @@ def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
                     if len(a["refFiles"]) < k:
                         continue
                     synth = {**a, "refFiles": [a["refFiles"][k - 1]]}
-                    if str(a.get("rotation", "")).strip() != "2":
-                        synth["noMirror"] = True  # only rotation-2 mirrors
+                    # Suppress the single-ref mirror only for true multi-
+                    # direction variants (rotation >= 3, where a flip can't
+                    # stand in). Rotation-2 mirrors; a NON-variant asset that
+                    # merely shares the group (blank/'-' rotation) keeps its
+                    # normal in-game pair behavior.
+                    rot = str(a.get("rotation", "")).strip()
+                    if rot.isdigit() and int(rot) >= 3:
+                        synth["noMirror"] = True
                     variant_assets.append(synth)
                 pages = [variant_assets[i:i + per_sheet]
                          for i in range(0, len(variant_assets), per_sheet)]
