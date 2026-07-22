@@ -1,0 +1,130 @@
+// ABOUTME: Stand-ins for ComfyUI's app/api modules and the browser DOM, so the
+// ABOUTME: real web/js modules can be imported and driven under plain node.
+
+export const calls = [];
+let responder = () => ({ ok: false, status: 400, body: { error: "order_path required" } });
+let latencyMs = 0;
+
+export function setResponder(fn) { responder = fn; }
+export function setLatency(ms) { latencyMs = ms; }
+export function reset() {
+    calls.length = 0;
+    repaints.count = 0;
+    nodes.clear();
+    app.graph.links = {};
+}
+
+// --- DOM ---------------------------------------------------------------------
+function element() {
+    return {
+        style: { cssText: "", display: "", opacity: "" },
+        children: [],
+        textContent: "",
+        appendChild(c) { this.children.push(c); return c; },
+        append(...cs) { this.children.push(...cs); },
+        replaceChildren(...cs) { this.children = cs; },
+        addEventListener() {}, removeEventListener() {},
+        setAttribute() {}, remove() {},
+        querySelector: () => null, querySelectorAll: () => [],
+    };
+}
+globalThis.document = {
+    createElement: element,
+    createTextNode: (t) => ({ text: t }),
+    body: element(),
+    addEventListener() {},
+};
+globalThis.window = { addEventListener() {}, devicePixelRatio: 1 };
+
+// --- api ---------------------------------------------------------------------
+export const api = {
+    apiURL: (route) => `/api${route}`,
+    addEventListener() {},
+    async fetchApi(route) {
+        calls.push(route);
+        const r = responder(route, calls.length);
+        if (latencyMs) await new Promise((res) => setTimeout(res, latencyMs));
+        return {
+            ok: r.ok,
+            status: r.status ?? (r.ok ? 200 : 400),
+            statusText: r.ok ? "OK" : "Error",
+            async json() { return r.body; },
+        };
+    },
+};
+
+// --- app / graph -------------------------------------------------------------
+const nodes = new Map();
+export const repaints = { count: 0 };
+let nextLink = 1;
+let nextId = 1;
+
+export const app = {
+    extensions: [],
+    registerExtension(ext) { this.extensions.push(ext); },
+    graph: { links: {}, getNodeById: (id) => nodes.get(id) ?? null },
+};
+
+function makeNode(comfyClass, widgets) {
+    const node = {
+        id: nextId++,
+        comfyClass,
+        size: [200, 100],
+        inputs: [],
+        outputs: [],
+        widgets: Object.entries(widgets).map(([name, value]) => ({
+            name, value, type: "text", callback: null,
+        })),
+        addWidget(type, name, value, callback, options) {
+            const w = { type, name, value, callback, options };
+            this.widgets.push(w);
+            return w;
+        },
+        addDOMWidget(name, type, elem, options) {
+            const w = { name, type, element: elem, options };
+            this.widgets.push(w);
+            return w;
+        },
+        // LiteGraph marks the canvas dirty, which schedules a repaint.
+        setDirtyCanvas() { repaints.count++; },
+        setSize() {}, computeSize: () => [200, 100],
+    };
+    nodes.set(node.id, node);
+    return node;
+}
+
+export function link(from, to, inputName) {
+    const id = nextLink++;
+    app.graph.links[id] = { origin_id: from.id, target_id: to.id, id };
+    to.inputs.push({ name: inputName, link: id });
+    const out = from.outputs[0] ?? (from.outputs[0] = { links: [] });
+    out.links.push(id);
+    return id;
+}
+
+// Build a node the way ComfyUI does: run every registered extension's
+// beforeRegisterNodeDef for this class, then invoke onNodeCreated.
+export async function create(comfyClass, widgets = {}) {
+    const proto = {};
+    for (const ext of app.extensions) {
+        await ext.beforeRegisterNodeDef?.({ prototype: proto }, { name: comfyClass });
+    }
+    const node = makeNode(comfyClass, widgets);
+    node.onNodeCreated = proto.onNodeCreated;
+    node.onConfigure = proto.onConfigure;
+    return node;
+}
+
+// One LiteGraph repaint: every combo widget whose values is a function has it
+// invoked, exactly as ComboWidget._displayValue does per frame.
+export function repaint(...targets) {
+    for (const node of targets) {
+        for (const w of node.widgets ?? []) {
+            if (w.type === "combo" && typeof w.options?.values === "function") {
+                w.options.values(w, node);
+            }
+        }
+    }
+}
+
+export const tick = () => new Promise((r) => setTimeout(r, 0));
