@@ -194,6 +194,16 @@ function openBrowser(node) {
             return row;
         }
 
+        function selectedUnder(key) {
+            // Ticked files anywhere below this folder, across all groups.
+            const prefix = `${key}/`;
+            let n = 0;
+            for (const g of groups) {
+                n += (g.files ?? []).filter((p) => p.startsWith(prefix)).length;
+            }
+            return n;
+        }
+
         function renderNode(node, prefix, depth) {
             for (const [dirName, child] of node.folders) {
                 const key = prefix ? `${prefix}/${dirName}` : dirName;
@@ -210,7 +220,14 @@ function openBrowser(node) {
                 check.addEventListener("click", (e) => e.stopPropagation());
                 check.addEventListener("change", () => {
                     // Folder tick = group its DIRECT visible files (subfolders
-                    // are their own groups — one folder, one sheet row).
+                    // are their own groups — one folder, one sheet row). A
+                    // folder with no direct files just expands — no empty group.
+                    if (!direct.length) {
+                        check.checked = false;
+                        expanded.add(key);
+                        renderTree();
+                        return;
+                    }
                     const clearing = nChecked > 0;
                     let g2 = groupOf(key);
                     if (clearing) {
@@ -233,7 +250,7 @@ function openBrowser(node) {
                     renderTree();
                 });
                 const label = el("span", "flex:1;cursor:pointer;",
-                    `${open ? "▾" : "▸"} 📁 ${dirName}  ${nChecked}/${child.count}`);
+                    `${open ? "▾" : "▸"} 📁 ${dirName}  ${selectedUnder(key)}/${child.count}`);
                 label.addEventListener("click", () => {
                     expanded[open ? "delete" : "add"](key);
                     renderTree();
