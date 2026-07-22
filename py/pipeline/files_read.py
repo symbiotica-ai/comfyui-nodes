@@ -9,11 +9,13 @@ from PIL import Image
 
 
 def _px_dims(path: str) -> tuple[int, int] | None:
-    """Image pixel size via a header read; None when unreadable."""
+    """Image pixel size via a header read; None when unreadable — including a
+    decompression-bomb-sized image (a huge client scan), which Pillow rejects
+    with DecompressionBombError (not an OSError) at open time."""
     try:
         with Image.open(path) as im:
             return im.size
-    except OSError:
+    except (OSError, Image.DecompressionBombError):
         return None
 
 
@@ -32,21 +34,34 @@ def build_files_order(refs_root: str, selection, name: str = "") -> dict:
             selection = json.loads(selection or "{}")
         except ValueError as e:
             raise ValueError(f"selection is not valid JSON: {e}") from e
-    groups = (selection or {}).get("groups") or []
+    # A hand-edited widget could hold valid JSON that is not an object (a list,
+    # a number) — treat anything but a dict of groups as empty.
+    groups = selection.get("groups") if isinstance(selection, dict) else None
     if not groups:
         raise ValueError("no groups selected — open the files browser and "
                          "tick folders/files to build groups")
-    assets, seen = [], {}
+    root_real = os.path.realpath(refs_root)
+    assets, used = [], set()
     for g in groups:
-        gname = (g.get("name") or "").strip() or "group"
-        # Duplicate names would collide in prefill's by-name maps: suffix them.
-        seen[gname] = seen.get(gname, 0) + 1
-        if seen[gname] > 1:
-            gname = f"{gname}-{seen[gname]}"
+        if not isinstance(g, dict):
+            continue  # skip a malformed group entry rather than crash
+        base = (g.get("name") or "").strip() or "group"
+        # Duplicate names collide in prefill's by-name maps (one group's art
+        # would overwrite another's), so make each unique — bumping past any
+        # suffix a user already typed, never reusing a taken name.
+        gname, n = base, 1
+        while gname in used:
+            n += 1
+            gname = f"{base}-{n}"
+        used.add(gname)
         files, w, h = [], 0, 0
         for rel in g.get("files") or []:
             p = os.path.join(refs_root, *str(rel).split("/"))
-            dims = _px_dims(p) if os.path.isfile(p) else None
+            # Confine reads to refs_root — an escaping rel ('../secret.png') is
+            # dropped like a missing file, never composited into the sheet.
+            real = os.path.realpath(p)
+            inside = real == root_real or real.startswith(root_real + os.sep)
+            dims = _px_dims(p) if inside and os.path.isfile(p) else None
             if dims is None:
                 continue
             files.append(str(rel))
@@ -62,6 +77,9 @@ def build_files_order(refs_root: str, selection, name: str = "") -> dict:
             "refFiles": files,
             "prompt": (g.get("desc") or "").strip(),
         })
+    if not assets:
+        raise ValueError("no valid groups — open the files browser and tick "
+                         "folders/files to build groups")
     feature = (name or "").strip() or os.path.basename(refs_root.rstrip(os.sep))
     return {"feature": feature, "eventName": feature, "assets": assets,
             "refsRoot": refs_root, "assetsRoot": "", "guide": None}

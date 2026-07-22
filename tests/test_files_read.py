@@ -125,3 +125,56 @@ def test_draw_task_refs_draws_nested_refs(tmp_path):
     sheet, regions, _ = build_prefill_sheet(assets, str(tmp_path), 256, 256,
                                             settings)
     assert sheet.getbbox() is not None  # the nested ref actually drew
+
+
+def test_dedup_avoids_collision_with_explicit_suffix(refs):
+    # ['s','s-2','s'] must NOT produce a duplicate 's-2' (prefill's by-name map
+    # would drop one group's content). Bump past taken suffixes.
+    order = build_files_order(str(refs), _sel([
+        {"name": "s", "category": "c", "files": ["Stoves/stove_red.png"]},
+        {"name": "s-2", "category": "c", "files": ["Stoves/stove_blue.png"]},
+        {"name": "s", "category": "c", "files": ["Food/Cakes/cake_a.png"]},
+    ]))
+    names = [a["assetName"] for a in order["assets"]]
+    assert names == ["s", "s-2", "s-3"]
+    assert len(set(names)) == 3
+
+
+def test_non_dict_selection_is_empty_not_crash(refs):
+    for bad in ["[1]", "5", '"x"']:
+        with pytest.raises(ValueError, match="files browser"):
+            build_files_order(str(refs), bad)
+
+
+def test_non_dict_group_entries_skipped(refs):
+    order = build_files_order(str(refs), _sel([
+        1, {"name": "s", "category": "c", "files": ["Stoves/stove_red.png"]}]))
+    assert [a["assetName"] for a in order["assets"]] == ["s"]
+
+
+def test_all_invalid_groups_raise(refs):
+    with pytest.raises(ValueError, match="files browser"):
+        build_files_order(str(refs), _sel([1, 2]))
+
+
+def test_oversized_image_is_dropped_not_raised(refs, monkeypatch):
+    # A decompression-bomb-sized image must be dropped like any unreadable
+    # file, not crash the node with a raw DecompressionBombError.
+    from PIL import Image
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 16)  # 128x128 trips 2x guard
+    with pytest.raises(ValueError, match="no readable images"):
+        build_files_order(str(refs), _sel([
+            {"name": "s", "category": "c", "files": ["Stoves/stove_red.png"]}]))
+
+
+def test_escaping_rel_is_dropped(tmp_path):
+    _png(tmp_path / "refs" / "Stoves" / "a.png")
+    _png(tmp_path / "secret.png")
+    root = str(tmp_path / "refs")
+    # An escaping rel resolves outside root -> treated as missing (dropped).
+    with pytest.raises(ValueError, match="no readable images"):
+        build_files_order(root, _sel([
+            {"name": "x", "category": "x", "files": ["../secret.png"]}]))
+    order = build_files_order(root, _sel([
+        {"name": "x", "category": "x", "files": ["Stoves/a.png"]}]))
+    assert order["assets"][0]["refFiles"] == ["Stoves/a.png"]

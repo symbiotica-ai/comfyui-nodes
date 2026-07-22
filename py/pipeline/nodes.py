@@ -287,7 +287,10 @@ class SymbioticaFilesRead(io.ComfyNode):
             sel = json.loads(selection or "{}")
         except ValueError:
             sel = {}
-        for g in (sel or {}).get("groups") or []:
+        groups = sel.get("groups") if isinstance(sel, dict) else None
+        for g in groups or []:
+            if not isinstance(g, dict):
+                continue
             for rel in g.get("files") or []:
                 p = os.path.join(refs_path, *str(rel).split("/"))
                 try:
