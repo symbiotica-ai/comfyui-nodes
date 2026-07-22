@@ -61,16 +61,27 @@ function failing(status) {
 test("a 4xx failure is remembered and never re-requested", async () => {
     // The Modal case: the project path does not exist on the server host, so
     // this key can never succeed without the user changing project or month.
+    //
+    // The clock has to move for this to mean anything. Two gets in the same
+    // millisecond also land inside the first backoff window, where a cache that
+    // merely defers 4xx looks exactly like one that keeps them — and a deferred
+    // 4xx is re-requested every backoff interval for as long as the tab is open.
     const fetcher = failing(400);
-    const cache = createOrderCache({ fetcher });
+    let clock = 1_000;
+    const cache = createOrderCache(
+        { fetcher, now: () => clock, baseBackoffMs: 1_000, maxBackoffMs: 30_000 });
 
     const first = await cache.get("bakery|October");
-    const second = await cache.get("bakery|October");
+    for (const jump of [1_100, 30_000, 300_000, 10_000_000]) {
+        clock += jump;
+        await cache.get("bakery|October");
+    }
+    const last = await cache.get("bakery|October");
 
-    assert.equal(fetcher.calls.length, 1);
+    assert.equal(fetcher.calls.length, 1, "the 4xx was re-requested later");
     assert.equal(first.ok, false);
     assert.equal(first.status, 400);
-    assert.equal(first, second);
+    assert.equal(first, last);
 });
 
 test("a 5xx failure backs off, then retries once the delay has passed", async () => {

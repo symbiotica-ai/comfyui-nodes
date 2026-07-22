@@ -4,13 +4,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-    calls, setResponder, setLatency, reset, create, link, repaint, tick,
+    calls, setResponder, setLatency, reset, create, link, repaint, tick, repaints,
 } from "./comfy_stub.mjs";
 import "../../web/js/order_pipeline.js";
 
 // A stale local path: it exists on the artist's mac, never inside the hosted
 // sandbox, so resolve_month() yields no order_path and the route 400s forever.
-const ABSENT_PROJECT = "/Users/someone/Google Drive/Clients/Imperia/bakery";
+//
+// The parse cache lives in the module and outlives any one test, so each test
+// takes its own path. Sharing one would let a cached answer leak forward and
+// quietly turn a later test into an assertion about nothing.
+let projectCounter = 0;
+const ABSENT_PROJECT = () =>
+    `/Users/someone/Google Drive/Clients/Imperia/bakery-${++projectCounter}`;
 
 const ONE_EVENT = {
     feature: "Mini 1",
@@ -30,7 +36,7 @@ async function runGraph({ responder, packerCount = 1, frames = 40 }) {
     setResponder(responder);
 
     const specs = await create("SymbioticaOrderSpecs",
-        { project_path: ABSENT_PROJECT, month: "October", feature: "Mini 1" });
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
     const packers = [];
     for (let i = 0; i < packerCount; i++) {
         const p = await create("SymbioticaAutoPacker",
@@ -90,6 +96,126 @@ test("a healthy order is parsed once and reused", async () => {
     assert.ok(n <= 3, `expected one parse for a healthy order, got ${n} requests`);
 });
 
+// The Auto Packer's assets panel is a DOM widget; its children are the asset
+// rows, so they say whether a parse actually reached the UI.
+const panelOf = (packer) =>
+    packer.widgets.find((w) => w.name === "assets_panel").element;
+
+test("a parsed order reaches the downstream assets panel", async () => {
+    // The guard suppresses repeat answers. It must still deliver new ones —
+    // otherwise the panel sits on its placeholder after a perfectly good parse
+    // and nothing in a request count would notice.
+    reset();
+    setLatency(1);
+    setResponder(always({ ok: true, status: 200,
+                          body: { events: [ONE_EVENT], refsRoot: "/refs" } }));
+
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
+    const packer = await create("SymbioticaAutoPacker",
+        { category: "All", overrides: "{}" });
+    link(specs, packer, "order");
+    specs.onNodeCreated();
+    packer.onNodeCreated();
+    for (let f = 0; f < 20; f++) await tick();
+
+    const panel = panelOf(packer);
+    assert.equal(panel.children.length, 1,
+                 "the assets panel never rendered the parsed asset");
+    assert.notEqual(panel.textContent, "Wire an Order Specs and pick an event.",
+                    "the panel is still showing its placeholder");
+});
+
+test("picking a different feature re-renders the packer", async () => {
+    // `feature` is part of the change comparison for this reason: the order
+    // behind it is identical, so an identity check on the parse alone would
+    // treat a new pick as nothing to do.
+    reset();
+    setLatency(1);
+    const second = {
+        feature: "Mini 2", eventName: "Frosted",
+        assets: [{ assetName: "Cake", category: "Dessert", canvas: "512x512",
+                   prompt: "a cake", refFiles: ["Cake.png"] }],
+    };
+    setResponder(always({ ok: true, status: 200,
+                          body: { events: [ONE_EVENT, second], refsRoot: "/refs" } }));
+
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
+    const packer = await create("SymbioticaAutoPacker",
+        { category: "All", overrides: "{}" });
+    link(specs, packer, "order");
+    specs.onNodeCreated();
+    packer.onNodeCreated();
+    for (let f = 0; f < 20; f++) await tick();
+
+    const featureWidget = specs.widgets.find((w) => w.name === "feature");
+    featureWidget.value = "Mini 2 — Frosted";
+    featureWidget.callback.call(featureWidget, "Mini 2 — Frosted");
+    for (let f = 0; f < 20; f++) await tick();
+
+    assert.equal(specs._symEvents.length, 2);
+    assert.equal(panelOf(packer).children.length, 1,
+                 "the packer did not re-render for the new feature");
+});
+
+test("a 400 is still not retried once a backoff would have elapsed", async () => {
+    // Real time, deliberately: this is the one place the whole chain is
+    // exercised end to end — fetchJson labelling the error with its status, the
+    // cache reading that status, and a 400 being kept rather than deferred. A
+    // failure that loses its status is retried on the backoff instead, which
+    // reads as fixed for the first second and floods slowly forever after.
+    reset();
+    setLatency(1);
+    setResponder(always({ ok: false, status: 400,
+                          body: { error: "order_path required" } }));
+
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
+    const packer = await create("SymbioticaAutoPacker",
+        { category: "All", overrides: "{}" });
+    link(specs, packer, "order");
+    specs.onNodeCreated();
+    packer.onNodeCreated();
+
+    // Past the 1000ms first backoff window, repainting throughout.
+    const until = Date.now() + 1_400;
+    while (Date.now() < until) {
+        repaint(specs, packer);
+        await new Promise((r) => setTimeout(r, 10));
+    }
+
+    assert.equal(parseOrderCalls(), 1,
+                 "the 400 was retried, so it was not classified as final");
+});
+
+test("a settled order stops marking the canvas dirty", async () => {
+    // Marking the canvas dirty schedules the repaint that paints the category
+    // combo, which asks for the order again. If that keeps firing on an
+    // unchanged answer the loop is still running — just without the requests,
+    // so no request count would show it.
+    reset();
+    setLatency(1);
+    setResponder(always({ ok: false, status: 400,
+                          body: { error: "order_path required" } }));
+
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
+    const packer = await create("SymbioticaAutoPacker",
+        { category: "All", overrides: "{}" });
+    link(specs, packer, "order");
+    specs.onNodeCreated();
+    packer.onNodeCreated();
+    for (let f = 0; f < 20; f++) { repaint(specs, packer); await tick(); }
+
+    const settled = repaints.count;
+    for (let f = 0; f < 60; f++) { repaint(specs, packer); await tick(); }
+
+    assert.equal(repaints.count, settled,
+                 `canvas kept being dirtied: ${repaints.count - settled} more `
+                 + "over 60 idle frames");
+});
+
 test("two Order Specs sharing a project and month both get their events", async () => {
     // Sharing one request between them must not mean only one of them is
     // filled in — the other node's feature combo would stay empty forever.
@@ -98,10 +224,11 @@ test("two Order Specs sharing a project and month both get their events", async 
     setResponder(always({ ok: true, status: 200,
                           body: { events: [ONE_EVENT], refsRoot: "/refs" } }));
 
+    const shared = ABSENT_PROJECT(); // the whole point: one key, two nodes
     const a = await create("SymbioticaOrderSpecs",
-        { project_path: ABSENT_PROJECT, month: "October", feature: "Mini 1" });
+        { project_path: shared, month: "October", feature: "Mini 1" });
     const b = await create("SymbioticaOrderSpecs",
-        { project_path: ABSENT_PROJECT, month: "October", feature: "Mini 1" });
+        { project_path: shared, month: "October", feature: "Mini 1" });
     a.onNodeCreated();
     b.onNodeCreated();
     for (let f = 0; f < 10; f++) await tick();
@@ -122,7 +249,7 @@ test("editing a widget retries a project that previously failed", async () => {
         : { ok: false, status: 400, body: { error: "order_path required" } });
 
     const specs = await create("SymbioticaOrderSpecs",
-        { project_path: ABSENT_PROJECT, month: "October", feature: "Mini 1" });
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
     specs.onNodeCreated();
     for (let f = 0; f < 10; f++) await tick();
     assert.equal(specs._symEvents.length, 0, "expected the first parse to fail");
@@ -146,7 +273,7 @@ test("clearing the project path keeps the picked feature", async () => {
                           body: { events: [ONE_EVENT], refsRoot: "/refs" } }));
 
     const specs = await create("SymbioticaOrderSpecs",
-        { project_path: ABSENT_PROJECT, month: "October", feature: "Mini 1" });
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
     specs.onNodeCreated();
     for (let f = 0; f < 10; f++) await tick();
 
@@ -169,7 +296,7 @@ test("repainting the category combo alone does not fetch", async () => {
                           body: { error: "order_path required" } }));
 
     const specs = await create("SymbioticaOrderSpecs",
-        { project_path: ABSENT_PROJECT, month: "October", feature: "Mini 1" });
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
     const packer = await create("SymbioticaAutoPacker",
         { category: "All", overrides: "{}" });
     link(specs, packer, "order");

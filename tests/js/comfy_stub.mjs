@@ -22,7 +22,9 @@ function element() {
         textContent: "",
         appendChild(c) { this.children.push(c); return c; },
         append(...cs) { this.children.push(...cs); },
-        replaceChildren(...cs) { this.children = cs; },
+        // As in the DOM, this drops every child including any text set through
+        // textContent — so a placeholder string does not survive a re-render.
+        replaceChildren(...cs) { this.children = cs; this.textContent = ""; },
         addEventListener() {}, removeEventListener() {},
         setAttribute() {}, remove() {},
         querySelector: () => null, querySelectorAll: () => [],
