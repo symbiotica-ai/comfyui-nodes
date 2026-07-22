@@ -126,3 +126,35 @@ class TestEntityUnescape:
         html = '<html><head><title>Bakery Story &#8211; Imperia &amp; Co</title></head><body><img src="/a_logo_100x100.png"></body></html>'
         a = extract_product_assets(html, "https://x.com/p")
         assert a["name"] == "Bakery Story – Imperia & Co"
+
+
+class TestPageDigest:
+    HTML = """
+    <html><body>
+    <nav><p>Home</p><p>About</p></nav>
+    <h1>Empire: Four Kingdoms</h1>
+    <p>Build your own castle, create a powerful army and fight epic player versus player battles on a dynamic world map. Crush your enemies, conquer land and rise to the ruler of a mighty empire!</p>
+    <p>Cookie settings</p>
+    <p>Four unique kingdoms with their own resources, buildings and dangers await your armies &amp; heroes. Forge alliances, trade with other players and prove yourself in events.</p>
+    <script>var x = "The developers ship paragraphs of junk in scripts sometimes and they must never appear";</script>
+    </body></html>
+    """
+
+    def test_digest_keeps_real_paragraphs_skips_crumbs_and_scripts(self):
+        from _hypereel_scrape import extract_page_text
+        d = extract_page_text(self.HTML)
+        assert "Build your own castle" in d
+        assert "Forge alliances" in d
+        assert "Cookie settings" not in d and "Home" not in d
+        assert "junk in scripts" not in d
+
+    def test_digest_caps_length_and_decodes_entities(self):
+        from _hypereel_scrape import extract_page_text
+        d = extract_page_text(self.HTML, max_chars=120)
+        assert len(d) <= 120
+        long = extract_page_text(self.HTML)
+        assert "armies & heroes" in long
+
+    def test_assets_carry_details(self):
+        a = extract_product_assets(self.HTML + '<img src="/e_logo_100x100.png">', "https://x.com/p")
+        assert "Build your own castle" in a["details"]

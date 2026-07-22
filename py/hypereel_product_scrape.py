@@ -86,6 +86,8 @@ class HypereelProductScrape:
             f"PRODUCT: {assets['name']} - {assets['description']} "
             f"Platform: {platform}. CTA rule: {_CTA[platform]}."
         )
+        if assets.get("details"):
+            summary += f"\nDETAILS: {assets['details']}"
         return (summary, logo, shots[0], shots[1], shots[2], len(assets["screenshots"]))
 
 

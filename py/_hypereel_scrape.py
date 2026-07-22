@@ -114,7 +114,8 @@ def extract_product_assets(html, page_url):
             if not re.search(r"appicon|placeholder", u, re.IGNORECASE) and "{" not in u
         ][:MAX_SCREENSHOTS]
         logo = app_icon or ("" if re.search(r"placeholder", og_image, re.IGNORECASE) else og_image)
-        return {"name": name, "description": description, "logo": logo, "screenshots": screenshots}
+        return {"name": name, "description": description, "logo": logo,
+                "screenshots": screenshots, "details": extract_page_text(html)}
 
     srcs = [
         _absolutize(m.group(1), page_url)
@@ -143,7 +144,29 @@ def extract_product_assets(html, page_url):
         "description": description,
         "logo": logos[0] if logos else og_image,
         "screenshots": screenshots,
+        "details": extract_page_text(html),
     }
+
+
+def extract_page_text(html, max_chars=900):
+    """A digest of the page's real prose: paragraph/list-item text long enough to
+    be content (not nav crumbs or cookie banners), scripts/styles stripped, tags
+    flattened, entities decoded, capped at max_chars. Feeds the script LLM with
+    actual selling points beyond the one-line og:description."""
+    body = re.sub(r"<(script|style)[^>]*>[\s\S]*?</\1>", " ", html, flags=re.IGNORECASE)
+    chunks = []
+    for m in re.finditer(r"<(?:p|li)[^>]*>([\s\S]*?)</(?:p|li)>", body, re.IGNORECASE):
+        text = html_mod.unescape(re.sub(r"<[^>]+>", " ", m.group(1)))
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) >= 60 and text not in chunks:
+            chunks.append(text)
+    out = ""
+    for c in chunks:
+        candidate = (out + " " + c).strip()
+        if len(candidate) > max_chars:
+            break
+        out = candidate
+    return out
 
 
 def find_store_link(html):
@@ -185,6 +208,9 @@ def scrape_product(url, fetch):
             # The store og:image / AppIcon is the right end-card logo for an app.
             if store["logo"]:
                 assets["logo"] = store["logo"]
+            # Store listings often carry the fuller description text.
+            if len(store.get("details", "")) > len(assets.get("details", "")):
+                assets["details"] = store["details"]
 
     if not assets["logo"] and not assets["screenshots"]:
         raise RuntimeError("no usable product images found on the page")
