@@ -13,6 +13,42 @@ PAD_PX = 16
 # cell+cell (256x256 + 256x256), so its crop is the native sprite resolution.
 CELL_GAP = 0
 FALLBACK_CELL = 256
+# Margin left around the block when scaling it to fill the sheet width (fit_width).
+FIT_PAD_PX = 5
+
+
+def _fit_block_to_width(regions: list[dict], sheet_w: int, sheet_h: int) -> None:
+    """Scale the whole placed block up (or down) so it fills the sheet width
+    minus FIT_PAD_PX on each side — the max scale that fits, capped so it never
+    overflows the height. Scaling is about the block's top-left; _center_block
+    re-centers afterwards. Region boxes, member cells, and cellPx all scale."""
+    if not regions:
+        return
+    min_x = min(r["x"] for r in regions)
+    max_x = max(r["x"] + r["w"] for r in regions)
+    min_y = min(r["y"] for r in regions)
+    max_y = max(r["y"] + r["h"] for r in regions)
+    bw, bh = max_x - min_x, max_y - min_y
+    if bw <= 0 or bh <= 0:
+        return
+    pad_x, pad_y = FIT_PAD_PX / sheet_w, FIT_PAD_PX / sheet_h
+    s = min((1 - 2 * pad_x) / bw, (1 - 2 * pad_y) / bh)
+    if s <= 0 or abs(s - 1) < 1e-9:
+        return
+    for r in regions:
+        r["x"] = (r["x"] - min_x) * s
+        r["y"] = (r["y"] - min_y) * s
+        r["w"] *= s
+        r["h"] *= s
+        r["scale"] = r.get("scale", 1) * s
+        cp = r.get("cellPx")
+        if cp:
+            r["cellPx"] = {"w": cp["w"] * s, "h": cp["h"] * s}
+        for m in r.get("members", []):
+            m["x"] = (m["x"] - min_x) * s
+            m["y"] = (m["y"] - min_y) * s
+            m["w"] *= s
+            m["h"] *= s
 
 
 def _cell_count(row: dict) -> int:
@@ -142,6 +178,8 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
             y = max(0, min(y_px, sheet_h - row["cellH"]))
             regions.append(_region_at(row, PAD_PX, y, sheet_w, sheet_h))
             y_px = y + row["cellH"] + PAD_PX
+        if settings.fit_width:
+            _fit_block_to_width(regions, sheet_w, sheet_h)
         _center_block(regions)
         regions.sort(key=lambda r: (r["y"], r["x"]))
         for i, r in enumerate(regions):

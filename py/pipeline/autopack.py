@@ -184,7 +184,7 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
                    base_name="order", scale=1.0, algorithm="shelf",
                    distribute_by_folder=False, padding=0, border=0,
                    scale_max_canvas=256, combined_sheet=True,
-                   split_variants=False):
+                   split_variants=False, max_refs=None, fit_width=False):
     """The whole order as ready-to-run sheets: plan_sheets chunks similar
     assets, each chunk is prefilled + drawn on its own sheet, and each
     sheet's client prompts come from the SAME chunk's regions — so item i
@@ -198,12 +198,22 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
 
     Two independent outputs: `combined_sheet` (the paginated grouped sheets —
     today's behavior) and `split_variants` (one mirrored sheet per variant ref
-    of each directional asset). Both can be on."""
+    of each directional asset). Both can be on.
+
+    `max_refs` (int or None) is a hard cap on reference images per asset: keep
+    the first N refFiles in order, drop the rest, before any packing — so a
+    sheet is never overloaded with more refs than the model can handle. None =
+    no cap. Applied after the per-asset panel overrides, so 'first N' respects a
+    reordered cell list."""
+    if max_refs:
+        assets = [{**a, "refFiles": (a.get("refFiles") or [])[:int(max_refs)]}
+                  for a in assets]
     settings = PackSettings(algorithm=algorithm, columns=max(1, int(columns)),
                             background=background, padding=max(0, int(padding)),
                             border=max(0, int(border)),
                             distribute_by_folder=bool(distribute_by_folder),
-                            max_width=sheet_w, max_height=sheet_h)
+                            max_width=sheet_w, max_height=sheet_h,
+                            fit_width=bool(fit_width))
 
     def _under_cutoff(a):
         spec = canvas_spec_of(a.get("canvas", "")) or {}

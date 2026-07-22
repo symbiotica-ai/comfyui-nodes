@@ -21,6 +21,9 @@ class PackSettings:
     distribute_by_folder: bool = False
     columns: int = 1
     background: str = "#808080"  # "" = transparent
+    # Auto-scale the whole packed block to fill the sheet width (5px pad) instead
+    # of a fixed per-asset scale. Applied post-pack in prefill_regions.
+    fit_width: bool = False
 
 
 def effective_max(settings: PackSettings) -> dict:

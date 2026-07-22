@@ -21,39 +21,48 @@ def element_block(index, region, ref_number=None):
 
 def build_client_prompts(regions):
     """The order's client prompts, grouped under an asset-type header so each
-    block is legible instead of an anonymous "row 1" stack:
+    block is legible instead of an anonymous "row 1" stack. Each asset's own
+    NAME is printed as a title above its brief — it gives the image model the
+    item's identity, not just its description:
 
         Decoration
+        Spider Web Doughnuts
         <the brief>
 
-        Food
+        Cashier's Desk
         row 1
+        Spider Mosaic Cash Register
         <brief>
 
         row 2
+        Gothic Cathedral Cash Register
         <brief>
 
-    A single-asset type prints just its brief; a multi-asset type (e.g. a food
-    sheet's recipes) numbers them row 1..N under the header. Each region's desc
-    is the client's brief verbatim (for food it already carries the
-    "Prep) … Ready) … Serving) …" stage lines). Regions with no brief are
-    skipped; groups keep first-seen (region/z-index) order.
+    A single-asset type prints just its name + brief; a multi-asset type (e.g. a
+    food sheet's recipes) numbers them row 1..N under the header. Each region's
+    desc is the client's brief verbatim (for food it already carries the
+    "Prep) … Ready) … Serving) …" stage lines). The name is `region["name"]`
+    (the asset name); a nameless region just skips the title line. Regions with
+    no brief are skipped; groups keep first-seen (region/z-index) order.
     """
     ordered = sorted(regions, key=lambda r: r.get("zIndex", 0))
-    groups: dict[str, list[str]] = {}
+    groups: dict[str, list[tuple[str, str]]] = {}
     for r in ordered:
         desc = (r.get("desc") or "").strip()
         if not desc:
             continue
         cat = (r.get("assetType") or r.get("category") or "").strip() or "Assets"
-        groups.setdefault(cat, []).append(desc)
+        name = (r.get("name") or "").strip()
+        groups.setdefault(cat, []).append((name, desc))
     blocks = []
-    for cat, descs in groups.items():
-        if len(descs) == 1:
-            blocks.append(f"{cat}\n{descs[0]}")
+    for cat, items in groups.items():
+        if len(items) == 1:
+            name, d = items[0]
+            blocks.append(f"{cat}\n{name}\n{d}" if name else f"{cat}\n{d}")
         else:
-            body = "\n\n".join(f"row {i}\n{d}" for i, d in enumerate(descs, 1))
-            blocks.append(f"{cat}\n{body}")
+            rows = [(f"row {i}\n{name}\n{d}" if name else f"row {i}\n{d}")
+                    for i, (name, d) in enumerate(items, 1)]
+            blocks.append(f"{cat}\n" + "\n\n".join(rows))
     return "\n\n".join(blocks)
 
 

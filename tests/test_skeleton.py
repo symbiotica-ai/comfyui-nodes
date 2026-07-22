@@ -50,17 +50,19 @@ def test_client_prompts_number_rows_in_region_order():
                region("back", "Popsicle", "Prep) x\nReady) y\nServing) z", 0, 0.3, 1, 0.3, z=1)]
     out = build_client_prompts(regions)
     # zIndex order: back (z=1) is row 1, front (z=5) is row 2. No assetType/
-    # category on these regions, so they group under the "Assets" header.
-    assert out == ("Assets\nrow 1\nPrep) x\nReady) y\nServing) z\n\n"
-                   "row 2\nPrep) a\nReady) b\nServing) c")
+    # category on these regions, so they group under the "Assets" header. Each
+    # row carries its asset name as a title above the brief.
+    assert out == ("Assets\nrow 1\nPopsicle\nPrep) x\nReady) y\nServing) z\n\n"
+                   "row 2\nSpookies\nPrep) a\nReady) b\nServing) c")
 
 
 def test_client_prompts_skip_empty_and_use_desc_verbatim():
     regions = [region("a", "A", "", 0, 0, 0.5, 0.5, z=0),
                region("b", "B", "just a red crate", 0.5, 0, 0.5, 0.5, z=1)]
     out = build_client_prompts(regions)
-    # single brief under the (header-less → "Assets") group prints just itself.
-    assert out == "Assets\njust a red crate"
+    # single brief under the (header-less → "Assets") group prints its name
+    # title then the brief.
+    assert out == "Assets\nB\njust a red crate"
 
 
 def test_client_prompts_empty_when_no_descs():

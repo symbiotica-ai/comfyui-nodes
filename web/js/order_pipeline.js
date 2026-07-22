@@ -202,6 +202,7 @@ function eventCategoriesFor(node) {
     const ev = events.find((e) => e.feature === feature) || events[0];
     const cats = ev
         ? [...new Set(ev.assets.filter((a) => a.assetName).map((a) => a.category))]
+              .sort((a, b) => a.localeCompare(b))
         : [];
     return ["All", ...cats];
 }
@@ -241,8 +242,12 @@ function assetsPanel(node) {
     catch { /* keep default */ }
 
     const container = document.createElement("div");
-    container.style.cssText = "max-height:320px;overflow-y:auto;padding:2px 2px 4px;"
-        + "font-size:11px;";
+    // box-sizing + width:100% + overflow-x:hidden keep the panel inside the node
+    // width (the DOM widget must not render wider than the node — rows clip, they
+    // don't stretch the node); the flex children below get min-width:0 so long
+    // names ellipsis instead of forcing the row wide.
+    container.style.cssText = "box-sizing:border-box;width:100%;max-height:320px;"
+        + "overflow-y:auto;overflow-x:hidden;padding:2px 2px 4px;font-size:11px;";
     stopWheel(container);
     node.addDOMWidget("assets_panel", "sym_assets", container,
                       { serialize: false, hideOnZoom: true });
@@ -266,18 +271,18 @@ function assetsPanel(node) {
         for (const a of assets) {
             const hidden = state.hidden.includes(a.assetName);
             const row = document.createElement("div");
-            row.style.cssText = "display:flex;flex-direction:column;gap:3px;"
+            row.style.cssText = "display:flex;flex-direction:column;gap:3px;min-width:0;"
                 + "border:1px solid #3a3a3a;border-radius:6px;padding:4px 5px;"
                 + `margin:3px 0;background:${hidden ? "#241a1a" : "#2a2a2a"};`
                 + `opacity:${hidden ? ".5" : "1"};`;
             // header: name + hide toggle
             const head = document.createElement("div");
-            head.style.cssText = "display:flex;align-items:center;gap:6px;";
+            head.style.cssText = "display:flex;align-items:center;gap:6px;min-width:0;";
             const refs = a.refFiles ?? [];
             if (refs[0] && refsRoot) head.appendChild(symImg(thumbUrl(refsRoot, refs[0]), 18));
             const name = document.createElement("span");
             name.textContent = `${a.assetName} · ${a.canvas}`;
-            name.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+            name.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
             head.appendChild(name);
             const eye = document.createElement("button");
             eye.textContent = hidden ? "hidden" : "hide";
@@ -354,9 +359,13 @@ function refreshCombos(node) {
 
 // --- events browser ----------------------------------------------------------
 function thumbUrl(refsRoot, file) {
+    // Keep the /api/ prefix: it works locally (ComfyUI mirrors custom routes
+    // under /api/) AND behind the Modal gateway, which proxies /api/* only — a
+    // root-level /symbiotica/* never reaches the editor sandbox there, so
+    // stripping /api/ blanked every thumbnail on Modal.
     return api.apiURL(
         `/symbiotica/local-image?path=${encodeURIComponent(`${refsRoot}/${file}`)}`
-    ).replace("/api/", "/"); // route registered at server root, not under /api
+    );
 }
 
 function renderBrowser(container, data) {
@@ -727,7 +736,7 @@ async function openEditorForNode(node, uiState) {
             if (!file) return "";
             return api.apiURL(
                 `/symbiotica/template-image?file=${encodeURIComponent(file)}`
-            ).replace("/api/", "/");
+            ); // /api/-prefixed so the Modal gateway (proxies /api/* only) serves it
         },
         resolveMemberUrl: (region, member) => {
             // Which image fills a member cell depends on the reference mode:

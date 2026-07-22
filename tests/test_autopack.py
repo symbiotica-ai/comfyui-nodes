@@ -211,6 +211,43 @@ def test_autopack_split_caps_at_three(tmp_path):
                                         "order-many-v3"]
 
 
+def test_autopack_max_refs_caps_variant_sheets(tmp_path):
+    # A hard cap keeps only the first N refs per asset, in order — a 3-ref
+    # variant with max_refs=2 splits into exactly 2 sheets (v1, v2).
+    a = _variant("Many", ("a.png", "b.png", "c.png"), "2")
+    root = _make_refs(tmp_path, [a])
+    out = autopack_order([a], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=False, split_variants=True, max_refs=2)
+    assert [o["name"] for o in out] == ["order-many-v1", "order-many-v2"]
+
+
+def test_autopack_fit_width_fills_sheet(tmp_path):
+    # fit_width auto-scales the packed block to fill the sheet width (5px pad),
+    # so a small asset ends up far larger than at native scale.
+    a = asset("Tiny", refs=("t.png",), category="Decoration", canvas="128x128")
+    root = _make_refs(tmp_path, [a])
+    native = autopack_order([a], root, sheet_w=1024, sheet_h=1024)
+    fit = autopack_order([a], root, sheet_w=1024, sheet_h=1024, fit_width=True)
+    regions = fit[0]["regions"]
+    span = (max(r["x"] + r["w"] for r in regions)
+            - min(r["x"] for r in regions))
+    assert span == pytest.approx((1024 - 10) / 1024, abs=0.02)  # width filled
+    assert (max(r["w"] for r in regions)
+            > max(r["w"] for r in native[0]["regions"]))         # scaled up
+
+
+def test_autopack_max_refs_truncates_food_region(tmp_path):
+    # Food keeps stages together in one region; max_refs=2 drops the 3rd stage
+    # so the recipe region carries only the first two cells.
+    food = _variant("Cake", ("c0.png", "c1.png", "c2.png"), "-",
+                    category="Food - 3 stages", canvas="128x128")
+    root = _make_refs(tmp_path, [food])
+    full = autopack_order([food], root, sheet_w=512, sheet_h=512)
+    capped = autopack_order([food], root, sheet_w=512, sheet_h=512, max_refs=2)
+    assert len(full[0]["regions"][0]["members"]) == 3
+    assert len(capped[0]["regions"][0]["members"]) == 2
+
+
 def test_autopack_split_skips_food_rotation_dash(tmp_path):
     food = _variant("Cake", ("c0.png", "c1.png", "c2.png"), "-",
                     category="Food - 3 stages", canvas="128x128")
