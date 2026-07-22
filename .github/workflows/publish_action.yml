@@ -2,18 +2,22 @@ name: Publish to Comfy registry
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "pyproject.toml"
+  release:
+    types: [published]
 
 jobs:
   publish-node:
     name: Publish Custom Node to registry
     runs-on: ubuntu-latest
+    # Workflow files travel into forks, and both triggers above can fire there.
+    # A fork publishing under this publisher id would ship someone else's code
+    # as ours.
+    if: ${{ github.repository_owner == 'symbiotica-ai' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: Comfy-Org/publish-node-action@main
+      # Pinned to a commit, not a branch: this step is handed the registry
+      # token, and @main (and @v1, which is also a branch) would run whatever
+      # that branch holds on the day we release.
+      - uses: Comfy-Org/publish-node-action@7578cdb0c1410f2515e6f9b1443c6859cab94f05  # 1.0.1
         with:
           personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
