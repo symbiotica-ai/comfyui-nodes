@@ -132,7 +132,10 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
     for asset in order_assets:
         picked = (chosen or {}).get(asset["assetName"])
         paths = picked if picked else [
-            f"{asset['category']}/{asset['assetName']}/{f}" for f in asset["refFiles"]
+            # A refFile containing "/" is already a rel path under refs_root
+            # (Files Read); bare basenames get the synthetic order prefix.
+            f if "/" in f else f"{asset['category']}/{asset['assetName']}/{f}"
+            for f in asset["refFiles"]
         ]
         if not paths:
             continue

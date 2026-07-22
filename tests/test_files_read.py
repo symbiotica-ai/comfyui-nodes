@@ -98,3 +98,30 @@ def test_duplicate_group_names_deduped(refs):
     ]))
     names = [a["assetName"] for a in order["assets"]]
     assert names == ["s", "s-2"]
+
+
+def test_resolve_ref_exact_rel_then_basename(tmp_path):
+    import os
+
+    from pipeline.compose import resolve_ref
+    _png(tmp_path / "Stoves" / "a.png")
+    _png(tmp_path / "flat.png")
+    nested = resolve_ref(str(tmp_path), "Stoves/a.png")
+    assert nested.endswith(os.path.join("Stoves", "a.png"))
+    # Synthetic order path ("Category/Asset/file.png") does not exist as a
+    # rel — falls back to the flat basename lookup (today's behavior).
+    flat = resolve_ref(str(tmp_path), "Deco/Stove/flat.png")
+    assert flat == os.path.join(str(tmp_path), "flat.png")
+
+
+def test_draw_task_refs_draws_nested_refs(tmp_path):
+    from pipeline.compose import build_prefill_sheet
+    from pipeline.texture_pack import PackSettings
+    _png(tmp_path / "Stoves" / "a.png", 64, 64)
+    assets = [{"assetName": "s", "category": "c", "canvas": "64x64",
+               "rotation": "-", "refFiles": ["Stoves/a.png"], "prompt": ""}]
+    settings = PackSettings(algorithm="shelf", columns=1, background="",
+                            max_width=256, max_height=256)
+    sheet, regions, _ = build_prefill_sheet(assets, str(tmp_path), 256, 256,
+                                            settings)
+    assert sheet.getbbox() is not None  # the nested ref actually drew
