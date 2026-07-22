@@ -1,0 +1,17 @@
+{
+  "version": {
+    "file": "pyproject.toml",
+    "format": "calver-build"
+  },
+  "test": "pytest tests/ && { [ -d tests/js ] || exit 0; node --import ./tests/js/register_hooks.mjs --test 'tests/js/*.test.mjs'; }",
+  "repo": {
+    "owner": "symbiotica-ai",
+    "name": "comfyui-nodes"
+  },
+  "tag": {
+    "prefix": "v"
+  },
+  "changelog": {
+    "file": "CHANGELOG.md"
+  }
+}
