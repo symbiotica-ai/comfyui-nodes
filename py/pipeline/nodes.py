@@ -306,11 +306,15 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
                         "sheet (e.g. recipes stacked per row at 2x scale). Wire "
                         "'settings' into the Auto Packer.",
             inputs=[
-                io.Combo.Input("scale", options=["0.5x", "1x", "2x", "3x"],
+                io.Combo.Input("scale",
+                               options=["0.5x", "1x", "2x", "3x", "4x",
+                                        "fit width"],
                                default="1x",
-                               tooltip="Enlarge small sprites (the editor's "
-                                       "half / x2). Only assets at/under the "
-                                       "cutoff grow."),
+                               tooltip="Fixed enlargement of small sprites "
+                                       "(only assets at/under the cutoff grow), "
+                                       "or 'fit width' = auto-scale the whole "
+                                       "packed block to fill the sheet width "
+                                       "(5px margin), ignoring the cutoff."),
                 io.Combo.Input("scale_max_canvas",
                                options=["128", "256", "512", "1024", "all"],
                                default="256",
@@ -350,7 +354,7 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
             outputs=[PackSettingsWire.Output(display_name="settings")],
         )
 
-    _SCALE = {"0.5x": 0.5, "1x": 1.0, "2x": 2.0, "3x": 3.0}
+    _SCALE = {"0.5x": 0.5, "1x": 1.0, "2x": 2.0, "3x": 3.0, "4x": 4.0}
 
     @classmethod
     def execute(cls, scale="1x", scale_max_canvas="256", algorithm="shelf",
@@ -358,8 +362,12 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
                 combined_sheet=True, split_variants=False,
                 max_refs="all") -> io.NodeOutput:
         cutoff = 10 ** 9 if scale_max_canvas == "all" else int(scale_max_canvas)
+        fit_width = scale == "fit width"
         return io.NodeOutput({
-            "scale": cls._SCALE.get(scale, 1.0),
+            # 'fit width' is a block-fit mode, not a fixed factor: no per-asset
+            # scale, prefill scales the whole block to the sheet width instead.
+            "scale": 1.0 if fit_width else cls._SCALE.get(scale, 1.0),
+            "fit_width": fit_width,
             "scale_max_canvas": cutoff,
             "algorithm": algorithm,
             "distribute_by_folder": bool(distribute_by_folder),
@@ -452,7 +460,7 @@ class SymbioticaAutoPacker(io.ComfyNode):
             padding=s.get("padding", 0), border=s.get("border", 0),
             combined_sheet=s.get("combined_sheet", True),
             split_variants=s.get("split_variants", False),
-            max_refs=s.get("max_refs"))
+            max_refs=s.get("max_refs"), fit_width=s.get("fit_width", False))
         return io.NodeOutput(
             [_pil_to_tensor(p["image"]) for p in packed],
             [p["prompts"] for p in packed],

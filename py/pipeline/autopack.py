@@ -184,7 +184,7 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
                    base_name="order", scale=1.0, algorithm="shelf",
                    distribute_by_folder=False, padding=0, border=0,
                    scale_max_canvas=256, combined_sheet=True,
-                   split_variants=False, max_refs=None):
+                   split_variants=False, max_refs=None, fit_width=False):
     """The whole order as ready-to-run sheets: plan_sheets chunks similar
     assets, each chunk is prefilled + drawn on its own sheet, and each
     sheet's client prompts come from the SAME chunk's regions — so item i
@@ -212,7 +212,8 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
                             background=background, padding=max(0, int(padding)),
                             border=max(0, int(border)),
                             distribute_by_folder=bool(distribute_by_folder),
-                            max_width=sheet_w, max_height=sheet_h)
+                            max_width=sheet_w, max_height=sheet_h,
+                            fit_width=bool(fit_width))
 
     def _under_cutoff(a):
         spec = canvas_spec_of(a.get("canvas", "")) or {}

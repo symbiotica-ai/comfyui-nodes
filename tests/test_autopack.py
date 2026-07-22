@@ -221,6 +221,21 @@ def test_autopack_max_refs_caps_variant_sheets(tmp_path):
     assert [o["name"] for o in out] == ["order-many-v1", "order-many-v2"]
 
 
+def test_autopack_fit_width_fills_sheet(tmp_path):
+    # fit_width auto-scales the packed block to fill the sheet width (5px pad),
+    # so a small asset ends up far larger than at native scale.
+    a = asset("Tiny", refs=("t.png",), category="Decoration", canvas="128x128")
+    root = _make_refs(tmp_path, [a])
+    native = autopack_order([a], root, sheet_w=1024, sheet_h=1024)
+    fit = autopack_order([a], root, sheet_w=1024, sheet_h=1024, fit_width=True)
+    regions = fit[0]["regions"]
+    span = (max(r["x"] + r["w"] for r in regions)
+            - min(r["x"] for r in regions))
+    assert span == pytest.approx((1024 - 10) / 1024, abs=0.02)  # width filled
+    assert (max(r["w"] for r in regions)
+            > max(r["w"] for r in native[0]["regions"]))         # scaled up
+
+
 def test_autopack_max_refs_truncates_food_region(tmp_path):
     # Food keeps stages together in one region; max_refs=2 drops the 3rd stage
     # so the recipe region carries only the first two cells.
