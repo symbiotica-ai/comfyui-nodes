@@ -28,3 +28,26 @@ class TestNotesBlock:
         notes = build_notes(style, hook, setting)
         assert notes.startswith("STYLE NOTE: " + STYLES[style])
         assert "\nHOOK PATTERN: " in notes and "\nSETTING NOTE: " in notes
+
+
+class TestAdPrompt:
+    def test_full_assembly_in_order(self):
+        from _hypereel_presets import build_ad_prompt
+        style = next(iter(STYLES)); hook = next(iter(HOOKS)); setting = next(iter(SETTINGS))
+        p = build_ad_prompt("PRODUCT: X - Y. Platform: mobile app. CTA rule: store download.",
+                            style, hook, setting)
+        assert p.startswith("PRODUCT: X")
+        assert "\nCREATOR: defined entirely by @Image1.\n" in p
+        assert "STYLE NOTE: " in p and p.index("CREATOR") < p.index("STYLE NOTE")
+
+    def test_persona_rides_the_creator_line(self):
+        from _hypereel_presets import build_ad_prompt
+        style = next(iter(STYLES)); hook = next(iter(HOOKS)); setting = next(iter(SETTINGS))
+        p = build_ad_prompt("PRODUCT: X", style, hook, setting, persona="dry humor, low energy")
+        assert "PERSONA: dry humor, low energy" in p.split("\n")[1]
+
+    def test_system_prompt_carries_the_format_contract(self):
+        from _hypereel_presets import SYSTEM_PROMPT
+        assert "Shot 1" in SYSTEM_PROMPT and "@Image1" in SYSTEM_PROMPT
+        assert "ABSOLUTELY NO rendered text" in SYSTEM_PROMPT
+        assert len(SYSTEM_PROMPT) > 3000
