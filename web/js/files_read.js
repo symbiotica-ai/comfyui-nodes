@@ -1,8 +1,8 @@
 // ABOUTME: Files Read node UI — fullscreen files browser over a client refs
 // ABOUTME: folder: tree + filters, folder=group / ticked files=cells, writes
 // ABOUTME: the node's selection JSON. Tree mechanics referenced from rail.js.
-import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
+import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
 const el = (tag, style = "", text = "") => {
