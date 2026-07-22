@@ -6,6 +6,34 @@ import requests
 from typing import Dict, Any, Optional
 
 
+def _resolve_interrupt_checker():
+    """Reads ComfyUI's cancel flag, or reports "not cancelled" outside it.
+
+    Cancel does not stop a running node — it sets a flag and expects the node to
+    notice. A video job that never looks runs its full timeout."""
+    try:
+        from comfy import model_management
+        return model_management.processing_interrupted
+    except Exception:
+        return lambda: False
+
+
+def _interrupted_base():
+    try:
+        from comfy.model_management import InterruptProcessingException
+        return InterruptProcessingException
+    except Exception:
+        return Exception
+
+
+class GrokInterrupted(_interrupted_base()):
+    """Raised when the user cancels while a video job is being polled."""
+
+
+class GrokVideoFailed(Exception):
+    """Raised when the API reports the video job itself failed."""
+
+
 class GrokClient:
     """Client for interacting with xAI Grok API"""
     
@@ -91,8 +119,22 @@ class GrokClient:
         """
         start_time = time.time()
         endpoint = f"/v1/videos/{request_id}"
-        
+        cancelled = _resolve_interrupt_checker()
+
+        def sleep_unless_cancelled(seconds):
+            """Sleep in slices so Cancel lands within a slice, not a poll."""
+            remaining = seconds
+            while remaining > 0:
+                if cancelled():
+                    raise GrokInterrupted("Cancelled while waiting for the video")
+                slice_s = min(0.5, remaining)
+                time.sleep(slice_s)
+                remaining -= slice_s
+
         while True:
+            if cancelled():
+                raise GrokInterrupted("Cancelled while waiting for the video")
+
             elapsed = time.time() - start_time
             if elapsed > timeout:
                 raise Exception(f"Video generation timed out after {timeout} seconds")
@@ -106,14 +148,21 @@ class GrokClient:
                     return result
                 elif status == "failed" or status == "error":
                     error_msg = result.get("error", result.get("message", "Unknown error"))
-                    raise Exception(f"Video generation failed: {error_msg}")
+                    raise GrokVideoFailed(f"Video generation failed: {error_msg}")
                 
                 # Task still processing, wait and retry
                 print(f"Video generation status: {status}...")
-                time.sleep(polling_interval)
-                
+                sleep_unless_cancelled(polling_interval)
+
+            # Above the catch-all: it swallows whatever it is handed, so a
+            # cancel caught there is a cancel ignored, and a failed job caught
+            # there is retried until the timeout hides the reason.
+            except GrokInterrupted:
+                raise
+            except GrokVideoFailed:
+                raise
             except Exception as e:
                 if "timed out" in str(e):
                     raise
                 # For other errors, retry after interval
-                time.sleep(polling_interval)
+                sleep_unless_cancelled(polling_interval)
