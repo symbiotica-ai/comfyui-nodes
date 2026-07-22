@@ -44,3 +44,16 @@ def resolve_key(env_names: list[str]) -> str | None:
         if value:
             return value
     return None
+
+
+def key_from_settings(*env_names) -> str | None:
+    """The Settings UI value for a provider, ignoring env vars and config files.
+
+    For resolvers that already have their own precedence between a widget,
+    config.ini, and the environment: this slots Settings in without disturbing
+    the rest of the chain."""
+    for env in env_names:
+        value = get_comfy_setting(setting_key(env))
+        if value:
+            return str(value).strip()
+    return None

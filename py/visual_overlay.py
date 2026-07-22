@@ -451,6 +451,10 @@ class NSVisualOverlay:
         """Resolve API key from input, then env vars."""
         if api_key and api_key.strip():
             return api_key.strip()
+        from ._settings import key_from_settings
+        key = key_from_settings("ANTHROPIC_API_KEY", "CLAUDE_API_KEY")
+        if key:
+            return key
         key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
         if not key:
             raise RuntimeError(
