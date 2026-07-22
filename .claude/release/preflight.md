@@ -90,13 +90,15 @@ change in June. That signal is gone.
 So when a release changes node inputs, outputs, or ids, **say so at the top of
 the release notes in plain language**. Nothing in the version number will.
 
-### Ordering hazard when migrating off semver
+### The semver boundary is behind us
 
-The last semver release was `2.40.0`. Every calver version outranks it
-(`2026.7.1` > `2.43.0`), so once a calver version ships, **any later semver
-release is a downgrade the registry will treat as older**. Before the first
-calver release, either land every in-flight semver bump first, or convert those
-branches to calver.
+The last semver release was `2.43.0`; the first calendar release was
+`2026.7.1`. Every calendar version outranks every semver one
+(`2026.7.1` > `2.43.0`), so **a semver-numbered release now would register as
+older than what is already out** and would not reach anyone.
+
+If a branch predating the switch still carries a semver bump, renumber it to the
+current calendar version before merging. Do not "finish the 2.x line".
 
 ## Tests
 
