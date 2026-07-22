@@ -3,9 +3,20 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { openTemplateEditor } from "./template_editor/editor.js";
+import { createOrderCache } from "./order_cache.js";
 
 // node.id -> {events, refFileCount, refsRoot} (last parse per Order Read node)
 const orderCache = new Map();
+
+// Order parses are requested from render paths — the Auto Packer's assets panel
+// and the category combo, which LiteGraph re-evaluates on every repaint — so the
+// same order would otherwise be re-fetched for every frame. Keyed on the request
+// route, which already carries project + month.
+const orderParses = createOrderCache({ fetcher: (route) => fetchJson(route) });
+
+// One shared empty list, so "no events" compares identical across calls and a
+// node can tell a repeat answer from a new one.
+const NO_EVENTS = [];
 
 // --- mirrors of py/pipeline/order_sheet.py (keep in sync) -------------------
 function slugify(s) {
@@ -141,27 +152,60 @@ function wireMonthPicker(node) {
 // Parse the order server-side and cache the events on the node, so its own
 // `feature` combo and a downstream Auto Packer's `category` combo can read the
 // event list synchronously.
-async function refreshOrderSpecs(node) {
+// `explicit` marks a deliberate request — the node being wired, or the user
+// editing project/month/feature. Those re-ask the server even for inputs that
+// failed before, so a path that starts working again can be picked up without a
+// page reload. The opportunistic callers below (a panel rendering, a combo being
+// painted) always take the cached answer.
+async function refreshOrderSpecs(node, { explicit = false } = {}) {
     const project = widgetOf(node, "project_path")?.value?.trim();
     const month = widgetOf(node, "month")?.value?.trim();
-    if (!project) { node._symEvents = []; node.setDirtyCanvas?.(true, true); return; }
+    if (!project) { publishOrder(node, null, NO_EVENTS, ""); return; }
     const q = new URLSearchParams({ project });
     if (month) q.set("month", month);
-    try {
-        const data = await fetchJson(`/symbiotica/parse-order?${q}`);
-        node._symEvents = data.events ?? [];
-        node._symRefsRoot = data.refsRoot ?? "";
-    } catch { node._symEvents = []; }
+    const route = `/symbiotica/parse-order?${q}`;
+    if (explicit) orderParses.invalidate(route);
+    const result = await orderParses.get(route);
+    publishOrder(node, result,
+                 (result.ok && result.data.events) || NO_EVENTS,
+                 (result.ok && result.data.refsRoot) || "");
+}
+
+// Put a parse result on the node, then re-render downstream ONLY if the answer
+// differs from the one the node already holds.
+//
+// That guard is what bounds the work. Both the Auto Packer's assets panel and
+// its `category` combo ask for the order while they render, and re-rendering
+// them — or marking the canvas dirty, which schedules the repaint that paints
+// the combo — calls straight back into here. Repeating the same answer means
+// repeating it forever: with a stale project path that was a request per round
+// trip per packer, and without the round trip to throttle it, an unbroken
+// recursion.
+function publishOrder(node, result, events, refsRoot) {
+    node._symEvents = events;
+    node._symRefsRoot = refsRoot;
     // Keep the feature value valid (accept the plain feature OR the labelled
     // form); empty means "the order's first event". Never reset a value that
     // still matches an event by key — that would clobber a saved workflow.
+    // `result` is null when there is no project to parse: nothing was asked, so
+    // nothing says the current pick is wrong, and clearing the path to type a
+    // new one must not throw the pick away.
     const featW = widgetOf(node, "feature");
-    if (featW && featW.value) {
+    if (result !== null && featW && featW.value) {
         const key = featureKey(featW.value);
-        if (!node._symEvents.some((e) => e.feature === key)) {
-            featW.value = node._symEvents[0] ? eventLabel(node._symEvents[0]) : "";
+        if (!events.some((e) => e.feature === key)) {
+            featW.value = events[0] ? eventLabel(events[0]) : "";
         }
     }
+    // The cache hands back one object per set of inputs, so identity answers
+    // "is this the same order I already published?" exactly. `feature` rides
+    // along because picking a different event has to re-render the packers even
+    // though the order behind it never changed.
+    const feature = featW?.value ?? "";
+    const last = node._symPublished;
+    node._symPublished = { result, events, feature };
+    if (last && last.result === result && last.events === events
+        && last.feature === feature) return;
     // Re-render any downstream Auto Packer asset panels now that the event's
     // assets (and refsRoot) are known.
     for (const ap of downstreamNodes(node, "SymbioticaAutoPacker")) {
@@ -183,11 +227,11 @@ function wireOrderSpecs(node) {
         const prev = w.callback;
         w.callback = function () {
             const r = prev?.apply(this, arguments);
-            refreshOrderSpecs(node);
+            refreshOrderSpecs(node, { explicit: true });
             return r;
         };
     }
-    refreshOrderSpecs(node);
+    refreshOrderSpecs(node, { explicit: true });
 }
 
 // The categories of the event an Auto Packer's upstream Order Specs has picked
@@ -580,7 +624,14 @@ app.registerExtension({
 // --- template editor wiring ----------------------------------------------------
 async function fetchJson(route) {
     const res = await api.fetchApi(route);
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+    if (!res.ok) {
+        const err = new Error(
+            (await res.json().catch(() => ({}))).error ?? res.statusText);
+        // Callers that cache need to tell "this request will never work" from
+        // "the server is having a moment".
+        err.status = res.status;
+        throw err;
+    }
     return res.json();
 }
 

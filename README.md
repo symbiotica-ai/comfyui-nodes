@@ -152,6 +152,28 @@ Agents repo: [symbiotica-ai/agents](https://github.com/symbiotica-ai/agents). Sk
 - **`faster-whisper`** is in the deps. First run of `NS Whisper Transcribe` downloads model weights — can be a few GB depending on the model size you pick.
 - **Remotion-rendered nodes** (captions, overlays) need Node.js installed system-wide. The package ships a pre-built Remotion bundle so no `npm install` is needed at install time, but the renderer subprocess still requires `node` on `PATH`.
 
+## Tests
+
+Python — the pipeline logic that runs without ComfyUI:
+
+```bash
+pytest tests/
+```
+
+Run it as `pytest`, not `python -m pytest`: the latter puts the repo root on
+`sys.path`, where the `py/` package shadows the `py` module pytest itself
+imports.
+
+JavaScript — the node UI logic, on node's built-in runner (no dependencies):
+
+```bash
+node --import ./tests/js/register_hooks.mjs --test 'tests/js/*.test.mjs'
+```
+
+`tests/js/register_hooks.mjs` points ComfyUI's `scripts/app.js` and
+`scripts/api.js` imports at `tests/js/comfy_stub.mjs`, so files under `web/js`
+are tested as they ship, unmodified.
+
 ## License
 
 MIT — see `LICENSE`.
