@@ -339,6 +339,13 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
                                          "2/4), emit one sheet per variant ref "
                                          "(max 3) — mirrored for rotation 2. "
                                          "Food (rotation -) is never split."),
+                io.Combo.Input("max_refs", options=["all", "1", "2", "3"],
+                               default="all",
+                               tooltip="Hard cap on reference images per asset "
+                                       "— keep the first N (in the panel's "
+                                       "order), drop the rest, so a sheet is "
+                                       "never overloaded with refs. 'all' = no "
+                                       "cap."),
             ],
             outputs=[PackSettingsWire.Output(display_name="settings")],
         )
@@ -348,7 +355,8 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
     @classmethod
     def execute(cls, scale="1x", scale_max_canvas="256", algorithm="shelf",
                 distribute_by_folder=True, padding=0, border=0,
-                combined_sheet=True, split_variants=False) -> io.NodeOutput:
+                combined_sheet=True, split_variants=False,
+                max_refs="all") -> io.NodeOutput:
         cutoff = 10 ** 9 if scale_max_canvas == "all" else int(scale_max_canvas)
         return io.NodeOutput({
             "scale": cls._SCALE.get(scale, 1.0),
@@ -359,6 +367,7 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
             "border": int(border),
             "combined_sheet": bool(combined_sheet),
             "split_variants": bool(split_variants),
+            "max_refs": None if max_refs == "all" else int(max_refs),
         })
 
 
@@ -442,7 +451,8 @@ class SymbioticaAutoPacker(io.ComfyNode):
             distribute_by_folder=s.get("distribute_by_folder", False),
             padding=s.get("padding", 0), border=s.get("border", 0),
             combined_sheet=s.get("combined_sheet", True),
-            split_variants=s.get("split_variants", False))
+            split_variants=s.get("split_variants", False),
+            max_refs=s.get("max_refs"))
         return io.NodeOutput(
             [_pil_to_tensor(p["image"]) for p in packed],
             [p["prompts"] for p in packed],
