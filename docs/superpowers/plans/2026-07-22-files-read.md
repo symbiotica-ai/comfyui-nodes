@@ -15,7 +15,8 @@
 - Order wire payload shape: `{feature, eventName, assets, refsRoot, assetsRoot, guide}` (see `SymbioticaOrderSpecs.execute`, nodes.py:246-253).
 - Asset dict fields consumed downstream: `assetName, category, canvas, rotation, refFiles, prompt`.
 - pytest does NOT import nodes.py — node schema/execute verified live via `/api/object_info/SymbioticaFilesRead` only.
-- Test runner: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/python -m pytest tests/ -q` run from the worktree root (worktree has no .venv).
+- Test runner: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/pytest tests/ -q` run from the worktree root (worktree has no .venv). NEVER `python -m pytest` — it puts the repo root on sys.path and the `py/` package shadows pytest's legacy `py` lib (AttributeError: py.path).
+- Tests import the pipeline as `pipeline.*` (conftest inserts `<repo>/py`), never `py.pipeline.*`.
 - Commit style: conventional (`feat:`, `fix:`, `test:`), plain prose bodies.
 
 ---
@@ -38,7 +39,7 @@ import json
 import pytest
 from PIL import Image
 
-from py.pipeline.files_read import build_files_order
+from pipeline.files_read import build_files_order
 
 
 def _png(path, w=64, h=64):
@@ -136,7 +137,7 @@ def test_duplicate_group_names_deduped(refs):
 
 - [ ] **Step 2: Run tests, verify they fail**
 
-Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/python -m pytest tests/test_files_read.py -q`
+Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/pytest tests/test_files_read.py -q`
 Expected: FAIL — `ModuleNotFoundError: py.pipeline.files_read`
 
 - [ ] **Step 3: Implement** (`py/pipeline/files_read.py`)
@@ -213,7 +214,7 @@ def build_files_order(refs_root: str, selection, name: str = "") -> dict:
 
 - [ ] **Step 4: Run tests, verify pass**
 
-Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/python -m pytest tests/test_files_read.py -q`
+Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/pytest tests/test_files_read.py -q`
 Expected: 8 passed
 
 - [ ] **Step 5: Commit** — `feat: files_read builder — selection JSON to Order payload`
@@ -250,7 +251,7 @@ Append to `tests/test_files_read.py`:
 
 ```python
 def test_resolve_ref_exact_rel_then_basename(tmp_path):
-    from py.pipeline.compose import resolve_ref
+    from pipeline.compose import resolve_ref
     _png(tmp_path / "Stoves" / "a.png")
     _png(tmp_path / "flat.png")
     nested = resolve_ref(str(tmp_path), "Stoves/a.png")
@@ -262,8 +263,8 @@ def test_resolve_ref_exact_rel_then_basename(tmp_path):
 
 
 def test_draw_task_refs_draws_nested_refs(tmp_path):
-    from py.pipeline.compose import build_prefill_sheet
-    from py.pipeline.texture_pack import PackSettings
+    from pipeline.compose import build_prefill_sheet
+    from pipeline.texture_pack import PackSettings
     _png(tmp_path / "Stoves" / "a.png", 64, 64)
     assets = [{"assetName": "s", "category": "c", "canvas": "64x64",
                "rotation": "-", "refFiles": ["Stoves/a.png"], "prompt": ""}]
@@ -278,7 +279,7 @@ def test_draw_task_refs_draws_nested_refs(tmp_path):
 
 - [ ] **Step 2: Run, verify the new tests fail**
 
-Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/python -m pytest tests/test_prefill.py tests/test_files_read.py -q`
+Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/pytest tests/test_prefill.py tests/test_files_read.py -q`
 Expected: the passthrough test fails (paths get `Deco/stoves/` prefix), resolve_ref fails with ImportError, draw test fails on blank sheet.
 
 - [ ] **Step 3: Implement**
@@ -338,7 +339,7 @@ body's filename handling:
 
 - [ ] **Step 4: Run the whole suite** (regression gate — order flow must not move)
 
-Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/python -m pytest tests/ -q`
+Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/pytest tests/ -q`
 Expected: all pass (121 pre-existing + new).
 
 - [ ] **Step 5: Commit** — `feat: nested ref paths resolve in prefill/compose (Files Read groundwork)`
@@ -362,8 +363,8 @@ Expected: all pass (121 pre-existing + new).
 def test_ref_image_resolution_stays_inside_root(tmp_path):
     # The route resolves with compose.resolve_ref then gates on is_allowed —
     # a nested rel resolves, an escape attempt dies at the allowlist.
-    from py.pipeline.compose import resolve_ref
-    from py.pipeline.routes import is_allowed, register_root
+    from pipeline.compose import resolve_ref
+    from pipeline.routes import is_allowed, register_root
     d = tmp_path / "refs" / "Stoves"
     d.mkdir(parents=True)
     (d / "a.png").write_bytes(b"x")
@@ -375,7 +376,7 @@ def test_ref_image_resolution_stays_inside_root(tmp_path):
 
 - [ ] **Step 2: Run, verify state**
 
-Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/python -m pytest tests/test_routes_allowlist.py -q`
+Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/pytest tests/test_routes_allowlist.py -q`
 Expected: PASS already (pure helpers exist) — this test pins the security contract the route relies on. The route itself is nodes-side code pytest can't import; it is verified live in Task 6.
 
 - [ ] **Step 3: Implement the route** (`py/pipeline/routes.py`, after `local_image`)
@@ -418,7 +419,7 @@ In `resolveMemberUrl`, replace the three task/sprite lookups:
 
 - [ ] **Step 5: Full suite + commit**
 
-Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/python -m pytest tests/ -q`
+Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/pytest tests/ -q`
 Expected: all pass.
 Commit: `feat: ref-image route — JS task-ref preview resolves like the compositor`
 
@@ -496,7 +497,7 @@ Expected: silence.
 
 - [ ] **Step 3: Full suite + commit**
 
-Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/python -m pytest tests/ -q`
+Run: `/Users/razvanmatei/.claude-sessions/comfy-nodes/comfyui-nodes/.venv/bin/pytest tests/ -q`
 Expected: all pass (nothing imports nodes.py).
 Commit: `feat: SymbioticaFilesRead node — loose client folders in, Order wire out`
 
