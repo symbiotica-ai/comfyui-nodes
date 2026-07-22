@@ -109,3 +109,180 @@ def test_autopack_empty_raises_actionable(tmp_path):
     with pytest.raises(ValueError, match="no assets"):
         autopack_order([asset("norefs", refs=())], str(tmp_path),
                        sheet_w=256, sheet_h=256, category="Food - 3 stages")
+
+
+def test_autopack_scale_enlarges_cells(tmp_path):
+    assets = [asset("A", refs=("a.png",))]
+    root = _make_refs(tmp_path, assets)
+    small = autopack_order(assets, root, sheet_w=1000, sheet_h=1000)
+    big = autopack_order(assets, root, sheet_w=1000, sheet_h=1000, scale=2)
+    sw = small[0]["regions"][0]["members"][0]["w"]
+    bw = big[0]["regions"][0]["members"][0]["w"]
+    assert bw > sw
+
+
+def test_autopack_scale_gated_by_canvas(tmp_path):
+    # scale_max_canvas=256: the 128 sprite scales x2, the 512 one is left native.
+    assets = [asset("small", canvas="128x128"),
+              asset("big", canvas="512x512")]
+    root = _make_refs(tmp_path, assets)
+    out = autopack_order(assets, root, sheet_w=4096, sheet_h=4096, scale=2,
+                         scale_max_canvas=256)
+    cells = {o["name"]: o["regions"][0]["cellPx"]["w"] for o in out}
+    small = next(v for k, v in cells.items() if "128x128" in k)
+    big = next(v for k, v in cells.items() if "512x512" in k)
+    assert small == 256   # 128 * 2 — under the cutoff, scaled
+    assert big == 512     # 512 > 256 cutoff — left native
+
+
+def test_select_cells_reorder_and_drop():
+    from pipeline.autopack import select_cells
+    assert select_cells(["a", "b", "c"], [1, 3, 2]) == ["a", "c", "b"]  # reorder
+    assert select_cells(["a", "b", "c"], [1, 3]) == ["a", "c"]          # drop b
+    assert select_cells(["a", "b"], [2, 1, 3]) == ["b", "a"]            # oor skip
+    assert select_cells(["a", "b", "c"], []) == []                      # keep none
+
+
+def test_apply_overrides_multi():
+    from pipeline.autopack import apply_overrides
+    assets = [asset("A", refs=("a0", "a1", "a2")), asset("B"),
+              asset("C", refs=("c0", "c1", "c2"))]
+    out = apply_overrides(assets, {"hidden": ["B"],
+                                   "cells": {"A": [1, 3], "C": [3, 1, 2]}})
+    assert [a["assetName"] for a in out] == ["A", "C"]
+    assert out[0]["refFiles"] == ["a0", "a2"]        # dropped the duplicate a1
+    assert out[1]["refFiles"] == ["c2", "c0", "c1"]  # reordered, none dropped
+    assert apply_overrides(assets, {}) == assets
+
+
+def test_apply_removal_drops_named_asset():
+    from pipeline.autopack import apply_removal
+    assets = [asset("A"), asset("B"), asset("C")]
+    assert [a["assetName"] for a in apply_removal(assets, "B")] == ["A", "C"]
+    assert apply_removal(assets, "none") is assets
+    assert apply_removal(assets, "") is assets
+
+
+def _variant(name, refs, rotation, category="Decoration", canvas="256x256"):
+    return {**asset(name, refs=refs, category=category, canvas=canvas),
+            "rotation": rotation}
+
+
+def test_autopack_split_variants_mirrors_rotation2(tmp_path):
+    a = _variant("Stall", ("s0.png", "s1.png"), "2")
+    root = _make_refs(tmp_path, [a])
+    out = autopack_order([a], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=False, split_variants=True)
+    assert [o["name"] for o in out] == ["order-stall-v1", "order-stall-v2"]
+    for o in out:  # each variant sheet = ref + horizontal mirror
+        ms = o["regions"][0]["members"]
+        assert len(ms) == 2 and ms[1].get("flipX") is True
+
+
+def test_autopack_split_skips_single_ref_no_duplicate(tmp_path):
+    # A 1-ref variant asset has nothing to split — it must NOT get a redundant
+    # variant sheet (was duplicating the combined sheet). combined keeps it once.
+    single = _variant("Solo", ("s0.png",), "2")
+    root = _make_refs(tmp_path, [single])
+    with pytest.raises(ValueError):  # split-only: nothing to split
+        autopack_order([single], root, sheet_w=1024, sheet_h=1024,
+                       combined_sheet=False, split_variants=True)
+    out = autopack_order([single], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=True, split_variants=True)
+    assert len(out) == 1  # combined only, no duplicate variant sheet
+
+
+def test_autopack_split_variants_rotation4_no_mirror(tmp_path):
+    a = _variant("Sign", ("d0.png", "d1.png"), "4")
+    root = _make_refs(tmp_path, [a])
+    out = autopack_order([a], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=False, split_variants=True)
+    assert len(out) == 2
+    for o in out:
+        assert len(o["regions"][0]["members"]) == 1  # no mirror for 4-way
+
+
+def test_autopack_split_caps_at_three(tmp_path):
+    a = _variant("Many", ("a.png", "b.png", "c.png", "d.png"), "2")
+    root = _make_refs(tmp_path, [a])
+    out = autopack_order([a], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=False, split_variants=True)
+    assert [o["name"] for o in out] == ["order-many-v1", "order-many-v2",
+                                        "order-many-v3"]
+
+
+def test_autopack_split_skips_food_rotation_dash(tmp_path):
+    food = _variant("Cake", ("c0.png", "c1.png", "c2.png"), "-",
+                    category="Food - 3 stages", canvas="128x128")
+    root = _make_refs(tmp_path, [food])
+    with pytest.raises(ValueError):  # food is not a variant → nothing to split
+        autopack_order([food], root, sheet_w=512, sheet_h=512,
+                       combined_sheet=False, split_variants=True)
+
+
+def test_autopack_combined_variant_paginated_by_ref(tmp_path):
+    # Two 2-ref rotation-2 decorations, same canvas → the combined sheet splits
+    # BY reference index: sheet v1 = each asset's ref1, v2 = each asset's ref2.
+    a = _variant("GBQ", ("g0.png", "g1.png"), "2", canvas="512x512")
+    b = _variant("WCT", ("w0.png", "w1.png"), "2", canvas="512x512")
+    root = _make_refs(tmp_path, [a, b])
+    out = autopack_order([a, b], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=True, split_variants=False)
+    assert [o["name"] for o in out] == ["order-decoration-v1",
+                                        "order-decoration-v2"]
+    for o in out:  # 2 assets' k-th ref, each a rotation-2 mirror pair
+        assert len(o["regions"]) == 2
+        assert len(o["regions"][0]["members"]) == 2
+
+
+def test_autopack_combined_mixed_group_keeps_pair(tmp_path):
+    # A rotation-BLANK single-ref decoration sharing a (category, canvas) group
+    # with a rotation-2 asset must KEEP its in-game mirror pair on the variant
+    # sheets — only true multi-direction variants (rotation >= 3) suppress it.
+    variant = _variant("Stall", ("s0.png", "s1.png"), "2")
+    plain = _variant("Lamp", ("l0.png",), "")     # blank rotation, 1 ref
+    four = _variant("Sign", ("d0.png", "d1.png"), "4")
+    root = _make_refs(tmp_path, [variant, plain, four])
+    out = autopack_order([variant, plain, four], root,
+                         sheet_w=2048, sheet_h=2048,
+                         combined_sheet=True, split_variants=False)
+    v1 = next(o for o in out if o["name"].endswith("-v1"))
+    members = {r["name"]: r["members"] for r in v1["regions"]}
+    assert len(members["Lamp"]) == 2                    # pair kept
+    assert members["Lamp"][1].get("flipX") is True
+    assert len(members["Stall"]) == 2                   # rotation-2 mirrors
+    assert len(members["Sign"]) == 1                    # rotation-4: no mirror
+
+
+def test_autopack_combined_food_stays_whole(tmp_path):
+    # Food (rotation '-') keeps its stages together — NOT paginated by ref.
+    f = _variant("Cake", ("c0.png", "c1.png", "c2.png"), "-",
+                 category="Food - 3 stages", canvas="128x128")
+    root = _make_refs(tmp_path, [f])
+    out = autopack_order([f], root, sheet_w=512, sheet_h=512,
+                         combined_sheet=True, split_variants=False)
+    assert [o["name"] for o in out] == ["order-food-3-stages"]
+    assert len(out[0]["regions"][0]["members"]) == 3  # all 3 stages one region
+
+
+def test_autopack_combined_and_split_together(tmp_path):
+    a = _variant("Stall", ("s0.png", "s1.png"), "2")
+    root = _make_refs(tmp_path, [a])
+    names = [o["name"] for o in autopack_order(
+        [a], root, sheet_w=1024, sheet_h=1024,
+        combined_sheet=True, split_variants=True)]
+    assert "order-decoration-v1" in names and "order-decoration-v2" in names
+    assert "order-stall-v1" in names and "order-stall-v2" in names
+
+
+def test_autopack_distribute_by_folder_stacks_categories(tmp_path):
+    # distribute_by_folder=True lays each category's strip on its own row —
+    # accepted as a keyword and drives the pack without error.
+    assets = [asset("f1", category="Food - 3 stages"),
+              asset("f2", category="Food - 3 stages")]
+    root = _make_refs(tmp_path, assets)
+    out = autopack_order(assets, root, sheet_w=1000, sheet_h=1000,
+                         distribute_by_folder=True, algorithm="shelf",
+                         padding=0, border=0)
+    assert len(out) == 1
+    assert len(out[0]["regions"]) == 2

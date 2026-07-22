@@ -39,6 +39,8 @@ OrderEvents = io.Custom("SYMBIOTICA_ORDER_EVENTS")
 EventSpec = io.Custom("SYMBIOTICA_EVENT_SPEC")
 Template = io.Custom("SYMBIOTICA_TEMPLATE")
 Order = io.Custom("SYMBIOTICA_ORDER")
+PackSettingsWire = io.Custom("SYMBIOTICA_PACK_SETTINGS")
+ModelPresetWire = io.Custom("SYMBIOTICA_MODEL_PRESET")
 
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
@@ -220,7 +222,12 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         events = loaded["events"]
         if not events:
             raise ValueError(f"no events found in {op}")
-        feature = (feature or "").strip() or events[0].get("feature", "")
+        feature = (feature or "").strip()
+        # The JS combo labels events "Feature — Event Name"; accept that form as
+        # well as the bare feature (saved workflows keep the bare value).
+        if feature and feature not in {e.get("feature") for e in events}:
+            feature = feature.split(" — ")[0].strip()
+        feature = feature or events[0].get("feature", "")
         # event_spec returns {feature, eventName, templates}; it raises an
         # actionable ValueError listing the available features when not found.
         spec = event_spec(events, feature)
@@ -247,6 +254,114 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         return io.NodeOutput(payload)
 
 
+class SymbioticaModelPreset(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaModelPreset",
+            display_name="Symbiotica Model Preset",
+            category="symbiotica/pipeline",
+            description="Shared sheet preset for the Auto Packer — model, "
+                        "resolution, aspect, layout (columns / rows) and "
+                        "background. Wire 'preset' into one or many Auto "
+                        "Packers to drive them all from a single node.",
+            inputs=[
+                io.Combo.Input("preset_model", options=_MODELS,
+                               default="qwen-image"),
+                io.Combo.Input("resolution", options=_RESOLUTIONS,
+                               default="1K"),
+                io.Combo.Input("aspect_ratio", options=_ASPECTS, default="1:1"),
+                io.Int.Input("columns", default=1, min=1, max=4,
+                             tooltip="Assets side by side per row"),
+                io.Int.Input("max_rows_per_sheet", default=4, min=1, max=12,
+                             tooltip="Rows per sheet before a new sheet"),
+                io.String.Input("background", default="#808080",
+                                tooltip="Sheet background color; empty = "
+                                        "transparent"),
+            ],
+            outputs=[ModelPresetWire.Output(display_name="preset")],
+        )
+
+    @classmethod
+    def execute(cls, preset_model="qwen-image", resolution="1K",
+                aspect_ratio="1:1", columns=1, max_rows_per_sheet=4,
+                background="#808080") -> io.NodeOutput:
+        return io.NodeOutput({
+            "model": preset_model, "tier": resolution, "ar": aspect_ratio,
+            "columns": int(columns), "max_rows": int(max_rows_per_sheet),
+            "background": background,
+        })
+
+
+class SymbioticaAutoPackerSettings(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaAutoPackerSettings",
+            display_name="Symbiotica Auto Packer Settings",
+            category="symbiotica/pipeline",
+            description="Optional pack-settings knobs for the Auto Packer — the "
+                        "same layout controls as the Template Editor's Pack "
+                        "Settings, so a hands-off run can reproduce an editor "
+                        "sheet (e.g. recipes stacked per row at 2x scale). Wire "
+                        "'settings' into the Auto Packer.",
+            inputs=[
+                io.Combo.Input("scale", options=["0.5x", "1x", "2x", "3x"],
+                               default="1x",
+                               tooltip="Enlarge small sprites (the editor's "
+                                       "half / x2). Only assets at/under the "
+                                       "cutoff grow."),
+                io.Combo.Input("scale_max_canvas",
+                               options=["128", "256", "512", "1024", "all"],
+                               default="256",
+                               tooltip="Only scale assets whose canvas max edge "
+                                       "is <= this (px) — the asset "
+                                       "resolutions. 256 = grow food/128/256, "
+                                       "leave 512+ native. 'all' = every size."),
+                io.Combo.Input("algorithm",
+                               options=["shelf", "maxrects", "grid"],
+                               default="shelf",
+                               tooltip="Packing algorithm (Shelf/Strip = one "
+                                       "strip per row)"),
+                io.Boolean.Input("distribute_by_folder", default=True,
+                                 tooltip="Lay each asset type's strip on its own "
+                                         "row (the editor default)"),
+                io.Int.Input("padding", default=0, min=0, max=512,
+                             tooltip="Gap between packed strips (px)"),
+                io.Int.Input("border", default=0, min=0, max=512,
+                             tooltip="Margin around the packed block (px)"),
+                io.Boolean.Input("combined_sheet", default=True,
+                                 tooltip="Emit the grouped, paginated sheets "
+                                         "(the normal output). Off = only the "
+                                         "split-variant sheets below."),
+                io.Boolean.Input("split_variants", default=False,
+                                 tooltip="For directional assets (xlsx rotation "
+                                         "2/4), emit one sheet per variant ref "
+                                         "(max 3) — mirrored for rotation 2. "
+                                         "Food (rotation -) is never split."),
+            ],
+            outputs=[PackSettingsWire.Output(display_name="settings")],
+        )
+
+    _SCALE = {"0.5x": 0.5, "1x": 1.0, "2x": 2.0, "3x": 3.0}
+
+    @classmethod
+    def execute(cls, scale="1x", scale_max_canvas="256", algorithm="shelf",
+                distribute_by_folder=True, padding=0, border=0,
+                combined_sheet=True, split_variants=False) -> io.NodeOutput:
+        cutoff = 10 ** 9 if scale_max_canvas == "all" else int(scale_max_canvas)
+        return io.NodeOutput({
+            "scale": cls._SCALE.get(scale, 1.0),
+            "scale_max_canvas": cutoff,
+            "algorithm": algorithm,
+            "distribute_by_folder": bool(distribute_by_folder),
+            "padding": int(padding),
+            "border": int(border),
+            "combined_sheet": bool(combined_sheet),
+            "split_variants": bool(split_variants),
+        })
+
+
 class SymbioticaAutoPacker(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -261,24 +376,16 @@ class SymbioticaAutoPacker(io.ComfyNode):
                         "LLM/prompt input; downstream runs once per sheet.",
             inputs=[
                 Order.Input("order"),
-                io.Int.Input("columns", default=1, min=1, max=4,
-                             tooltip="Assets side by side per row"),
-                io.Int.Input("max_rows_per_sheet", default=4, min=1, max=12,
-                             tooltip="Rows per sheet before starting a new "
-                                     "sheet"),
-                # Copied verbatim from SymbioticaTemplateEditor's schema so the
-                # option lists + defaults match the editor exactly.
-                io.Combo.Input("preset_model", options=_MODELS,
-                               default="qwen-image"),
-                io.Combo.Input("resolution", options=_RESOLUTIONS,
-                               default="1K"),
-                io.Combo.Input("aspect_ratio", options=_ASPECTS,
-                               default="1:1"),
-                io.String.Input("background", default="#808080",
-                                tooltip="Sheet background color; empty = "
-                                        "transparent"),
+                # Sheet size / layout / background come from a Model Preset
+                # node (or defaults); pack behaviour from a Settings node. Only
+                # the category picker + per-asset panel live on this node.
                 io.String.Input("category", default="All",
                                 tooltip="One asset type, or All"),
+                io.String.Input("overrides", default="{}",
+                                tooltip="Per-asset hide/reorder, set from the "
+                                        "node's Assets panel (JSON)"),
+                ModelPresetWire.Input("preset", optional=True),
+                PackSettingsWire.Input("settings", optional=True),
             ],
             outputs=[
                 io.Image.Output(display_name="sheets", is_output_list=True,
@@ -296,25 +403,46 @@ class SymbioticaAutoPacker(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, order, columns=1, max_rows_per_sheet=4,
-                preset_model="qwen-image", resolution="1K", aspect_ratio="1:1",
-                background="#808080", category="All") -> io.NodeOutput:
+    def execute(cls, order, category="All", overrides="{}",
+                preset=None, settings=None) -> io.NodeOutput:
         if not isinstance(order, dict) or "assets" not in order:
             raise ValueError("order input must come from Symbiotica Order "
                              "Specs")
-        dims = preset_dims({"model": preset_model, "tier": resolution,
-                            "ar": aspect_ratio})
+        # Sheet size / layout / background come from a wired Model Preset node
+        # (or these defaults when it is unwired).
+        p = preset if isinstance(preset, dict) else {}
+        model = p.get("model", "qwen-image")
+        tier = p.get("tier", "1K")
+        ar = p.get("ar", "1:1")
+        columns = int(p.get("columns", 1))
+        max_rows_per_sheet = int(p.get("max_rows", 4))
+        background = p.get("background", "#808080")
+        dims = preset_dims({"model": model, "tier": tier, "ar": ar})
         if not dims:
-            raise ValueError(
-                f"invalid preset: {preset_model} / {resolution} / "
-                f"{aspect_ratio}")
-        from .autopack import autopack_order
+            raise ValueError(f"invalid preset: {model} / {tier} / {ar}")
+        # Optional pack-settings node (unwired = today's defaults: shelf, no
+        # distribute, scale 1 — nothing regresses).
+        s = settings if isinstance(settings, dict) else {}
+        from .autopack import apply_overrides, autopack_order
+        try:
+            ov = json.loads(overrides) if overrides else {}
+        except (ValueError, TypeError):
+            ov = {}
         base = slugify(order.get("feature", "")) or "order"
+        assets = apply_overrides(order["assets"],
+                                 ov if isinstance(ov, dict) else {})
         packed = autopack_order(
-            order["assets"], order.get("refsRoot", ""),
+            assets, order.get("refsRoot", ""),
             sheet_w=dims["w"], sheet_h=dims["h"], columns=columns,
             max_rows=max_rows_per_sheet, background=background,
-            category=(category or "All").strip() or "All", base_name=base)
+            category=(category or "All").strip() or "All", base_name=base,
+            scale=s.get("scale", 1.0),
+            scale_max_canvas=s.get("scale_max_canvas", 256),
+            algorithm=s.get("algorithm", "shelf"),
+            distribute_by_folder=s.get("distribute_by_folder", False),
+            padding=s.get("padding", 0), border=s.get("border", 0),
+            combined_sheet=s.get("combined_sheet", True),
+            split_variants=s.get("split_variants", False))
         return io.NodeOutput(
             [_pil_to_tensor(p["image"]) for p in packed],
             [p["prompts"] for p in packed],
@@ -1508,6 +1636,8 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
+    SymbioticaModelPreset,
+    SymbioticaAutoPackerSettings,
     SymbioticaAutoPacker,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,

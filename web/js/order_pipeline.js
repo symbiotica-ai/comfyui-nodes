@@ -30,6 +30,16 @@ function templateGroups(event) {
     return [...groups.values()];
 }
 
+// Event combo label ("Mini 1 — Ghostly Goodies") vs the stored key ("Mini 1").
+// The value may be either form (saved workflows keep the plain feature); the
+// key strips the " — <name>" the combo appends.
+function eventLabel(e) {
+    return e.eventName ? `${e.feature} — ${e.eventName}` : e.feature;
+}
+function featureKey(value) {
+    return String(value ?? "").split(" — ")[0].trim();
+}
+
 // --- graph helpers -----------------------------------------------------------
 function upstreamNode(node, inputName) {
     const input = node.inputs?.find((i) => i.name === inputName);
@@ -74,11 +84,26 @@ function pickedEventFor(node) {
 
 // --- widget upgrades ---------------------------------------------------------
 function comboify(node, widgetName, valuesFn) {
-    const w = node.widgets?.find((x) => x.name === widgetName);
-    if (!w) return;
-    w.type = "combo";
-    w.options = w.options ?? {};
-    w.options.values = valuesFn; // LiteGraph accepts a function — always fresh
+    const i = node.widgets?.findIndex((x) => x.name === widgetName);
+    if (i == null || i < 0) return;
+    const existing = node.widgets[i];
+    if (existing.type === "combo") {
+        existing.options = existing.options ?? {};
+        existing.options.values = valuesFn; // LiteGraph accepts a function
+        return existing;
+    }
+    // The classic (non-Vue) node UI won't turn a text widget into a dropdown by
+    // mutating `.type` — it keeps the text-prompt behavior. Recreate it as a
+    // REAL combo widget in the same slot so both UIs show a dropdown. Preserve
+    // the value + serialization so the string still reaches the Python node.
+    const value = existing.value;
+    node.widgets.splice(i, 1);
+    const w = node.addWidget("combo", widgetName, value,
+                             (v) => { w.value = v; }, { values: valuesFn });
+    node.widgets = node.widgets.filter((x) => x !== w); // move it back to slot i
+    node.widgets.splice(i, 0, w);
+    w.serializeValue = () => w.value;
+    return w;
 }
 
 // Turn a node's `month` text widget into a dropdown fed by the months found
@@ -123,13 +148,24 @@ async function refreshOrderSpecs(node) {
     const q = new URLSearchParams({ project });
     if (month) q.set("month", month);
     try {
-        node._symEvents = (await fetchJson(`/symbiotica/parse-order?${q}`)).events ?? [];
+        const data = await fetchJson(`/symbiotica/parse-order?${q}`);
+        node._symEvents = data.events ?? [];
+        node._symRefsRoot = data.refsRoot ?? "";
     } catch { node._symEvents = []; }
-    // Keep the feature value valid; empty means "the order's first event".
+    // Keep the feature value valid (accept the plain feature OR the labelled
+    // form); empty means "the order's first event". Never reset a value that
+    // still matches an event by key — that would clobber a saved workflow.
     const featW = widgetOf(node, "feature");
-    const features = node._symEvents.map((e) => e.feature);
-    if (featW && featW.value && !features.includes(featW.value)) {
-        featW.value = features[0] ?? "";
+    if (featW && featW.value) {
+        const key = featureKey(featW.value);
+        if (!node._symEvents.some((e) => e.feature === key)) {
+            featW.value = node._symEvents[0] ? eventLabel(node._symEvents[0]) : "";
+        }
+    }
+    // Re-render any downstream Auto Packer asset panels now that the event's
+    // assets (and refsRoot) are known.
+    for (const ap of downstreamNodes(node, "SymbioticaAutoPacker")) {
+        ap._symRenderAssets?.();
     }
     node.setDirtyCanvas?.(true, true);
 }
@@ -137,10 +173,11 @@ async function refreshOrderSpecs(node) {
 function wireOrderSpecs(node) {
     node._symEvents = [];
     wireMonthPicker(node); // month combo, refreshed on project_path change
-    comboify(node, "feature", () => (node._symEvents ?? []).map((e) => e.feature));
+    comboify(node, "feature", () => (node._symEvents ?? []).map(eventLabel));
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
-    // own project_path hook — both fire).
-    for (const name of ["project_path", "month"]) {
+    // own project_path hook — both fire). `feature` too, so a downstream Auto
+    // Packer panel re-renders for the newly picked event.
+    for (const name of ["project_path", "month", "feature"]) {
         const w = widgetOf(node, name);
         if (!w) continue;
         const prev = w.callback;
@@ -161,12 +198,149 @@ function eventCategoriesFor(node) {
     if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs") return ["All"];
     const events = specs._symEvents ?? [];
     if (!events.length) { refreshOrderSpecs(specs); return ["All"]; }
-    const feature = widgetOf(specs, "feature")?.value?.trim();
+    const feature = featureKey(widgetOf(specs, "feature")?.value);
     const ev = events.find((e) => e.feature === feature) || events[0];
     const cats = ev
         ? [...new Set(ev.assets.filter((a) => a.assetName).map((a) => a.category))]
         : [];
     return ["All", ...cats];
+}
+
+// The selected event's assets + refsRoot for an Auto Packer, filtered to the
+// node's chosen `category` (All = every type). Empty when no upstream yet.
+function eventAssetsFor(node) {
+    const specs = upstreamNode(node, "order");
+    if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs")
+        return { assets: [], refsRoot: "" };
+    const events = specs._symEvents ?? [];
+    if (!events.length) refreshOrderSpecs(specs);
+    const feature = featureKey(widgetOf(specs, "feature")?.value);
+    const ev = events.find((e) => e.feature === feature) || events[0];
+    const cat = widgetOf(node, "category")?.value?.trim() || "All";
+    const assets = (ev?.assets ?? []).filter(
+        (a) => a.assetName && (cat === "All" || a.category === cat));
+    return { assets, refsRoot: specs._symRefsRoot ?? "" };
+}
+
+function symImg(src, px) {
+    const img = document.createElement("img");
+    img.src = src;
+    img.style.cssText = `width:${px}px;height:${px}px;object-fit:contain;`
+        + "background:#111;border-radius:3px;flex:none;";
+    return img;
+}
+
+// An interactive Assets panel on the Auto Packer: the chosen category's assets
+// with thumbnails, a hide toggle per asset, and per-cell reorder arrows for
+// multi-reference assets. Drives the hidden `overrides` widget
+// ({hidden:[name], reorder:{name:"1,3,2"}}) — supports many hides + reorders.
+function assetsPanel(node) {
+    const ovW = widgetOf(node, "overrides");
+    let state = { hidden: [], cells: {} };
+    try { state = { hidden: [], cells: {}, ...JSON.parse(ovW?.value || "{}") }; }
+    catch { /* keep default */ }
+
+    const container = document.createElement("div");
+    container.style.cssText = "max-height:320px;overflow-y:auto;padding:2px 2px 4px;"
+        + "font-size:11px;";
+    stopWheel(container);
+    node.addDOMWidget("assets_panel", "sym_assets", container,
+                      { serialize: false, hideOnZoom: true });
+    node.size[0] = Math.max(node.size[0], 320);
+
+    const save = () => {
+        if (ovW) ovW.value = JSON.stringify(state);
+        node.setDirtyCanvas?.(true, true);
+    };
+
+    node._symRenderAssets = () => render();
+    function render() {
+        container.replaceChildren();
+        const { assets, refsRoot } = eventAssetsFor(node);
+        if (!assets.length) {
+            container.textContent = "Wire an Order Specs and pick an event.";
+            container.style.opacity = ".6";
+            return;
+        }
+        container.style.opacity = "1";
+        for (const a of assets) {
+            const hidden = state.hidden.includes(a.assetName);
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;flex-direction:column;gap:3px;"
+                + "border:1px solid #3a3a3a;border-radius:6px;padding:4px 5px;"
+                + `margin:3px 0;background:${hidden ? "#241a1a" : "#2a2a2a"};`
+                + `opacity:${hidden ? ".5" : "1"};`;
+            // header: name + hide toggle
+            const head = document.createElement("div");
+            head.style.cssText = "display:flex;align-items:center;gap:6px;";
+            const refs = a.refFiles ?? [];
+            if (refs[0] && refsRoot) head.appendChild(symImg(thumbUrl(refsRoot, refs[0]), 18));
+            const name = document.createElement("span");
+            name.textContent = `${a.assetName} · ${a.canvas}`;
+            name.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+            head.appendChild(name);
+            const eye = document.createElement("button");
+            eye.textContent = hidden ? "hidden" : "hide";
+            eye.style.cssText = "font-size:10px;padding:1px 6px;border-radius:4px;cursor:pointer;"
+                + `border:1px solid #555;background:${hidden ? "#7a3a3a" : "#333"};color:#ddd;`;
+            eye.addEventListener("pointerdown", (e) => {
+                e.stopPropagation();
+                state.hidden = hidden ? state.hidden.filter((n) => n !== a.assetName)
+                                      : [...state.hidden, a.assetName];
+                save(); render();
+            });
+            head.appendChild(eye);
+            row.appendChild(head);
+            // cells: reorder arrows for multi-ref assets
+            if (!hidden && refs.length > 1 && refsRoot) {
+                // Explicit cell list (reorder + drop). If stored, use as-is —
+                // do NOT re-add missing indices, or a removed cell comes back.
+                const stored = state.cells[a.assetName];
+                const order = (stored ? stored.slice()
+                    : refs.map((_, i) => i + 1)).filter((i) => i >= 1 && i <= refs.length);
+                const commit = () => { state.cells[a.assetName] = order.slice(); save(); render(); };
+                const cells = document.createElement("div");
+                cells.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;";
+                order.forEach((refIdx, pos) => {
+                    const cell = document.createElement("div");
+                    cell.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:1px;";
+                    cell.appendChild(symImg(thumbUrl(refsRoot, refs[refIdx - 1]), 30));
+                    const btns = document.createElement("div");
+                    btns.style.cssText = "display:flex;gap:2px;";
+                    const mk = (txt, fn, danger) => {
+                        const b = document.createElement("button");
+                        b.textContent = txt;
+                        b.style.cssText = "font-size:11px;line-height:1;padding:1px 5px;border-radius:3px;"
+                            + `cursor:pointer;border:1px solid #555;color:#ccc;`
+                            + `background:${danger ? "#5a2a2a" : "#333"};`;
+                        b.addEventListener("pointerdown", (e) => { e.stopPropagation(); fn(); });
+                        return b;
+                    };
+                    btns.append(
+                        mk("←", () => { if (pos > 0) { [order[pos], order[pos - 1]] = [order[pos - 1], order[pos]]; commit(); } }),
+                        mk("→", () => { if (pos < order.length - 1) { [order[pos], order[pos + 1]] = [order[pos + 1], order[pos]]; commit(); } }),
+                        mk("−", () => { if (order.length > 1) { order.splice(pos, 1); commit(); } }, true),
+                    );
+                    cell.appendChild(btns);
+                    cells.appendChild(cell);
+                });
+                row.appendChild(cells);
+            }
+            container.appendChild(row);
+        }
+    }
+
+    // Re-render when the category changes.
+    const catW = widgetOf(node, "category");
+    if (catW) {
+        const prev = catW.callback;
+        catW.callback = function () {
+            const r = prev?.apply(this, arguments);
+            render();
+            return r;
+        };
+    }
+    render();
 }
 
 function refreshCombos(node) {
@@ -310,6 +484,32 @@ app.registerExtension({
                 orig?.apply(this, arguments);
                 // "All" + the categories of the upstream Order Specs' event.
                 comboify(this, "category", () => eventCategoriesFor(this));
+                // The Assets panel drives the hidden `overrides` widget.
+                const ovW = widgetOf(this, "overrides");
+                if (ovW) { ovW.hidden = true; ovW.computeSize = () => [0, -4]; }
+                assetsPanel(this);
+            };
+            const origCfg = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                origCfg?.apply(this, arguments);
+                // Migrate pre-v2.40 workflows: the packer's layout widgets
+                // moved to the Model Preset node, so old widgets_values map
+                // positionally onto [category, overrides] — category gets the
+                // old `columns` int, overrides the old `max_rows`. Real
+                // categories are never bare numbers and overrides must be a
+                // JSON object; anything else is remap debris → reset it.
+                const catW = widgetOf(this, "category");
+                if (catW && /^\d+$/.test(String(catW.value).trim())) {
+                    catW.value = "All";
+                }
+                const ovW = widgetOf(this, "overrides");
+                if (ovW) {
+                    try {
+                        const v = JSON.parse(ovW.value || "{}");
+                        if (typeof v !== "object" || v === null) throw 0;
+                    } catch { ovW.value = "{}"; }
+                }
+                queueMicrotask(() => this._symRenderAssets?.());
             };
         }
 
@@ -376,7 +576,7 @@ async function fetchJson(route) {
 }
 
 function widgetOf(node, name) {
-    return node.widgets?.find((w) => w.name === name);
+    return node?.widgets?.find((w) => w.name === name);
 }
 
 function parseJsonWidget(node, name, fallback) {
