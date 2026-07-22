@@ -169,6 +169,28 @@ def extract_page_text(html, max_chars=900):
     return out
 
 
+# CTA note per platform choice — the exact phrasing the platform's product node
+# rides along in the summary (app modes only; a physical product carries none).
+_PLATFORM_NOTE = {
+    "mobile app": " (mobile app — the call to action must match: download on the App Store / Google Play)",
+    "desktop app": " (desktop app — the call to action must match: get it on desktop / sign up on the web)",
+    "physical product": "",
+}
+
+
+def build_summary(name, description, platform, details="", include_details=False):
+    """The product line the script LLM reads, byte-identical to the platform
+    product node's output: `App (…CTA…): Name — Description`. The page-text
+    DETAILS digest is opt-in — the platform engine never sends one."""
+    kind = "Product" if platform == "physical product" else "App"
+    summary = f"{kind}{_PLATFORM_NOTE.get(platform, '')}: {name}"
+    if description:
+        summary += f" — {description}"
+    if include_details and details:
+        summary += f"\nDETAILS: {details}"
+    return summary
+
+
 def find_store_link(html):
     for m in re.finditer(r"href=[\"'](https?://[^\"']+)[\"']", html, re.IGNORECASE):
         if is_store_host(m.group(1)):

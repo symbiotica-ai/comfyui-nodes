@@ -7,15 +7,11 @@ import requests
 import torch
 from PIL import Image
 
-from ._hypereel_scrape import is_public_http_target, scrape_product
+from ._hypereel_scrape import build_summary, is_public_http_target, scrape_product
 
 _UA = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
-_CTA = {
-    "mobile app": "store download",
-    "desktop app": "play on PC",
-    "physical product": "shop link in bio",
-}
+_PLATFORMS = ["mobile app", "desktop app", "physical product"]
 
 
 def _fetch_html(url):
@@ -51,9 +47,14 @@ class HypereelProductScrape:
         return {
             "required": {
                 "url": ("STRING", {"default": "", "tooltip": "Product page, app page, or app-store listing."}),
-                "platform": (list(_CTA.keys()), {"default": "mobile app",
-                                                 "tooltip": "Drives the CTA rule in the summary."}),
-            }
+                "platform": (_PLATFORMS, {"default": "mobile app",
+                                          "tooltip": "Drives the CTA rule in the summary."}),
+            },
+            "optional": {
+                "include_details": ("BOOLEAN", {"default": False,
+                                                "tooltip": "Append a page-text DETAILS digest to the summary. "
+                                                           "Off matches the platform engine exactly."}),
+            },
         }
 
     RETURN_TYPES = ("STRING", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "INT")
@@ -61,7 +62,7 @@ class HypereelProductScrape:
     FUNCTION = "scrape"
     CATEGORY = "Symbiotica/Hypereel"
 
-    def scrape(self, url, platform):
+    def scrape(self, url, platform, include_details=False):
         assets = scrape_product(url.strip(), fetch=_fetch_html)
 
         logo = _fetch_image(assets["logo"]) if assets["logo"] else None
@@ -82,12 +83,10 @@ class HypereelProductScrape:
         while len(shots) < 3:
             shots.append(shots[-1] if shots else logo)
 
-        summary = (
-            f"PRODUCT: {assets['name']} - {assets['description']} "
-            f"Platform: {platform}. CTA rule: {_CTA[platform]}."
+        summary = build_summary(
+            assets["name"], assets["description"], platform,
+            details=assets.get("details", ""), include_details=include_details,
         )
-        if assets.get("details"):
-            summary += f"\nDETAILS: {assets['details']}"
         return (summary, logo, shots[0], shots[1], shots[2], len(assets["screenshots"]))
 
 

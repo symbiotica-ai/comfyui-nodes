@@ -158,3 +158,38 @@ class TestPageDigest:
     def test_assets_carry_details(self):
         a = extract_product_assets(self.HTML + '<img src="/e_logo_100x100.png">', "https://x.com/p")
         assert "Build your own castle" in a["details"]
+
+
+class TestSummaryPlatformParity:
+    """build_summary must emit the platform product node's exact line — same CTA
+    phrasing, and no DETAILS digest unless explicitly enabled (the platform
+    engine never sends one)."""
+
+    def test_mobile_app_matches_platform_cta_line(self):
+        from _hypereel_scrape import build_summary
+        s = build_summary("Empire: Four Kingdoms", "Become a king!", "mobile app")
+        assert s == (
+            "App (mobile app — the call to action must match: download on the "
+            "App Store / Google Play): Empire: Four Kingdoms — Become a king!"
+        )
+
+    def test_desktop_app_cta_line(self):
+        from _hypereel_scrape import build_summary
+        s = build_summary("X", "Y", "desktop app")
+        assert "desktop app — the call to action must match: get it on desktop / sign up on the web" in s
+
+    def test_physical_product_has_no_platform_note(self):
+        from _hypereel_scrape import build_summary
+        s = build_summary("Empire: Four Kingdoms", "Become a king!", "physical product")
+        assert s == "Product: Empire: Four Kingdoms — Become a king!"
+
+    def test_missing_description_drops_the_dash(self):
+        from _hypereel_scrape import build_summary
+        assert build_summary("X", "", "physical product") == "Product: X"
+
+    def test_details_off_by_default_on_when_asked(self):
+        from _hypereel_scrape import build_summary
+        d = "Build your own castle and fight epic battles."
+        assert "DETAILS:" not in build_summary("X", "Y", "mobile app", details=d)
+        s = build_summary("X", "Y", "mobile app", details=d, include_details=True)
+        assert s.endswith("\nDETAILS: Build your own castle and fight epic battles.")
