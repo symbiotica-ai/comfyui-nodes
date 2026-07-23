@@ -301,7 +301,7 @@ function wireOrderSpecs(node) {
         }
     });
     node.addDOMWidget("read_folder", "sym_readfolder", readBtn,
-                      { serialize: false });
+                      { serialize: false, hideOnZoom: true });
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
     // own project_path hook — both fire). `feature` too, so a downstream Auto
     // Packer panel re-renders for the newly picked event.
