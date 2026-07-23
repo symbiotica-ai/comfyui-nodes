@@ -17,8 +17,10 @@ jobs:
       - uses: actions/checkout@v4
       # Pinned to a commit, not a branch: this step is handed the registry
       # token, and @main (and @v1, which is also a branch) would run whatever
-      # that branch holds on the day we release.
-      - uses: Comfy-Org/publish-node-action@7578cdb0c1410f2515e6f9b1443c6859cab94f05  # 1.0.1
+      # that branch holds on the day we release. 1.0.1's tracking-disable step
+      # ran `comfy --yes env`, which comfy-cli 1.12 removed — this pin is the
+      # first upstream commit without that step.
+      - uses: Comfy-Org/publish-node-action@d2366e7abb6ab16f3bb03e3520ae25c8cf749bc9  # main 2026-07, post-1.0.1
         with:
           personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
 
