@@ -310,3 +310,71 @@ test("repainting the category combo alone does not fetch", async () => {
     assert.equal(parseOrderCalls(), settled,
                  "60 repaints issued fresh parse-order requests");
 });
+
+test("a wired project_path never overwrites the picked month", async () => {
+    // A WIRED project_path is resolved by walking the graph — a best-effort
+    // guess, since the real branch is chosen at execution in Python. That guess
+    // must never overwrite `month`, which feeds the queued render: a wrong month
+    // makes resolve_month() silently fall back to months[0] and render the wrong
+    // order. Only a typed project_path is authoritative enough to re-pick month.
+    reset();
+    setLatency(1);
+    const wiredProject = ABSENT_PROJECT();
+    setResponder((route) => {
+        if (route.includes("list-orders")) {
+            return route.includes(encodeURIComponent(wiredProject))
+                ? { ok: true, body: { months: [{ label: "March" }] } }
+                : { ok: true, body: { months: [] } };
+        }
+        return { ok: false, status: 400, body: { error: "order_path required" } };
+    });
+
+    // A String literal carries the path into a wired project_path socket.
+    const literal = await create("StringLiteral", { value: wiredProject });
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: "", month: "October", feature: "Mini 1" });
+    link(literal, specs, "project_path");
+
+    specs.onNodeCreated();
+    for (let f = 0; f < 10; f++) await tick();
+
+    const month = specs.widgets.find((w) => w.name === "month").value;
+    assert.equal(month, "October",
+                 "a wired-path resolution clobbered the render-feeding month");
+});
+
+test("an unrecognized multi-input switch resolves to no project, not a guess", async () => {
+    // The resolver only understands an on_true/on_false switch. A third-party
+    // switch (rgthree any_01/any_02, Impact select+input1/2) has several wired
+    // inputs and no recognizable selector, so following "first wired input" can
+    // pick the branch the server did NOT. Refuse to guess: resolve to empty so
+    // the month dropdown blanks rather than showing a wrong project's months.
+    reset();
+    setLatency(1);
+    const branchA = ABSENT_PROJECT(); // the branch a naive "first input" walk hits
+    let listOrdersForA = 0;
+    setResponder((route) => {
+        if (route.includes("list-orders")) {
+            if (route.includes(encodeURIComponent(branchA))) listOrdersForA++;
+            return { ok: true, body: { months: [{ label: "March" }] } };
+        }
+        return { ok: false, status: 400, body: { error: "order_path required" } };
+    });
+
+    const litA = await create("StringLiteral", { value: branchA });
+    const litB = await create("StringLiteral", { value: ABSENT_PROJECT() });
+    const sw = await create("ImpactSwitch", { select: 2 }); // INT selector, no on_true/on_false
+    link(litA, sw, "input1");
+    link(litB, sw, "input2");
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: "", month: "October", feature: "Mini 1" });
+    link(sw, specs, "project_path");
+
+    specs.onNodeCreated();
+    for (let f = 0; f < 10; f++) await tick();
+
+    assert.equal(listOrdersForA, 0,
+                 "the resolver guessed a switch branch instead of refusing");
+    assert.deepEqual(specs._symMonths, [],
+                     "an unresolvable switch left a wrong project's month options");
+});

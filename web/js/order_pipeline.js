@@ -91,8 +91,10 @@ function inputString(node, inputName, seen) {
 
 // The string a node's output carries, resolved statically from the graph: a
 // switch node (on_true/on_false + a `switch` widget) follows its selected
-// branch; a literal/primitive yields its string widget; anything else follows
-// its first wired input. `seen` guards against a cycle.
+// branch; a literal/primitive yields its string widget; a lone-input passthrough
+// (a Reroute) follows its wire. A node with several wired inputs that we can't
+// read as a switch is an ambiguous selector — we refuse to guess a branch, since
+// the wrong one silently feeds a wrong project. `seen` guards against a cycle.
 function nodeOutputString(node, seen) {
     if (!node || seen.has(node.id)) return "";
     seen.add(node.id);
@@ -105,12 +107,8 @@ function nodeOutputString(node, seen) {
     const strW = node.widgets?.find(
         (w) => typeof w.value === "string" && w.value.trim());
     if (strW) return strW.value.trim();
-    for (const inp of node.inputs ?? []) {
-        if (inp.link != null) {
-            const s = inputString(node, inp.name, seen);
-            if (s) return s;
-        }
-    }
+    const wired = (node.inputs ?? []).filter((i) => i.link != null);
+    if (wired.length === 1) return inputString(node, wired[0].name, seen);
     return "";
 }
 
@@ -172,8 +170,13 @@ function wireMonthPicker(node) {
             const data = await fetchJson(
                 "/symbiotica/list-orders?project=" + encodeURIComponent(project));
             node._symMonths = (data.months ?? []).map((m) => m.label);
+            // Only a typed project_path may re-pick the month. A wired path is
+            // resolved by a best-effort graph walk (the real branch is chosen at
+            // execution), so letting it overwrite `month` would feed the render a
+            // guessed month; populate the dropdown but leave the pick alone.
+            const typed = widgetOf(node, "project_path")?.value?.trim();
             const monthW = widgetOf(node, "month");
-            if (monthW && !node._symMonths.includes(monthW.value)) {
+            if (typed && monthW && !node._symMonths.includes(monthW.value)) {
                 monthW.value = node._symMonths[0] ?? "";
             }
         } catch { node._symMonths = []; }
