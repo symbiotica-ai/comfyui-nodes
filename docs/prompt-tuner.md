@@ -65,7 +65,8 @@ NS Prompt Tuner Load ──system_prompt──▶ NS LLM Chat ──▶ image pr
    `max_iterations`; stopping Auto-Queue by hand is always fine. Keep the Save
    node wired and unmuted — it is what records each refinement and advances the
    `max_iterations` count. With Save muted the loop can make no progress, so it
-   stops after a few unrecorded serves and tells you why.
+   stops after a few unrecorded serves and tells you why; unmute or rewire Save
+   and queue again to resume.
 4. Ship: set `version_override` to the best version and the graph serves that
    prompt forever. Roll back anytime — every version + critique lives in the
    state file, human-readable.
