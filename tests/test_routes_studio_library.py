@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 import sys
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -32,8 +33,15 @@ def routes_mod(monkeypatch):
 
     server = SimpleNamespace(instance=SimpleNamespace(routes=_Routes()))
     monkeypatch.setitem(sys.modules, "server", SimpleNamespace(PromptServer=server))
-    from aiohttp import web
-    monkeypatch.setattr(web, "json_response", json_response)
+    # Stub aiohttp so the suite runs without it installed (CI ships a minimal dep
+    # set — aiohttp is a ComfyUI-runtime dep), mirroring test_routes_allowlist.py.
+    # json_response is our capturing stub.
+    fake_web = types.ModuleType("aiohttp.web")
+    fake_web.json_response = json_response
+    fake_aiohttp = types.ModuleType("aiohttp")
+    fake_aiohttp.web = fake_web
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+    monkeypatch.setitem(sys.modules, "aiohttp.web", fake_web)
     from pipeline import routes as mod
     importlib.reload(mod)
     mod._captured = captured  # expose for assertions
