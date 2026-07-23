@@ -71,6 +71,49 @@ function downstreamNodes(node, type) {
     return out;
 }
 
+// Resolve project_path even when it is a WIRED input (a Local/Modal switch, a
+// String literal, a chain of them). The combos and the thumbnail route's root
+// registration both need the actual path string, which the widget alone can't
+// give once the socket is wired.
+function resolveProjectPath(node) {
+    const v = widgetOf(node, "project_path")?.value?.trim?.();
+    if (v) return v;
+    return inputString(node, "project_path", new Set());
+}
+
+function inputString(node, inputName, seen) {
+    const input = node?.inputs?.find((i) => i.name === inputName);
+    if (!input || input.link == null) return "";
+    const link = app.graph.links[input.link];
+    const origin = link && app.graph.getNodeById(link.origin_id);
+    return nodeOutputString(origin, seen);
+}
+
+// The string a node's output carries, resolved statically from the graph: a
+// switch node (on_true/on_false + a `switch` widget) follows its selected
+// branch; a literal/primitive yields its string widget; anything else follows
+// its first wired input. `seen` guards against a cycle.
+function nodeOutputString(node, seen) {
+    if (!node || seen.has(node.id)) return "";
+    seen.add(node.id);
+    const isSwitch = node.inputs?.some((i) => i.name === "on_true")
+                  && node.inputs?.some((i) => i.name === "on_false");
+    if (isSwitch) {
+        const sw = node.widgets?.find((w) => w.name === "switch");
+        return inputString(node, sw?.value ? "on_true" : "on_false", seen);
+    }
+    const strW = node.widgets?.find(
+        (w) => typeof w.value === "string" && w.value.trim());
+    if (strW) return strW.value.trim();
+    for (const inp of node.inputs ?? []) {
+        if (inp.link != null) {
+            const s = inputString(node, inp.name, seen);
+            if (s) return s;
+        }
+    }
+    return "";
+}
+
 const SPEC_INPUT_NODES = new Set(["SymbioticaTemplateBuilder", "SymbioticaTemplateEditor"]);
 
 function orderDataFor(node) {
@@ -123,7 +166,7 @@ function wireMonthPicker(node) {
     node._symMonths = [];
     comboify(node, "month", () => node._symMonths);
     const refresh = async () => {
-        const project = widgetOf(node, "project_path")?.value?.trim();
+        const project = resolveProjectPath(node);
         if (!project) { node._symMonths = []; return; }
         try {
             const data = await fetchJson(
@@ -145,6 +188,7 @@ function wireMonthPicker(node) {
             return r;
         };
     }
+    node._symRefreshMonths = refresh; // the Read-folder button calls this
     refresh();
 }
 
@@ -158,7 +202,7 @@ function wireMonthPicker(node) {
 // page reload. The opportunistic callers below (a panel rendering, a combo being
 // painted) always take the cached answer.
 async function refreshOrderSpecs(node, { explicit = false } = {}) {
-    const project = widgetOf(node, "project_path")?.value?.trim();
+    const project = resolveProjectPath(node);
     const month = widgetOf(node, "month")?.value?.trim();
     if (!project) { publishOrder(node, null, NO_EVENTS, ""); return; }
     const q = new URLSearchParams({ project });
@@ -218,6 +262,22 @@ function wireOrderSpecs(node) {
     node._symEvents = [];
     wireMonthPicker(node); // month combo, refreshed on project_path change
     comboify(node, "feature", () => (node._symEvents ?? []).map(eventLabel));
+    // "Read folder" — resolve project_path (even a wired Local/Modal switch),
+    // fill the month + feature dropdowns, and hit parse-order so the server
+    // registers the refs root (that is what lets the Auto Packer thumbnails
+    // load). A wired project_path has no widget callback to auto-refresh on, so
+    // this button is the reliable trigger; no need to wire + queue a packer.
+    const readBtn = node.addWidget("button", "📁 Read folder", null,
+        async () => {
+            await node._symRefreshMonths?.();
+            await refreshOrderSpecs(node, { explicit: true });
+            node.setDirtyCanvas?.(true, true);
+        });
+    readBtn.serialize = false;
+    // Sit the button above month/feature.
+    node.widgets = node.widgets.filter((w) => w !== readBtn);
+    const at = node.widgets.findIndex((w) => w.name === "month");
+    node.widgets.splice(at < 0 ? node.widgets.length : at, 0, readBtn);
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
     // own project_path hook — both fire). `feature` too, so a downstream Auto
     // Packer panel re-renders for the newly picked event.
