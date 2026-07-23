@@ -41,19 +41,25 @@ function refreshSummary(node) {
 }
 
 function openBrowser(node) {
-    // Fullscreen overlay: breadcrumb + up-nav + a client-side name filter + a
-    // single lazy tree pane. Folders expand by fetching ROUTE?dir=<rel>; the
-    // first open passes sync=1. Clicking a row's select control calls
-    // applySelection(node, entry.rel) and closes. A non-ok fetch throws in
-    // fetchJson and renders inline; an empty listing shows a distinct empty
-    // state. The filter narrows the CURRENT pane by name (it does not search
-    // into unopened folders). Done/✕ and Escape are always-available closes,
-    // independent of whether the current pane has any rows.
+    // A centered modal (~80% of the viewport) over a dimmed backdrop: breadcrumb
+    // + up-nav + a client-side name filter + a single lazy tree pane. Folders
+    // expand by fetching ROUTE?dir=<rel>; the first open passes sync=1. Clicking
+    // a row's select control calls applySelection(node, entry.rel) and closes. A
+    // non-ok fetch throws in fetchJson and renders inline; an empty listing shows
+    // a distinct empty state. The filter narrows the CURRENT pane by name (it does
+    // not search into unopened folders). Done/✕, Escape, and a backdrop click are
+    // always-available closes, independent of whether the pane has any rows.
     const overlay = document.createElement("div");
     overlay.className = "symbiotica-studio-library";
     overlay.style.cssText =
-        "position:fixed;inset:0;z-index:10000;background:#161616;color:#ddd;" +
-        "display:flex;flex-direction:column;font:12px sans-serif;";
+        "position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);" +
+        "display:flex;align-items:center;justify-content:center;";
+    const panel = document.createElement("div");
+    panel.style.cssText =
+        "width:80%;height:80%;max-width:1100px;background:#161616;color:#ddd;" +
+        "display:flex;flex-direction:column;font:12px sans-serif;" +
+        "border:1px solid #333;border-radius:8px;overflow:hidden;" +
+        "box-shadow:0 8px 40px rgba(0,0,0,.5);";
 
     const bar = document.createElement("div");
     bar.style.cssText =
@@ -88,7 +94,8 @@ function openBrowser(node) {
     const pane = document.createElement("div");
     pane.style.cssText = "flex:1;overflow:auto;padding:6px 12px;";
 
-    overlay.append(bar, filterBar, errline, pane);
+    panel.append(bar, filterBar, errline, pane);
+    overlay.appendChild(panel);
     document.body.appendChild(overlay);
 
     let firstOpen = true;
@@ -104,6 +111,9 @@ function openBrowser(node) {
     };
     document.addEventListener("keydown", onKeydown);
     closeBtn.addEventListener("click", close);
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) close();  // backdrop click (not a click inside the panel)
+    });
     upBtn.addEventListener("click", () => {
         if (currentParent !== null) show(currentParent);
     });

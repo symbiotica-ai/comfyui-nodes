@@ -12,8 +12,8 @@ pick one **file or folder**, emitting its absolute sandbox path as a `STRING`
 `io.ComfyNode` in the pipeline package holds a hidden `selection` widget storing
 a **volume-relative** path (`studios/<slug>/<rel>`); a lazy per-level browse
 route (`/symbiotica/studio-library`) lists the confined tree; a `web/js`
-extension opens a single-select fullscreen browser that writes the pick into the
-widget. `execute()` resolves the widget value against the studio-assets Volume
+extension opens a single-select modal browser (a centered overlay at ~80% of the
+viewport, over a dimmed backdrop) that writes the pick into the widget. `execute()` resolves the widget value against the studio-assets Volume
 root **without reading any tenant environment**, confining the result to that
 root.
 
@@ -306,7 +306,8 @@ Behavior:
 - `onConfigure`: chain the original, then in a `queueMicrotask` re-run
   `summaryLabel` from the restored `selection` so a reopened workflow shows the
   stored pick (Appendix B #17).
-- Button opens a fullscreen overlay: a breadcrumb + a single tree pane whose
+- Button opens a centered modal overlay (~80% of the viewport, over a dimmed
+  backdrop that also closes it): a breadcrumb + a single tree pane whose
   folders expand lazily by fetching `/symbiotica/studio-library?dir=<rel>` (the
   first open passes `sync=1`). Each row is a folder or file; clicking a row's
   select control calls `applySelection(node, entry.rel)` and closes (or a "Done"
