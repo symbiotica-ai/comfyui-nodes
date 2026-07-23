@@ -17,38 +17,36 @@ FALLBACK_CELL = 256
 FIT_PAD_PX = 5
 
 
-def _fit_block_to_width(regions: list[dict], sheet_w: int, sheet_h: int) -> None:
-    """Scale the whole placed block up (or down) so it fills the sheet width
-    minus FIT_PAD_PX on each side — the max scale that fits, capped so it never
-    overflows the height. Scaling is about the block's top-left; _center_block
-    re-centers afterwards. Region boxes, member cells, and cellPx all scale."""
-    if not regions:
-        return
-    min_x = min(r["x"] for r in regions)
-    max_x = max(r["x"] + r["w"] for r in regions)
-    min_y = min(r["y"] for r in regions)
-    max_y = max(r["y"] + r["h"] for r in regions)
-    bw, bh = max_x - min_x, max_y - min_y
-    if bw <= 0 or bh <= 0:
-        return
-    pad_x, pad_y = FIT_PAD_PX / sheet_w, FIT_PAD_PX / sheet_h
-    s = min((1 - 2 * pad_x) / bw, (1 - 2 * pad_y) / bh)
-    if s <= 0 or abs(s - 1) < 1e-9:
-        return
-    for r in regions:
-        r["x"] = (r["x"] - min_x) * s
-        r["y"] = (r["y"] - min_y) * s
-        r["w"] *= s
-        r["h"] *= s
-        r["scale"] = r.get("scale", 1) * s
-        cp = r.get("cellPx")
-        if cp:
-            r["cellPx"] = {"w": cp["w"] * s, "h": cp["h"] * s}
-        for m in r.get("members", []):
-            m["x"] = (m["x"] - min_x) * s
-            m["y"] = (m["y"] - min_y) * s
-            m["w"] *= s
-            m["h"] *= s
+def _fit_width_stack(rows: list[dict], sheet_w: int, sheet_h: int) -> list[dict]:
+    """fit_width layout: ONE region per row, stacked top to bottom, every row
+    scaled by the SAME factor — the largest that lets the widest row fill the
+    sheet width (FIT_PAD_PX margin) while the whole stack still fits the height.
+    So the rows come out as big as possible without overlapping. Rows are
+    centered horizontally and the leftover vertical space is split evenly.
+
+    This replaces packing several strips side by side (which, for wide 3-cell
+    food recipes, filled the width with two small rows and left the sheet half
+    empty — nothing left to scale into)."""
+    if not rows:
+        return []
+    widest = max(_row_w(r) for r in rows) or 1
+    total_h = sum(r["cellH"] for r in rows) or 1
+    m = FIT_PAD_PX
+    s = min((sheet_w - 2 * m) / widest,
+            (sheet_h - (len(rows) + 1) * m) / total_h)
+    s = max(s, 0.01)
+    scaled_h = total_h * s
+    gap = max(m, (sheet_h - scaled_h) / (len(rows) + 1))
+    regions = []
+    y_px = gap
+    for i, row in enumerate(rows):
+        srow = {**row, "cellW": row["cellW"] * s, "cellH": row["cellH"] * s}
+        x_px = max(0, (sheet_w - _row_w(srow)) / 2)
+        region = _region_at(srow, x_px, y_px, sheet_w, sheet_h)
+        region["zIndex"] = i
+        regions.append(region)
+        y_px += srow["cellH"] + gap
+    return regions
 
 
 def _cell_count(row: dict) -> int:
@@ -152,6 +150,12 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
     if not rows:
         return {"regions": [], "overflow": []}
 
+    if settings is not None and settings.fit_width:
+        # fit_width owns the layout: one row per asset, each scaled up to fill
+        # (no side-by-side packing to defeat the scale).
+        return {"regions": _fit_width_stack(rows, sheet_w, sheet_h),
+                "overflow": []}
+
     if settings is not None:
         by_name = {r["asset"]["assetName"]: r for r in rows}
         pseudo = [{
@@ -181,8 +185,6 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
             y = max(0, min(y_px, sheet_h - row["cellH"]))
             regions.append(_region_at(row, PAD_PX, y, sheet_w, sheet_h))
             y_px = y + row["cellH"] + PAD_PX
-        if settings.fit_width:
-            _fit_block_to_width(regions, sheet_w, sheet_h)
         _center_block(regions)
         regions.sort(key=lambda r: (r["y"], r["x"]))
         for i, r in enumerate(regions):
