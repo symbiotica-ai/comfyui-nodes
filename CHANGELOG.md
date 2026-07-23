@@ -6,6 +6,18 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.8
+
+Studio Library browser UI polish. No node's inputs, outputs, or ids changed —
+nothing here breaks an existing workflow.
+
+### Changed
+- **Symbiotica Studio Library** browser is now a centered ~80% modal over a
+  dimmed, click-to-close backdrop (was fullscreen), restyled against the
+  symbiotica hub design tokens. Clicking a folder row opens it (files select).
+- A shared `web/js/hub_theme.js` module now holds the pack's base palette and
+  interaction styles for web extensions to build on.
+
 ## 2026.7.7
 
 Adds a new node. No existing node's inputs, outputs, or ids changed —
