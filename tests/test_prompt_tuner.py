@@ -304,11 +304,17 @@ def test_auto_stall_halts_then_recovers():
     # Save is fixed — not re-halt forever.
     state = {}
     served = {}
+    billed = 0
     for _ in range(20):
         state, served = _auto(state)       # no record() between serves
         if "halt" in served:
             break
+        billed += 1                        # each real serve bills the generator
     assert "halt" in served and "Save" in served["halt"]
+    # Pin the exact spend ceiling: at _MAX_UNCONSUMED_SERVES=3 the loop bills 3
+    # serves and halts on the 4th press. An off-by-one here is one wasted paid
+    # call per halt cycle, so assert the bound, not just "halts eventually".
+    assert billed == 3, f"stall guard billed {billed} serves before halting"
     assert state.get("unconsumed", 0) == 0, "the trip must reset the count"
 
     # Save is fixed; the next serve proceeds (no halt) and records.
@@ -418,3 +424,30 @@ def test_pinned_serve_does_not_starve_an_active_save(tmp_path, monkeypatch):
     # Six queues, Save active: six refinements recorded, never a spurious halt.
     assert len(store.load("t")["iterations"]) == 7
     assert store.load("t").get("unconsumed", 0) == 0
+
+
+def test_stall_halt_abandons_the_pending_serve(tmp_path, monkeypatch):
+    # When the loop gives up (stall halt), the unrecorded serve it was on must
+    # be abandoned — not left pending for a later pinned serve to preserve and
+    # a Save to record, which would leak a stale version into the lineage
+    # (the halt message even steers users toward pinning).
+    import prompt_tuner
+    store = TunerStore(str(tmp_path))
+    monkeypatch.setattr(prompt_tuner, "_default_store", lambda: store)
+    load = prompt_tuner.NSPromptTunerLoad()
+    save = prompt_tuner.NSPromptTunerSave()
+
+    # Muted Save until the loop halts.
+    for _ in range(20):
+        try:
+            load.serve_prompt("t", "g", -1, 0, initial_prompt="base")
+        except TunerHalt:
+            break
+    before = len(store.load("t")["iterations"])
+
+    # User follows the halt's advice: pins a version, with an active Save.
+    load.serve_prompt("t", "g", 0, 0, initial_prompt="base")
+    status = save.save_iteration("t", improve_response("should not be recorded"))["result"][0]
+
+    assert len(store.load("t")["iterations"]) == before, "pinned serve leaked a record"
+    assert "nothing recorded" in status.lower()
