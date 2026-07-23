@@ -277,10 +277,15 @@ function wireOrderSpecs(node) {
             node.setDirtyCanvas?.(true, true);
         });
     readBtn.serialize = false;
-    // Sit the button above month/feature.
-    node.widgets = node.widgets.filter((w) => w !== readBtn);
-    const at = node.widgets.findIndex((w) => w.name === "month");
-    node.widgets.splice(at < 0 ? node.widgets.length : at, 0, readBtn);
+    // Move it above month with an IN-PLACE splice. Never reassign node.widgets:
+    // the frontend keeps a reference to the array, so a reassignment is dropped
+    // and the button vanishes (comboify moves widgets the same in-place way).
+    const from = node.widgets.indexOf(readBtn);
+    const to = node.widgets.findIndex((w) => w.name === "month");
+    if (from >= 0 && to >= 0 && to < from) {
+        node.widgets.splice(from, 1);
+        node.widgets.splice(to, 0, readBtn);
+    }
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
     // own project_path hook — both fire). `feature` too, so a downstream Auto
     // Packer panel re-renders for the newly picked event.
@@ -294,7 +299,15 @@ function wireOrderSpecs(node) {
             return r;
         };
     }
+    // Fire now, and once more after the graph settles: on load a wired
+    // project_path (a Local/Modal switch) is not resolvable until the links are
+    // restored, so this deferred pass populates the month + feature dropdowns
+    // and registers the refs root without needing the button.
     refreshOrderSpecs(node, { explicit: true });
+    setTimeout(() => {
+        node._symRefreshMonths?.();
+        refreshOrderSpecs(node, { explicit: true });
+    }, 400);
 }
 
 // The categories of the event an Auto Packer's upstream Order Specs has picked
