@@ -218,6 +218,13 @@ def serve(state: dict, *, initial_prompt: str, guidance: str,
         #     downstream must record THAT, not be suppressed by this pin.
         #     Clobbering it is what made a Save-active compare graph record
         #     nothing and halt blaming a Save that was fine.
+        # Known bounded limitation of the single shared slot: a pending auto
+        # serve left by an INTERRUPTED queue (cancel, upstream error, a Save that
+        # raised on a truncated response) is preserved here too, so pinning right
+        # after such an abort lets one Save record a version with the abandoned
+        # serve's parent/guidance. Bounded to one per abort (the next pin sees a
+        # consumed slot); the clean fix is slot freshness, not another special
+        # case. The stall-guard halt already neutralises its own pending slot.
         consumed_auto = prior_served.get("record") and prior_served.get("consumed")
         if not consumed_auto:
             state["last_served"] = prior_served
