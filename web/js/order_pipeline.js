@@ -315,15 +315,19 @@ function wireOrderSpecs(node) {
             return r;
         };
     }
-    // Fire now, and once more after the graph settles: on load a wired
-    // project_path (a Local/Modal switch) is not resolvable until the links are
-    // restored, so this deferred pass populates the month + feature dropdowns
-    // and registers the refs root without needing the button.
+    // Fire now, and — only if the project could not be resolved yet — once more
+    // after the graph settles: on load a wired project_path (a Local/Modal
+    // switch) is not resolvable until the links are restored, so this deferred
+    // pass populates the month + feature dropdowns and registers the refs root
+    // without needing the button. When the project already resolved, the settled
+    // parse stands — re-asking would reopen a cached failure and reflood.
     refreshOrderSpecs(node, { explicit: true });
-    setTimeout(() => {
-        node._symRefreshMonths?.();
-        refreshOrderSpecs(node, { explicit: true });
-    }, 400);
+    if (!resolveProjectPath(node)) {
+        setTimeout(() => {
+            node._symRefreshMonths?.();
+            refreshOrderSpecs(node, { explicit: true });
+        }, 400);
+    }
 }
 
 // The categories of the event an Auto Packer's upstream Order Specs has picked
