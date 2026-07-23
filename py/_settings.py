@@ -46,6 +46,7 @@ def resolve_key(env_names: list[str]) -> str | None:
     return None
 
 
+
 def resolve_provider_key(api_key: str, env_names: list[str], provider: str) -> str:
     """The key for one node call: what was typed on the node, else Settings or
     the environment. Raises with somewhere to put it when there is none.
@@ -63,3 +64,17 @@ def resolve_provider_key(api_key: str, env_names: list[str], provider: str) -> s
             f"works too, but saves the key into the workflow file."
         )
     return key
+
+
+def key_from_settings(*env_names) -> str | None:
+    """The Settings UI value for a provider, ignoring env vars and config files.
+
+    For resolvers that already have their own precedence between a widget,
+    config.ini, and the environment: this slots Settings in without disturbing
+    the rest of the chain."""
+    for env in env_names:
+        value = get_comfy_setting(setting_key(env))
+        if value:
+            return str(value).strip()
+    return None
+

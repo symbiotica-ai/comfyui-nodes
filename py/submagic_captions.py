@@ -57,6 +57,11 @@ class NSSubmagicCaptions:
         if api_key:
             return api_key
 
+        from ._settings import key_from_settings
+        key = key_from_settings("SUBMAGIC_API_KEY")
+        if key:
+            return key
+
         parent_dir = os.path.join(os.path.dirname(__file__), "..")
         config_path = os.path.join(parent_dir, "config.ini")
         if os.path.exists(config_path):
