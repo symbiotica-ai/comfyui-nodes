@@ -378,3 +378,31 @@ test("an unrecognized multi-input switch resolves to no project, not a guess", a
     assert.deepEqual(specs._symMonths, [],
                      "an unresolvable switch left a wrong project's month options");
 });
+
+test("a wired project_path never clobbers the picked feature", async () => {
+    // The same invariant as month, on the other render-feeding widget: a wired
+    // resolution must not overwrite `feature`. Regression: publishOrder blanked
+    // feature to "", and Python's `feature = feature or events[0]` then rendered
+    // the first event of the real project — a silently wrong render.
+    reset();
+    setLatency(1);
+    const wiredProject = ABSENT_PROJECT();
+    setResponder((route) => {
+        if (route.includes("list-orders"))
+            return { ok: true, body: { months: [{ label: "October" }] } };
+        // parse-order fails -> events empty -> the pre-fix path blanks feature.
+        return { ok: false, status: 400, body: { error: "order_path required" } };
+    });
+
+    const literal = await create("StringLiteral", { value: wiredProject });
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: "", month: "October", feature: "Mini 1" });
+    link(literal, specs, "project_path");
+
+    specs.onNodeCreated();
+    for (let f = 0; f < 10; f++) await tick();
+
+    const feature = specs.widgets.find((w) => w.name === "feature").value;
+    assert.equal(feature, "Mini 1",
+                 "a wired-path resolution clobbered the render-feeding feature");
+});

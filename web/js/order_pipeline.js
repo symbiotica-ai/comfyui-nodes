@@ -81,6 +81,14 @@ function resolveProjectPath(node) {
     return inputString(node, "project_path", new Set());
 }
 
+// A typed project_path is authoritative — the user entered it in the widget. A
+// wired one is resolved by a best-effort graph walk, so it must never auto-pick
+// a render-feeding widget (month, feature): a wrong-branch guess would reach the
+// queued render, where Python silently falls back to the first month/event.
+function projectPathTyped(node) {
+    return !!widgetOf(node, "project_path")?.value?.trim?.();
+}
+
 function inputString(node, inputName, seen) {
     const input = node?.inputs?.find((i) => i.name === inputName);
     if (!input || input.link == null) return "";
@@ -170,13 +178,11 @@ function wireMonthPicker(node) {
             const data = await fetchJson(
                 "/symbiotica/list-orders?project=" + encodeURIComponent(project));
             node._symMonths = (data.months ?? []).map((m) => m.label);
-            // Only a typed project_path may re-pick the month. A wired path is
-            // resolved by a best-effort graph walk (the real branch is chosen at
-            // execution), so letting it overwrite `month` would feed the render a
-            // guessed month; populate the dropdown but leave the pick alone.
-            const typed = widgetOf(node, "project_path")?.value?.trim();
+            // A wired path populates the dropdown but never re-picks the month —
+            // only a typed project_path is authoritative enough for that.
             const monthW = widgetOf(node, "month");
-            if (typed && monthW && !node._symMonths.includes(monthW.value)) {
+            if (projectPathTyped(node) && monthW
+                && !node._symMonths.includes(monthW.value)) {
                 monthW.value = node._symMonths[0] ?? "";
             }
         } catch { node._symMonths = []; }
@@ -236,9 +242,10 @@ function publishOrder(node, result, events, refsRoot) {
     // still matches an event by key — that would clobber a saved workflow.
     // `result` is null when there is no project to parse: nothing was asked, so
     // nothing says the current pick is wrong, and clearing the path to type a
-    // new one must not throw the pick away.
+    // new one must not throw the pick away. Only a typed project_path re-picks:
+    // a wired resolution is a graph-walk guess and must not overwrite feature.
     const featW = widgetOf(node, "feature");
-    if (result !== null && featW && featW.value) {
+    if (projectPathTyped(node) && result !== null && featW && featW.value) {
         const key = featureKey(featW.value);
         if (!events.some((e) => e.feature === key)) {
             featW.value = events[0] ? eventLabel(events[0]) : "";
