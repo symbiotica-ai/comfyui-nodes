@@ -838,7 +838,7 @@ git commit -m "feat: studio-library browse route with bounded async volume sync"
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { app } from "./comfy_stub.mjs";
+import { create } from "./comfy_stub.mjs";
 import "../../web/js/studio_library.js";
 import { summaryLabel, applySelection, filterEntries } from "../../web/js/studio_library.js";
 
@@ -863,8 +863,8 @@ test("filterEntries matches names case-insensitively, empty query passes all", (
     assert.deepEqual(filterEntries(entries, "zzz"), []);
 });
 
-test("applySelection writes the rel into the selection widget and summary", () => {
-    const node = app.create("SymbioticaStudioLibrary");
+test("applySelection writes the rel into the selection widget and summary", async () => {
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
     node.onNodeCreated?.();
     applySelection(node, "studios/ggs/references/hero.png");
     const sel = node.widgets.find((w) => w.name === "selection");
@@ -875,7 +875,7 @@ test("applySelection writes the rel into the selection widget and summary", () =
 });
 
 test("summary restores from a loaded workflow via onConfigure", async () => {
-    const node = app.create("SymbioticaStudioLibrary", { selection: "" });
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
     node.onNodeCreated?.();
     const sel = node.widgets.find((w) => w.name === "selection");
     sel.value = "studios/ggs/brief.txt";  // as if restored by configure()
@@ -898,8 +898,8 @@ Modeled on `files_read.js` (fetchJson at :17-21, chained onNodeCreated at :394, 
 ```javascript
 // ABOUTME: Single-select studio asset library browser — a lazy per-level overlay
 // ABOUTME: that writes a volume-relative pick into the node's selection widget.
-import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
+import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
 
 const ROUTE = "/symbiotica/studio-library";
 
