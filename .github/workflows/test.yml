@@ -25,11 +25,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # The tested pipeline modules need only pytest + pillow. Installing the
-      # project would pull faster-whisper (and torch, via the node modules),
-      # which the unit tests never touch.
+      # The suite reaches pillow (compose/markers) and requests (the grok/
+      # wavespeed API clients); everything else it imports is stdlib. Install
+      # those two runtime deps plus pytest, but not faster-whisper (heavy, and
+      # imported lazily) or torch/numpy (only in node modules the tests skip).
       - name: Install test dependencies
-        run: python -m pip install pytest pillow
+        run: python -m pip install pytest pillow requests
       # Must be `pytest tests/`, never `python -m pytest`: the top-level py/
       # directory shadows pytest's own `py` module and crashes collection.
       - name: Run Python tests
