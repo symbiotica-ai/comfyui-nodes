@@ -330,37 +330,48 @@ function wireOrderSpecs(node) {
     }
 }
 
-// The categories of the event an Auto Packer's upstream Order Specs has picked
-// (named assets only), for its `category` combo. Opportunistically re-parses
-// upstream when its cache is empty so the next open is populated.
-function eventCategoriesFor(node) {
+// The Auto Packer's asset source: its upstream Order Specs (wired on `order`),
+// OR a Template Library (wired on `template`, carrying a frozen order). Both
+// stash the picked event on _symEvents / _symRefsRoot — Order Specs picks by
+// its `feature` widget; the Library exposes exactly the selected template's one
+// event. Opportunistically re-parses an Order Specs whose cache is still empty.
+// When both are wired, `order` (the live pick) wins.
+function assetSourceFor(node) {
     const specs = upstreamNode(node, "order");
-    if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs") return ["All"];
-    const events = specs._symEvents ?? [];
-    if (!events.length) { refreshOrderSpecs(specs); return ["All"]; }
-    const feature = featureKey(widgetOf(specs, "feature")?.value);
-    const ev = events.find((e) => e.feature === feature) || events[0];
-    const cats = ev
-        ? [...new Set(ev.assets.filter((a) => a.assetName).map((a) => a.category))]
-              .sort((a, b) => a.localeCompare(b))
-        : [];
+    if (specs?.comfyClass === "SymbioticaOrderSpecs") {
+        const events = specs._symEvents ?? [];
+        if (!events.length) refreshOrderSpecs(specs);
+        const feature = featureKey(widgetOf(specs, "feature")?.value);
+        const ev = events.find((e) => e.feature === feature) || events[0] || null;
+        return { event: ev, refsRoot: specs._symRefsRoot ?? "" };
+    }
+    const lib = upstreamNode(node, "template");
+    if (lib?.comfyClass === "SymbioticaTemplateLibrary") {
+        return { event: (lib._symEvents ?? [])[0] || null,
+                 refsRoot: lib._symRefsRoot ?? "" };
+    }
+    return { event: null, refsRoot: "" };
+}
+
+// The categories of that source's picked event (named assets only), for the
+// Auto Packer's `category` combo.
+function eventCategoriesFor(node) {
+    const { event: ev } = assetSourceFor(node);
+    if (!ev) return ["All"];
+    const cats = [...new Set(
+        ev.assets.filter((a) => a.assetName).map((a) => a.category))]
+        .sort((a, b) => a.localeCompare(b));
     return ["All", ...cats];
 }
 
-// The selected event's assets + refsRoot for an Auto Packer, filtered to the
-// node's chosen `category` (All = every type). Empty when no upstream yet.
+// The picked event's assets + refsRoot for an Auto Packer, filtered to the
+// node's chosen `category` (All = every type). Empty when no source is wired.
 function eventAssetsFor(node) {
-    const specs = upstreamNode(node, "order");
-    if (!specs || specs.comfyClass !== "SymbioticaOrderSpecs")
-        return { assets: [], refsRoot: "" };
-    const events = specs._symEvents ?? [];
-    if (!events.length) refreshOrderSpecs(specs);
-    const feature = featureKey(widgetOf(specs, "feature")?.value);
-    const ev = events.find((e) => e.feature === feature) || events[0];
+    const { event: ev, refsRoot } = assetSourceFor(node);
     const cat = widgetOf(node, "category")?.value?.trim() || "All";
     const assets = (ev?.assets ?? []).filter(
         (a) => a.assetName && (cat === "All" || a.category === cat));
-    return { assets, refsRoot: specs._symRefsRoot ?? "" };
+    return { assets, refsRoot };
 }
 
 function symImg(src, px) {
@@ -510,6 +521,249 @@ function assetsPanel(node) {
     render();
 }
 
+// "💾 Save as template" on the Auto Packer: names the current pack, sets the
+// hidden `save_as` widget, queues once so Python writes the sheets + recipe to
+// the project's templates/ folder, then clears the name so the next run does
+// not re-save. A DOM button, not a litegraph button — the Vue node UI only
+// renders DOM widgets (same reason as the Order Specs "Read folder" button).
+function wireSaveButton(node) {
+    const saveW = widgetOf(node, "save_as");
+    if (saveW) { saveW.hidden = true; saveW.computeSize = () => [0, -4]; }
+    const btn = document.createElement("button");
+    btn.textContent = "💾 Save as template";
+    btn.style.cssText = "width:100%;box-sizing:border-box;padding:5px 8px;"
+        + "cursor:pointer;border-radius:8px;border:1px solid #555;background:#333;"
+        + "color:#ddd;font-size:12px;";
+    let saving = false;
+    btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (saving) return;
+        const { event: ev } = assetSourceFor(node);
+        const cat = widgetOf(node, "category")?.value?.trim() || "All";
+        const suggested = slugify(
+            [ev?.feature || "template", cat === "All" ? "" : cat]
+                .filter(Boolean).join("-"));
+        const name = window.prompt(
+            "Save this pack as a template named:", suggested);
+        if (!name || !name.trim()) return;
+        saving = true;
+        btn.textContent = "⏳ Saving…";
+        if (saveW) saveW.value = name.trim();
+        try {
+            // Serialize NOW so save_as is captured, THEN clear + queue the
+            // captured prompt. app.queuePrompt only serializes when no run is in
+            // flight, so relying on it drops save_as under auto-queue or a long
+            // downstream run. graphToPrompt snapshots the graph synchronously.
+            const prompt = await app.graphToPrompt();
+            if (saveW) saveW.value = "";
+            await api.queuePrompt(0, prompt);
+        } catch (err) {
+            console.error("[symbiotica] template save queue failed", err);
+        } finally {
+            if (saveW) saveW.value = "";
+            saving = false;
+            btn.textContent = "💾 Save as template";
+            node.setDirtyCanvas?.(true, true);
+        }
+    });
+    node.addDOMWidget("save_template", "sym_savetpl", btn,
+                      { serialize: false, hideOnZoom: true });
+}
+
+// The Template Library node: a folder browser of the project's saved Auto
+// Packer templates (name · sheet count · expandable sheet thumbnails), a hidden
+// `selected` slug it outputs, and — on select — it drives any downstream Auto
+// Packer: exposes the template's frozen order as its one event (so the packer's
+// Assets panel + category combo light up, via assetSourceFor) and preloads the
+// packer's category + overrides widgets so a re-pack matches and stays editable.
+function wireTemplateLibrary(node) {
+    node._symEvents = [];
+    node._symRefsRoot = "";
+    node._symTemplates = [];
+    const selW = widgetOf(node, "selected");
+    if (selW) { selW.hidden = true; selW.computeSize = () => [0, -4]; }
+
+    const container = document.createElement("div");
+    container.style.cssText = "box-sizing:border-box;width:100%;"
+        + "overflow-y:auto;overflow-x:hidden;font-size:11px;";
+    const list = document.createElement("div");
+    list.style.cssText = "padding:2px 2px 4px;";
+    container.appendChild(list);
+    stopWheel(container);
+    const panelW = node.addDOMWidget("library_panel", "sym_library", container,
+                                     { serialize: false, hideOnZoom: true });
+    const PANEL_MAX = 760;
+    panelW.computeSize = function (width) {
+        const h = list.scrollHeight;
+        return [width, Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX)];
+    };
+    const refit = () => requestAnimationFrame(() => {
+        node.setSize?.([node.size[0], node.computeSize()[1]]);
+        node.setDirtyCanvas?.(true, true);
+    });
+    node.size[0] = Math.max(node.size[0], 340);
+
+    let expanded = null; // slug whose sheet thumbnails are shown
+
+    // Expose the selected template's frozen order as this node's one event so a
+    // downstream Auto Packer's Assets panel + category combo light up
+    // (assetSourceFor treats a Library like an Order Specs). Runs on EVERY
+    // refresh/load — so it must NOT write the packer's category/overrides
+    // widgets, or it would clobber the user's edits on reload and after a save.
+    const exposeEvent = (tpl) => {
+        const order = tpl?.order || {};
+        node._symEvents = tpl ? [{
+            feature: order.feature || "",
+            eventName: order.eventName || "",
+            assets: order.assets || [],
+        }] : [];
+        node._symRefsRoot = order.refsRoot || "";
+        for (const ap of downstreamNodes(node, "SymbioticaAutoPacker")) {
+            ap._symRenderAssets?.();
+        }
+        node.setDirtyCanvas?.(true, true);
+    };
+
+    // Prime a downstream packer's category + overrides FROM the template — only
+    // on an explicit "use" click, so a re-pack matches the saved recipe. After
+    // that the packer's own widgets are the source of truth (they survive
+    // reloads/saves), matching resolve_pack_inputs' "widget wins" contract.
+    const primePackers = (tpl) => {
+        for (const ap of downstreamNodes(node, "SymbioticaAutoPacker")) {
+            const catW = widgetOf(ap, "category");
+            if (catW) catW.value = tpl?.category || "All";
+            const ovW = widgetOf(ap, "overrides");
+            if (ovW) ovW.value = JSON.stringify(tpl?.overrides || {});
+        }
+    };
+
+    const select = (tpl) => {
+        if (selW) selW.value = tpl?.name || "";
+        primePackers(tpl);
+        exposeEvent(tpl); // relights + re-renders packers with the primed values
+        render();
+    };
+
+    const doDelete = async (tpl) => {
+        const project = resolveProjectPath(node) || "";
+        try {
+            await postJson("/symbiotica/pack-template-delete",
+                           { project, name: tpl.name });
+        } catch (err) { console.error("[symbiotica] delete failed", err); }
+        if (selW?.value === tpl.name) { selW.value = ""; exposeEvent(null); }
+        await refresh();
+    };
+
+    const refresh = async () => {
+        // Fetch even with an empty project — the route also lists
+        // output/templates (Files Read / fallback saves live there).
+        const project = resolveProjectPath(node) || "";
+        try {
+            const data = await fetchJson(
+                "/symbiotica/pack-template-list?project="
+                + encodeURIComponent(project));
+            node._symTemplates = data.templates ?? [];
+        } catch { node._symTemplates = []; }
+        // Re-expose the selected template's event — its data may only arrive now
+        // — WITHOUT re-priming the packer's widgets (those are the user's now).
+        const cur = node._symTemplates.find((t) => t.name === selW?.value);
+        if (cur) exposeEvent(cur);
+        render();
+    };
+    node._symRefreshTemplates = refresh;
+
+    function render() {
+        list.replaceChildren();
+        const templates = node._symTemplates ?? [];
+        if (!templates.length) {
+            list.textContent = resolveProjectPath(node)
+                ? "No templates yet — save one from the Auto Packer (💾)."
+                : "Set the project folder to browse its templates.";
+            list.style.opacity = ".6";
+            refit();
+            return;
+        }
+        list.style.opacity = "1";
+        for (const t of templates) {
+            const sel = selW?.value === t.name;
+            const open = expanded === t.name;
+            const row = document.createElement("div");
+            row.style.cssText = "border:1px solid " + (sel ? "#5a7a9a" : "#3a3a3a")
+                + ";border-radius:6px;margin:3px 0;min-width:0;background:"
+                + (sel ? "#1e2a33" : "#2a2a2a") + ";";
+            const head = document.createElement("div");
+            head.style.cssText = "display:flex;align-items:center;gap:6px;"
+                + "min-width:0;padding:4px 5px;cursor:pointer;";
+            const folder = document.createElement("span");
+            folder.textContent = (open ? "📂 " : "📁 ") + t.name;
+            folder.style.cssText = "flex:1;min-width:0;overflow:hidden;"
+                + "text-overflow:ellipsis;white-space:nowrap;";
+            head.appendChild(folder);
+            const count = document.createElement("span");
+            count.textContent = (t.sheetCount ?? (t.sheets?.length || 0)) + " ▦";
+            count.style.cssText = "font-size:10px;opacity:.7;flex:none;";
+            head.appendChild(count);
+            const use = document.createElement("button");
+            use.textContent = sel ? "✓" : "use";
+            use.style.cssText = "font-size:10px;padding:1px 7px;border-radius:4px;"
+                + "cursor:pointer;border:1px solid #555;color:#ddd;flex:none;"
+                + "background:" + (sel ? "#3a5a3a" : "#333") + ";";
+            // stopPropagation on BOTH pointerdown (litegraph drag) and click —
+            // a pointerdown-only stop still lets the click bubble to head and
+            // toggle the expand.
+            use.addEventListener("pointerdown", (e) => e.stopPropagation());
+            use.addEventListener("click",
+                (e) => { e.stopPropagation(); select(t); });
+            head.appendChild(use);
+            const del = document.createElement("button");
+            del.textContent = "×";
+            del.style.cssText = "font-size:13px;line-height:1;padding:0 6px;"
+                + "border-radius:4px;cursor:pointer;border:1px solid #555;"
+                + "color:#c88;background:#3a2a2a;flex:none;";
+            del.addEventListener("pointerdown", (e) => e.stopPropagation());
+            del.addEventListener("click",
+                (e) => { e.stopPropagation(); doDelete(t); });
+            head.appendChild(del);
+            head.addEventListener("click", () => {
+                expanded = open ? null : t.name;
+                render();
+            });
+            row.appendChild(head);
+            if (open) {
+                const sheets = document.createElement("div");
+                sheets.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;"
+                    + "padding:0 5px 5px;";
+                const paths = t.sheetPaths ?? [];
+                if (!paths.length) {
+                    const none = document.createElement("span");
+                    none.textContent = "(no sheet images)";
+                    none.style.cssText = "opacity:.5;font-size:10px;";
+                    sheets.appendChild(none);
+                }
+                for (const p of paths) sheets.appendChild(symImg(localImageUrl(p), 54));
+                row.appendChild(sheets);
+            }
+            list.appendChild(row);
+        }
+        refit();
+    }
+
+    // Refresh on project change (chain onto the widget callback) + on load. A
+    // wired project_path (Local/Modal switch) is only resolvable once the links
+    // restore, so a deferred pass covers that case without a manual refresh.
+    const projectW = widgetOf(node, "project_path");
+    if (projectW) {
+        const prev = projectW.callback;
+        projectW.callback = function () {
+            const r = prev?.apply(this, arguments);
+            refresh();
+            return r;
+        };
+    }
+    refresh();
+    if (!resolveProjectPath(node)) setTimeout(() => refresh(), 400);
+}
+
 function refreshCombos(node) {
     for (const specs of downstreamNodes(node, "SymbioticaEventSpecs")) {
         specs.setDirtyCanvas(true, true);
@@ -537,6 +791,13 @@ function refUrl(refsRoot, rel) {
     return api.apiURL(
         `/symbiotica/ref-image?root=${encodeURIComponent(refsRoot)}&rel=${encodeURIComponent(rel)}`
     );
+}
+
+// Thumbnail URL for an ABSOLUTE image path (a saved template sheet). Same route
+// and /api/ prefix rule as thumbUrl — only the path is already absolute.
+function localImageUrl(path) {
+    return api.apiURL(
+        `/symbiotica/local-image?path=${encodeURIComponent(path)}`);
 }
 
 function renderBrowser(container, data) {
@@ -628,6 +889,24 @@ app.registerExtension({
             if (node._symbioticaBrowser) renderBrowser(node._symbioticaBrowser, detail);
             refreshCombos(node);
         });
+        // A pack save (Auto Packer 💾) landed — refresh every Template Library so
+        // the new/updated folder shows up with its sheet thumbnails.
+        api.addEventListener("symbiotica.pack_template_saved", ({ detail }) => {
+            if (detail?.error) {
+                console.error("[symbiotica] template save:", detail.error);
+                return;
+            }
+            if (detail?.fellBack) {
+                console.warn("[symbiotica] template '" + detail.name
+                    + "' saved to output/templates (project folder unwritable "
+                    + "or unset) — still browsable in the Library.");
+            }
+            for (const n of app.graph?._nodes ?? []) {
+                if (n.comfyClass === "SymbioticaTemplateLibrary") {
+                    n._symRefreshTemplates?.();
+                }
+            }
+        });
     },
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -664,10 +943,18 @@ app.registerExtension({
                 orig?.apply(this, arguments);
                 // "All" + the categories of the upstream Order Specs' event.
                 comboify(this, "category", () => eventCategoriesFor(this));
+                // Schema default is "" (the unset sentinel Python uses to defer
+                // to a wired template). A fresh interactive node should still
+                // SHOW "All" — a concrete pick Python honors as "pack every
+                // type". onConfigure restores a saved value over this.
+                const cw0 = widgetOf(this, "category");
+                if (cw0 && !cw0.value) cw0.value = "All";
                 // The Assets panel drives the hidden `overrides` widget.
                 const ovW = widgetOf(this, "overrides");
                 if (ovW) { ovW.hidden = true; ovW.computeSize = () => [0, -4]; }
                 assetsPanel(this);
+                // "💾 Save as template" — snapshots this pack to the library.
+                wireSaveButton(this);
             };
             const origCfg = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function () {
@@ -690,6 +977,21 @@ app.registerExtension({
                     } catch { ovW.value = "{}"; }
                 }
                 queueMicrotask(() => this._symRenderAssets?.());
+            };
+        }
+
+        if (nodeData.name === "SymbioticaTemplateLibrary") {
+            const orig = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                orig?.apply(this, arguments);
+                wireTemplateLibrary(this);
+            };
+            const origCfg = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                origCfg?.apply(this, arguments);
+                // Workflow load: re-list the project's templates and re-drive
+                // any downstream Auto Packer from the saved `selected` template.
+                queueMicrotask(() => this._symRefreshTemplates?.());
             };
         }
 
@@ -760,6 +1062,17 @@ async function fetchJson(route) {
         throw err;
     }
     return res.json();
+}
+
+async function postJson(route, body) {
+    const res = await api.fetchApi(route, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error ?? res.statusText);
+    return data;
 }
 
 function widgetOf(node, name) {

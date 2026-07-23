@@ -14,6 +14,11 @@ from server import PromptServer
 from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
+from .pack_library import (
+    delete_pack_template_dirs,
+    list_pack_templates_dirs,
+    templates_dir,
+)
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
@@ -361,3 +366,39 @@ async def template_image(request):
     if not (path == root or path.startswith(root + os.sep)) or not os.path.isfile(path):
         return web.json_response({"error": "not found"}, status=404)
     return web.FileResponse(path, headers={"Cache-Control": "private, max-age=60"})
+
+
+def _pack_dirs(project: str) -> list[str]:
+    """Where Auto Packer templates live: the project's templates/ subfolder AND
+    output/templates (the fallback for a read-only project / no-project save).
+    Project first so a filed template shadows a fallback of the same name."""
+    out = _template_dir()
+    return [d for d in (templates_dir(project), out) if d]
+
+
+@PromptServer.instance.routes.get("/symbiotica/pack-template-list")
+async def pack_template_list(request):
+    """The saved Auto Packer templates for a project — from its templates/
+    subfolder AND output/templates (the save fallback). Registers both so
+    /symbiotica/local-image can serve each template's sheet thumbnails (abs
+    sheetPaths ride along)."""
+    project = request.query.get("project", "")
+    dirs = _pack_dirs(project)
+    for d in dirs:
+        register_root(d)
+    return web.json_response({"dir": templates_dir(project),
+                              "templates": list_pack_templates_dirs(dirs)})
+
+
+@PromptServer.instance.routes.post("/symbiotica/pack-template-delete")
+async def pack_template_delete(request):
+    """Delete one saved Auto Packer template folder from wherever it lives
+    (project templates/ or output/templates). basename/realpath-guarded; missing
+    is a no-op, not an error."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    removed = delete_pack_template_dirs(_pack_dirs(str(body.get("project") or "")),
+                                        str(body.get("name") or ""))
+    return web.json_response({"ok": True, "removed": removed})
