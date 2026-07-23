@@ -268,24 +268,33 @@ function wireOrderSpecs(node) {
     // "Read folder" — resolve project_path (even a wired Local/Modal switch),
     // fill the month + feature dropdowns, and hit parse-order so the server
     // registers the refs root (that is what lets the Auto Packer thumbnails
-    // load). A wired project_path has no widget callback to auto-refresh on, so
-    // this button is the reliable trigger; no need to wire + queue a packer.
-    const readBtn = node.addWidget("button", "📁 Read folder", null,
-        async () => {
+    // load). No need to wire + queue a packer just to populate the pickers.
+    //
+    // A DOM widget, NOT node.addWidget("button", …): the new Vue node UI does
+    // not render litegraph button widgets, but it DOES render addDOMWidget
+    // elements (the Auto Packer's assets panel proves it).
+    const readBtn = document.createElement("button");
+    readBtn.textContent = "📁 Read folder";
+    readBtn.style.cssText = "width:100%;box-sizing:border-box;padding:5px 8px;"
+        + "cursor:pointer;border-radius:8px;border:1px solid #555;background:#333;"
+        + "color:#ddd;font-size:12px;";
+    let reading = false;
+    readBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (reading) return;
+        reading = true;
+        readBtn.textContent = "⏳ Reading…";
+        try {
             await node._symRefreshMonths?.();
             await refreshOrderSpecs(node, { explicit: true });
+        } finally {
+            reading = false;
+            readBtn.textContent = "📁 Read folder";
             node.setDirtyCanvas?.(true, true);
-        });
-    readBtn.serialize = false;
-    // Move it above month with an IN-PLACE splice. Never reassign node.widgets:
-    // the frontend keeps a reference to the array, so a reassignment is dropped
-    // and the button vanishes (comboify moves widgets the same in-place way).
-    const from = node.widgets.indexOf(readBtn);
-    const to = node.widgets.findIndex((w) => w.name === "month");
-    if (from >= 0 && to >= 0 && to < from) {
-        node.widgets.splice(from, 1);
-        node.widgets.splice(to, 0, readBtn);
-    }
+        }
+    });
+    node.addDOMWidget("read_folder", "sym_readfolder", readBtn,
+                      { serialize: false });
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
     // own project_path hook — both fire). `feature` too, so a downstream Auto
     // Packer panel re-renders for the newly picked event.
