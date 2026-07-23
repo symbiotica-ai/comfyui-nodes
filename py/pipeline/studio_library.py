@@ -82,3 +82,52 @@ def selection_fingerprint(base_dir, selection):
     except (ValueError, OSError):
         h.update(b"unresolved")
     return h.hexdigest()
+
+
+def list_studio_dir(base_dir, studio, rel=""):
+    """Confined single-level listing of studios/<studio>[/rel]. Never raises —
+    returns {"error": ...} for a bad/escaping dir, or a normal empty listing for
+    an unprovisioned studio."""
+    try:
+        studio = str(studio or "")
+        if not _STUDIO_SLUG.fullmatch(studio):
+            return {"error": "invalid studio"}
+        root = _confined_root(base_dir)
+        studio_root = os.path.realpath(os.path.join(root, "studios", studio))
+        if not os.path.isdir(studio_root):
+            return {"studio": studio, "rel": f"studios/{studio}", "parent": None, "entries": []}
+        rel = str(rel or "").strip() or f"studios/{studio}"
+        parts = _split_studio(rel)
+        if parts is None or parts[0] != studio:
+            return {"error": "outside the studio library"}
+        target = os.path.realpath(os.path.join(root, rel))
+        if not (target == studio_root or target.startswith(studio_root + os.sep)):
+            return {"error": "outside the studio library"}
+        if not os.path.isdir(target):
+            return {"error": "not a directory"}
+        at_root = target == studio_root
+        entries = []
+        with os.scandir(target) as it:
+            for e in it:
+                if e.name.startswith("."):
+                    continue
+                if at_root and e.name in MODEL_KINDS:
+                    continue
+                is_dir = os.path.isdir(os.path.join(target, e.name))  # follow; matches execute
+                size = None
+                if not is_dir:
+                    try:
+                        size = e.stat().st_size
+                    except OSError:
+                        size = None
+                entries.append({
+                    "name": e.name,
+                    "rel": f"{rel}/{e.name}",
+                    "type": "dir" if is_dir else "file",
+                    "size": size,
+                })
+        entries.sort(key=lambda x: (x["type"] != "dir", x["name"].lower()))
+        parent = None if at_root else "/".join(rel.split("/")[:-1])
+        return {"studio": studio, "rel": rel, "parent": parent, "entries": entries}
+    except (ValueError, OSError) as exc:
+        return {"error": str(exc) or "listing failed"}

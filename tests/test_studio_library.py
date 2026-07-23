@@ -6,6 +6,7 @@ import pytest
 
 from pipeline.studio_library import MODEL_KINDS, resolve_studio_path
 from pipeline.studio_library import resolve_selection, selection_fingerprint
+from pipeline.studio_library import list_studio_dir
 
 
 def _touch(path, data=b"x"):
@@ -153,3 +154,82 @@ def test_resolution_ignores_canvas_studio(vol, monkeypatch):
     monkeypatch.delenv("CANVAS_STUDIO", raising=False)
     assert resolve_selection(str(vol), sel) == with_env
     assert selection_fingerprint(str(vol), sel) == fp_env
+
+
+@pytest.fixture()
+def vol2(tmp_path):
+    root = tmp_path
+    for k in ("checkpoints", "loras", "references", "renders"):
+        (root / "studios" / "ggs" / k).mkdir(parents=True)
+    _touch(root / "studios" / "ggs" / "references" / "hero.png", b"1234")
+    _touch(root / "studios" / "ggs" / "references" / ".hidden", b"x")
+    (root / "studios" / "ggs" / "references" / "loras").mkdir()  # nested "loras" is legit
+    _touch(root / "studios" / "ggs" / "brief.txt", b"hi")
+    return root
+
+
+def test_lists_dirs_first_and_hides_model_kinds_at_root(vol2):
+    res = list_studio_dir(str(vol2), "ggs", "")
+    assert "error" not in res
+    assert res["rel"] == "studios/ggs"
+    assert res["parent"] is None
+    names = [e["name"] for e in res["entries"]]
+    assert "checkpoints" not in names and "loras" not in names  # MODEL_KINDS hidden at root
+    assert names == ["references", "renders", "brief.txt"]  # dirs first, case-insensitive
+    ref = next(e for e in res["entries"] if e["name"] == "references")
+    assert ref["type"] == "dir" and ref["rel"] == "studios/ggs/references"
+
+
+def test_model_kinds_not_hidden_in_nested_dir(vol2):
+    res = list_studio_dir(str(vol2), "ggs", "studios/ggs/references")
+    names = [e["name"] for e in res["entries"]]
+    assert "loras" in names  # a nested folder literally named "loras" is a real asset
+    assert ".hidden" not in names  # dotfiles skipped
+    hero = next(e for e in res["entries"] if e["name"] == "hero.png")
+    assert hero["type"] == "file" and hero["size"] == 4
+    assert res["parent"] == "studios/ggs"
+
+
+def test_missing_studio_root_lists_empty_not_error(tmp_path):
+    (tmp_path / "studios").mkdir()  # volume exists, studio not provisioned
+    res = list_studio_dir(str(tmp_path), "brandnew", "")
+    assert res == {"studio": "brandnew", "rel": "studios/brandnew", "parent": None, "entries": []}
+
+
+def test_escaping_dir_returns_error_not_raise(vol2):
+    assert "error" in list_studio_dir(str(vol2), "ggs", "studios/ggs/../imperia")
+    assert "error" in list_studio_dir(str(vol2), "ggs", "studios/other/x")
+
+
+def test_prefix_collision_sibling_not_inside(tmp_path):
+    (tmp_path / "studios" / "ggs" / "a").mkdir(parents=True)
+    (tmp_path / "studios" / "ggs-2" / "secret").mkdir(parents=True)
+    assert "error" in list_studio_dir(str(tmp_path), "ggs", "studios/ggs-2")
+
+
+def test_file_as_dir_returns_error(vol2):
+    assert "error" in list_studio_dir(str(vol2), "ggs", "studios/ggs/brief.txt")
+
+
+def test_nul_byte_returns_error_not_raise(vol2):
+    assert "error" in list_studio_dir(str(vol2), "ggs", "studios/ggs/a\x00b")
+
+
+def test_invalid_studio_returns_error(vol2):
+    assert "error" in list_studio_dir(str(vol2), "Bad_Studio", "")
+
+
+def test_symlinked_dir_types_as_dir(vol2):
+    target = vol2 / "studios" / "ggs" / "renders"
+    link = vol2 / "studios" / "ggs" / "references" / "link_dir"
+    os.symlink(target, link)
+    res = list_studio_dir(str(vol2), "ggs", "studios/ggs/references")
+    e = next(e for e in res["entries"] if e["name"] == "link_dir")
+    assert e["type"] == "dir"  # matches execute()'s os.path.isdir
+
+
+def test_round_trip_child_rel_lists(vol2):
+    root = list_studio_dir(str(vol2), "ggs", "")
+    first_dir = next(e for e in root["entries"] if e["type"] == "dir")
+    child = list_studio_dir(str(vol2), "ggs", first_dir["rel"])
+    assert "error" not in child and child["rel"] == first_dir["rel"]
