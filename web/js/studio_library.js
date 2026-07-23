@@ -136,19 +136,22 @@ function openBrowser(node) {
                 "border-bottom:1px solid #262626;";
             const label = document.createElement("span");
             label.style.cssText =
-                "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+                "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;";
             label.textContent = (entry.type === "dir" ? "📁 " : "📄 ") + entry.name;
+            // Clicking the row is the default action: a folder opens (drill in),
+            // a file is selected.
+            label.addEventListener("click", () => {
+                if (entry.type === "dir") show(entry.rel);
+                else { applySelection(node, entry.rel); close(); }
+            });
             row.appendChild(label);
-            const pick = document.createElement("button");
-            pick.textContent = "select";
-            pick.addEventListener("click", () => { applySelection(node, entry.rel); close(); });
             if (entry.type === "dir") {
-                const expand = document.createElement("button");
-                expand.textContent = "open";
-                expand.addEventListener("click", () => show(entry.rel));
-                row.appendChild(expand);
+                // A folder can also be picked as the value itself, not just opened.
+                const pick = document.createElement("button");
+                pick.textContent = "select";
+                pick.addEventListener("click", () => { applySelection(node, entry.rel); close(); });
+                row.appendChild(pick);
             }
-            row.appendChild(pick);
             pane.appendChild(row);
         }
     }

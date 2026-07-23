@@ -98,3 +98,22 @@ test("the Done button removes the overlay", async () => {
     fire(closeBtn, "click");
     assert.ok(!document.body.children.includes(overlay));
 });
+
+test("clicking a folder row opens it (the default action)", async () => {
+    reset();
+    setResponder((route) => route.includes("Export")
+        ? { ok: true, body: { rel: "studios/ggs/Export JPG NoResize", parent: "studios/ggs",
+            entries: [{ name: "a.jpg", type: "file", rel: "studios/ggs/Export JPG NoResize/a.jpg" }] } }
+        : { ok: true, body: { rel: "studios/ggs", parent: null,
+            entries: [{ name: "Export JPG NoResize", type: "dir", rel: "studios/ggs/Export JPG NoResize" }] } });
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const folderLabel = find(overlay, (n) => typeof n.textContent === "string"
+        && n.textContent.includes("📁 Export JPG NoResize"));
+    assert.ok(folderLabel, "expected the folder row label");
+    fire(folderLabel, "click");
+    await tick();
+    assert.ok(find(overlay, (n) => n.textContent && n.textContent.includes("a.jpg")),
+        "clicking the folder row should navigate into it");
+});
