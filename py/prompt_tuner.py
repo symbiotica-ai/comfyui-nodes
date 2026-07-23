@@ -22,6 +22,14 @@ class TunerHalt(Exception):
     """Raised by the Load node to stop the Auto-Queue loop cleanly."""
 
 
+# How many auto serves in a row the Save node may leave unrecorded before the
+# loop stops itself. A muted/bypassed Save records nothing, so max_iterations
+# (which counts recorded refinements) can never fire; without this the loop
+# re-bills the generator every queue forever. Tolerates a couple of transient
+# misses, then halts.
+_MAX_UNCONSUMED_SERVES = 3
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -145,6 +153,7 @@ def serve(state: dict, *, initial_prompt: str, guidance: str,
     refined_count = len(iterations) - 1
     auto = version_override < 0
 
+    streak = 0
     if auto:
         if max_iterations > 0 and refined_count >= max_iterations:
             raise TunerHalt(
@@ -156,6 +165,19 @@ def serve(state: dict, *, initial_prompt: str, guidance: str,
                 f"Prompt tuner stopped: converged at v{max_v}. Change guidance to keep tuning, "
                 f"or set version_override={max_v} to serve the final prompt (recording "
                 f"stops automatically in that mode).")
+        # A serve the Save node never recorded leaves the slot unconsumed. A run
+        # of them means Save is muted, bypassed, or on a different tuner_id, so
+        # nothing is being tuned — and max_iterations, which counts recorded
+        # refinements, can never halt it. Stop before it re-bills forever.
+        if (prior_served and prior_served.get("record")
+                and not prior_served.get("consumed")):
+            streak = prior_served.get("unconsumed", 0) + 1
+        if streak >= _MAX_UNCONSUMED_SERVES:
+            raise TunerHalt(
+                f"Prompt tuner stopped: the Save node has not recorded the last "
+                f"{streak} serves — it is muted, bypassed, or wired to a different "
+                f"tuner_id, so nothing is being tuned. Fix the Save node, or set "
+                f"version_override to serve a fixed version.")
         active = last
     else:
         by_v = {it["v"]: it for it in iterations}
@@ -169,11 +191,18 @@ def serve(state: dict, *, initial_prompt: str, guidance: str,
         "version": active["v"], "guidance": guidance,
         "record": auto, "consumed": False, "ts": _now(),
     }
+    if auto:
+        state["last_served"]["unconsumed"] = streak
 
     dirty = True
     if not auto and not initialized and prior_served:
-        keys = ("version", "guidance", "record")
-        if all(prior_served.get(k) == state["last_served"][k] for k in keys):
+        # Pinned mode records nothing; it writes only to mark the slot
+        # non-recording so a downstream Save stays a no-op. Once the slot
+        # already says record=False that suppression is in place, and
+        # re-writing it for a different pin only churns the file — which, with
+        # two pinned Loads on one tuner_id, re-bills the graph every queue.
+        # Skip once suppression is already there, whatever version is pinned.
+        if prior_served.get("record") is False:
             state["last_served"] = prior_served
             dirty = False
 

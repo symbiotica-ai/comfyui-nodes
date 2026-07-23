@@ -62,7 +62,10 @@ NS Prompt Tuner Load ──system_prompt──▶ NS LLM Chat ──▶ image pr
 2. Fix your KSampler seed — the prompt should be the only variable.
 3. Queue once and inspect, or enable Auto-Queue (instant) and watch the
    Design/Result compare. The loop stops itself on convergence or
-   `max_iterations`; stopping Auto-Queue by hand is always fine.
+   `max_iterations`; stopping Auto-Queue by hand is always fine. Keep the Save
+   node wired and unmuted — it is what records each refinement and advances the
+   `max_iterations` count. With Save muted the loop can make no progress, so it
+   stops after a few unrecorded serves and tells you why.
 4. Ship: set `version_override` to the best version and the graph serves that
    prompt forever. Roll back anytime — every version + critique lives in the
    state file, human-readable.

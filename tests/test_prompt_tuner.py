@@ -286,3 +286,75 @@ def test_store_schema_drift_raises_actionable_error(tmp_path):
     (tmp_path / "old.json").write_text(json.dumps({"iterations": [{"foo": 1}]}), encoding="utf-8")
     with pytest.raises(ValueError, match="schema"):
         TunerStore(str(tmp_path)).load("old")
+
+
+# ---------- re-billing guards (added after a Fable validation) ----------
+
+def _auto(state, guidance="g"):
+    return serve(state, initial_prompt="p", guidance=guidance,
+                 version_override=-1, max_iterations=0)
+
+
+def test_auto_halts_when_save_never_runs():
+    # If the Save node is muted, bypassed, or unwired, no iteration is ever
+    # recorded, so max_iterations (which counts refinements) can never fire and
+    # the loop re-bills the generator on every queue forever. A run of serves
+    # that Save never consumed has to stop the loop instead.
+    state = {}
+    served_count = 0
+    with pytest.raises(TunerHalt) as halt:
+        for _ in range(50):
+            state, _ = _auto(state)   # no record() between serves
+            served_count += 1
+    assert served_count < 50, "auto loop with no Save ran unbounded"
+    assert "Save" in str(halt.value)
+
+
+def test_auto_keeps_going_while_save_records():
+    # The guard must not fire on the normal loop, where Save records between
+    # serves — that resets the streak.
+    state = {}
+    for i in range(6):
+        state, _ = _auto(state)
+        state, _ = record(state, improve_response(f"prompt v{i+1}"))
+    # six real refinements, no spurious halt
+    assert len(state["iterations"]) == 7
+
+
+def _seed_three_versions():
+    state = {}
+    state, _ = serve(state, initial_prompt="p0", guidance="g",
+                     version_override=-1, max_iterations=0)
+    state, _ = record(state, improve_response("p1"))
+    state, _ = serve(state, initial_prompt="p0", guidance="g",
+                     version_override=-1, max_iterations=0)
+    state, _ = record(state, improve_response("p2"))
+    return state   # now has v0, v1, v2
+
+
+def test_alternating_pinned_loads_settle_to_cached():
+    # Two Load nodes on one tuner_id pinned to different versions (an A/B
+    # compare graph) used to write the shared last_served slot on every serve,
+    # so IS_CHANGED never stabilised and both downstream LLM branches re-billed
+    # every queue. Alternating pinned serves must go clean.
+    state = _seed_three_versions()
+    dirt = []
+    for v in (1, 2, 1, 2, 1, 2):
+        state, served = serve(state, initial_prompt="", guidance="g",
+                              version_override=v, max_iterations=0)
+        dirt.append(served["dirty"])
+    # the first pinned serve may persist once (to mark the slot non-recording);
+    # everything after must be cached.
+    assert dirt[0] is True
+    assert not any(dirt[1:]), f"alternating pins kept re-writing: {dirt}"
+
+
+def test_single_pin_still_serves_the_right_prompt():
+    # The pinned skip must not corrupt what is actually served.
+    state = _seed_three_versions()
+    state, a = serve(state, initial_prompt="", guidance="g",
+                     version_override=1, max_iterations=0)
+    state, b = serve(state, initial_prompt="", guidance="g",
+                     version_override=2, max_iterations=0)
+    assert a["version"] == 1 and a["prompt"] == "p1"
+    assert b["version"] == 2 and b["prompt"] == "p2"
