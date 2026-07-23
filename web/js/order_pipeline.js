@@ -71,6 +71,55 @@ function downstreamNodes(node, type) {
     return out;
 }
 
+// Resolve project_path even when it is a WIRED input (a Local/Modal switch, a
+// String literal, a chain of them). The combos and the thumbnail route's root
+// registration both need the actual path string, which the widget alone can't
+// give once the socket is wired.
+function resolveProjectPath(node) {
+    const v = widgetOf(node, "project_path")?.value?.trim?.();
+    if (v) return v;
+    return inputString(node, "project_path", new Set());
+}
+
+// A typed project_path is authoritative — the user entered it in the widget. A
+// wired one is resolved by a best-effort graph walk, so it must never auto-pick
+// a render-feeding widget (month, feature): a wrong-branch guess would reach the
+// queued render, where Python silently falls back to the first month/event.
+function projectPathTyped(node) {
+    return !!widgetOf(node, "project_path")?.value?.trim?.();
+}
+
+function inputString(node, inputName, seen) {
+    const input = node?.inputs?.find((i) => i.name === inputName);
+    if (!input || input.link == null) return "";
+    const link = app.graph.links[input.link];
+    const origin = link && app.graph.getNodeById(link.origin_id);
+    return nodeOutputString(origin, seen);
+}
+
+// The string a node's output carries, resolved statically from the graph: a
+// switch node (on_true/on_false + a `switch` widget) follows its selected
+// branch; a literal/primitive yields its string widget; a lone-input passthrough
+// (a Reroute) follows its wire. A node with several wired inputs that we can't
+// read as a switch is an ambiguous selector — we refuse to guess a branch, since
+// the wrong one silently feeds a wrong project. `seen` guards against a cycle.
+function nodeOutputString(node, seen) {
+    if (!node || seen.has(node.id)) return "";
+    seen.add(node.id);
+    const isSwitch = node.inputs?.some((i) => i.name === "on_true")
+                  && node.inputs?.some((i) => i.name === "on_false");
+    if (isSwitch) {
+        const sw = node.widgets?.find((w) => w.name === "switch");
+        return inputString(node, sw?.value ? "on_true" : "on_false", seen);
+    }
+    const strW = node.widgets?.find(
+        (w) => typeof w.value === "string" && w.value.trim());
+    if (strW) return strW.value.trim();
+    const wired = (node.inputs ?? []).filter((i) => i.link != null);
+    if (wired.length === 1) return inputString(node, wired[0].name, seen);
+    return "";
+}
+
 const SPEC_INPUT_NODES = new Set(["SymbioticaTemplateBuilder", "SymbioticaTemplateEditor"]);
 
 function orderDataFor(node) {
@@ -123,14 +172,17 @@ function wireMonthPicker(node) {
     node._symMonths = [];
     comboify(node, "month", () => node._symMonths);
     const refresh = async () => {
-        const project = widgetOf(node, "project_path")?.value?.trim();
+        const project = resolveProjectPath(node);
         if (!project) { node._symMonths = []; return; }
         try {
             const data = await fetchJson(
                 "/symbiotica/list-orders?project=" + encodeURIComponent(project));
             node._symMonths = (data.months ?? []).map((m) => m.label);
+            // A wired path populates the dropdown but never re-picks the month —
+            // only a typed project_path is authoritative enough for that.
             const monthW = widgetOf(node, "month");
-            if (monthW && !node._symMonths.includes(monthW.value)) {
+            if (projectPathTyped(node) && monthW
+                && !node._symMonths.includes(monthW.value)) {
                 monthW.value = node._symMonths[0] ?? "";
             }
         } catch { node._symMonths = []; }
@@ -145,6 +197,7 @@ function wireMonthPicker(node) {
             return r;
         };
     }
+    node._symRefreshMonths = refresh; // the Read-folder button calls this
     refresh();
 }
 
@@ -158,7 +211,7 @@ function wireMonthPicker(node) {
 // page reload. The opportunistic callers below (a panel rendering, a combo being
 // painted) always take the cached answer.
 async function refreshOrderSpecs(node, { explicit = false } = {}) {
-    const project = widgetOf(node, "project_path")?.value?.trim();
+    const project = resolveProjectPath(node);
     const month = widgetOf(node, "month")?.value?.trim();
     if (!project) { publishOrder(node, null, NO_EVENTS, ""); return; }
     const q = new URLSearchParams({ project });
@@ -189,9 +242,10 @@ function publishOrder(node, result, events, refsRoot) {
     // still matches an event by key — that would clobber a saved workflow.
     // `result` is null when there is no project to parse: nothing was asked, so
     // nothing says the current pick is wrong, and clearing the path to type a
-    // new one must not throw the pick away.
+    // new one must not throw the pick away. Only a typed project_path re-picks:
+    // a wired resolution is a graph-walk guess and must not overwrite feature.
     const featW = widgetOf(node, "feature");
-    if (result !== null && featW && featW.value) {
+    if (projectPathTyped(node) && result !== null && featW && featW.value) {
         const key = featureKey(featW.value);
         if (!events.some((e) => e.feature === key)) {
             featW.value = events[0] ? eventLabel(events[0]) : "";
@@ -218,6 +272,36 @@ function wireOrderSpecs(node) {
     node._symEvents = [];
     wireMonthPicker(node); // month combo, refreshed on project_path change
     comboify(node, "feature", () => (node._symEvents ?? []).map(eventLabel));
+    // "Read folder" — resolve project_path (even a wired Local/Modal switch),
+    // fill the month + feature dropdowns, and hit parse-order so the server
+    // registers the refs root (that is what lets the Auto Packer thumbnails
+    // load). No need to wire + queue a packer just to populate the pickers.
+    //
+    // A DOM widget, NOT node.addWidget("button", …): the new Vue node UI does
+    // not render litegraph button widgets, but it DOES render addDOMWidget
+    // elements (the Auto Packer's assets panel proves it).
+    const readBtn = document.createElement("button");
+    readBtn.textContent = "📁 Read folder";
+    readBtn.style.cssText = "width:100%;box-sizing:border-box;padding:5px 8px;"
+        + "cursor:pointer;border-radius:8px;border:1px solid #555;background:#333;"
+        + "color:#ddd;font-size:12px;";
+    let reading = false;
+    readBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (reading) return;
+        reading = true;
+        readBtn.textContent = "⏳ Reading…";
+        try {
+            await node._symRefreshMonths?.();
+            await refreshOrderSpecs(node, { explicit: true });
+        } finally {
+            reading = false;
+            readBtn.textContent = "📁 Read folder";
+            node.setDirtyCanvas?.(true, true);
+        }
+    });
+    node.addDOMWidget("read_folder", "sym_readfolder", readBtn,
+                      { serialize: false, hideOnZoom: true });
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
     // own project_path hook — both fire). `feature` too, so a downstream Auto
     // Packer panel re-renders for the newly picked event.
@@ -231,7 +315,19 @@ function wireOrderSpecs(node) {
             return r;
         };
     }
+    // Fire now, and — only if the project could not be resolved yet — once more
+    // after the graph settles: on load a wired project_path (a Local/Modal
+    // switch) is not resolvable until the links are restored, so this deferred
+    // pass populates the month + feature dropdowns and registers the refs root
+    // without needing the button. When the project already resolved, the settled
+    // parse stands — re-asking would reopen a cached failure and reflood.
     refreshOrderSpecs(node, { explicit: true });
+    if (!resolveProjectPath(node)) {
+        setTimeout(() => {
+            node._symRefreshMonths?.();
+            refreshOrderSpecs(node, { explicit: true });
+        }, 400);
+    }
 }
 
 // The categories of the event an Auto Packer's upstream Order Specs has picked
