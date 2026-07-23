@@ -95,7 +95,7 @@ def test_dotdot_escape_raises(vol):
     # Textual prefix passes; realpath collapses .. to outside the Volume root.
     _touch(vol.parent / "secret.png")
     with pytest.raises(ValueError, match="outside the studio library"):
-        resolve_studio_path(str(vol), "studios/ggs/../../secret.png")
+        resolve_studio_path(str(vol), "studios/ggs/../../../secret.png")
 
 
 def test_in_tree_symlink_escape_raises(vol):
