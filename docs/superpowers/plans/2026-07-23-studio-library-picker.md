@@ -827,7 +827,7 @@ git commit -m "feat: studio-library browse route with bounded async volume sync"
 
 **Interfaces:**
 - Consumes: `app`, `api` from `../../scripts/{app,api}.js` (aliased to `comfy_stub.mjs` in tests).
-- Produces (named exports for testability): `summaryLabel(selection: string) -> string`, `applySelection(node, entryRel: string) -> void`.
+- Produces (named exports for testability): `summaryLabel(selection: string) -> string`, `applySelection(node, entryRel: string) -> void`, `filterEntries(entries, query: string) -> entries` (client-side name filter for the current pane).
 
 - [ ] **Step 1: Write the failing tests** (`tests/js/studio_library.test.mjs`)
 
@@ -839,7 +839,7 @@ import assert from "node:assert/strict";
 
 import { app } from "./comfy_stub.mjs";
 import "../../web/js/studio_library.js";
-import { summaryLabel, applySelection } from "../../web/js/studio_library.js";
+import { summaryLabel, applySelection, filterEntries } from "../../web/js/studio_library.js";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -847,6 +847,19 @@ test("summaryLabel is prefix-bearing and handles empty", () => {
     assert.equal(summaryLabel(""), "no selection");
     assert.match(summaryLabel("studios/ggs/references/hero.png"), /ggs/);
     assert.equal(summaryLabel("studios/ggs/references/hero.png"), "ggs · references/hero.png");
+});
+
+test("filterEntries matches names case-insensitively, empty query passes all", () => {
+    const entries = [
+        { name: "references", type: "dir" },
+        { name: "renders", type: "dir" },
+        { name: "brief.txt", type: "file" },
+    ];
+    assert.deepEqual(filterEntries(entries, "ren").map((e) => e.name), ["references", "renders"]);
+    assert.deepEqual(filterEntries(entries, "").map((e) => e.name), ["references", "renders", "brief.txt"]);
+    assert.deepEqual(filterEntries(entries, "  ").map((e) => e.name), ["references", "renders", "brief.txt"]);
+    assert.deepEqual(filterEntries(entries, "BRIEF").map((e) => e.name), ["brief.txt"]);
+    assert.deepEqual(filterEntries(entries, "zzz"), []);
 });
 
 test("applySelection writes the rel into the selection widget and summary", () => {
@@ -898,6 +911,12 @@ export function summaryLabel(selection) {
     return "no selection";
 }
 
+export function filterEntries(entries, query) {
+    const q = String(query || "").trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter((e) => e.name.toLowerCase().includes(q));
+}
+
 export function applySelection(node, entryRel) {
     const sel = node.widgets?.find((w) => w.name === "selection");
     if (sel) sel.value = entryRel;
@@ -919,43 +938,42 @@ function refreshSummary(node) {
 }
 
 function openBrowser(node) {
-    // Fullscreen overlay: breadcrumb + a single lazy tree pane. Folders expand
-    // by fetching ROUTE?dir=<rel>; the first open passes sync=1. Clicking a row's
-    // select control calls applySelection(node, entry.rel) and closes. A non-ok
-    // fetch throws in fetchJson and renders inline; an empty listing shows a
-    // distinct empty state.
+    // Fullscreen overlay: breadcrumb + a client-side name filter + a single lazy
+    // tree pane. Folders expand by fetching ROUTE?dir=<rel>; the first open passes
+    // sync=1. Clicking a row's select control calls applySelection(node, entry.rel)
+    // and closes. A non-ok fetch throws in fetchJson and renders inline; an empty
+    // listing shows a distinct empty state. The filter narrows the CURRENT pane by
+    // name (it does not search into unopened folders).
     const overlay = document.createElement("div");
     overlay.className = "symbiotica-studio-library";
-    const pane = document.createElement("div");
     const crumb = document.createElement("div");
+    const filter = document.createElement("input");
+    filter.type = "search";
+    filter.placeholder = "🔎 filter this folder…";
     const errline = document.createElement("div");
+    const pane = document.createElement("div");
     overlay.appendChild(crumb);
+    overlay.appendChild(filter);
     overlay.appendChild(errline);
     overlay.appendChild(pane);
     document.body.appendChild(overlay);
 
     let firstOpen = true;
+    let currentEntries = [];
     const close = () => overlay.remove();
 
-    async function show(dir) {
-        errline.textContent = "";
-        let data;
-        try {
-            const q = new URLSearchParams({ dir });
-            if (firstOpen) q.set("sync", "1");
-            firstOpen = false;
-            data = await fetchJson(`${ROUTE}?${q.toString()}`);
-        } catch (e) {
-            errline.textContent = e.message || "studio library unavailable";
-            return;
-        }
-        crumb.textContent = data.rel || "studios";
+    function renderRows() {
         pane.replaceChildren();
-        if (!data.entries || data.entries.length === 0) {
+        if (currentEntries.length === 0) {
             pane.textContent = "No files in this studio library yet";
             return;
         }
-        for (const entry of data.entries) {
+        const shown = filterEntries(currentEntries, filter.value);
+        if (shown.length === 0) {
+            pane.textContent = "No matches";
+            return;
+        }
+        for (const entry of shown) {
             const row = document.createElement("div");
             row.textContent = (entry.type === "dir" ? "📁 " : "📄 ") + entry.name;
             const pick = document.createElement("button");
@@ -970,6 +988,26 @@ function openBrowser(node) {
             row.appendChild(pick);
             pane.appendChild(row);
         }
+    }
+
+    filter.addEventListener("input", renderRows);
+
+    async function show(dir) {
+        errline.textContent = "";
+        let data;
+        try {
+            const q = new URLSearchParams({ dir });
+            if (firstOpen) q.set("sync", "1");
+            firstOpen = false;
+            data = await fetchJson(`${ROUTE}?${q.toString()}`);
+        } catch (e) {
+            errline.textContent = e.message || "studio library unavailable";
+            return;
+        }
+        crumb.textContent = data.rel || "studios";
+        currentEntries = data.entries || [];
+        filter.value = "";
+        renderRows();
     }
     show("");
 }

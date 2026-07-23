@@ -278,7 +278,8 @@ async def studio_library(request):
 ### 4. `web/js/studio_library.js` — the browser (new)
 
 Modeled on `files_read.js` but **single-select** and **lazy** (no groups, no
-filters, no thumbnails in v1). Registered via `app.registerExtension` gated on
+thumbnails in v1; a **client-side name filter** narrows the current pane).
+Registered via `app.registerExtension` gated on
 `nodeData.name === "SymbioticaStudioLibrary"`, chaining the original
 `onNodeCreated`/`onConfigure` (preserve-and-call, per `files_read.js:394` /
 `order_pipeline.js:729-733`).
@@ -293,6 +294,10 @@ Appendix B #9):
   `studios/ggs/references/hero_pose.png` it yields `ggs · references/hero_pose.png`
   (studio slug retained, so a cross-studio pick is distinguishable — Appendix B
   #18); empty → `"no selection"`. Pure, unit-tested.
+- `filterEntries(entries, query)` — case-insensitive name filter over the current
+  pane's entries (empty/whitespace query passes all). Pure, unit-tested; wired to a
+  search box that re-renders the current pane. Does not search unopened folders
+  (server-side recursive search stays out of scope).
 
 Behavior:
 
@@ -450,7 +455,9 @@ Deferred to the separate **release step** (NOT the feature PR):
   (`files_read.py:63`, `routes.py:45,300,327`) each have incompatible policy
   (return-None / skip-continue / output-dir) and keep their working code (a
   separate, optional consolidation — Appendix B #20).
-- Multi-select, filters, a configurable model-kind toggle, listing pagination.
+- Multi-select, a configurable model-kind toggle, listing pagination, and
+  **server-side recursive search** (v1 ships a client-side name filter over the
+  current pane only — added per Alex's request during the build).
 
 ---
 
