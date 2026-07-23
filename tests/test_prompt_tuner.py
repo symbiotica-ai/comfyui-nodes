@@ -286,3 +286,135 @@ def test_store_schema_drift_raises_actionable_error(tmp_path):
     (tmp_path / "old.json").write_text(json.dumps({"iterations": [{"foo": 1}]}), encoding="utf-8")
     with pytest.raises(ValueError, match="schema"):
         TunerStore(str(tmp_path)).load("old")
+
+
+# ---------- re-billing guards (added after two Fable validations) ----------
+# The muted-Save halt now returns a {"halt": ...} marker from serve(); the Load
+# node (serve_prompt) persists the reset it carries, then raises TunerHalt.
+
+def _auto(state, guidance="g"):
+    return serve(state, initial_prompt="p", guidance=guidance,
+                 version_override=-1, max_iterations=0)
+
+
+def test_auto_stall_halts_then_recovers():
+    # A muted/unwired Save never records, so the count of unrecorded serves
+    # climbs until the guard trips. Crucially it must recover: the trip resets
+    # the count (persisted by the node), so the next queue serves afresh once
+    # Save is fixed — not re-halt forever.
+    state = {}
+    served = {}
+    for _ in range(20):
+        state, served = _auto(state)       # no record() between serves
+        if "halt" in served:
+            break
+    assert "halt" in served and "Save" in served["halt"]
+    assert state.get("unconsumed", 0) == 0, "the trip must reset the count"
+
+    # Save is fixed; the next serve proceeds (no halt) and records.
+    state, served = _auto(state)
+    assert "halt" not in served
+    state, _ = record(state, improve_response("recovered prompt"))
+    assert len(state["iterations"]) >= 2
+
+    # And the loop keeps going normally afterwards.
+    for i in range(4):
+        state, served = _auto(state)
+        assert "halt" not in served
+        state, _ = record(state, improve_response(f"more {i}"))
+
+
+def test_stall_count_survives_a_pinned_serve():
+    # A pinned Load on the same tuner_id (a latest-vs-baseline compare graph)
+    # must not reset the auto stall count — the two guards used to starve each
+    # other and re-open the runaway.
+    state = _seed_three_versions()
+    served = {}
+    for _ in range(20):
+        state, served = _auto(state)                      # auto serve
+        if "halt" in served:
+            break
+        state, _ = serve(state, initial_prompt="", guidance="g",
+                         version_override=0, max_iterations=0)   # pinned serve, no record
+    assert "halt" in served, "a pinned serve wiped the stall count"
+
+
+def test_normal_loop_never_stalls():
+    state = {}
+    for i in range(8):
+        state, served = _auto(state)
+        assert "halt" not in served
+        state, _ = record(state, improve_response(f"v{i+1}"))
+    assert len(state["iterations"]) == 9
+
+
+def _seed_three_versions():
+    state = {}
+    state, _ = _auto(state)
+    state, _ = record(state, improve_response("p1"))
+    state, _ = _auto(state)
+    state, _ = record(state, improve_response("p2"))
+    return state   # v0, v1, v2
+
+
+def test_alternating_pinned_loads_settle_to_cached():
+    state = _seed_three_versions()
+    dirt = []
+    for v in (1, 2, 1, 2, 1, 2):
+        state, served = serve(state, initial_prompt="", guidance="g",
+                              version_override=v, max_iterations=0)
+        dirt.append(served["dirty"])
+    assert dirt[0] is True
+    assert not any(dirt[1:]), f"alternating pins kept re-writing: {dirt}"
+
+
+def test_single_pin_serves_the_right_prompt():
+    state = _seed_three_versions()
+    state, a = serve(state, initial_prompt="", guidance="g",
+                     version_override=1, max_iterations=0)
+    state, b = serve(state, initial_prompt="", guidance="g",
+                     version_override=2, max_iterations=0)
+    assert a["version"] == 1 and a["prompt"] == "p1"
+    assert b["version"] == 2 and b["prompt"] == "p2"
+
+
+def test_serve_prompt_persists_the_reset_on_halt(tmp_path, monkeypatch):
+    # End-to-end through the Load node: the halt must both raise AND leave the
+    # state file with the count reset, so a re-queue recovers.
+    import prompt_tuner
+    store = TunerStore(str(tmp_path))
+    monkeypatch.setattr(prompt_tuner, "_default_store", lambda: store)
+    node = prompt_tuner.NSPromptTunerLoad()
+
+    halted = False
+    for _ in range(20):
+        try:
+            node.serve_prompt("t", "g", -1, 0, initial_prompt="p")
+        except TunerHalt:
+            halted = True
+            break
+    assert halted, "the node never halted with Save absent"
+    assert store.load("t").get("unconsumed", 0) == 0, "reset not persisted"
+    # The very next serve works (does not re-raise).
+    node.serve_prompt("t", "g", -1, 0, initial_prompt="p")
+
+
+def test_pinned_serve_does_not_starve_an_active_save(tmp_path, monkeypatch):
+    # Compare graph: auto Load + pinned Load on one tuner_id, Save ACTIVE, run
+    # auto -> pin -> Save each queue. The pinned serve must not clobber the auto
+    # serve's pending record slot, or Save records nothing and the loop halts
+    # blaming a Save that is fine.
+    import prompt_tuner
+    store = TunerStore(str(tmp_path))
+    monkeypatch.setattr(prompt_tuner, "_default_store", lambda: store)
+    load = prompt_tuner.NSPromptTunerLoad()
+    save = prompt_tuner.NSPromptTunerSave()
+
+    for i in range(6):
+        load.serve_prompt("t", "g", -1, 0, initial_prompt="base")   # auto
+        load.serve_prompt("t", "g", 0, 0, initial_prompt="base")    # pinned v0
+        save.save_iteration("t", improve_response(f"refined {i}"))   # active Save
+
+    # Six queues, Save active: six refinements recorded, never a spurious halt.
+    assert len(store.load("t")["iterations"]) == 7
+    assert store.load("t").get("unconsumed", 0) == 0

@@ -22,6 +22,14 @@ class TunerHalt(Exception):
     """Raised by the Load node to stop the Auto-Queue loop cleanly."""
 
 
+# How many auto serves in a row the Save node may leave unrecorded before the
+# loop stops itself. A muted/bypassed Save records nothing, so max_iterations
+# (which counts recorded refinements) can never fire; without this the loop
+# re-bills the generator every queue forever. Tolerates a couple of transient
+# misses, then halts.
+_MAX_UNCONSUMED_SERVES = 3
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -156,6 +164,22 @@ def serve(state: dict, *, initial_prompt: str, guidance: str,
                 f"Prompt tuner stopped: converged at v{max_v}. Change guidance to keep tuning, "
                 f"or set version_override={max_v} to serve the final prompt (recording "
                 f"stops automatically in that mode).")
+        # Consecutive auto serves the Save node never recorded mean Save is
+        # muted, bypassed, or on a different tuner_id — nothing is being tuned,
+        # and max_iterations (which counts recorded refinements) can never halt
+        # it. The count is top-level state so a pinned Load on the same tuner_id
+        # cannot wipe it. Reset it and hand serve_prompt a halt marker to save
+        # before it raises: a bare raise here cannot persist the reset, and an
+        # uncleared counter would re-halt every queue forever — Save runs
+        # downstream of this node, so it only clears the count once this node
+        # serves again, which the reset now allows on the next queue.
+        if state.get("unconsumed", 0) >= _MAX_UNCONSUMED_SERVES:
+            state["unconsumed"] = 0
+            return state, {"halt": (
+                f"Prompt tuner stopped: the Save node has not recorded the last "
+                f"{_MAX_UNCONSUMED_SERVES} serves — it is muted, bypassed, or wired to a "
+                f"different tuner_id, so nothing is being tuned. Unmute or rewire Save and "
+                f"queue again to resume, or set version_override to serve a fixed version.")}
         active = last
     else:
         by_v = {it["v"]: it for it in iterations}
@@ -169,11 +193,25 @@ def serve(state: dict, *, initial_prompt: str, guidance: str,
         "version": active["v"], "guidance": guidance,
         "record": auto, "consumed": False, "ts": _now(),
     }
+    if auto:
+        # Counts serves awaiting a record; record() zeroes it, so it only grows
+        # while Save is not keeping up. Top-level so a pinned serve can't wipe it.
+        state["unconsumed"] = state.get("unconsumed", 0) + 1
 
     dirty = True
     if not auto and not initialized and prior_served:
-        keys = ("version", "guidance", "record")
-        if all(prior_served.get(k) == state["last_served"][k] for k in keys):
+        # Pinned mode records nothing; it writes only to mark the slot
+        # non-recording so a downstream Save stays a no-op. Preserve the slot
+        # (don't churn, don't clobber) unless it's a CONSUMED auto serve that a
+        # stale Save might otherwise re-record. Keep it when:
+        #   - it's already a non-recording pinned marker (record False), so a
+        #     different pin only churns the file — the two-pin re-billing case; or
+        #   - it's a PENDING auto serve (record True, not yet consumed): a Save
+        #     downstream must record THAT, not be suppressed by this pin.
+        #     Clobbering it is what made a Save-active compare graph record
+        #     nothing and halt blaming a Save that was fine.
+        consumed_auto = prior_served.get("record") and prior_served.get("consumed")
+        if not consumed_auto:
             state["last_served"] = prior_served
             dirty = False
 
@@ -249,6 +287,7 @@ def record(state: dict, response_text: str) -> tuple:
     })
     state["iterations"] = iterations
     state["last_served"] = dict(last_served, consumed=True)
+    state["unconsumed"] = 0   # Save recorded — the stall guard's count resets
 
     note = ""
     if matched is not None and matched["v"] != served_iter["v"]:
@@ -369,6 +408,12 @@ class NSPromptTunerLoad:
         state, served = serve(
             state, initial_prompt=initial_prompt, guidance=guidance,
             version_override=version_override, max_iterations=max_iterations)
+        if "halt" in served:
+            # The stall guard cleared its count in `state`; persist that before
+            # halting so the next queue (once Save is fixed) serves afresh
+            # instead of re-halting forever.
+            store.save(tuner_id, state)
+            raise TunerHalt(served["halt"])
         if served["dirty"]:
             store.save(tuner_id, state)
         return (served["prompt"], served["context"], served["status"])
