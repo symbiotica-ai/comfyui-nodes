@@ -397,3 +397,24 @@ def test_serve_prompt_persists_the_reset_on_halt(tmp_path, monkeypatch):
     assert store.load("t").get("unconsumed", 0) == 0, "reset not persisted"
     # The very next serve works (does not re-raise).
     node.serve_prompt("t", "g", -1, 0, initial_prompt="p")
+
+
+def test_pinned_serve_does_not_starve_an_active_save(tmp_path, monkeypatch):
+    # Compare graph: auto Load + pinned Load on one tuner_id, Save ACTIVE, run
+    # auto -> pin -> Save each queue. The pinned serve must not clobber the auto
+    # serve's pending record slot, or Save records nothing and the loop halts
+    # blaming a Save that is fine.
+    import prompt_tuner
+    store = TunerStore(str(tmp_path))
+    monkeypatch.setattr(prompt_tuner, "_default_store", lambda: store)
+    load = prompt_tuner.NSPromptTunerLoad()
+    save = prompt_tuner.NSPromptTunerSave()
+
+    for i in range(6):
+        load.serve_prompt("t", "g", -1, 0, initial_prompt="base")   # auto
+        load.serve_prompt("t", "g", 0, 0, initial_prompt="base")    # pinned v0
+        save.save_iteration("t", improve_response(f"refined {i}"))   # active Save
+
+    # Six queues, Save active: six refinements recorded, never a spurious halt.
+    assert len(store.load("t")["iterations"]) == 7
+    assert store.load("t").get("unconsumed", 0) == 0

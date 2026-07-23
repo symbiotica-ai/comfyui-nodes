@@ -201,12 +201,17 @@ def serve(state: dict, *, initial_prompt: str, guidance: str,
     dirty = True
     if not auto and not initialized and prior_served:
         # Pinned mode records nothing; it writes only to mark the slot
-        # non-recording so a downstream Save stays a no-op. Once the slot
-        # already says record=False that suppression is in place, and
-        # re-writing it for a different pin only churns the file — which, with
-        # two pinned Loads on one tuner_id, re-bills the graph every queue.
-        # Skip once suppression is already there, whatever version is pinned.
-        if prior_served.get("record") is False:
+        # non-recording so a downstream Save stays a no-op. Preserve the slot
+        # (don't churn, don't clobber) unless it's a CONSUMED auto serve that a
+        # stale Save might otherwise re-record. Keep it when:
+        #   - it's already a non-recording pinned marker (record False), so a
+        #     different pin only churns the file — the two-pin re-billing case; or
+        #   - it's a PENDING auto serve (record True, not yet consumed): a Save
+        #     downstream must record THAT, not be suppressed by this pin.
+        #     Clobbering it is what made a Save-active compare graph record
+        #     nothing and halt blaming a Save that was fine.
+        consumed_auto = prior_served.get("record") and prior_served.get("consumed")
+        if not consumed_auto:
             state["last_served"] = prior_served
             dirty = False
 
