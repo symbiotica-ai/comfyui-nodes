@@ -110,7 +110,7 @@ test("clicking a folder row opens it (the default action)", async () => {
     node.onNodeCreated?.();
     const overlay = await openOverlay(node);
     const folderLabel = find(overlay, (n) => typeof n.textContent === "string"
-        && n.textContent.includes("📁 Export JPG NoResize"));
+        && n.textContent.includes("Export JPG NoResize"));
     assert.ok(folderLabel, "expected the folder row label");
     fire(folderLabel, "click");
     await tick();

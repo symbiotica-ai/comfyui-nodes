@@ -2,6 +2,7 @@
 // ABOUTME: that writes a volume-relative pick into the node's selection widget.
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
 
 const ROUTE = "/symbiotica/studio-library";
 
@@ -49,50 +50,56 @@ function openBrowser(node) {
     // a distinct empty state. The filter narrows the CURRENT pane by name (it does
     // not search into unopened folders). Done/✕, Escape, and a backdrop click are
     // always-available closes, independent of whether the pane has any rows.
+    injectHubStyles();
+    const ghostCss = ghostButtonCss;
+
     const overlay = document.createElement("div");
     overlay.className = "symbiotica-studio-library";
     overlay.style.cssText =
-        "position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);" +
+        "position:fixed;inset:0;z-index:10000;background:rgba(1,1,2,.66);" +
         "display:flex;align-items:center;justify-content:center;";
     const panel = document.createElement("div");
     panel.style.cssText =
-        "width:80%;height:80%;max-width:1100px;background:#161616;color:#ddd;" +
-        "display:flex;flex-direction:column;font:12px sans-serif;" +
-        "border:1px solid #333;border-radius:8px;overflow:hidden;" +
-        "box-shadow:0 8px 40px rgba(0,0,0,.5);";
+        `width:min(80vw,1000px);height:80vh;background:${HUB.surface2};color:${HUB.ink};` +
+        `font:13px/1.5 ${HUB.font};display:flex;flex-direction:column;` +
+        `border:1px solid ${HUB.hairline};border-radius:12px;overflow:hidden;` +
+        "box-shadow:0 16px 48px rgba(0,0,0,.55);";
 
     const bar = document.createElement("div");
     bar.style.cssText =
-        "display:flex;align-items:center;gap:10px;padding:8px 12px;" +
-        "background:#202020;border-bottom:1px solid #333;";
+        `display:flex;align-items:center;gap:10px;padding:12px 16px;` +
+        `border-bottom:1px solid ${HUB.hairline};`;
     const upBtn = document.createElement("button");
-    upBtn.textContent = "⬆ up";
-    upBtn.style.cssText = "display:none;";
+    upBtn.textContent = "↑ up";
+    upBtn.className = "sym-btn";
+    upBtn.style.cssText = ghostCss + "display:none;";
     const crumb = document.createElement("div");
     crumb.style.cssText =
-        "flex:1;font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        `flex:1;font:12px ${HUB.mono};color:${HUB.inkSubtle};` +
+        "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
     const closeBtn = document.createElement("button");
     closeBtn.textContent = "Done";
-    closeBtn.style.cssText = "margin-left:auto;";
+    closeBtn.className = "sym-btn";
+    closeBtn.style.cssText = ghostCss + "margin-left:auto;";
     bar.append(upBtn, crumb, closeBtn);
 
     const filterBar = document.createElement("div");
-    filterBar.style.cssText =
-        "display:flex;align-items:center;gap:6px;padding:6px 12px;" +
-        "background:#1b1b1b;border-bottom:1px solid #2a2a2a;";
+    filterBar.style.cssText = `padding:10px 16px;border-bottom:1px solid ${HUB.hairline};`;
     const filter = document.createElement("input");
     filter.type = "search";
-    filter.placeholder = "🔎 filter this folder…";
+    filter.className = "sym-input";
+    filter.placeholder = "Filter this folder…";
     filter.style.cssText =
-        "flex:1;max-width:320px;padding:4px 6px;background:#111;color:#ddd;" +
-        "border:1px solid #333;border-radius:4px;";
+        `width:100%;box-sizing:border-box;padding:7px 10px;background:${HUB.surface1};` +
+        `color:${HUB.ink};border:1px solid ${HUB.hairlineStrong};border-radius:8px;` +
+        `font:13px ${HUB.font};`;
     filterBar.appendChild(filter);
 
     const errline = document.createElement("div");
-    errline.style.cssText = "padding:6px 12px;color:#f66;";
+    errline.style.cssText = `padding:10px 16px;color:${HUB.danger};font:12px ${HUB.font};`;
 
     const pane = document.createElement("div");
-    pane.style.cssText = "flex:1;overflow:auto;padding:6px 12px;";
+    pane.style.cssText = "flex:1;overflow:auto;padding:8px;";
 
     panel.append(bar, filterBar, errline, pane);
     overlay.appendChild(panel);
@@ -118,26 +125,32 @@ function openBrowser(node) {
         if (currentParent !== null) show(currentParent);
     });
 
+    const emptyState = (text) => {
+        const d = document.createElement("div");
+        d.style.cssText = `padding:28px 16px;text-align:center;color:${HUB.inkTertiary};font:13px ${HUB.font};`;
+        d.textContent = text;
+        return d;
+    };
     function renderRows() {
         pane.replaceChildren();
         if (currentEntries.length === 0) {
-            pane.textContent = "No files in this studio library yet";
+            pane.appendChild(emptyState("No files in this studio library yet"));
             return;
         }
         const shown = filterEntries(currentEntries, filter.value);
         if (shown.length === 0) {
-            pane.textContent = "No matches";
+            pane.appendChild(emptyState("No matches"));
             return;
         }
         for (const entry of shown) {
             const row = document.createElement("div");
-            row.style.cssText =
-                "display:flex;align-items:center;gap:8px;padding:6px 4px;" +
-                "border-bottom:1px solid #262626;";
+            row.className = "sym-row";
+            row.style.cssText = "display:flex;align-items:center;gap:10px;padding:9px 10px;";
             const label = document.createElement("span");
+            label.className = "sym-name";
             label.style.cssText =
-                "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;";
-            label.textContent = (entry.type === "dir" ? "📁 " : "📄 ") + entry.name;
+                `flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${HUB.ink};`;
+            label.textContent = (entry.type === "dir" ? "📁  " : "📄  ") + entry.name;
             // Clicking the row is the default action: a folder opens (drill in),
             // a file is selected.
             label.addEventListener("click", () => {
@@ -149,6 +162,10 @@ function openBrowser(node) {
                 // A folder can also be picked as the value itself, not just opened.
                 const pick = document.createElement("button");
                 pick.textContent = "select";
+                pick.className = "sym-btn sym-btn-accent";
+                pick.style.cssText =
+                    `padding:5px 12px;background:${HUB.accent};color:${HUB.onAccent};` +
+                    `border:0;border-radius:8px;cursor:pointer;font:12px ${HUB.font};`;
                 pick.addEventListener("click", () => { applySelection(node, entry.rel); close(); });
                 row.appendChild(pick);
             }
