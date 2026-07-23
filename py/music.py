@@ -29,7 +29,8 @@ class NSMusic:
         return {
             "required": {
                 "music_prompt": ("STRING", {"multiline": True}),
-                "api_key": ("STRING", {"multiline": False}),
+                "api_key": ("STRING", {"multiline": False, "default": "",
+                                       "tooltip": "Leave empty to use Settings → Symbiotica → ElevenLabs API key. A key typed here is saved into the workflow file."}),
                 "duration_sec": ("FLOAT", {"default": 30.0, "min": 3.0, "max": 600.0, "step": 1.0}),
             },
             "optional": {
@@ -81,6 +82,11 @@ class NSMusic:
 
     def _call_elevenlabs_music(self, api_key, prompt, duration_ms, force_instrumental, seed, temp_files):
         """Call ElevenLabs music API, return path to downloaded MP3."""
+        from ._settings import resolve_provider_key
+        # Resolved here rather than in execute(): a node with nothing to do
+        # returns before this and never needs a key.
+        api_key = resolve_provider_key(api_key, ["ELEVENLABS_API_KEY"],
+                                       "ElevenLabs")
         payload = {
             "prompt": prompt,
             "music_length_ms": duration_ms,

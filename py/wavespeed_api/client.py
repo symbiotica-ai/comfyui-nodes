@@ -6,6 +6,38 @@ import requests
 from typing import Dict, Any, Optional
 
 
+def _resolve_interrupt_checker():
+    """Reads ComfyUI's cancel flag, or reports "not cancelled" outside it.
+
+    Pressing Cancel in ComfyUI does not stop a running node — it sets a flag
+    and expects the node to notice. A node that never looks runs to its own
+    timeout, which for a video job is minutes of the user watching a button
+    they already pressed."""
+    try:
+        from comfy import model_management
+        return model_management.processing_interrupted
+    except Exception:
+        return lambda: False
+
+
+def _interrupted_base():
+    """ComfyUI logs its own interrupt quietly and marks no node in red, so a
+    cancel raised as that type reads as a cancel rather than a failure."""
+    try:
+        from comfy.model_management import InterruptProcessingException
+        return InterruptProcessingException
+    except Exception:
+        return Exception
+
+
+class WaveSpeedInterrupted(_interrupted_base()):
+    """Raised when the user cancels while a task is being polled."""
+
+
+class WaveSpeedTaskFailed(Exception):
+    """Raised when the API reports the task itself failed."""
+
+
 class WaveSpeedClient:
     """Client for interacting with WaveSpeed AI API"""
     
@@ -68,28 +100,50 @@ class WaveSpeedClient:
         """
         start_time = time.time()
         endpoint = f"/api/v3/wavespeed-ai/task/{task_id}"
-        
+        cancelled = _resolve_interrupt_checker()
+
+        def sleep_unless_cancelled(seconds):
+            """Sleep in slices so Cancel lands within a slice, not a poll."""
+            remaining = seconds
+            while remaining > 0:
+                if cancelled():
+                    raise WaveSpeedInterrupted("Cancelled while waiting for the task")
+                slice_s = min(0.5, remaining)
+                time.sleep(slice_s)
+                remaining -= slice_s
+
         while True:
+            if cancelled():
+                raise WaveSpeedInterrupted("Cancelled while waiting for the task")
+
             elapsed = time.time() - start_time
             if elapsed > timeout:
                 raise Exception(f"Task polling timed out after {timeout} seconds")
-            
+
             try:
                 result = self.post(endpoint, {}, timeout=30)
-                
+
                 status = result.get("status", "")
-                
+
                 if status == "completed" or status == "success":
                     return result
                 elif status == "failed" or status == "error":
                     error_msg = result.get("error", "Unknown error")
-                    raise Exception(f"Task failed: {error_msg}")
-                
+                    raise WaveSpeedTaskFailed(f"Task failed: {error_msg}")
+
                 # Task still processing, wait and retry
-                time.sleep(polling_interval)
-                
+                sleep_unless_cancelled(polling_interval)
+
+            # These two must stay ABOVE the catch-all below. That handler exists
+            # to ride out transient status-check errors, and it swallows whatever
+            # it is given — a cancel caught there is a cancel ignored, and a
+            # failed task caught there is retried until the timeout hides it.
+            except WaveSpeedInterrupted:
+                raise
+            except WaveSpeedTaskFailed:
+                raise
             except Exception as e:
                 if "Task polling timed out" in str(e):
                     raise
                 # For other errors, retry after interval
-                time.sleep(polling_interval)
+                sleep_unless_cancelled(polling_interval)

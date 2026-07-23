@@ -42,6 +42,11 @@ class NSWaveSpeedClient:
         wavespeed_api_key = ""
 
         if api_key == "":
+            from ._settings import key_from_settings
+            settings_key = key_from_settings("WAVESPEED_API_KEY")
+            if settings_key:
+                return ({"api_key": settings_key},)
+
             # Try to read from config.ini
             try:
                 current_dir = os.path.dirname(os.path.abspath(__file__))

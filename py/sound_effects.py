@@ -29,7 +29,8 @@ class NSSoundEffects:
             "required": {
                 "video": ("VIDEO",),
                 "sfx_cues": ("STRING", {"multiline": True}),
-                "api_key": ("STRING", {"multiline": False}),
+                "api_key": ("STRING", {"multiline": False, "default": "",
+                                       "tooltip": "Leave empty to use Settings → Symbiotica → ElevenLabs API key. A key typed here is saved into the workflow file."}),
             },
             "optional": {
                 "volume": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 2.0, "step": 0.05}),
@@ -53,6 +54,11 @@ class NSSoundEffects:
 
     def _call_elevenlabs(self, api_key, sfx_text, duration, prompt_influence, temp_files):
         """Call ElevenLabs sound-generation API, return path to downloaded MP3."""
+        from ._settings import resolve_provider_key
+        # Resolved here rather than in execute(): a node with nothing to do
+        # returns before this and never needs a key.
+        api_key = resolve_provider_key(api_key, ["ELEVENLABS_API_KEY"],
+                                       "ElevenLabs")
         payload = {"text": sfx_text, "prompt_influence": prompt_influence}
         if duration is not None:
             clamped = max(0.5, min(22.0, float(duration)))

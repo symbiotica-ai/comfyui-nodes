@@ -2,18 +2,77 @@ name: Publish to Comfy registry
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "pyproject.toml"
+  release:
+    types: [published]
 
 jobs:
   publish-node:
     name: Publish Custom Node to registry
     runs-on: ubuntu-latest
+    # Workflow files travel into forks, and both triggers above can fire there.
+    # A fork publishing under this publisher id would ship someone else's code
+    # as ours.
+    if: ${{ github.repository_owner == 'symbiotica-ai' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: Comfy-Org/publish-node-action@main
+      # Pinned to a commit, not a branch: this step is handed the registry
+      # token, and @main (and @v1, which is also a branch) would run whatever
+      # that branch holds on the day we release.
+      - uses: Comfy-Org/publish-node-action@7578cdb0c1410f2515e6f9b1443c6859cab94f05  # 1.0.1
         with:
           personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+
+      # The registry keeps a per-version changelog, and publish-node-action does
+      # not set it — so every version shows blank notes even though the GitHub
+      # release has them. This copies the release body across. Only meaningful
+      # on the `release` trigger; on workflow_dispatch RELEASE_TAG is empty and
+      # the step skips.
+      - name: Update registry changelog
+        env:
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          # Passed as env, not interpolated into the script: the tag is
+          # attacker-shaped input in the general case, and this step holds the
+          # registry token.
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RELEASE_TAG:-}" ]; then
+            echo "No release tag (workflow_dispatch run) — skipping changelog."
+            exit 0
+          fi
+
+          VERSION=$(grep -E '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "Version: $VERSION  Tag: $RELEASE_TAG"
+
+          RELEASE_BODY=$(gh release view "$RELEASE_TAG" --json body -q .body 2>/dev/null || echo "")
+          if [ -z "$RELEASE_BODY" ]; then
+            echo "No release notes found — skipping changelog."
+            exit 0
+          fi
+
+          # The PUT wants the version's database id, not its string.
+          VERSION_ID=$(curl -s "https://api.comfy.org/nodes/symbiotica/versions?limit=10" \
+            | jq -r --arg v "$VERSION" '.[] | select(.version == $v) | .id')
+          if [ -z "$VERSION_ID" ]; then
+            echo "Warning: no registry version id for $VERSION — skipping changelog."
+            exit 0
+          fi
+          echo "Version id: $VERSION_ID"
+
+          # jq -Rs turns the body into a valid JSON string, newlines and all.
+          BODY_JSON=$(printf '%s' "$RELEASE_BODY" | jq -Rs .)
+
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT "https://api.comfy.org/publishers/razvan-symbiotica/nodes/symbiotica/versions/$VERSION_ID" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${REGISTRY_TOKEN}" \
+            -d "{\"changelog\": $BODY_JSON}")
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "Changelog updated (HTTP $HTTP_STATUS)."
+          else
+            # Publishing already succeeded; a changelog miss is not worth failing.
+            echo "Warning: changelog update returned HTTP $HTTP_STATUS."
+          fi

@@ -23,6 +23,7 @@ Stateless agents you wire into workflows. Personality (SOUL), instructions (CLAU
 - `Symbiotica Skills` — toggle which skills the agent has access to
 - `NS LLM Chat` — single-shot chat completion
 - `NS LLM Model Selector` — central model picker for routing
+- `NS Prompt Tuner Load` / `NS Prompt Tuner Save` — self-improving system-prompt loop; each queue run refines the prompt against a design reference (see `docs/prompt-tuner.md`)
 
 Supports Claude, Gemini, GPT, Grok.
 
