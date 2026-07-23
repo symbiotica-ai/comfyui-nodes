@@ -46,6 +46,26 @@ def resolve_key(env_names: list[str]) -> str | None:
     return None
 
 
+
+def resolve_provider_key(api_key: str, env_names: list[str], provider: str) -> str:
+    """The key for one node call: what was typed on the node, else Settings or
+    the environment. Raises with somewhere to put it when there is none.
+
+    A key typed into a node widget is stored in the workflow JSON, so a shared
+    or committed workflow carries it. Leaving the widget empty is the point —
+    the value then lives per-user, server-side, and never travels."""
+    key = (api_key or "").strip()
+    if not key:
+        key = resolve_key(env_names) or ""
+    if not key:
+        raise Exception(
+            f"{provider} API key required. Set it in Settings → Symbiotica, "
+            f"or the {env_names[0]} environment variable. Typing it on the node "
+            f"works too, but saves the key into the workflow file."
+        )
+    return key
+
+
 def key_from_settings(*env_names) -> str | None:
     """The Settings UI value for a provider, ignoring env vars and config files.
 
@@ -57,3 +77,4 @@ def key_from_settings(*env_names) -> str | None:
         if value:
             return str(value).strip()
     return None
+
