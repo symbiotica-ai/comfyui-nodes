@@ -6,6 +6,33 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.9
+
+Template Library — save an Auto Packer setup once and reload it after a restart.
+**Input change (backward compatible):** the Auto Packer gains an optional
+`template` input, a `save_as` field, and its `order` input is now optional;
+existing workflows keep working (order still drives it when wired).
+
+### Added
+- **Symbiotica Template Library** (new node) — browses a project's saved Auto
+  Packer templates as folders with sheet thumbnails and outputs one as a
+  `SYMBIOTICA_PACK_TEMPLATE` recipe (frozen order + model preset + pack settings
+  + category + per-asset overrides). Wire it into the Auto Packer's `template`
+  input to re-pack or edit a saved setup without rebuilding the chain.
+- **Auto Packer → "Save as template"** button — writes this run's sheets plus
+  the effective recipe to `<project>/templates/<name>/` (sheet PNGs +
+  `template.json` together). Falls back to `output/templates/` when the project
+  folder is unwritable (read-only Modal Volume) or unset; the Library browses
+  both.
+- `/symbiotica/pack-template-list` and `/symbiotica/pack-template-delete` routes.
+
+### Changed
+- **Symbiotica Order Specs** — the `order` wire now also carries `project_path`
+  and `month` (additive) so a template save can reproduce the exact event.
+- The Auto Packer `category` default is now empty (the "unset" sentinel that
+  defers to a wired template); an explicit "All" is honored as "pack every
+  type". A fresh node still shows "All".
+
 ## 2026.7.8
 
 Studio Library browser UI polish. No node's inputs, outputs, or ids changed —

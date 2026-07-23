@@ -41,6 +41,10 @@ Template = io.Custom("SYMBIOTICA_TEMPLATE")
 Order = io.Custom("SYMBIOTICA_ORDER")
 PackSettingsWire = io.Custom("SYMBIOTICA_PACK_SETTINGS")
 ModelPresetWire = io.Custom("SYMBIOTICA_MODEL_PRESET")
+# A saved Auto Packer recipe from the Template Library: {order, preset,
+# settings, category, overrides, name}. Distinct from SYMBIOTICA_TEMPLATE (the
+# Template Builder/Editor sheet bundle) — different shape, different producer.
+PackTemplateWire = io.Custom("SYMBIOTICA_PACK_TEMPLATE")
 
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
@@ -250,6 +254,11 @@ class SymbioticaOrderSpecs(io.ComfyNode):
             "refsRoot": rp,
             "assetsRoot": assets_root,
             "guide": cls._guide(project_path),
+            # The order identity, so a Template Library save can reproduce this
+            # exact event later (project + month + feature). Additive keys —
+            # older consumers ignore them.
+            "project_path": (project_path or "").strip(),
+            "month": (month or "").strip(),
         }
         return io.NodeOutput(payload)
 
@@ -479,17 +488,30 @@ class SymbioticaAutoPacker(io.ComfyNode):
                         "Wire sheets -> img2img and sheet_prompts -> your "
                         "LLM/prompt input; downstream runs once per sheet.",
             inputs=[
-                Order.Input("order"),
+                # Optional: the order comes from Order Specs, OR from a wired
+                # Template Library `template` (which carries a frozen order).
+                Order.Input("order", optional=True),
                 # Sheet size / layout / background come from a Model Preset
                 # node (or defaults); pack behaviour from a Settings node. Only
                 # the category picker + per-asset panel live on this node.
-                io.String.Input("category", default="All",
+                # Empty = unset (defers to a wired template's saved category);
+                # a concrete pick, including "All", is the user's choice.
+                io.String.Input("category", default="",
                                 tooltip="One asset type, or All"),
                 io.String.Input("overrides", default="{}",
                                 tooltip="Per-asset hide/reorder, set from the "
                                         "node's Assets panel (JSON)"),
+                io.String.Input("save_as", default="",
+                                tooltip="Set by the '💾 Save as template' button "
+                                        "— names the template this run writes to "
+                                        "the project's templates/ folder. Empty "
+                                        "= don't save."),
                 ModelPresetWire.Input("preset", optional=True),
                 PackSettingsWire.Input("settings", optional=True),
+                # A saved recipe from the Template Library: supplies order /
+                # preset / settings / category / overrides as DEFAULTS — this
+                # node's own wired inputs and edited widgets override them.
+                PackTemplateWire.Input("template", optional=True),
             ],
             outputs=[
                 io.Image.Output(display_name="sheets", is_output_list=True,
@@ -507,14 +529,21 @@ class SymbioticaAutoPacker(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, order, category="All", overrides="{}",
-                preset=None, settings=None) -> io.NodeOutput:
-        if not isinstance(order, dict) or "assets" not in order:
-            raise ValueError("order input must come from Symbiotica Order "
-                             "Specs")
+    def execute(cls, order=None, category="", overrides="{}", save_as="",
+                preset=None, settings=None, template=None) -> io.NodeOutput:
+        from .pack_library import resolve_pack_inputs
+        # A wired Template Library `template` supplies order/preset/settings/
+        # category/overrides as DEFAULTS; this node's own inputs + widgets win.
+        cfg = resolve_pack_inputs(order=order, preset=preset, settings=settings,
+                                  category=category, overrides=overrides,
+                                  template=template)
+        eff_order = cfg["order"]
+        if not isinstance(eff_order, dict) or "assets" not in eff_order:
+            raise ValueError("wire an Order Specs into 'order', or a Template "
+                             "Library template into 'template'")
         # Sheet size / layout / background come from a wired Model Preset node
         # (or these defaults when it is unwired).
-        p = preset if isinstance(preset, dict) else {}
+        p = cfg["preset"]
         model = p.get("model", "qwen-image")
         tier = p.get("tier", "1K")
         ar = p.get("ar", "1:1")
@@ -526,20 +555,21 @@ class SymbioticaAutoPacker(io.ComfyNode):
             raise ValueError(f"invalid preset: {model} / {tier} / {ar}")
         # Optional pack-settings node (unwired = today's defaults: shelf, no
         # distribute, scale 1 — nothing regresses).
-        s = settings if isinstance(settings, dict) else {}
+        s = cfg["settings"]
         from .autopack import apply_overrides, autopack_order
         try:
-            ov = json.loads(overrides) if overrides else {}
+            ov = json.loads(cfg["overrides"]) if cfg["overrides"] else {}
         except (ValueError, TypeError):
             ov = {}
-        base = slugify(order.get("feature", "")) or "order"
-        assets = apply_overrides(order["assets"],
-                                 ov if isinstance(ov, dict) else {})
+        if not isinstance(ov, dict):
+            ov = {}
+        base = slugify(eff_order.get("feature", "")) or "order"
+        assets = apply_overrides(eff_order["assets"], ov)
         packed = autopack_order(
-            assets, order.get("refsRoot", ""),
+            assets, eff_order.get("refsRoot", ""),
             sheet_w=dims["w"], sheet_h=dims["h"], columns=columns,
             max_rows=max_rows_per_sheet, background=background,
-            category=(category or "All").strip() or "All", base_name=base,
+            category=cfg["category"], base_name=base,
             scale=s.get("scale", 1.0),
             scale_max_canvas=s.get("scale_max_canvas", 256),
             algorithm=s.get("algorithm", "shelf"),
@@ -548,11 +578,147 @@ class SymbioticaAutoPacker(io.ComfyNode):
             combined_sheet=s.get("combined_sheet", True),
             split_variants=s.get("split_variants", False),
             max_refs=s.get("max_refs"), fit_width=s.get("fit_width", False))
+        if (save_as or "").strip():
+            # Capture the EFFECTIVE preset/settings (what actually packed these
+            # sheets), not the raw wire, so a re-load reproduces them exactly.
+            eff_preset = {"model": model, "tier": tier, "ar": ar,
+                          "columns": columns, "max_rows": max_rows_per_sheet,
+                          "background": background}
+            eff_settings = {
+                "scale": s.get("scale", 1.0),
+                "fit_width": s.get("fit_width", False),
+                "scale_max_canvas": s.get("scale_max_canvas", 256),
+                "algorithm": s.get("algorithm", "shelf"),
+                "distribute_by_folder": s.get("distribute_by_folder", False),
+                "padding": s.get("padding", 0), "border": s.get("border", 0),
+                "combined_sheet": s.get("combined_sheet", True),
+                "split_variants": s.get("split_variants", False),
+                "max_refs": s.get("max_refs"),
+            }
+            cls._save_template(save_as, eff_order, eff_preset, eff_settings,
+                               cfg["category"], ov, packed)
         return io.NodeOutput(
             [_pil_to_tensor(p["image"]) for p in packed],
             [p["prompts"] for p in packed],
             [p["name"] for p in packed],
         )
+
+    @classmethod
+    def _save_template(cls, name, order, preset, settings, category,
+                       overrides, packed) -> None:
+        """Write this run's sheets + recipe as a Template Library folder under
+        the project's templates/ dir. Never raises — a save failure must not
+        lose the packed output; it falls back to output/templates and tells the
+        UI via a push."""
+        from .pack_library import templates_dir, write_pack_template
+        project_path = str(order.get("project_path", "")).strip()
+        base = templates_dir(project_path)
+        fell_back = not base
+        if not base:
+            base = os.path.join(folder_paths.get_output_directory(), "templates")
+        sidecar = {
+            "eventName": order.get("eventName", ""),
+            "order": {
+                "project_path": project_path,
+                "month": str(order.get("month", "")),
+                "feature": order.get("feature", ""),
+                "eventName": order.get("eventName", ""),
+                "assets": order.get("assets", []),
+                "refsRoot": order.get("refsRoot", ""),
+                "assetsRoot": order.get("assetsRoot", ""),
+            },
+            "preset": preset,
+            "settings": settings,
+            "category": category,
+            "overrides": overrides if isinstance(overrides, dict) else {},
+            "sheetNames": [p.get("name", "") for p in packed],
+        }
+        images = [p["image"] for p in packed]
+        try:
+            result = write_pack_template(base, name, images, sidecar)
+        except Exception:
+            # Project folder not writable (e.g. a read-only Modal Volume) — keep
+            # the sheets by saving to output/templates instead. The Library +
+            # list route browse output/templates too, so it stays reloadable.
+            base = os.path.join(folder_paths.get_output_directory(), "templates")
+            fell_back = True
+            try:
+                result = write_pack_template(base, name, images, sidecar)
+            except Exception as e:
+                _push("symbiotica.pack_template_saved",
+                      {"error": f"could not save template: {e}"})
+                return
+        _register_refs_root(base)
+        _push("symbiotica.pack_template_saved",
+              {"name": result["name"], "dir": result["dir"],
+               "project_path": project_path, "fellBack": fell_back})
+
+
+class SymbioticaTemplateLibrary(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaTemplateLibrary",
+            display_name="Symbiotica Template Library",
+            category="symbiotica/pipeline",
+            description="Browse the Auto Packer templates saved for a project "
+                        "(as folders, with sheet thumbnails) and output one — "
+                        "its full recipe: the order, model preset, pack "
+                        "settings, and per-asset overrides. Wire 'template' "
+                        "into the Auto Packer to re-pack or edit a saved setup "
+                        "without rebuilding it every restart.",
+            inputs=[
+                io.String.Input("project_path", default="",
+                                tooltip="The client project folder — its "
+                                        "templates/ subfolder is browsed"),
+                io.String.Input("selected", default="",
+                                tooltip="Which saved template to output — set "
+                                        "from the node's folder browser"),
+            ],
+            outputs=[PackTemplateWire.Output(display_name="template")],
+        )
+
+    _NEUTRAL = {"order": {}, "preset": {}, "settings": {}, "category": "",
+                "overrides": {}, "name": ""}
+
+    @classmethod
+    def _dirs(cls, project_path):
+        from .pack_library import templates_dir
+        out = os.path.join(folder_paths.get_output_directory(), "templates")
+        # Project dir first so a filed template shadows a fallback of the same
+        # name; output/templates covers read-only-project + no-project saves.
+        return [d for d in (templates_dir(project_path), out) if d]
+
+    @classmethod
+    def execute(cls, project_path="", selected="") -> io.NodeOutput:
+        from .pack_library import load_pack_template_dirs
+        dirs = cls._dirs(project_path)
+        for d in dirs:
+            _register_refs_root(d)
+        if not (selected or "").strip():
+            # Nothing picked yet — a NEUTRAL bundle, not a raise: this node may be
+            # wired into an Auto Packer alongside a live Order Specs (the order
+            # wins), and raising here would kill the whole prompt before the
+            # packer runs. With no order wired the packer raises its own error.
+            return io.NodeOutput(dict(cls._NEUTRAL))
+        tpl = load_pack_template_dirs(dirs, selected)
+        if not tpl:
+            raise ValueError(
+                f"no saved template {selected!r} for this project — save one "
+                "from the Auto Packer first (\U0001f4be Save as template)")
+        order = tpl.get("order") or {}
+        # Register the frozen order's refs root so the Auto Packer's Assets-panel
+        # thumbnails serve when editing this template.
+        if order.get("refsRoot"):
+            _register_refs_root(order["refsRoot"])
+        return io.NodeOutput({
+            "order": order,
+            "preset": tpl.get("preset") or {},
+            "settings": tpl.get("settings") or {},
+            "category": tpl.get("category", "All"),
+            "overrides": tpl.get("overrides") or {},
+            "name": tpl.get("name", ""),
+        })
 
 
 class SymbioticaEventSpecs(io.ComfyNode):
@@ -1745,6 +1911,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaModelPreset,
     SymbioticaAutoPackerSettings,
     SymbioticaAutoPacker,
+    SymbioticaTemplateLibrary,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
     SymbioticaTemplateEditor,
