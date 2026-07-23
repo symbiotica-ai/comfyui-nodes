@@ -58,3 +58,27 @@ def resolve_studio_path(base_dir, rel):
     if not os.path.exists(path):
         raise ValueError(f"not found: {rel}")
     return path
+
+
+def resolve_selection(base_dir, selection):
+    """(absolute path, is_dir) for a stored selection. Env-free."""
+    path = resolve_studio_path(base_dir, selection)
+    return path, os.path.isdir(path)
+
+
+def selection_fingerprint(base_dir, selection):
+    """Content-change hash. Files: mtime+size. Folders: sorted direntry-name set
+    (an in-place rewrite of a file UNDER a selected folder does NOT change it —
+    a documented limitation). Always hashes the selection string itself."""
+    selection = str(selection or "")
+    h = hashlib.sha256(selection.encode())
+    try:
+        path, is_dir = resolve_selection(base_dir, selection)
+        if is_dir:
+            h.update("\x00".join(sorted(os.listdir(path))).encode())
+        else:
+            st = os.stat(path)
+            h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
+    except (ValueError, OSError):
+        h.update(b"unresolved")
+    return h.hexdigest()

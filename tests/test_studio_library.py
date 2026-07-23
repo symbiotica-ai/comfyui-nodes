@@ -5,6 +5,7 @@ import os
 import pytest
 
 from pipeline.studio_library import MODEL_KINDS, resolve_studio_path
+from pipeline.studio_library import resolve_selection, selection_fingerprint
 
 
 def _touch(path, data=b"x"):
@@ -97,3 +98,58 @@ def test_model_kinds_is_the_eight_names():
         "checkpoints", "loras", "vae", "controlnet",
         "upscale_models", "embeddings", "diffusion_models", "text_encoders",
     })
+
+
+def test_resolve_selection_is_dir_flag(vol):
+    assert resolve_selection(str(vol), "studios/ggs/references/hero.png")[1] is False
+    assert resolve_selection(str(vol), "studios/ggs/references")[1] is True
+
+
+def test_fingerprint_changes_on_file_mtime_and_size(vol):
+    sel = "studios/ggs/references/hero.png"
+    f = vol / "studios" / "ggs" / "references" / "hero.png"
+    fp0 = selection_fingerprint(str(vol), sel)
+    os.utime(f, (1_000_000, 1_000_000))
+    fp_mtime = selection_fingerprint(str(vol), sel)
+    assert fp_mtime != fp0
+    f.write_bytes(b"much longer content")  # size change
+    assert selection_fingerprint(str(vol), sel) != fp_mtime
+
+
+def test_fingerprint_folder_tracks_direntry_set_not_content(vol):
+    sel = "studios/ggs/references"
+    fp0 = selection_fingerprint(str(vol), sel)
+    # Adding a direntry changes the fingerprint...
+    (vol / "studios" / "ggs" / "references" / "new.png").write_bytes(b"y")
+    fp_added = selection_fingerprint(str(vol), sel)
+    assert fp_added != fp0
+    # ...but an in-place rewrite of a file UNDER the folder does NOT (documented).
+    (vol / "studios" / "ggs" / "references" / "hero.png").write_bytes(b"zzzzzzzz")
+    assert selection_fingerprint(str(vol), sel) == fp_added
+
+
+def test_fingerprint_stable_and_unresolved(vol):
+    sel = "studios/ggs/references/hero.png"
+    assert selection_fingerprint(str(vol), sel) == selection_fingerprint(str(vol), sel)
+    a = selection_fingerprint(str(vol), "studios/ggs/gone.png")
+    b = selection_fingerprint(str(vol), "studios/ggs/also-gone.png")
+    assert a != b  # the selection string is always hashed
+    assert selection_fingerprint(str(vol), "studios/ggs/gone.png") == a  # stable
+
+
+def test_none_selection_does_not_raise(vol):
+    # A value wired from an upstream STRING socket can be None.
+    assert isinstance(selection_fingerprint(str(vol), None), str)
+    with pytest.raises(ValueError, match="no selection"):
+        resolve_selection(str(vol), None)
+
+
+def test_resolution_ignores_canvas_studio(vol, monkeypatch):
+    # execute()/fingerprint delegate here and must NOT consult CANVAS_STUDIO.
+    sel = "studios/ggs/references/hero.png"
+    monkeypatch.setenv("CANVAS_STUDIO", "imperia")  # a different, nonexistent studio
+    with_env = resolve_selection(str(vol), sel)
+    fp_env = selection_fingerprint(str(vol), sel)
+    monkeypatch.delenv("CANVAS_STUDIO", raising=False)
+    assert resolve_selection(str(vol), sel) == with_env
+    assert selection_fingerprint(str(vol), sel) == fp_env
