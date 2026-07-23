@@ -8,8 +8,9 @@ node's inputs, outputs, or id says so at the top of its entry.
 
 ## 2026.7.2
 
-Adds one new node (**Symbiotica Files Read**). No existing node's inputs,
-outputs, or ids changed — nothing here breaks an existing workflow.
+Adds three new nodes (**Symbiotica Files Read**, **NS Prompt Tuner Load**,
+**NS Prompt Tuner Save**). No existing node's inputs, outputs, or ids changed —
+nothing here breaks an existing workflow.
 
 ### Added
 
@@ -23,6 +24,34 @@ outputs, or ids changed — nothing here breaks an existing workflow.
 - Nested reference paths now resolve for any sheet draw (a shared exact-rel
   then basename rule), and a new `/symbiotica/ref-image` route makes the canvas
   preview match the queued sheet. Existing spreadsheet orders are unaffected.
+- **NS Prompt Tuner Load / NS Prompt Tuner Save — a self-improving
+  system-prompt loop.** Each queue run serves the current best system prompt,
+  generates, has a refiner LLM critique the result against a design reference,
+  and saves the refined prompt as the next version; Auto-Queue iterates
+  hands-free. The per-`tuner_id` state file keeps every version and critique,
+  the refiner sees the full history plus the user's rough guidance, and the
+  loop halts itself on convergence or `max_iterations`. `version_override`
+  pins a version for production: recording stops and repeat runs cache fully.
+  Malformed or truncated refiner replies are rejected rather than saved. See
+  `docs/prompt-tuner.md`.
+- **Cancel works on hosted video jobs.** Interrupting a run now actually stops
+  Wavespeed and Grok video jobs instead of letting them bill to completion.
+
+### Fixes
+
+- **The tuner cannot re-bill a stalled loop.** A muted or unwired Save node
+  used to leave the loop generating (and paying) every queue with no progress;
+  it now halts after three unrecorded serves and says which node to fix. Two
+  pinned Loads sharing a `tuner_id` no longer churn the state file and re-run
+  both branches every queue.
+- **NS Music and NS Sound Effects no longer store the ElevenLabs key in the
+  workflow**, and the pack reads the Settings-UI keys it already asks users
+  for. Workflows stay shareable without leaking credentials.
+
+### Other
+
+- Registry publishing hardened: the publish fires on the release itself, and
+  release notes land in the registry changelog automatically.
 
 ## 2026.7.1
 
