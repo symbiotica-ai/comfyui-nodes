@@ -6,6 +6,27 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.3
+
+Two fixes for the hosted (Modal) canvas and the Prompt Tuner. No node's
+inputs, outputs, or ids changed — nothing here breaks an existing workflow.
+
+### Fixes
+
+- **Order Specs works on the hosted canvas when `project_path` is wired.**
+  Feeding the path in over a wire (a Local/Modal switch) instead of typing it
+  now populates the month and feature dropdowns and loads the Auto Packer
+  thumbnails — no more wiring a packer to a Preview and queueing just to fill
+  the pickers. A new "📁 Read folder" button on Order Specs resolves the path,
+  fills the pickers, and registers the reference root on demand. A wired path
+  only ever fills the dropdowns; it never overwrites the month or feature you
+  picked, so routing `project_path` through a switch can't silently render the
+  wrong order.
+- **NS Prompt Tuner no longer records a stray refinement after an interrupted
+  queue.** Cancelling a run mid-loop could leave a pending serve that the next
+  pinned Load counted as one spurious refinement; the stall guard now abandons
+  that pending serve when it halts.
+
 ## 2026.7.2
 
 Adds three new nodes (**Symbiotica Files Read**, **NS Prompt Tuner Load**,
