@@ -8,7 +8,8 @@ import pytest
 def test_pure_modules_import_without_comfy():
     for mod in ["pipeline.order_sheet", "pipeline.order_loader",
                 "pipeline.texture_pack", "pipeline.model_presets",
-                "pipeline.prefill", "pipeline.compose"]:
+                "pipeline.prefill", "pipeline.compose",
+                "pipeline.studio_library"]:
         importlib.import_module(mod)
 
 
