@@ -386,12 +386,21 @@ function assetsPanel(node) {
     // width (the DOM widget must not render wider than the node — rows clip, they
     // don't stretch the node); the flex children below get min-width:0 so long
     // names ellipsis instead of forcing the row wide.
-    container.style.cssText = "box-sizing:border-box;width:100%;max-height:320px;"
+    container.style.cssText = "box-sizing:border-box;width:100%;height:100%;"
         + "overflow-y:auto;overflow-x:hidden;padding:2px 2px 4px;font-size:11px;";
     stopWheel(container);
-    node.addDOMWidget("assets_panel", "sym_assets", container,
-                      { serialize: false, hideOnZoom: true });
+    const panelW = node.addDOMWidget("assets_panel", "sym_assets", container,
+                                     { serialize: false, hideOnZoom: true });
+    // Fill the panel down to the bottom of the node instead of a fixed 320px
+    // box, so dragging the node taller grows the scroll area. Height = node
+    // height minus the title + the one visible widget (category) above it; the
+    // self-reference is a stable fixed point (min node size resolves to itself).
+    panelW.computeSize = function (width) {
+        const header = (window.LiteGraph?.NODE_TITLE_HEIGHT ?? 30) + 34;
+        return [width, Math.max(140, (node.size?.[1] ?? 0) - header)];
+    };
     node.size[0] = Math.max(node.size[0], 320);
+    node.size[1] = Math.max(node.size[1], 420);
 
     const save = () => {
         if (ovW) ovW.value = JSON.stringify(state);
