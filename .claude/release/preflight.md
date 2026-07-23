@@ -4,20 +4,24 @@ Read this before bumping anything. This repo does not release the way the
 generic flow assumes, and two of the differences will ship something you did not
 intend.
 
-## The version line is the shipped artifact, not the tag
+## Publishing the GitHub release is what ships it
 
-`.github/workflows/publish_action.yml` fires on **any push to `main` that
-touches `pyproject.toml`** and publishes to the public ComfyUI Registry as
-publisher `razvan-symbiotica`. Consequences:
+`.github/workflows/publish_action.yml` fires when a **GitHub release is
+published**, and publishes to the public ComfyUI Registry as publisher
+`razvan-symbiotica`. Consequences:
 
-- Editing `version` in `pyproject.toml` and merging is a **publish to every
-  ComfyUI user who installs this pack**. It is not bookkeeping.
-- A version bump on a branch publishes nothing. If a release has to actually
-  ship, the commit has to reach `main`.
-- Tags are documentation here. The repo had none at all through v2.40.0.
+- Merging a version bump publishes nothing on its own. The version line says
+  what the next release will be called; publishing the release is what sends it.
+- So the release page is not documentation any more — creating it is the act
+  that reaches every user who installs this pack.
+- `workflow_dispatch` also publishes, on whatever `main` currently holds.
 
-Before bumping, confirm the release is meant to reach the registry. If it is
-not, stop — commit the work without touching `version`.
+Whatever version sits in `pyproject.toml` at the moment the release is published
+is the version the registry receives — the release notes and tag are not
+consulted. Check they agree before publishing.
+
+Through `2.43.0` this fired on any push to `main` touching `pyproject.toml`, so
+editing that line *was* the publish. Older notes and habits assume that.
 
 ## Check no open PR already claims a version
 
