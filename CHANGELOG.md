@@ -6,7 +6,7 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
-## Unreleased
+## 2026.7.7
 
 Adds a new node. No existing node's inputs, outputs, or ids changed —
 nothing here breaks an existing workflow.
