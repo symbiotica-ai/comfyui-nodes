@@ -254,6 +254,60 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         return io.NodeOutput(payload)
 
 
+class SymbioticaFilesRead(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaFilesRead",
+            display_name="Symbiotica Files Read",
+            category="symbiotica/pipeline",
+            description="Build an order from loose client reference folders — "
+                        "no xlsx. Open the files browser, tick folders/files "
+                        "into groups (folder = one sheet row, ticked files = "
+                        "its cells), and wire 'order' into the Auto Packer.",
+            inputs=[
+                io.String.Input("refs_path", default="",
+                                tooltip="The client folder of reference "
+                                        "images (subfolders welcome)"),
+                io.String.Input("name", default="",
+                                tooltip="Base name for the sheets (empty = "
+                                        "the folder's name)"),
+                io.String.Input("selection", default="{}", advanced=True,
+                                tooltip="Groups JSON, set by the files "
+                                        "browser"),
+            ],
+            outputs=[Order.Output(display_name="order")],
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, refs_path="", name="", selection="{}"):
+        h = hashlib.sha256(f"{refs_path}|{name}|{selection}".encode())
+        # Re-run when any selected file changes on disk.
+        try:
+            sel = json.loads(selection or "{}")
+        except ValueError:
+            sel = {}
+        groups = sel.get("groups") if isinstance(sel, dict) else None
+        for g in groups or []:
+            if not isinstance(g, dict):
+                continue
+            for rel in g.get("files") or []:
+                p = os.path.join(refs_path, *str(rel).split("/"))
+                try:
+                    st = os.stat(p)
+                    h.update(f"{rel}:{st.st_mtime_ns}:{st.st_size}".encode())
+                except OSError:
+                    h.update(f"{rel}:missing".encode())
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, refs_path="", name="", selection="{}") -> io.NodeOutput:
+        from .files_read import build_files_order
+        order = build_files_order(refs_path, selection, name)
+        _register_refs_root(order["refsRoot"])
+        return io.NodeOutput(order)
+
+
 class SymbioticaModelPreset(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1654,6 +1708,7 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
+    SymbioticaFilesRead,
     SymbioticaModelPreset,
     SymbioticaAutoPackerSettings,
     SymbioticaAutoPacker,

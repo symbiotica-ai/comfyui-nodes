@@ -115,3 +115,17 @@ def test_list_subdirs_default_is_home(monkeypatch):
     info = routes.list_subdirs("")
     assert info is not None
     assert info["path"] == os.path.realpath(os.path.expanduser("~"))
+
+
+def test_ref_image_resolution_stays_inside_root(tmp_path):
+    # The route resolves with compose.resolve_ref then gates on is_allowed —
+    # a nested rel resolves, an escape attempt dies at the allowlist.
+    from pipeline.compose import resolve_ref
+    from pipeline.routes import is_allowed, register_root
+    d = tmp_path / "refs" / "Stoves"
+    d.mkdir(parents=True)
+    (d / "a.png").write_bytes(b"x")
+    root = str(tmp_path / "refs")
+    register_root(root)
+    assert is_allowed(resolve_ref(root, "Stoves/a.png")) is not None
+    assert is_allowed(resolve_ref(root, "../../etc/passwd")) is None

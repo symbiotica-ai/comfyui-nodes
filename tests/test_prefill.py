@@ -139,3 +139,13 @@ def test_scales_enlarge_cells():
     assert abs(sc["w"] - 2 * b["w"]) < 1e-6
     assert abs(sc["h"] - 2 * b["h"]) < 1e-6
     assert scaled["regions"][0]["scale"] == 2
+
+
+def test_rel_path_reffiles_pass_through_verbatim():
+    # A refFile containing "/" is already a rel path — no category/assetName
+    # synthesis (the Files Read flow); basenames keep the synthetic prefix.
+    assets = [{"assetName": "stoves", "category": "Deco", "canvas": "128x128",
+               "rotation": "-", "refFiles": ["Stoves/a.png", "Stoves/b.png"]}]
+    result = prefill_regions(assets, 1024, 1024)
+    paths = result["regions"][0]["taskRefs"]["paths"]
+    assert paths == ["Stoves/a.png", "Stoves/b.png"]
