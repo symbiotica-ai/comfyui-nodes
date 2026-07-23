@@ -107,6 +107,20 @@ def test_no_sync_flag_does_not_spawn(routes_mod, monkeypatch, tmp_path):
     assert spawned["n"] == 0
 
 
+def test_sync_spawn_failure_still_lists(routes_mod, monkeypatch, tmp_path):
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+
+    async def _fake_exec(*a, **k):
+        raise FileNotFoundError("no such file: sync")
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+    asyncio.run(routes_mod.studio_library(_req(sync="1")))
+    assert routes_mod._captured["status"] == 200
+    assert "entries" in routes_mod._captured["body"]
+
+
 def test_sync_timeout_still_lists_and_kills(routes_mod, monkeypatch, tmp_path):
     (tmp_path / "studios" / "ggs").mkdir(parents=True)
     monkeypatch.setenv("CANVAS_STUDIO", "ggs")

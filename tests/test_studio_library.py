@@ -67,6 +67,18 @@ def test_in_tree_symlink_escape_raises(vol):
         resolve_studio_path(str(vol), "studios/ggs/link.png")
 
 
+def test_sibling_prefix_of_volume_root_escape_raises(vol):
+    # A sibling directory whose name merely starts with the Volume root's name
+    # (not a subdirectory of it). A `startswith(root)` check missing the
+    # `+ os.sep` would wrongly treat this as inside the root.
+    secret = vol.parent / (vol.name + "-evil") / "secret.txt"
+    _touch(secret)
+    link = vol / "studios" / "ggs" / "link.txt"
+    os.symlink(secret, link)
+    with pytest.raises(ValueError, match="outside"):
+        resolve_studio_path(str(vol), "studios/ggs/link.txt")
+
+
 def test_invalid_slug_raises(vol):
     with pytest.raises(ValueError, match="not a studio path"):
         resolve_studio_path(str(vol), "studios/Bad_Slug/x.png")
@@ -205,6 +217,18 @@ def test_prefix_collision_sibling_not_inside(tmp_path):
     (tmp_path / "studios" / "ggs" / "a").mkdir(parents=True)
     (tmp_path / "studios" / "ggs-2" / "secret").mkdir(parents=True)
     assert "error" in list_studio_dir(str(tmp_path), "ggs", "studios/ggs-2")
+
+
+def test_sibling_studio_prefix_listing_escape(tmp_path):
+    # studios/ggs-private is a SIBLING of studios/ggs, not a child of it; a
+    # symlink inside ggs pointing at it must not be listable through ggs. A
+    # `startswith(studio_root)` check missing the `+ os.sep` would wrongly
+    # treat "studios/ggs-private" as inside "studios/ggs" (string prefix).
+    _touch(tmp_path / "studios" / "ggs-private" / "secret.txt")
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    os.symlink(tmp_path / "studios" / "ggs-private", tmp_path / "studios" / "ggs" / "peek")
+    res = list_studio_dir(str(tmp_path), "ggs", "studios/ggs/peek")
+    assert "error" in res
 
 
 def test_file_as_dir_returns_error(vol2):
