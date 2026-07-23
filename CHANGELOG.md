@@ -6,6 +6,18 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## Unreleased
+
+Adds a new node. No existing node's inputs, outputs, or ids changed —
+nothing here breaks an existing workflow.
+
+### Added
+- **Symbiotica Studio Library** — a single-select browser (with a
+  client-side name filter) for the active studio's non-model asset tree —
+  reference images, arbitrary files, and folder paths — emitting an absolute
+  sandbox path plus `is_dir` for downstream path-consuming nodes. Model
+  kinds stay hidden (already native via `/comfy-models`).
+
 ## 2026.7.3
 
 Two fixes for the hosted (Modal) canvas and the Prompt Tuner. No node's

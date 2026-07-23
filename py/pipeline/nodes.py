@@ -308,6 +308,39 @@ class SymbioticaFilesRead(io.ComfyNode):
         return io.NodeOutput(order)
 
 
+class SymbioticaStudioLibrary(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaStudioLibrary",
+            display_name="Symbiotica Studio Library",
+            category="symbiotica/pipeline",
+            description="Pick a file or folder from the studio asset library; "
+                        "outputs its absolute sandbox path (and whether it is a "
+                        "folder). Open the browser, click one entry.",
+            inputs=[
+                io.String.Input("selection", default="", advanced=True,
+                                tooltip="Volume-relative pick, set by the "
+                                        "studio-library browser"),
+            ],
+            outputs=[
+                io.String.Output(display_name="path"),
+                io.Boolean.Output(display_name="is_dir"),
+            ],
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, selection=""):
+        from .studio_library import STUDIO_ASSETS_DIR, selection_fingerprint
+        return selection_fingerprint(STUDIO_ASSETS_DIR, selection)
+
+    @classmethod
+    def execute(cls, selection="") -> io.NodeOutput:
+        from .studio_library import STUDIO_ASSETS_DIR, resolve_selection
+        path, is_dir = resolve_selection(STUDIO_ASSETS_DIR, selection)
+        return io.NodeOutput(path, is_dir)
+
+
 class SymbioticaModelPreset(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1721,4 +1754,5 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaPromptsSplit,
     SymbioticaPromptEnhancer,
     SymbioticaTemplatePrompt,
+    SymbioticaStudioLibrary,
 ]

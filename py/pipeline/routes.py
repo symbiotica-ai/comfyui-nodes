@@ -2,6 +2,7 @@
 # ABOUTME: thumbnails, folder browsing, and project-asset listings.
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -10,6 +11,7 @@ import threading
 from aiohttp import web
 from server import PromptServer
 
+from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
 
@@ -226,6 +228,38 @@ async def list_assets(request):
             w = h = None
         images.append({"rel": rel, "w": w, "h": h})
     return web.json_response({"root": root, "images": images})
+
+
+SYNC_TIMEOUT_S = 10  # best-effort browse sync; time out and list the stale mount.
+
+
+async def _sync_studio_assets(root):
+    """Best-effort async publish/refresh of the studio-assets v2 mount before a
+    browse-session listing. Never blocks the event loop; a stale listing is
+    acceptable. Mirrors services/comfy-modal/symbiotica_platform/route.py:206-213."""
+    try:
+        proc = await asyncio.create_subprocess_exec("sync", root)
+    except OSError:
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=SYNC_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        proc.kill()
+
+
+@PromptServer.instance.routes.get("/symbiotica/studio-library")
+async def studio_library(request):
+    """Lazy per-level listing of the active studio's asset tree, confined to the
+    studio-assets Volume root. `dir` is a volume-relative rel studios/<slug>[/...]
+    (or '' for the studio root). A browse-session open (sync=1) refreshes first."""
+    studio = (os.environ.get("CANVAS_STUDIO") or "").strip()
+    if not studio:
+        return web.json_response({"error": "studio library not available"}, status=503)
+    if request.query.get("sync") == "1":
+        await _sync_studio_assets(studio_library_mod.STUDIO_ASSETS_DIR)
+    result = studio_library_mod.list_studio_dir(
+        studio_library_mod.STUDIO_ASSETS_DIR, studio, request.query.get("dir", ""))
+    return web.json_response(result, status=400 if "error" in result else 200)
 
 
 @PromptServer.instance.routes.post("/symbiotica/template-save")

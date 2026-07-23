@@ -15,28 +15,59 @@ export function reset() {
 }
 
 // --- DOM ---------------------------------------------------------------------
+// addEventListener/removeEventListener actually store listeners (rather than
+// no-op) so tests can drive click/keydown-triggered code via fire(); remove()
+// unlinks from the parent set by appendChild/append so removal is observable.
+function listening() {
+    return {
+        addEventListener(type, fn) {
+            (this._listeners ??= {});
+            (this._listeners[type] ??= []).push(fn);
+        },
+        removeEventListener(type, fn) {
+            if (this._listeners?.[type]) {
+                this._listeners[type] = this._listeners[type].filter((f) => f !== fn);
+            }
+        },
+    };
+}
+export function fire(el, type, event = {}) {
+    for (const fn of el._listeners?.[type] ?? []) fn(event);
+}
 function element() {
     return {
+        ...listening(),
         style: { cssText: "", display: "", opacity: "" },
         children: [],
+        parent: null,
         textContent: "",
-        appendChild(c) { this.children.push(c); return c; },
-        append(...cs) { this.children.push(...cs); },
+        appendChild(c) { this.children.push(c); c.parent = this; return c; },
+        append(...cs) { this.children.push(...cs); cs.forEach((c) => { c.parent = this; }); },
         // As in the DOM, this drops every child including any text set through
         // textContent — so a placeholder string does not survive a re-render.
-        replaceChildren(...cs) { this.children = cs; this.textContent = ""; },
-        addEventListener() {}, removeEventListener() {},
-        setAttribute() {}, remove() {},
+        replaceChildren(...cs) {
+            this.children = cs;
+            this.textContent = "";
+            cs.forEach((c) => { c.parent = this; });
+        },
+        setAttribute() {},
+        remove() {
+            if (this.parent) {
+                this.parent.children = this.parent.children.filter((c) => c !== this);
+                this.parent = null;
+            }
+        },
         querySelector: () => null, querySelectorAll: () => [],
     };
 }
 globalThis.document = {
+    ...listening(),
     createElement: element,
     createTextNode: (t) => ({ text: t }),
     body: element(),
-    addEventListener() {},
 };
 globalThis.window = { addEventListener() {}, devicePixelRatio: 1 };
+globalThis.requestAnimationFrame = (cb) => cb();
 
 // --- api ---------------------------------------------------------------------
 export const api = {
