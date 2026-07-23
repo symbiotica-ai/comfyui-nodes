@@ -741,6 +741,7 @@ def test_sync_timeout_still_lists_and_kills(routes_mod, monkeypatch, tmp_path):
         return _Proc()
 
     async def _timeout(coro, timeout):
+        coro.close()  # real wait_for cancels the inner awaitable on timeout
         raise asyncio.TimeoutError
 
     monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
