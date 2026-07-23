@@ -175,6 +175,14 @@ def serve(state: dict, *, initial_prompt: str, guidance: str,
         # serves again, which the reset now allows on the next queue.
         if state.get("unconsumed", 0) >= _MAX_UNCONSUMED_SERVES:
             state["unconsumed"] = 0
+            # The loop is giving up on the last, unrecorded serve. Neutralize its
+            # record request (mark the slot non-recording) so a later pinned
+            # serve cannot preserve it for a Save to record — that would leak a
+            # stale version, with the abandoned serve's parent/guidance, into the
+            # lineage, and the halt message steers users straight toward pinning.
+            ps = state.get("last_served")
+            if ps and ps.get("record") and not ps.get("consumed"):
+                state["last_served"] = dict(ps, record=False)
             return state, {"halt": (
                 f"Prompt tuner stopped: the Save node has not recorded the last "
                 f"{_MAX_UNCONSUMED_SERVES} serves — it is muted, bypassed, or wired to a "

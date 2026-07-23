@@ -418,3 +418,30 @@ def test_pinned_serve_does_not_starve_an_active_save(tmp_path, monkeypatch):
     # Six queues, Save active: six refinements recorded, never a spurious halt.
     assert len(store.load("t")["iterations"]) == 7
     assert store.load("t").get("unconsumed", 0) == 0
+
+
+def test_stall_halt_abandons_the_pending_serve(tmp_path, monkeypatch):
+    # When the loop gives up (stall halt), the unrecorded serve it was on must
+    # be abandoned — not left pending for a later pinned serve to preserve and
+    # a Save to record, which would leak a stale version into the lineage
+    # (the halt message even steers users toward pinning).
+    import prompt_tuner
+    store = TunerStore(str(tmp_path))
+    monkeypatch.setattr(prompt_tuner, "_default_store", lambda: store)
+    load = prompt_tuner.NSPromptTunerLoad()
+    save = prompt_tuner.NSPromptTunerSave()
+
+    # Muted Save until the loop halts.
+    for _ in range(20):
+        try:
+            load.serve_prompt("t", "g", -1, 0, initial_prompt="base")
+        except TunerHalt:
+            break
+    before = len(store.load("t")["iterations"])
+
+    # User follows the halt's advice: pins a version, with an active Save.
+    load.serve_prompt("t", "g", 0, 0, initial_prompt="base")
+    status = save.save_iteration("t", improve_response("should not be recorded"))["result"][0]
+
+    assert len(store.load("t")["iterations"]) == before, "pinned serve leaked a record"
+    assert "nothing recorded" in status.lower()
