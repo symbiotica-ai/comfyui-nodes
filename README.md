@@ -99,6 +99,9 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   (stored under `output/templates/`). The node executes from the saved
   template: base sheet + task-reference sheet sharing one region layout —
   wire both into an img2img edit node.
+- **Symbiotica Studio Library** — pick a file or folder from the active
+  studio's asset library; outputs its absolute sandbox path and whether it is
+  a folder.
 
 The web extension adds an events browser on Order Read and populates the
 feature/group dropdowns after the first queue. On a fully cached run the
