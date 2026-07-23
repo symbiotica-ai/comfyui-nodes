@@ -381,24 +381,29 @@ function assetsPanel(node) {
     try { state = { hidden: [], cells: {}, ...JSON.parse(ovW?.value || "{}") }; }
     catch { /* keep default */ }
 
+    // The outer container is the scroll VIEWPORT: ComfyUI sets its height from
+    // computeSize below. Rows live in an inner `list` whose natural height IS the
+    // content height. Measure the LIST, never the container: the container fills
+    // its allocated box, so container.scrollHeight just echoes the box height and
+    // feeds the size back into itself, running the node off the canvas.
+    // box-sizing/width:100%/overflow-x:hidden keep the panel inside the node
+    // width; the flex children get min-width:0 so long names ellipsis.
     const container = document.createElement("div");
-    // box-sizing + width:100% + overflow-x:hidden keep the panel inside the node
-    // width (the DOM widget must not render wider than the node — rows clip, they
-    // don't stretch the node); the flex children below get min-width:0 so long
-    // names ellipsis instead of forcing the row wide.
-    container.style.cssText = "box-sizing:border-box;width:100%;height:100%;"
-        + "overflow-y:auto;overflow-x:hidden;padding:2px 2px 4px;font-size:11px;";
+    container.style.cssText = "box-sizing:border-box;width:100%;"
+        + "overflow-y:auto;overflow-x:hidden;font-size:11px;";
+    const list = document.createElement("div");
+    list.style.cssText = "padding:2px 2px 4px;";
+    container.appendChild(list);
     stopWheel(container);
     const panelW = node.addDOMWidget("assets_panel", "sym_assets", container,
                                      { serialize: false, hideOnZoom: true });
-    // Height fits the CONTENT — the selected event's asset rows — so the node
+    // Height fits the CONTENT (the selected event's asset rows) so the node
     // auto-grows to fit the assets and shrinks for a smaller category, capped so
-    // a huge event scrolls instead of running off the canvas. NOT node.size[1]
-    // (self-referential — that grew the node to the bottom of the canvas).
+    // a huge event scrolls instead of running off the canvas.
     const PANEL_MAX = 760;
     panelW.computeSize = function (width) {
-        const h = container.scrollHeight;
-        return [width, Math.min(Math.max(h ? h + 6 : 44, 44), PANEL_MAX)];
+        const h = list.scrollHeight;
+        return [width, Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX)];
     };
     // Re-fit the node to the new content after each render (scrollHeight is only
     // valid once the rows are in the DOM).
@@ -415,15 +420,15 @@ function assetsPanel(node) {
 
     node._symRenderAssets = () => render();
     function render() {
-        container.replaceChildren();
+        list.replaceChildren();
         const { assets, refsRoot } = eventAssetsFor(node);
         if (!assets.length) {
-            container.textContent = "Wire an Order Specs and pick an event.";
-            container.style.opacity = ".6";
+            list.textContent = "Wire an Order Specs and pick an event.";
+            list.style.opacity = ".6";
             refit();
             return;
         }
-        container.style.opacity = "1";
+        list.style.opacity = "1";
         for (const a of assets) {
             const hidden = state.hidden.includes(a.assetName);
             const row = document.createElement("div");
@@ -487,7 +492,7 @@ function assetsPanel(node) {
                 });
                 row.appendChild(cells);
             }
-            container.appendChild(row);
+            list.appendChild(row);
         }
         refit();
     }
