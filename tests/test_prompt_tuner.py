@@ -304,11 +304,17 @@ def test_auto_stall_halts_then_recovers():
     # Save is fixed — not re-halt forever.
     state = {}
     served = {}
+    billed = 0
     for _ in range(20):
         state, served = _auto(state)       # no record() between serves
         if "halt" in served:
             break
+        billed += 1                        # each real serve bills the generator
     assert "halt" in served and "Save" in served["halt"]
+    # Pin the exact spend ceiling: at _MAX_UNCONSUMED_SERVES=3 the loop bills 3
+    # serves and halts on the 4th press. An off-by-one here is one wasted paid
+    # call per halt cycle, so assert the bound, not just "halts eventually".
+    assert billed == 3, f"stall guard billed {billed} serves before halting"
     assert state.get("unconsumed", 0) == 0, "the trip must reset the count"
 
     # Save is fixed; the next serve proceeds (no halt) and records.
