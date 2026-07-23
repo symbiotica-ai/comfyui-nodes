@@ -391,16 +391,22 @@ function assetsPanel(node) {
     stopWheel(container);
     const panelW = node.addDOMWidget("assets_panel", "sym_assets", container,
                                      { serialize: false, hideOnZoom: true });
-    // Fill the panel down to the bottom of the node instead of a fixed 320px
-    // box, so dragging the node taller grows the scroll area. Height = node
-    // height minus the title + the one visible widget (category) above it; the
-    // self-reference is a stable fixed point (min node size resolves to itself).
+    // Height fits the CONTENT — the selected event's asset rows — so the node
+    // auto-grows to fit the assets and shrinks for a smaller category, capped so
+    // a huge event scrolls instead of running off the canvas. NOT node.size[1]
+    // (self-referential — that grew the node to the bottom of the canvas).
+    const PANEL_MAX = 760;
     panelW.computeSize = function (width) {
-        const header = (window.LiteGraph?.NODE_TITLE_HEIGHT ?? 30) + 34;
-        return [width, Math.max(140, (node.size?.[1] ?? 0) - header)];
+        const h = container.scrollHeight;
+        return [width, Math.min(Math.max(h ? h + 6 : 44, 44), PANEL_MAX)];
     };
+    // Re-fit the node to the new content after each render (scrollHeight is only
+    // valid once the rows are in the DOM).
+    const refit = () => requestAnimationFrame(() => {
+        node.setSize?.([node.size[0], node.computeSize()[1]]);
+        node.setDirtyCanvas?.(true, true);
+    });
     node.size[0] = Math.max(node.size[0], 320);
-    node.size[1] = Math.max(node.size[1], 420);
 
     const save = () => {
         if (ovW) ovW.value = JSON.stringify(state);
@@ -414,6 +420,7 @@ function assetsPanel(node) {
         if (!assets.length) {
             container.textContent = "Wire an Order Specs and pick an event.";
             container.style.opacity = ".6";
+            refit();
             return;
         }
         container.style.opacity = "1";
@@ -482,6 +489,7 @@ function assetsPanel(node) {
             }
             container.appendChild(row);
         }
+        refit();
     }
 
     // Re-render when the category changes.
