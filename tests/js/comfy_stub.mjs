@@ -37,6 +37,7 @@ globalThis.document = {
     addEventListener() {},
 };
 globalThis.window = { addEventListener() {}, devicePixelRatio: 1 };
+globalThis.requestAnimationFrame = (cb) => cb();
 
 // --- api ---------------------------------------------------------------------
 export const api = {
