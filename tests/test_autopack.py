@@ -370,6 +370,18 @@ def test_autopack_mini2_combined_refs_together_split_singles(tmp_path):
     assert {r["name"] for r in c512["regions"]} == {"Bone Rose", "Mad Baker"}
 
 
+def test_autopack_padding_spaces_mirror_cells(tmp_path):
+    # padding puts a gap between an asset and its mirror cell (was hardcoded 0).
+    a = _variant("Stall", ("s0.png",), "2", canvas="128x128")  # 1 ref → pair
+    root = _make_refs(tmp_path, [a])
+    out = autopack_order([a], root, sheet_w=1000, sheet_h=1000,
+                         combined_sheet=True, split_variants=False, padding=40)
+    ms = out[0]["regions"][0]["members"]
+    assert len(ms) == 2
+    gap_px = (ms[1]["x"] - (ms[0]["x"] + ms[0]["w"])) * 1000
+    assert round(gap_px) == 40
+
+
 def test_autopack_distribute_by_folder_stacks_categories(tmp_path):
     # distribute_by_folder=True lays each category's strip on its own row —
     # accepted as a keyword and drives the pack without error.
