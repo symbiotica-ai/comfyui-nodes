@@ -179,17 +179,16 @@ def test_autopack_split_variants_mirrors_rotation2(tmp_path):
         assert len(ms) == 2 and ms[1].get("flipX") is True
 
 
-def test_autopack_split_skips_single_ref_no_duplicate(tmp_path):
-    # A 1-ref variant asset has nothing to split — it must NOT get a redundant
-    # variant sheet (was duplicating the combined sheet). combined keeps it once.
+def test_autopack_split_includes_single_ref_variant(tmp_path):
+    # A 1-ref variant now gets its own split sheet (ref + flip) — the per-item
+    # deliverable — separate from the combined sheet that groups it.
     single = _variant("Solo", ("s0.png",), "2")
     root = _make_refs(tmp_path, [single])
-    with pytest.raises(ValueError):  # split-only: nothing to split
-        autopack_order([single], root, sheet_w=1024, sheet_h=1024,
-                       combined_sheet=False, split_variants=True)
     out = autopack_order([single], root, sheet_w=1024, sheet_h=1024,
-                         combined_sheet=True, split_variants=True)
-    assert len(out) == 1  # combined only, no duplicate variant sheet
+                         combined_sheet=False, split_variants=True)
+    assert [o["name"] for o in out] == ["order-solo-v1"]
+    ms = out[0]["regions"][0]["members"]
+    assert len(ms) == 2 and ms[1].get("flipX") is True   # ref + horizontal flip
 
 
 def test_autopack_split_variants_rotation4_no_mirror(tmp_path):
@@ -257,19 +256,35 @@ def test_autopack_split_skips_food_rotation_dash(tmp_path):
                        combined_sheet=False, split_variants=True)
 
 
-def test_autopack_combined_variant_paginated_by_ref(tmp_path):
-    # Two 2-ref rotation-2 decorations, same canvas → the combined sheet splits
-    # BY reference index: sheet v1 = each asset's ref1, v2 = each asset's ref2.
+def test_autopack_combined_variant_keeps_asset_refs_together(tmp_path):
+    # Two 2-ref rotation-2 decorations, same canvas → the combined sheet keeps
+    # each asset's refs together (no per-ref v1/v2 split). At max_rows=4 all four
+    # mirror-pair units land on ONE sheet, in asset order.
     a = _variant("GBQ", ("g0.png", "g1.png"), "2", canvas="512x512")
     b = _variant("WCT", ("w0.png", "w1.png"), "2", canvas="512x512")
     root = _make_refs(tmp_path, [a, b])
     out = autopack_order([a, b], root, sheet_w=1024, sheet_h=1024,
+                         columns=1, max_rows=4,
                          combined_sheet=True, split_variants=False)
-    assert [o["name"] for o in out] == ["order-decoration-v1",
-                                        "order-decoration-v2"]
-    for o in out:  # 2 assets' k-th ref, each a rotation-2 mirror pair
-        assert len(o["regions"]) == 2
-        assert len(o["regions"][0]["members"]) == 2
+    assert [o["name"] for o in out] == ["order-decoration"]
+    regs = out[0]["regions"]
+    assert [r["name"] for r in regs] == ["GBQ", "GBQ", "WCT", "WCT"]
+    assert all(len(r["members"]) == 2 for r in regs)   # each a mirror pair
+
+
+def test_autopack_combined_variant_paginates_by_max_rows(tmp_path):
+    # max_rows now controls pagination: 2 assets x 2 refs at max_rows=2 → two
+    # sheets, each keeping one asset's two refs together.
+    a = _variant("GBQ", ("g0.png", "g1.png"), "2", canvas="512x512")
+    b = _variant("WCT", ("w0.png", "w1.png"), "2", canvas="512x512")
+    root = _make_refs(tmp_path, [a, b])
+    out = autopack_order([a, b], root, sheet_w=1024, sheet_h=1024,
+                         columns=1, max_rows=2,
+                         combined_sheet=True, split_variants=False)
+    assert [o["name"] for o in out] == ["order-decoration-1",
+                                        "order-decoration-2"]
+    assert [r["name"] for r in out[0]["regions"]] == ["GBQ", "GBQ"]
+    assert [r["name"] for r in out[1]["regions"]] == ["WCT", "WCT"]
 
 
 def test_autopack_combined_mixed_group_keeps_pair(tmp_path):
@@ -281,14 +296,16 @@ def test_autopack_combined_mixed_group_keeps_pair(tmp_path):
     four = _variant("Sign", ("d0.png", "d1.png"), "4")
     root = _make_refs(tmp_path, [variant, plain, four])
     out = autopack_order([variant, plain, four], root,
-                         sheet_w=2048, sheet_h=2048,
+                         sheet_w=2048, sheet_h=2048, columns=1, max_rows=8,
                          combined_sheet=True, split_variants=False)
-    v1 = next(o for o in out if o["name"].endswith("-v1"))
-    members = {r["name"]: r["members"] for r in v1["regions"]}
-    assert len(members["Lamp"]) == 2                    # pair kept
-    assert members["Lamp"][1].get("flipX") is True
-    assert len(members["Stall"]) == 2                   # rotation-2 mirrors
-    assert len(members["Sign"]) == 1                    # rotation-4: no mirror
+    assert [o["name"] for o in out] == ["order-decoration"]  # all units, 1 sheet
+    by_name = {}
+    for r in out[0]["regions"]:
+        by_name.setdefault(r["name"], []).append(r["members"])
+    assert len(by_name["Lamp"][0]) == 2                      # pair kept
+    assert by_name["Lamp"][0][1].get("flipX") is True
+    assert all(len(m) == 2 for m in by_name["Stall"])        # rotation-2 mirrors
+    assert all(len(m) == 1 for m in by_name["Sign"])         # rotation-4: no mirror
 
 
 def test_autopack_combined_food_stays_whole(tmp_path):
@@ -306,10 +323,41 @@ def test_autopack_combined_and_split_together(tmp_path):
     a = _variant("Stall", ("s0.png", "s1.png"), "2")
     root = _make_refs(tmp_path, [a])
     names = [o["name"] for o in autopack_order(
-        [a], root, sheet_w=1024, sheet_h=1024,
+        [a], root, sheet_w=1024, sheet_h=1024, columns=1, max_rows=4,
         combined_sheet=True, split_variants=True)]
-    assert "order-decoration-v1" in names and "order-decoration-v2" in names
+    assert "order-decoration" in names               # both refs, one sheet
     assert "order-stall-v1" in names and "order-stall-v2" in names
+    assert len(names) == 3
+
+
+def test_autopack_mini2_combined_refs_together_split_singles(tmp_path):
+    # Real Mini 2 shape: one 256 decoration with 2 refs + two 512 decorations
+    # with 1 ref each, all rotation 2.
+    #   combined  -> the 256's two refs TOGETHER on one sheet (not split per
+    #                ref), and the two 512s together on one sheet.
+    #   split     -> one ref+flip sheet per ref of EVERY variant asset, the
+    #                single-ref 512s included.
+    bc = _variant("Black Cat", ("bc0.png", "bc1.png"), "2", canvas="256x256")
+    bone = _variant("Bone Rose", ("bo0.png",), "2", canvas="512x512")
+    mad = _variant("Mad Baker", ("md0.png",), "2", canvas="512x512")
+    root = _make_refs(tmp_path, [bc, bone, mad])
+    out = autopack_order([bc, bone, mad], root, sheet_w=1328, sheet_h=1328,
+                         columns=1, max_rows=4, category="Decoration",
+                         combined_sheet=True, split_variants=True)
+    names = [o["name"] for o in out]
+    assert len(out) == 6
+    # combined: canvas is in the name because Decoration spans 256 and 512
+    assert "order-decoration-256x256" in names
+    assert "order-decoration-512x512" in names
+    # split: every variant ref its own ref+flip sheet, single-ref included
+    assert "order-black-cat-v1" in names and "order-black-cat-v2" in names
+    assert "order-bone-rose-v1" in names
+    assert "order-mad-baker-v1" in names
+    c256 = next(o for o in out if o["name"] == "order-decoration-256x256")
+    assert len(c256["regions"]) == 2                    # both refs, together
+    assert all(len(r["members"]) == 2 for r in c256["regions"])  # each a pair
+    c512 = next(o for o in out if o["name"] == "order-decoration-512x512")
+    assert {r["name"] for r in c512["regions"]} == {"Bone Rose", "Mad Baker"}
 
 
 def test_autopack_distribute_by_folder_stacks_categories(tmp_path):

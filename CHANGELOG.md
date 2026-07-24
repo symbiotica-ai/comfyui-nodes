@@ -6,6 +6,24 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.10
+
+Auto Packer combined/split variant fixes. **Output/naming change:** combined
+variant sheets are named differently (see below); no node inputs/outputs/ids
+changed.
+
+### Fixed
+- **Combined sheets** no longer split a single directional asset's references
+  across separate `-v1`/`-v2` sheets. Every reference becomes its own mirror-pair
+  region, and a `(category, canvas)` group's regions now paginate by
+  `max_rows_per_sheet` — so an asset's refs stay together on one sheet when they
+  fit (e.g. a 256 decoration with 2 refs → one combined sheet, both refs). This
+  renames combined variant sheets from `<base>-<cat>-v<k>` to
+  `<base>-<cat>[-<canvas>][-<page>]`.
+- **Split variants** now emits a sheet for a *single-reference* directional
+  asset too (its one ref + horizontal flip), not only 2+ ref assets — so every
+  directional item gets its per-item ref+flip sheet.
+
 ## 2026.7.9
 
 Template Library — save an Auto Packer setup once and reload it after a restart.
