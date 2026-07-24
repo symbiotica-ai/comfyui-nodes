@@ -430,9 +430,12 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
                                  tooltip="Lay each asset type's strip on its own "
                                          "row (the editor default)"),
                 io.Int.Input("padding", default=0, min=0, max=512,
-                             tooltip="Gap between packed strips (px)"),
+                             tooltip="Gap between packed strips AND between an "
+                                     "asset and its mirror cell (px)"),
                 io.Int.Input("border", default=0, min=0, max=512,
-                             tooltip="Margin around the packed block (px)"),
+                             tooltip="Draw an outline box this many px thick "
+                                     "around each icon cell (the asset and its "
+                                     "mirror each get a box). 0 = no box."),
                 io.Boolean.Input("combined_sheet", default=True,
                                  tooltip="Emit the grouped, paginated sheets "
                                          "(the normal output). Off = only the "

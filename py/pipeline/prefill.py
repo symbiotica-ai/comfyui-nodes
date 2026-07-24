@@ -9,15 +9,17 @@ from .order_sheet import canvas_spec_of
 from .texture_pack import PackSettings, pack
 
 PAD_PX = 16
-# Gap between the CELLS of one region: zero — a pair region is exactly
-# cell+cell (256x256 + 256x256), so its crop is the native sprite resolution.
+# Default gap between the CELLS of one region: zero — a pair region is then
+# exactly cell+cell (256x256 + 256x256), its crop the native sprite resolution.
+# settings.padding overrides it (space between an asset and its mirror).
 CELL_GAP = 0
 FALLBACK_CELL = 256
 # Margin left around the block when scaling it to fill the sheet width (fit_width).
 FIT_PAD_PX = 5
 
 
-def _fit_width_stack(rows: list[dict], sheet_w: int, sheet_h: int) -> list[dict]:
+def _fit_width_stack(rows: list[dict], sheet_w: int, sheet_h: int,
+                     cell_gap: float = CELL_GAP) -> list[dict]:
     """fit_width layout: ONE region per row, stacked top to bottom, every row
     scaled by the SAME factor — the largest that lets the widest row fill the
     sheet width (FIT_PAD_PX margin) while the whole stack still fits the height.
@@ -29,7 +31,7 @@ def _fit_width_stack(rows: list[dict], sheet_w: int, sheet_h: int) -> list[dict]
     empty — nothing left to scale into)."""
     if not rows:
         return []
-    widest = max(_row_w(r) for r in rows) or 1
+    widest = max(_row_w(r, cell_gap) for r in rows) or 1
     total_h = sum(r["cellH"] for r in rows) or 1
     m = FIT_PAD_PX
     s = min((sheet_w - 2 * m) / widest,
@@ -41,8 +43,8 @@ def _fit_width_stack(rows: list[dict], sheet_w: int, sheet_h: int) -> list[dict]
     y_px = gap
     for i, row in enumerate(rows):
         srow = {**row, "cellW": row["cellW"] * s, "cellH": row["cellH"] * s}
-        x_px = max(0, (sheet_w - _row_w(srow)) / 2)
-        region = _region_at(srow, x_px, y_px, sheet_w, sheet_h)
+        x_px = max(0, (sheet_w - _row_w(srow, cell_gap)) / 2)
+        region = _region_at(srow, x_px, y_px, sheet_w, sheet_h, cell_gap)
         region["zIndex"] = i
         regions.append(region)
         y_px += srow["cellH"] + gap
@@ -53,12 +55,13 @@ def _cell_count(row: dict) -> int:
     return 2 if row["flip"] else len(row["paths"])
 
 
-def _row_w(row: dict) -> float:
+def _row_w(row: dict, cell_gap: float = CELL_GAP) -> float:
     n = _cell_count(row)
-    return n * row["cellW"] + (n - 1) * CELL_GAP
+    return n * row["cellW"] + (n - 1) * cell_gap
 
 
-def _region_at(row: dict, x_px: float, y_px: float, sheet_w: int, sheet_h: int) -> dict:
+def _region_at(row: dict, x_px: float, y_px: float, sheet_w: int, sheet_h: int,
+               cell_gap: float = CELL_GAP) -> dict:
     cell_paths = [row["paths"][0], row["paths"][0]] if row["flip"] else row["paths"]
     x = x_px
     members = []
@@ -68,7 +71,7 @@ def _region_at(row: dict, x_px: float, y_px: float, sheet_w: int, sheet_h: int) 
         if row["flip"] and i == 1:
             m["flipX"] = True
         members.append(m)
-        x += row["cellW"] + CELL_GAP
+        x += row["cellW"] + cell_gap
     x0 = members[0]["x"]
     last = members[-1]
     return {
@@ -150,10 +153,14 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
     if not rows:
         return {"regions": [], "overflow": []}
 
+    # Gap between the cells of a region (an asset and its mirror) = the pack
+    # padding, so 'padding' spaces mirrored cells as well as packed strips.
+    cg = int(getattr(settings, "padding", 0) or 0) if settings is not None else 0
+
     if settings is not None and settings.fit_width:
         # fit_width owns the layout: one row per asset, each scaled up to fill
         # (no side-by-side packing to defeat the scale).
-        return {"regions": _fit_width_stack(rows, sheet_w, sheet_h),
+        return {"regions": _fit_width_stack(rows, sheet_w, sheet_h, cg),
                 "overflow": []}
 
     if settings is not None:
@@ -162,7 +169,7 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
             "id": r["asset"]["assetName"],
             "name": r["asset"]["assetName"],
             "path": f"{r['asset']['category']}/{r['asset']['assetName']}",
-            "width": _row_w(r),
+            "width": _row_w(r, cg),
             "height": r["cellH"],
         } for r in rows]
         result = pack(pseudo, replace(settings, preset=None, max_width=sheet_w,
@@ -172,7 +179,8 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
         for p in result["placed"]:
             row = by_name.get(p["id"])
             if row:
-                regions.append(_region_at(row, p["x"], p["y"], sheet_w, sheet_h))
+                regions.append(
+                    _region_at(row, p["x"], p["y"], sheet_w, sheet_h, cg))
         overflow = []
         y_px = (max((r["y"] + r["h"]) * sheet_h for r in regions) + PAD_PX
                 if regions else PAD_PX)
@@ -183,7 +191,7 @@ def prefill_regions(order_assets: list[dict], sheet_w: int, sheet_h: int,
             overflow.append(row["asset"]["assetName"])
             # floor at 0 — oversized strips clamp to the top edge instead of going out of bounds
             y = max(0, min(y_px, sheet_h - row["cellH"]))
-            regions.append(_region_at(row, PAD_PX, y, sheet_w, sheet_h))
+            regions.append(_region_at(row, PAD_PX, y, sheet_w, sheet_h, cg))
             y_px = y + row["cellH"] + PAD_PX
         _center_block(regions)
         regions.sort(key=lambda r: (r["y"], r["x"]))

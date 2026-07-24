@@ -6,7 +6,7 @@ import json
 import os
 import re
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from .order_sheet import slugify
 from .prefill import prefill_regions
@@ -231,16 +231,56 @@ def _draw_task_refs(sheet: Image.Image, regions: list[dict], refs_root: str,
             _composite_member(sheet, img, member, sheet_w, sheet_h, flip)
 
 
+def _box_color(background: str) -> tuple[int, int, int, int]:
+    """A frame color that reads against the sheet background: a dark line on a
+    light sheet, a light line on a dark (or empty/transparent) one."""
+    bg = (background or "").lstrip("#")
+    try:
+        r, g, b = (int(bg[i:i + 2], 16) for i in (0, 2, 4))
+        lum = 0.299 * r + 0.587 * g + 0.114 * b
+    except (ValueError, IndexError):
+        lum = 0  # empty/transparent → treat as dark → light frame
+    # Midpoint threshold (127.5) so mid-gray #808080 — whose float luminance is
+    # 127.999… — reads as light and gets a dark frame.
+    return (30, 30, 30, 255) if lum >= 127.5 else (220, 220, 220, 255)
+
+
+def _draw_cell_boxes(sheet: Image.Image, regions: list[dict], sheet_w: int,
+                     sheet_h: int, border: int, background: str) -> None:
+    """Outline each icon cell (an asset and, separately, its mirror) with a
+    `border`-px frame — so every icon reads as an icon inside a box. The cell's
+    contain-fit letterbox is the margin between the art and the frame."""
+    draw = ImageDraw.Draw(sheet)
+    color = _box_color(background)
+    for region in regions:
+        for m in region.get("members", []):
+            x0 = round(m["x"] * sheet_w)
+            y0 = round(m["y"] * sheet_h)
+            x1 = round((m["x"] + m["w"]) * sheet_w) - 1
+            y1 = round((m["y"] + m["h"]) * sheet_h) - 1
+            # Keep the whole stroke on the sheet (width grows the box inward).
+            x0 = max(0, x0)
+            y0 = max(0, y0)
+            x1 = min(sheet_w - 1, x1)
+            y1 = min(sheet_h - 1, y1)
+            if x1 > x0 and y1 > y0:
+                draw.rectangle([x0, y0, x1, y1], outline=color, width=border)
+
+
 def build_prefill_sheet(assets: list[dict], refs_root: str, sheet_w: int,
                         sheet_h: int, settings: PackSettings, chosen=None,
                         scales=None):
     """Prefill-from-specs sheet: regions via prefill_regions, each member cell
     drawing its reference image contain-fit (flipX mirrors the single-ref pair).
-    Returns (PIL.Image, regions, overflow_names)."""
+    A positive settings.border frames each cell. Returns (PIL.Image, regions,
+    overflow_names)."""
     result = prefill_regions(assets, sheet_w, sheet_h, chosen=chosen,
                              settings=settings, scales=scales)
     sheet = _paint_background(sheet_w, sheet_h, settings.background)
     _draw_task_refs(sheet, result["regions"], refs_root, sheet_w, sheet_h)
+    if getattr(settings, "border", 0) and settings.border > 0:
+        _draw_cell_boxes(sheet, result["regions"], sheet_w, sheet_h,
+                         int(settings.border), settings.background)
     return sheet, result["regions"], result["overflow"]
 
 

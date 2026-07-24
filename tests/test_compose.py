@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from pipeline.compose import (
+    _box_color,
     build_catalog_sheet,
     build_prefill_sheet,
     category_candidates,
@@ -97,6 +98,46 @@ def test_build_prefill_sheet_draws_refs(tmp_path):
     # Outside any region: background gray. (The packed strip sits at the top
     # of the sheet and the upscaled ref fills its cell, so sample well below.)
     assert img.getpixel((5, 500))[:3] == (128, 128, 128)
+
+
+def test_box_color_contrasts_background():
+    assert _box_color("#808080")[:3] == (30, 30, 30)     # light sheet → dark box
+    assert _box_color("#000000")[:3] == (220, 220, 220)  # dark sheet → light box
+    assert _box_color("")[:3] == (220, 220, 220)         # transparent → light box
+
+
+def test_build_prefill_sheet_border_frames_each_cell(tmp_path):
+    refs = tmp_path / "refs"
+    make_png(str(refs / "Cart.png"), (128, 128), (0, 255, 0))  # fills the cell
+    assets = [{"assetName": "Cart", "category": "Decoration", "canvas": "128x128",
+               "prompt": "p", "refFiles": ["Cart.png"]}]
+    settings = PackSettings(preset=None, max_width=512, max_height=512,
+                            background="#808080", border=6)
+    img, regions, overflow = build_prefill_sheet(assets, str(refs), 512, 512,
+                                                 settings)
+    m = regions[0]["members"][0]
+    x0 = round(m["x"] * 512)
+    cy = int((m["y"] + m["h"] / 2) * 512)
+    # A few px inside the cell's left edge sits under the 6px frame → box color,
+    # drawn OVER the green ref that fills the cell.
+    assert img.getpixel((x0 + 2, cy))[:3] == (30, 30, 30)
+    # The cell center is still the green ref.
+    cx = int((m["x"] + m["w"] / 2) * 512)
+    assert img.getpixel((cx, cy))[:3] == (0, 255, 0)
+
+
+def test_build_prefill_sheet_no_border_no_box(tmp_path):
+    refs = tmp_path / "refs"
+    make_png(str(refs / "Cart.png"), (128, 128), (0, 255, 0))
+    assets = [{"assetName": "Cart", "category": "Decoration", "canvas": "128x128",
+               "prompt": "p", "refFiles": ["Cart.png"]}]
+    settings = PackSettings(preset=None, max_width=512, max_height=512,
+                            background="#808080", border=0)
+    img, regions, _ = build_prefill_sheet(assets, str(refs), 512, 512, settings)
+    m = regions[0]["members"][0]
+    x0 = round(m["x"] * 512)
+    cy = int((m["y"] + m["h"] / 2) * 512)
+    assert img.getpixel((x0 + 2, cy))[:3] == (0, 255, 0)  # no frame → still green
 
 
 def test_build_prefill_sheet_upscales_ref_to_fill_cell(tmp_path):
