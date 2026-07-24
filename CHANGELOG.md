@@ -6,6 +6,15 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.13
+
+### Fixed
+- **Template Library `sheets`/`sheet_prompts` no longer crash a downstream
+  Preview / Show Text when nothing is checked.** An empty output list made
+  ComfyUI do `v[-1]` on `[]` → `IndexError`. Now the outputs fall back to the
+  `use`-selected template when no box is ticked, and never emit an empty list
+  (a small placeholder tile + hint prompt when nothing is checked or selected).
+
 ## 2026.7.12
 
 Per-size Auto Packer scaling. **Input change:** the Auto Packer Settings node's
