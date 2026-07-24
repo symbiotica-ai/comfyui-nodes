@@ -84,14 +84,15 @@ def _variant_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
                     base_name, category, cap=3):
     """One sheet per variant ref (up to `cap`) for each variant asset: a
     rotation=2 asset mirrors each ref (ref + horizontal flip); rotation=4 draws
-    the single ref (a flip can't stand in for 4 directions). Food is skipped.
+    the single ref (a flip can't stand in for 4 directions). Food (rotation '-')
+    is skipped.
 
-    Only assets with 2+ references are split — a single-ref asset has one
-    variant, nothing to separate, so it stays in the combined sheet instead of
-    producing a redundant duplicate sheet."""
+    A single-ref variant still gets its own sheet (its one ref + flip) — the
+    per-item deliverable — separate from the combined sheet that groups it with
+    the rest of its (category, canvas). Only a truly ref-less asset is skipped."""
     out = []
     for a in assets:
-        if len(a.get("refFiles") or []) < 2 or not _is_variant(a):
+        if not _is_variant(a) or not (a.get("refFiles") or []):
             continue
         if category != "All" and a.get("category") != category:
             continue
@@ -116,11 +117,13 @@ def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
                      base_name, category, columns, max_rows):
     """The grouped 'combined' sheets, one (category, canvas) group at a time.
 
-    A VARIANT group (directional decorations, rotation 2/4) is paginated BY
-    reference index — sheet v1 gathers every asset's 1st ref, v2 the 2nd, and
-    so on (rotation-2 refs drawn as their left/right mirror pair). A STAGE group
-    (food, rotation '-') keeps each recipe's stages together in one region, many
-    assets packed per sheet. Both paginate to columns x max_rows per sheet."""
+    A VARIANT group (directional decorations, rotation 2/4): every reference of
+    every asset becomes its own single-ref mirror-pair region (rotation 2 = ref
+    + horizontal flip; rotation >= 3 = the single ref). Those units flatten in
+    asset order and paginate by columns x max_rows, so ONE asset's refs stay
+    together on a sheet when they fit — they are no longer split across per-ref
+    sheets. A STAGE group (food, rotation '-') keeps each recipe's stages
+    together in one region, many assets packed per sheet."""
     per_sheet = max(1, int(columns)) * max(1, int(max_rows))
     groups: dict[tuple[str, str], list[dict]] = {}
     for a in assets:
@@ -149,13 +152,12 @@ def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
     out = []
     for (cat, canvas), group in groups.items():
         if any(_is_variant(a) for a in group):
-            max_refs = max(len(a["refFiles"]) for a in group)
-            for k in range(1, max_refs + 1):
-                variant_assets = []
-                for a in group:
-                    if len(a["refFiles"]) < k:
-                        continue
-                    synth = {**a, "refFiles": [a["refFiles"][k - 1]]}
+            # One single-ref region per reference, kept in asset order so an
+            # asset's refs stay adjacent; paginate the flat list by max_rows.
+            units = []
+            for a in group:
+                for ref in a["refFiles"]:
+                    synth = {**a, "refFiles": [ref]}
                     # Suppress the single-ref mirror only for true multi-
                     # direction variants (rotation >= 3, where a flip can't
                     # stand in). Rotation-2 mirrors; a NON-variant asset that
@@ -164,12 +166,12 @@ def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
                     rot = str(a.get("rotation", "")).strip()
                     if rot.isdigit() and int(rot) >= 3:
                         synth["noMirror"] = True
-                    variant_assets.append(synth)
-                pages = [variant_assets[i:i + per_sheet]
-                         for i in range(0, len(variant_assets), per_sheet)]
-                for pi, page in enumerate(pages, 1):
-                    suffix = f"-v{k}" + (f"-{pi}" if len(pages) > 1 else "")
-                    emit(cat, canvas, page, suffix, out)
+                    units.append(synth)
+            pages = [units[i:i + per_sheet]
+                     for i in range(0, len(units), per_sheet)]
+            for pi, page in enumerate(pages, 1):
+                suffix = f"-{pi}" if len(pages) > 1 else ""
+                emit(cat, canvas, page, suffix, out)
         else:
             pages = [group[i:i + per_sheet]
                      for i in range(0, len(group), per_sheet)]
