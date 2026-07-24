@@ -6,6 +6,24 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.11
+
+Template Library now carries settings on load and can output saved sheets
+directly. **Input/output change (backward compatible):** the Template Library
+node gains a `checked` input and two outputs (`sheets`, `sheet_prompts`); the
+existing `template` output is unchanged (still slot 0).
+
+### Added
+- **Template Library → `sheets` / `sheet_prompts` outputs** + a per-row
+  checkbox. Check any templates to stream their *saved* sheets and client
+  prompts straight out — no re-render through the Auto Packer. Prompts are now
+  stored in `template.json` at save time (older templates emit empty prompts
+  until re-saved).
+- **Selecting a template now loads its Model Preset + Pack Settings** onto the
+  Auto Packer's wired Preset / Settings nodes (reverse-mapped from the saved
+  recipe), so those nodes show — and the pack uses — the values the template was
+  saved with. Previously a wired Settings node silently overrode the template.
+
 ## 2026.7.10
 
 Auto Packer combined/split variant fixes. **Output/naming change:** combined

@@ -5,6 +5,7 @@ import json
 from PIL import Image
 
 from pipeline.pack_library import (
+    collect_checked,
     delete_pack_template,
     delete_pack_template_dirs,
     list_pack_templates,
@@ -190,6 +191,32 @@ def test_load_dirs_falls_back_to_output(tmp_path):
     # project dir has nothing → falls through to output/templates
     assert load_pack_template_dirs([project, out], "orphan") is not None
     assert load_pack_template_dirs([project, out], "missing") is None
+
+
+def test_collect_checked_pairs_sheets_with_prompts(tmp_path):
+    base = str(tmp_path / "templates")
+    write_pack_template(base, "t", [_img(), _img()],
+                        _sidecar(sheetPrompts=["p0", "p1"]))
+    pairs = collect_checked([base], ["t"])
+    assert [pr for _, pr in pairs] == ["p0", "p1"]
+    assert all(path.endswith(".png") for path, _ in pairs)
+
+
+def test_collect_checked_skips_unknown_and_missing_prompts(tmp_path):
+    base = str(tmp_path / "templates")
+    write_pack_template(base, "noprompts", [_img()], _sidecar())  # no sheetPrompts
+    pairs = collect_checked([base], ["noprompts", "ghost"])   # ghost = unknown
+    assert len(pairs) == 1
+    assert pairs[0][1] == ""                                   # missing → ""
+
+
+def test_collect_checked_multiple_templates_in_order(tmp_path):
+    base = str(tmp_path / "templates")
+    write_pack_template(base, "a", [_img()], _sidecar(sheetPrompts=["pa"]))
+    write_pack_template(base, "b", [_img(), _img()],
+                        _sidecar(sheetPrompts=["pb0", "pb1"]))
+    pairs = collect_checked([base], ["a", "b"])
+    assert [pr for _, pr in pairs] == ["pa", "pb0", "pb1"]
 
 
 def test_delete_dirs_removes_from_all(tmp_path):

@@ -632,6 +632,9 @@ class SymbioticaAutoPacker(io.ComfyNode):
             "category": category,
             "overrides": overrides if isinstance(overrides, dict) else {},
             "sheetNames": [p.get("name", "") for p in packed],
+            # Saved so the Template Library can re-emit each sheet's client
+            # prompts without re-packing (index-aligned with sheets/sheetNames).
+            "sheetPrompts": [p.get("prompts", "") for p in packed],
         }
         images = [p["image"] for p in packed]
         try:
@@ -662,20 +665,33 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
             display_name="Symbiotica Template Library",
             category="symbiotica/pipeline",
             description="Browse the Auto Packer templates saved for a project "
-                        "(as folders, with sheet thumbnails) and output one — "
-                        "its full recipe: the order, model preset, pack "
-                        "settings, and per-asset overrides. Wire 'template' "
-                        "into the Auto Packer to re-pack or edit a saved setup "
-                        "without rebuilding it every restart.",
+                        "(as folders, with sheet thumbnails). 'use' one → its "
+                        "full recipe on 'template' (wire into the Auto Packer to "
+                        "re-pack or edit). CHECK any → their saved sheets + "
+                        "prompts stream out of 'sheets'/'sheet_prompts' with no "
+                        "re-render.",
             inputs=[
                 io.String.Input("project_path", default="",
                                 tooltip="The client project folder — its "
                                         "templates/ subfolder is browsed"),
                 io.String.Input("selected", default="",
-                                tooltip="Which saved template to output — set "
-                                        "from the node's folder browser"),
+                                tooltip="Which saved template to output as a "
+                                        "recipe — set by the browser's 'use'"),
+                io.String.Input("checked", default="[]",
+                                tooltip="Templates whose saved sheets/prompts to "
+                                        "emit — JSON list, set by the browser's "
+                                        "checkboxes"),
             ],
-            outputs=[PackTemplateWire.Output(display_name="template")],
+            outputs=[
+                PackTemplateWire.Output(display_name="template"),
+                io.Image.Output(display_name="sheets", is_output_list=True,
+                                tooltip="Saved sheets of the CHECKED templates "
+                                        "(no re-render)"),
+                io.String.Output(display_name="sheet_prompts",
+                                 is_output_list=True,
+                                 tooltip="Client prompts index-aligned with "
+                                         "sheets"),
+            ],
         )
 
     _NEUTRAL = {"order": {}, "preset": {}, "settings": {}, "category": "",
@@ -690,35 +706,49 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
         return [d for d in (templates_dir(project_path), out) if d]
 
     @classmethod
-    def execute(cls, project_path="", selected="") -> io.NodeOutput:
-        from .pack_library import load_pack_template_dirs
+    def execute(cls, project_path="", selected="", checked="[]") -> io.NodeOutput:
+        from .pack_library import (collect_checked, load_pack_template_dirs)
         dirs = cls._dirs(project_path)
         for d in dirs:
             _register_refs_root(d)
-        if not (selected or "").strip():
-            # Nothing picked yet — a NEUTRAL bundle, not a raise: this node may be
-            # wired into an Auto Packer alongside a live Order Specs (the order
-            # wins), and raising here would kill the whole prompt before the
-            # packer runs. With no order wired the packer raises its own error.
-            return io.NodeOutput(dict(cls._NEUTRAL))
-        tpl = load_pack_template_dirs(dirs, selected)
-        if not tpl:
-            raise ValueError(
-                f"no saved template {selected!r} for this project — save one "
-                "from the Auto Packer first (\U0001f4be Save as template)")
-        order = tpl.get("order") or {}
-        # Register the frozen order's refs root so the Auto Packer's Assets-panel
-        # thumbnails serve when editing this template.
-        if order.get("refsRoot"):
-            _register_refs_root(order["refsRoot"])
-        return io.NodeOutput({
-            "order": order,
-            "preset": tpl.get("preset") or {},
-            "settings": tpl.get("settings") or {},
-            "category": tpl.get("category", "All"),
-            "overrides": tpl.get("overrides") or {},
-            "name": tpl.get("name", ""),
-        })
+        # (1) The recipe bundle for the single 'use'-selected template. Missing
+        # or unselected → a NEUTRAL bundle, never a raise: this node may sit
+        # beside a live Order Specs (the order wins), and it also drives the
+        # sheets output below — a raise would kill both.
+        bundle = dict(cls._NEUTRAL)
+        if (selected or "").strip():
+            tpl = load_pack_template_dirs(dirs, selected)
+            if tpl:
+                order = tpl.get("order") or {}
+                if order.get("refsRoot"):
+                    _register_refs_root(order["refsRoot"])
+                bundle = {
+                    "order": order,
+                    "preset": tpl.get("preset") or {},
+                    "settings": tpl.get("settings") or {},
+                    "category": tpl.get("category", "All"),
+                    "overrides": tpl.get("overrides") or {},
+                    "name": tpl.get("name", ""),
+                }
+        # (2) Saved sheets + prompts for the CHECKED templates — loaded from disk,
+        # no re-pack.
+        try:
+            names = json.loads(checked) if checked else []
+        except (ValueError, TypeError):
+            names = []
+        sheets, prompts = [], []
+        from PIL import Image
+        for path, prompt in collect_checked(dirs,
+                                             names if isinstance(names, list)
+                                             else []):
+            try:
+                with Image.open(path) as im:
+                    tensor = _pil_to_tensor(im.copy())
+            except (OSError, ValueError):
+                continue
+            sheets.append(tensor)
+            prompts.append(prompt)
+        return io.NodeOutput(bundle, sheets, prompts)
 
 
 class SymbioticaEventSpecs(io.ComfyNode):
