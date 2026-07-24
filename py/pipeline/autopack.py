@@ -183,20 +183,20 @@ def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
 
 def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
                    max_rows=4, background="#808080", category="All",
-                   base_name="order", scale=1.0, algorithm="shelf",
-                   distribute_by_folder=False, padding=0, border=0,
-                   scale_max_canvas=256, combined_sheet=True,
-                   split_variants=False, max_refs=None, fit_width=False):
+                   base_name="order", scale_target=0, scale_max=1.0,
+                   algorithm="shelf", distribute_by_folder=False, padding=0,
+                   border=0, combined_sheet=True, split_variants=False,
+                   max_refs=None, fit_width=False):
     """The whole order as ready-to-run sheets: plan_sheets chunks similar
     assets, each chunk is prefilled + drawn on its own sheet, and each
     sheet's client prompts come from the SAME chunk's regions — so item i
     of the images and item i of the prompts always describe each other.
 
-    The pack knobs (scale, algorithm, distribute_by_folder, padding, border)
-    mirror the Template Editor's Pack Settings so a wired Auto Packer Settings
-    node reproduces an editor sheet. `scale` enlarges a cell uniformly, but
-    only for assets whose canvas max edge is <= `scale_max_canvas` — small
-    sprites (food, 256 decorations) grow, already-large 512+ ones stay native.
+    Scaling is per-size: each sprite grows so its longest canvas edge reaches
+    ~`scale_target` px, but never more than `scale_max`x and never below 1x
+    (never shrink). So with target 512 + max 3x a 128 sprite scales 3x (capped),
+    a 256 scales 2x, a 512 stays native — small sprites grow more, and the cap
+    keeps a scaled sheet from overflowing. `scale_target=0` disables scaling.
 
     Two independent outputs: `combined_sheet` (the paginated grouped sheets —
     today's behavior) and `split_variants` (one mirrored sheet per variant ref
@@ -217,13 +217,30 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
                             max_width=sheet_w, max_height=sheet_h,
                             fit_width=bool(fit_width))
 
-    def _under_cutoff(a):
+    def _asset_scale(a):
+        # Grow the sprite so its longest edge reaches ~scale_target px, capped at
+        # scale_max, floored at 1x (never shrink). This makes a small sprite
+        # scale MORE than a large one, and the cap bounds the zoom so a scaled
+        # sheet can't overflow. scale_target=0 = scaling off.
+        if not scale_target:
+            return 1.0
         spec = canvas_spec_of(a.get("canvas", "")) or {}
-        return max(spec.get("w", 256), spec.get("h", 256)) <= scale_max_canvas
+        edge = max(spec.get("w", 0), spec.get("h", 0))
+        if edge <= 0:
+            return 1.0
+        return max(1.0, min(scale_target / edge, scale_max))
 
-    scales = ({a["assetName"]: scale for a in assets
-               if a.get("assetName") and _under_cutoff(a)} or None
-              if scale and scale != 1 else None)
+    scales = None
+    if scale_target:
+        scales = {}
+        for a in assets:
+            name = a.get("assetName")
+            if not name:
+                continue
+            factor = _asset_scale(a)
+            if factor > 1.0:
+                scales[name] = factor
+        scales = scales or None
     out = []
     if combined_sheet:
         out.extend(_combined_sheets(assets, refs_root, sheet_w, sheet_h,

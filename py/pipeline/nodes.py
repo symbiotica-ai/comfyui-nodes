@@ -402,22 +402,25 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
                         "sheet (e.g. recipes stacked per row at 2x scale). Wire "
                         "'settings' into the Auto Packer.",
             inputs=[
-                io.Combo.Input("scale",
-                               options=["0.5x", "1x", "2x", "3x", "4x",
-                                        "fit width"],
-                               default="1x",
-                               tooltip="Fixed enlargement of small sprites "
-                                       "(only assets at/under the cutoff grow), "
-                                       "or 'fit width' = auto-scale the whole "
-                                       "packed block to fill the sheet width "
-                                       "(5px margin), ignoring the cutoff."),
-                io.Combo.Input("scale_max_canvas",
-                               options=["128", "256", "512", "1024", "all"],
-                               default="256",
-                               tooltip="Only scale assets whose canvas max edge "
-                                       "is <= this (px) — the asset "
-                                       "resolutions. 256 = grow food/128/256, "
-                                       "leave 512+ native. 'all' = every size."),
+                io.Combo.Input("scale_target",
+                               options=["off", "256", "384", "512", "768",
+                                        "1024", "fit width"],
+                               default="off",
+                               tooltip="Grow each sprite so its longest edge "
+                                       "reaches ~this many px (capped by "
+                                       "scale_max, never shrinks) — small "
+                                       "sprites scale more than large ones. "
+                                       "'off' = native size. 'fit width' = "
+                                       "scale the whole packed block to fill "
+                                       "the sheet width (5px margin)."),
+                io.Combo.Input("scale_max",
+                               options=["2x", "3x", "4x", "6x", "8x"],
+                               default="3x",
+                               tooltip="Max zoom for the target above — a small "
+                                       "sprite never grows more than this, so a "
+                                       "scaled sheet can't overflow. e.g. target "
+                                       "512 + 3x → 128px:3x, 256px:2x, "
+                                       "512px:native."),
                 io.Combo.Input("algorithm",
                                options=["shelf", "maxrects", "grid"],
                                default="shelf",
@@ -450,21 +453,25 @@ class SymbioticaAutoPackerSettings(io.ComfyNode):
             outputs=[PackSettingsWire.Output(display_name="settings")],
         )
 
-    _SCALE = {"0.5x": 0.5, "1x": 1.0, "2x": 2.0, "3x": 3.0, "4x": 4.0}
+    _CAP = {"2x": 2.0, "3x": 3.0, "4x": 4.0, "6x": 6.0, "8x": 8.0}
 
     @classmethod
-    def execute(cls, scale="1x", scale_max_canvas="256", algorithm="shelf",
+    def execute(cls, scale_target="off", scale_max="3x", algorithm="shelf",
                 distribute_by_folder=True, padding=0, border=0,
                 combined_sheet=True, split_variants=False,
                 max_refs="all") -> io.NodeOutput:
-        cutoff = 10 ** 9 if scale_max_canvas == "all" else int(scale_max_canvas)
-        fit_width = scale == "fit width"
+        fit_width = scale_target == "fit width"
+        try:
+            # 0 = off or fit-width (a block-fit mode, not a per-asset target).
+            # int() guards a stale pre-target value from an old saved workflow.
+            target = 0 if scale_target in ("off", "fit width") \
+                else int(scale_target)
+        except (ValueError, TypeError):
+            target = 0
         return io.NodeOutput({
-            # 'fit width' is a block-fit mode, not a fixed factor: no per-asset
-            # scale, prefill scales the whole block to the sheet width instead.
-            "scale": 1.0 if fit_width else cls._SCALE.get(scale, 1.0),
+            "scale_target": target,
+            "scale_max": cls._CAP.get(scale_max, 3.0),
             "fit_width": fit_width,
-            "scale_max_canvas": cutoff,
             "algorithm": algorithm,
             "distribute_by_folder": bool(distribute_by_folder),
             "padding": int(padding),
@@ -570,8 +577,8 @@ class SymbioticaAutoPacker(io.ComfyNode):
             sheet_w=dims["w"], sheet_h=dims["h"], columns=columns,
             max_rows=max_rows_per_sheet, background=background,
             category=cfg["category"], base_name=base,
-            scale=s.get("scale", 1.0),
-            scale_max_canvas=s.get("scale_max_canvas", 256),
+            scale_target=s.get("scale_target", 0),
+            scale_max=s.get("scale_max", 1.0),
             algorithm=s.get("algorithm", "shelf"),
             distribute_by_folder=s.get("distribute_by_folder", False),
             padding=s.get("padding", 0), border=s.get("border", 0),
@@ -585,9 +592,9 @@ class SymbioticaAutoPacker(io.ComfyNode):
                           "columns": columns, "max_rows": max_rows_per_sheet,
                           "background": background}
             eff_settings = {
-                "scale": s.get("scale", 1.0),
+                "scale_target": s.get("scale_target", 0),
+                "scale_max": s.get("scale_max", 1.0),
                 "fit_width": s.get("fit_width", False),
-                "scale_max_canvas": s.get("scale_max_canvas", 256),
                 "algorithm": s.get("algorithm", "shelf"),
                 "distribute_by_folder": s.get("distribute_by_folder", False),
                 "padding": s.get("padding", 0), "border": s.get("border", 0),

@@ -6,6 +6,21 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.12
+
+Per-size Auto Packer scaling. **Input change:** the Auto Packer Settings node's
+`scale` and `scale_max_canvas` widgets are replaced by `scale_target` +
+`scale_max` (a stale saved value resets to default; no outputs or ids changed).
+
+### Changed
+- **Scaling is now per-size.** Each sprite grows so its longest canvas edge
+  reaches ~`scale_target` px, capped at `scale_max`× and never below 1× (never
+  shrinks). So `target 512, max 3×` gives a 128 sprite ×3 (capped), a 256 ×2, a
+  512 native — small sprites scale more than large ones, and the cap keeps a
+  scaled sheet from overflowing. Replaces the old single flat `scale` +
+  `scale_max_canvas` cutoff, which scaled every sub-cutoff size by the same
+  factor. `scale_target = off` disables scaling; `fit width` is unchanged.
+
 ## 2026.7.11
 
 Template Library now carries settings on load and can output saved sheets

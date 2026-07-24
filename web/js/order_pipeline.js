@@ -79,7 +79,7 @@ function setNodeWidget(node, name, val) {
     const w = node?.widgets?.find((x) => x.name === name);
     if (w && val !== undefined && val !== null) w.value = val;
 }
-const _SCALE_LABEL = { 0.5: "0.5x", 1: "1x", 2: "2x", 3: "3x", 4: "4x" };
+const _CAP_LABEL = { 2: "2x", 3: "3x", 4: "4x", 6: "6x", 8: "8x" };
 function applyPresetToNode(packer, preset) {
     if (!preset) return;
     const n = upstreamNode(packer, "preset");
@@ -96,10 +96,10 @@ function applySettingsToNode(packer, s) {
     if (!s) return;
     const n = upstreamNode(packer, "settings");
     if (n?.comfyClass !== "SymbioticaAutoPackerSettings") return;
-    setNodeWidget(n, "scale",
-                  s.fit_width ? "fit width" : (_SCALE_LABEL[s.scale] ?? "1x"));
-    setNodeWidget(n, "scale_max_canvas",
-                  s.scale_max_canvas >= 1e9 ? "all" : String(s.scale_max_canvas));
+    setNodeWidget(n, "scale_target",
+                  s.fit_width ? "fit width"
+                  : (!s.scale_target ? "off" : String(s.scale_target)));
+    setNodeWidget(n, "scale_max", _CAP_LABEL[s.scale_max] ?? "3x");
     setNodeWidget(n, "algorithm", s.algorithm);
     setNodeWidget(n, "distribute_by_folder", s.distribute_by_folder);
     setNodeWidget(n, "padding", s.padding);
@@ -1045,6 +1045,25 @@ app.registerExtension({
                     } catch { ovW.value = "{}"; }
                 }
                 queueMicrotask(() => this._symRenderAssets?.());
+            };
+        }
+
+        if (nodeData.name === "SymbioticaAutoPackerSettings") {
+            const origCfg = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                origCfg?.apply(this, arguments);
+                // Migrate pre-scale_target workflows: the `scale` /
+                // `scale_max_canvas` widgets were replaced by scale_target /
+                // scale_max, so a restored value ("3x"/"256") is no longer a
+                // valid option for its slot — reset those to the default.
+                const fix = (name, opts, def) => {
+                    const w = widgetOf(this, name);
+                    if (w && !opts.includes(w.value)) w.value = def;
+                };
+                fix("scale_target",
+                    ["off", "256", "384", "512", "768", "1024", "fit width"],
+                    "off");
+                fix("scale_max", ["2x", "3x", "4x", "6x", "8x"], "3x");
             };
         }
 
