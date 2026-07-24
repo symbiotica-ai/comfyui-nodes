@@ -149,6 +149,23 @@ def delete_pack_template_dirs(dirs, name) -> bool:
     return removed
 
 
+def collect_checked(dirs, names):
+    """(abs sheet path, prompt) pairs for every sheet of each checked template,
+    in template-then-sheet order — so the Template Library can output saved
+    sheets + prompts directly, no re-render. Prompts come from the saved
+    sheetPrompts (empty string when a template predates prompt-saving). Unknown
+    names are skipped."""
+    out = []
+    for nm in names or []:
+        tpl = load_pack_template_dirs(dirs, nm)
+        if not tpl:
+            continue
+        prompts = tpl.get("sheetPrompts") or []
+        for i, path in enumerate(tpl.get("sheetPaths") or []):
+            out.append((path, prompts[i] if i < len(prompts) else ""))
+    return out
+
+
 def resolve_pack_inputs(*, order, preset, settings, category, overrides,
                         template):
     """Layer a Template Library `template` bundle under the node's own inputs:

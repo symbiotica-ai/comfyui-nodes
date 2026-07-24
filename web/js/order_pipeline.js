@@ -71,6 +71,45 @@ function downstreamNodes(node, type) {
     return out;
 }
 
+// Reverse-map a saved template's preset/settings dicts back onto the Auto
+// Packer's WIRED Model Preset / Settings nodes, so selecting a template makes
+// those nodes SHOW (and pack with) the values it was saved with. A no-op when
+// the packer has no such node wired — then the template dict drives at execute.
+function setNodeWidget(node, name, val) {
+    const w = node?.widgets?.find((x) => x.name === name);
+    if (w && val !== undefined && val !== null) w.value = val;
+}
+const _SCALE_LABEL = { 0.5: "0.5x", 1: "1x", 2: "2x", 3: "3x", 4: "4x" };
+function applyPresetToNode(packer, preset) {
+    if (!preset) return;
+    const n = upstreamNode(packer, "preset");
+    if (n?.comfyClass !== "SymbioticaModelPreset") return;
+    setNodeWidget(n, "preset_model", preset.model);
+    setNodeWidget(n, "resolution", preset.tier);
+    setNodeWidget(n, "aspect_ratio", preset.ar);
+    setNodeWidget(n, "columns", preset.columns);
+    setNodeWidget(n, "max_rows_per_sheet", preset.max_rows);
+    setNodeWidget(n, "background", preset.background);
+    n.setDirtyCanvas?.(true, true);
+}
+function applySettingsToNode(packer, s) {
+    if (!s) return;
+    const n = upstreamNode(packer, "settings");
+    if (n?.comfyClass !== "SymbioticaAutoPackerSettings") return;
+    setNodeWidget(n, "scale",
+                  s.fit_width ? "fit width" : (_SCALE_LABEL[s.scale] ?? "1x"));
+    setNodeWidget(n, "scale_max_canvas",
+                  s.scale_max_canvas >= 1e9 ? "all" : String(s.scale_max_canvas));
+    setNodeWidget(n, "algorithm", s.algorithm);
+    setNodeWidget(n, "distribute_by_folder", s.distribute_by_folder);
+    setNodeWidget(n, "padding", s.padding);
+    setNodeWidget(n, "border", s.border);
+    setNodeWidget(n, "combined_sheet", s.combined_sheet);
+    setNodeWidget(n, "split_variants", s.split_variants);
+    setNodeWidget(n, "max_refs", s.max_refs == null ? "all" : String(s.max_refs));
+    n.setDirtyCanvas?.(true, true);
+}
+
 // Resolve project_path even when it is a WIRED input (a Local/Modal switch, a
 // String literal, a chain of them). The combos and the thumbnail route's root
 // registration both need the actual path string, which the widget alone can't
@@ -582,6 +621,13 @@ function wireTemplateLibrary(node) {
     node._symTemplates = [];
     const selW = widgetOf(node, "selected");
     if (selW) { selW.hidden = true; selW.computeSize = () => [0, -4]; }
+    // Multi-select checkboxes: which templates' saved sheets/prompts to output.
+    const chkW = widgetOf(node, "checked");
+    if (chkW) { chkW.hidden = true; chkW.computeSize = () => [0, -4]; }
+    const readChecked = () => {
+        try { return new Set(JSON.parse(chkW?.value || "[]")); }
+        catch { return new Set(); }
+    };
 
     const container = document.createElement("div");
     container.style.cssText = "box-sizing:border-box;width:100%;"
@@ -634,6 +680,11 @@ function wireTemplateLibrary(node) {
             if (catW) catW.value = tpl?.category || "All";
             const ovW = widgetOf(ap, "overrides");
             if (ovW) ovW.value = JSON.stringify(tpl?.overrides || {});
+            // Push the saved model preset + pack settings onto the packer's
+            // wired Preset / Settings nodes so they show and drive the saved
+            // values (a wired node otherwise overrides the template at execute).
+            applyPresetToNode(ap, tpl?.preset);
+            applySettingsToNode(ap, tpl?.settings);
         }
     };
 
@@ -684,6 +735,7 @@ function wireTemplateLibrary(node) {
             return;
         }
         list.style.opacity = "1";
+        const checkedSet = readChecked();
         for (const t of templates) {
             const sel = selW?.value === t.name;
             const open = expanded === t.name;
@@ -694,6 +746,22 @@ function wireTemplateLibrary(node) {
             const head = document.createElement("div");
             head.style.cssText = "display:flex;align-items:center;gap:6px;"
                 + "min-width:0;padding:4px 5px;cursor:pointer;";
+            // Output checkbox (multi-select) — drives the sheets/sheet_prompts
+            // outputs; independent of "use" (the single config selection).
+            const chk = document.createElement("input");
+            chk.type = "checkbox";
+            chk.checked = checkedSet.has(t.name);
+            chk.title = "Output this template's saved sheets + prompts";
+            chk.style.cssText = "flex:none;cursor:pointer;margin:0 1px;";
+            chk.addEventListener("pointerdown", (e) => e.stopPropagation());
+            chk.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const s = readChecked();
+                if (chk.checked) s.add(t.name); else s.delete(t.name);
+                if (chkW) chkW.value = JSON.stringify([...s]);
+                node.setDirtyCanvas?.(true, true);
+            });
+            head.appendChild(chk);
             const folder = document.createElement("span");
             folder.textContent = (open ? "📂 " : "📁 ") + t.name;
             folder.style.cssText = "flex:1;min-width:0;overflow:hidden;"
