@@ -737,17 +737,18 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
                     "overrides": tpl.get("overrides") or {},
                     "name": tpl.get("name", ""),
                 }
-        # (2) Saved sheets + prompts for the CHECKED templates — loaded from disk,
-        # no re-pack.
+        # (2) Saved sheets + prompts for the CHECKED templates — loaded from
+        # disk, no re-pack. Falls back to the 'use'-selected template when
+        # nothing is checked, so a wired Preview shows something.
         try:
             names = json.loads(checked) if checked else []
         except (ValueError, TypeError):
             names = []
+        if not (isinstance(names, list) and names):
+            names = [selected.strip()] if (selected or "").strip() else []
         sheets, prompts = [], []
         from PIL import Image
-        for path, prompt in collect_checked(dirs,
-                                             names if isinstance(names, list)
-                                             else []):
+        for path, prompt in collect_checked(dirs, names):
             try:
                 with Image.open(path) as im:
                     tensor = _pil_to_tensor(im.copy())
@@ -755,6 +756,13 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
                 continue
             sheets.append(tensor)
             prompts.append(prompt)
+        if not sheets:
+            # ComfyUI maps a downstream node over an is_output_list output and
+            # does v[-1] on an EMPTY list → IndexError (crashes a wired Preview
+            # / Show Text). Emit one small placeholder so the graph degrades
+            # gracefully when nothing is checked or selected.
+            sheets = [torch.full((1, 8, 8, 3), 0.5)]
+            prompts = ["(no template checked — tick a box or press 'use')"]
         return io.NodeOutput(bundle, sheets, prompts)
 
 
