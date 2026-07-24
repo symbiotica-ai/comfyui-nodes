@@ -6,6 +6,16 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.14
+
+### Fixed
+- **Auto Packer `border` and `padding` now work.** They were ignored by the
+  packer's layout (hardcoded 0 cell gap, no box drawn). Now `padding` is the gap
+  between a region's cells (an asset and its mirror) as well as between packed
+  strips, and `border` draws a frame that many px thick around **each icon cell**
+  — the asset and its mirror each get a box ("icon inside a box"), in a color
+  that contrasts the sheet background. `border = 0` = no box.
+
 ## 2026.7.13
 
 ### Fixed
