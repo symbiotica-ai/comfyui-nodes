@@ -112,27 +112,37 @@ def test_autopack_empty_raises_actionable(tmp_path):
 
 
 def test_autopack_scale_enlarges_cells(tmp_path):
-    assets = [asset("A", refs=("a.png",))]
+    assets = [asset("A", refs=("a.png",))]  # default canvas 128x128
     root = _make_refs(tmp_path, assets)
     small = autopack_order(assets, root, sheet_w=1000, sheet_h=1000)
-    big = autopack_order(assets, root, sheet_w=1000, sheet_h=1000, scale=2)
+    big = autopack_order(assets, root, sheet_w=1000, sheet_h=1000,
+                         scale_target=256, scale_max=4.0)  # 128 -> x2
     sw = small[0]["regions"][0]["members"][0]["w"]
     bw = big[0]["regions"][0]["members"][0]["w"]
     assert bw > sw
 
 
-def test_autopack_scale_gated_by_canvas(tmp_path):
-    # scale_max_canvas=256: the 128 sprite scales x2, the 512 one is left native.
-    assets = [asset("small", canvas="128x128"),
+def test_autopack_scale_target_per_size(tmp_path):
+    # target 512 + cap 3x: 128 -> x3 (capped, 384px), 256 -> x2 (512),
+    # 512 -> x1 (native). Small sprites scale more; the cap bounds the zoom.
+    assets = [asset("food", canvas="128x128"),
+              asset("deco", canvas="256x256"),
               asset("big", canvas="512x512")]
     root = _make_refs(tmp_path, assets)
-    out = autopack_order(assets, root, sheet_w=4096, sheet_h=4096, scale=2,
-                         scale_max_canvas=256)
+    out = autopack_order(assets, root, sheet_w=4096, sheet_h=4096,
+                         scale_target=512, scale_max=3.0)
     cells = {o["name"]: o["regions"][0]["cellPx"]["w"] for o in out}
-    small = next(v for k, v in cells.items() if "128x128" in k)
-    big = next(v for k, v in cells.items() if "512x512" in k)
-    assert small == 256   # 128 * 2 — under the cutoff, scaled
-    assert big == 512     # 512 > 256 cutoff — left native
+    assert next(v for k, v in cells.items() if "128x128" in k) == 384  # 128*3 cap
+    assert next(v for k, v in cells.items() if "256x256" in k) == 512  # 256*2
+    assert next(v for k, v in cells.items() if "512x512" in k) == 512  # native
+
+
+def test_autopack_scale_target_off_is_native(tmp_path):
+    assets = [asset("a", canvas="128x128")]
+    root = _make_refs(tmp_path, assets)
+    out = autopack_order(assets, root, sheet_w=4096, sheet_h=4096,
+                         scale_target=0, scale_max=3.0)
+    assert out[0]["regions"][0]["cellPx"]["w"] == 128  # unscaled
 
 
 def test_select_cells_reorder_and_drop():
