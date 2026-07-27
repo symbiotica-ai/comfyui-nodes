@@ -607,7 +607,8 @@ function wireSaveButton(node) {
 // downstream Auto Packer: exposes the template's frozen order as its one event
 // (so the packer's Assets panel + category combo light up, via assetSourceFor)
 // and preloads the packer's category + overrides widgets so a re-pack matches
-// and stays editable. A disabled summary widget mirrors the current pick.
+// and stays editable. A disabled summary widget mirrors the current pick, and a
+// thumbnail strip under the button shows the sheets of the templates in play.
 function wireTemplateLibrary(node) {
     node._symEvents = [];
     node._symRefsRoot = "";
@@ -631,10 +632,78 @@ function wireTemplateLibrary(node) {
     const summary = node.addWidget("text", "library_summary", "", () => {});
     summary.disabled = true;
     summary.serialize = false;
+
+    // A compact always-visible strip under the button: the sheet thumbnails of
+    // the templates currently in play (the "use"d one plus every checked one),
+    // so the node shows what it will output without opening the browser. Rows
+    // live in an INNER div so computeSize can measure real content height
+    // (measuring the scroll container itself feeds back and grows forever).
+    const strip = document.createElement("div");
+    strip.style.cssText = "box-sizing:border-box;width:100%;"
+        + "overflow-y:auto;overflow-x:hidden;font-size:11px;";
+    const stripList = document.createElement("div");
+    stripList.style.cssText = "padding:2px 2px 4px;";
+    strip.appendChild(stripList);
+    stopWheel(strip);
+    const stripW = node.addDOMWidget("library_thumbs", "sym_library_thumbs",
+                                     strip, { serialize: false });
+    const STRIP_MAX = 420;
+    stripW.computeSize = function (width) {
+        const h = stripList.scrollHeight;
+        return [width, Math.min(Math.max(h ? h + 8 : 24, 24), STRIP_MAX)];
+    };
+    const refit = () => requestAnimationFrame(() => {
+        node.setSize?.([node.size[0], node.computeSize()[1]]);
+        node.setDirtyCanvas?.(true, true);
+    });
+    node.size[0] = Math.max(node.size[0], 340);
+
+    const renderStrip = () => {
+        stripList.replaceChildren();
+        const checkedSet = readChecked();
+        const shown = (node._symTemplates ?? []).filter(
+            (t) => t.name === selW?.value || checkedSet.has(t.name));
+        if (!shown.length) {
+            stripList.textContent = "No template in use — 📂 Browse to pick one.";
+            stripList.style.opacity = ".6";
+            refit();
+            return;
+        }
+        stripList.style.opacity = "1";
+        for (const t of shown) {
+            const row = document.createElement("div");
+            row.style.cssText = "margin:3px 0;min-width:0;";
+            const head = document.createElement("div");
+            head.style.cssText = "display:flex;align-items:center;gap:5px;"
+                + "min-width:0;opacity:.75;font-size:10px;";
+            const tag = document.createElement("span");
+            tag.textContent = (t.name === selW?.value ? "✓ " : "▦ ") + t.name;
+            tag.style.cssText = "flex:1;min-width:0;overflow:hidden;"
+                + "text-overflow:ellipsis;white-space:nowrap;";
+            head.appendChild(tag);
+            row.appendChild(head);
+            const sheets = document.createElement("div");
+            sheets.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;"
+                + "padding:2px 0 3px;";
+            const paths = t.sheetPaths ?? [];
+            if (!paths.length) {
+                const none = document.createElement("span");
+                none.textContent = "(no sheet images)";
+                none.style.cssText = "opacity:.5;font-size:10px;";
+                sheets.appendChild(none);
+            }
+            for (const p of paths) sheets.appendChild(symImg(localImageUrl(p), 54));
+            row.appendChild(sheets);
+            stripList.appendChild(row);
+        }
+        refit();
+    };
+
     const refreshSummary = () => {
         const n = readChecked().size;
         summary.value = (selW?.value ? `use: ${selW.value}` : "no template")
             + (n ? ` · out: ${n} ▦` : "");
+        renderStrip();
         node.setDirtyCanvas?.(true, true);
     };
 

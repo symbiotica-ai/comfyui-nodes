@@ -6,6 +6,14 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.19
+
+### Added
+- **Sheet thumbnails are back on the Template Library node**, as a compact strip
+  under the Browse button showing the sheets of the templates in play (the one
+  in use plus every checked one), so the node shows what it will output without
+  opening the browser. The overlay stays the place to pick, check, and delete.
+
 ## 2026.7.18
 
 ### Changed
