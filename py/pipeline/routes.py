@@ -77,6 +77,14 @@ def list_subdirs(path: str) -> dict | None:
         return None
 
 
+def _expand_project(value: str) -> str:
+    """A volume-relative studios/<slug>/... project string (the Studio Library
+    node's wire currency) becomes its absolute path under the studio-assets
+    Volume; anything else passes through for the route's own checks."""
+    return studio_library_mod.expand_studio_path(
+        studio_library_mod.STUDIO_ASSETS_DIR, value)
+
+
 def _template_dir() -> str | None:
     """ComfyUI's output/templates folder, or None when folder_paths is absent
     (unit tests import this module with server/aiohttp stubbed)."""
@@ -165,7 +173,7 @@ async def list_orders(request):
     Order Read node's month picker."""
     from .project_layout import list_order_months
 
-    project = request.query.get("project", "").strip()
+    project = _expand_project(request.query.get("project", ""))
     if not project or not os.path.isdir(project):
         return web.json_response({"months": []})
     months = list_order_months(project)
@@ -185,7 +193,7 @@ async def parse_order(request):
 
     order_path = request.query.get("order_path", "").strip()
     refs_path = request.query.get("refs_path", "").strip()
-    project = request.query.get("project", "").strip()
+    project = _expand_project(request.query.get("project", ""))
     month = request.query.get("month", "").strip()
     assets_root = ""
     if project:
@@ -213,7 +221,7 @@ async def list_assets(request):
     """Recursive image listing of a user-picked project folder. Picking the
     folder in the browser IS the user intent, so the root is registered for
     thumbnail serving via /symbiotica/local-image."""
-    root = os.path.realpath(request.query.get("dir", ""))
+    root = os.path.realpath(_expand_project(request.query.get("dir", "")))
     if not root or not os.path.isdir(root):
         return web.json_response({"error": "not a readable directory"}, status=400)
     register_root(root)
@@ -382,7 +390,7 @@ async def pack_template_list(request):
     subfolder AND output/templates (the save fallback). Registers both so
     /symbiotica/local-image can serve each template's sheet thumbnails (abs
     sheetPaths ride along)."""
-    project = request.query.get("project", "")
+    project = _expand_project(request.query.get("project", ""))
     dirs = _pack_dirs(project)
     for d in dirs:
         register_root(d)

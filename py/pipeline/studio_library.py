@@ -66,6 +66,20 @@ def resolve_selection(base_dir, selection):
     return path, os.path.isdir(path)
 
 
+def expand_studio_path(base_dir, value):
+    """`value` with a volume-relative studios/<slug>/... string (the Studio
+    Library node's wire currency) resolved to its absolute confined path; any
+    other string — or one that fails to resolve — passes through unchanged so
+    the caller's own existence/error handling applies."""
+    value = str(value or "").strip()
+    if not value.startswith(RESERVED_PREFIX):
+        return value
+    try:
+        return resolve_studio_path(base_dir, value)
+    except (ValueError, OSError):
+        return value
+
+
 def selection_fingerprint(base_dir, selection):
     """Content-change hash. Files: mtime+size. Folders: sorted direntry-name set
     (an in-place rewrite of a file UNDER a selected folder does NOT change it —
