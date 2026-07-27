@@ -4,6 +4,7 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { openTemplateEditor } from "./template_editor/editor.js";
 import { createOrderCache } from "./order_cache.js";
+import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
 
 // node.id -> {events, refFileCount, refsRoot} (last parse per Order Read node)
 const orderCache = new Map();
@@ -557,8 +558,7 @@ function assetsPanel(node) {
 // "💾 Save as template" on the Auto Packer: names the current pack, sets the
 // hidden `save_as` widget, queues once so Python writes the sheets + recipe to
 // the project's templates/ folder, then clears the name so the next run does
-// not re-save. A DOM button, not a litegraph button — the Vue node UI only
-// renders DOM widgets (same reason as the Order Specs "Read folder" button).
+// not re-save.
 function wireSaveButton(node) {
     const saveW = widgetOf(node, "save_as");
     if (saveW) { saveW.hidden = true; saveW.computeSize = () => [0, -4]; }
@@ -599,12 +599,15 @@ function wireSaveButton(node) {
     btn.serialize = false;
 }
 
-// The Template Library node: a folder browser of the project's saved Auto
-// Packer templates (name · sheet count · expandable sheet thumbnails), a hidden
-// `selected` slug it outputs, and — on select — it drives any downstream Auto
-// Packer: exposes the template's frozen order as its one event (so the packer's
-// Assets panel + category combo light up, via assetSourceFor) and preloads the
-// packer's category + overrides widgets so a re-pack matches and stays editable.
+// The Template Library node: a native "Browse" button (the Studio Library
+// pattern — a DOM panel embedded in the node does not reliably render in the
+// Vue UI) that opens a full-screen overlay listing the project's saved Auto
+// Packer templates (checkbox · name · sheet count · thumbnails · use · delete).
+// A hidden `selected` slug is the output; on "use" the node drives any
+// downstream Auto Packer: exposes the template's frozen order as its one event
+// (so the packer's Assets panel + category combo light up, via assetSourceFor)
+// and preloads the packer's category + overrides widgets so a re-pack matches
+// and stays editable. A disabled summary widget mirrors the current pick.
 function wireTemplateLibrary(node) {
     node._symEvents = [];
     node._symRefsRoot = "";
@@ -619,27 +622,21 @@ function wireTemplateLibrary(node) {
         catch { return new Set(); }
     };
 
-    const container = document.createElement("div");
-    container.style.cssText = "box-sizing:border-box;width:100%;"
-        + "overflow-y:auto;overflow-x:hidden;font-size:11px;";
-    const list = document.createElement("div");
-    list.style.cssText = "padding:2px 2px 4px;";
-    container.appendChild(list);
-    stopWheel(container);
-    const panelW = node.addDOMWidget("library_panel", "sym_library", container,
-                                     { serialize: false, hideOnZoom: true });
-    const PANEL_MAX = 760;
-    panelW.computeSize = function (width) {
-        const h = list.scrollHeight;
-        return [width, Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX)];
-    };
-    const refit = () => requestAnimationFrame(() => {
-        node.setSize?.([node.size[0], node.computeSize()[1]]);
-        node.setDirtyCanvas?.(true, true);
-    });
-    node.size[0] = Math.max(node.size[0], 340);
+    // While the overlay is open this re-renders its rows; null when closed.
+    let paneRender = null;
 
-    let expanded = null; // slug whose sheet thumbnails are shown
+    const browseBtn = node.addWidget("button", "📂 Browse template library",
+                                     null, () => openBrowser());
+    browseBtn.serialize = false;
+    const summary = node.addWidget("text", "library_summary", "", () => {});
+    summary.disabled = true;
+    summary.serialize = false;
+    const refreshSummary = () => {
+        const n = readChecked().size;
+        summary.value = (selW?.value ? `use: ${selW.value}` : "no template")
+            + (n ? ` · out: ${n} ▦` : "");
+        node.setDirtyCanvas?.(true, true);
+    };
 
     // Expose the selected template's frozen order as this node's one event so a
     // downstream Auto Packer's Assets panel + category combo light up
@@ -682,7 +679,8 @@ function wireTemplateLibrary(node) {
         if (selW) selW.value = tpl?.name || "";
         primePackers(tpl);
         exposeEvent(tpl); // relights + re-renders packers with the primed values
-        render();
+        refreshSummary();
+        paneRender?.();
     };
 
     const doDelete = async (tpl) => {
@@ -709,101 +707,148 @@ function wireTemplateLibrary(node) {
         // — WITHOUT re-priming the packer's widgets (those are the user's now).
         const cur = node._symTemplates.find((t) => t.name === selW?.value);
         if (cur) exposeEvent(cur);
-        render();
+        refreshSummary();
+        paneRender?.();
     };
     node._symRefreshTemplates = refresh;
 
-    function render() {
-        list.replaceChildren();
-        const templates = node._symTemplates ?? [];
-        if (!templates.length) {
-            list.textContent = resolveProjectPath(node)
-                ? "No templates yet — save one from the Auto Packer (💾)."
-                : "Set the project folder to browse its templates.";
-            list.style.opacity = ".6";
-            refit();
-            return;
+    // The overlay browser — the Studio Library's modal chrome (centered panel
+    // over a dimmed backdrop; Done/✕, Escape, and backdrop click all close),
+    // listing this node's templates instead of a directory tree.
+    function openBrowser() {
+        injectHubStyles();
+
+        const overlay = document.createElement("div");
+        overlay.className = "symbiotica-template-library";
+        overlay.style.cssText =
+            "position:fixed;inset:0;z-index:10000;background:rgba(1,1,2,.66);" +
+            "display:flex;align-items:center;justify-content:center;";
+        const panel = document.createElement("div");
+        panel.style.cssText =
+            `width:min(80vw,1000px);height:80vh;background:${HUB.surface2};color:${HUB.ink};` +
+            `font:13px/1.5 ${HUB.font};display:flex;flex-direction:column;` +
+            `border:1px solid ${HUB.hairline};border-radius:12px;overflow:hidden;` +
+            "box-shadow:0 16px 48px rgba(0,0,0,.55);";
+
+        const bar = document.createElement("div");
+        bar.style.cssText =
+            `display:flex;align-items:center;gap:10px;padding:12px 16px;` +
+            `border-bottom:1px solid ${HUB.hairline};`;
+        const crumb = document.createElement("div");
+        crumb.style.cssText =
+            `flex:1;font:12px ${HUB.mono};color:${HUB.inkSubtle};` +
+            "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        crumb.textContent = resolveProjectPath(node) || "output/templates";
+        const closeBtn = document.createElement("button");
+        closeBtn.textContent = "Done";
+        closeBtn.className = "sym-btn";
+        closeBtn.style.cssText = ghostButtonCss + "margin-left:auto;";
+        bar.append(crumb, closeBtn);
+
+        const pane = document.createElement("div");
+        pane.style.cssText = "flex:1;overflow:auto;padding:8px;";
+
+        panel.append(bar, pane);
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+
+        function onKeydown(e) {
+            if (e.key === "Escape") close();
         }
-        list.style.opacity = "1";
-        const checkedSet = readChecked();
-        for (const t of templates) {
-            const sel = selW?.value === t.name;
-            const open = expanded === t.name;
-            const row = document.createElement("div");
-            row.style.cssText = "border:1px solid " + (sel ? "#5a7a9a" : "#3a3a3a")
-                + ";border-radius:6px;margin:3px 0;min-width:0;background:"
-                + (sel ? "#1e2a33" : "#2a2a2a") + ";";
-            const head = document.createElement("div");
-            head.style.cssText = "display:flex;align-items:center;gap:6px;"
-                + "min-width:0;padding:4px 5px;cursor:pointer;";
-            // Output checkbox (multi-select) — drives the sheets/sheet_prompts
-            // outputs; independent of "use" (the single config selection).
-            const chk = document.createElement("input");
-            chk.type = "checkbox";
-            chk.checked = checkedSet.has(t.name);
-            chk.title = "Output this template's saved sheets + prompts";
-            chk.style.cssText = "flex:none;cursor:pointer;margin:0 1px;";
-            chk.addEventListener("pointerdown", (e) => e.stopPropagation());
-            chk.addEventListener("click", (e) => {
-                e.stopPropagation();
-                const s = readChecked();
-                if (chk.checked) s.add(t.name); else s.delete(t.name);
-                if (chkW) chkW.value = JSON.stringify([...s]);
-                node.setDirtyCanvas?.(true, true);
-            });
-            head.appendChild(chk);
-            const folder = document.createElement("span");
-            folder.textContent = (open ? "📂 " : "📁 ") + t.name;
-            folder.style.cssText = "flex:1;min-width:0;overflow:hidden;"
-                + "text-overflow:ellipsis;white-space:nowrap;";
-            head.appendChild(folder);
-            const count = document.createElement("span");
-            count.textContent = (t.sheetCount ?? (t.sheets?.length || 0)) + " ▦";
-            count.style.cssText = "font-size:10px;opacity:.7;flex:none;";
-            head.appendChild(count);
-            const use = document.createElement("button");
-            use.textContent = sel ? "✓" : "use";
-            use.style.cssText = "font-size:10px;padding:1px 7px;border-radius:4px;"
-                + "cursor:pointer;border:1px solid #555;color:#ddd;flex:none;"
-                + "background:" + (sel ? "#3a5a3a" : "#333") + ";";
-            // stopPropagation on BOTH pointerdown (litegraph drag) and click —
-            // a pointerdown-only stop still lets the click bubble to head and
-            // toggle the expand.
-            use.addEventListener("pointerdown", (e) => e.stopPropagation());
-            use.addEventListener("click",
-                (e) => { e.stopPropagation(); select(t); });
-            head.appendChild(use);
-            const del = document.createElement("button");
-            del.textContent = "×";
-            del.style.cssText = "font-size:13px;line-height:1;padding:0 6px;"
-                + "border-radius:4px;cursor:pointer;border:1px solid #555;"
-                + "color:#c88;background:#3a2a2a;flex:none;";
-            del.addEventListener("pointerdown", (e) => e.stopPropagation());
-            del.addEventListener("click",
-                (e) => { e.stopPropagation(); doDelete(t); });
-            head.appendChild(del);
-            head.addEventListener("click", () => {
-                expanded = open ? null : t.name;
-                render();
-            });
-            row.appendChild(head);
-            if (open) {
-                const sheets = document.createElement("div");
-                sheets.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;"
-                    + "padding:0 5px 5px;";
-                const paths = t.sheetPaths ?? [];
-                if (!paths.length) {
-                    const none = document.createElement("span");
-                    none.textContent = "(no sheet images)";
-                    none.style.cssText = "opacity:.5;font-size:10px;";
-                    sheets.appendChild(none);
-                }
-                for (const p of paths) sheets.appendChild(symImg(localImageUrl(p), 54));
-                row.appendChild(sheets);
+        const close = () => {
+            paneRender = null;
+            overlay.remove();
+            document.removeEventListener("keydown", onKeydown);
+        };
+        document.addEventListener("keydown", onKeydown);
+        closeBtn.addEventListener("click", close);
+        overlay.addEventListener("click", (e) => {
+            if (e.target === overlay) close();  // backdrop click, not the panel
+        });
+
+        const emptyState = (text) => {
+            const d = document.createElement("div");
+            d.style.cssText =
+                `padding:28px 16px;text-align:center;color:${HUB.inkTertiary};font:13px ${HUB.font};`;
+            d.textContent = text;
+            return d;
+        };
+
+        paneRender = () => {
+            pane.replaceChildren();
+            const templates = node._symTemplates ?? [];
+            if (!templates.length) {
+                pane.appendChild(emptyState(resolveProjectPath(node)
+                    ? "No templates yet — save one from the Auto Packer (💾)."
+                    : "Set the project folder to browse its templates."));
+                return;
             }
-            list.appendChild(row);
-        }
-        refit();
+            const checkedSet = readChecked();
+            for (const t of templates) {
+                const sel = selW?.value === t.name;
+                const row = document.createElement("div");
+                row.className = "sym-row";
+                row.style.cssText = "padding:6px 10px;min-width:0;"
+                    + (sel ? `background:${HUB.rowHover};` : "");
+                const head = document.createElement("div");
+                head.style.cssText =
+                    "display:flex;align-items:center;gap:10px;min-width:0;";
+                // Output checkbox (multi-select) — drives the sheets /
+                // sheet_prompts outputs; independent of "use" (the single
+                // config selection).
+                const chk = document.createElement("input");
+                chk.type = "checkbox";
+                chk.checked = checkedSet.has(t.name);
+                chk.title = "Output this template's saved sheets + prompts";
+                chk.style.cssText = "flex:none;cursor:pointer;margin:0;";
+                chk.addEventListener("click", () => {
+                    const s = readChecked();
+                    if (chk.checked) s.add(t.name); else s.delete(t.name);
+                    if (chkW) chkW.value = JSON.stringify([...s]);
+                    refreshSummary();
+                });
+                head.appendChild(chk);
+                const label = document.createElement("span");
+                label.style.cssText = "flex:1;min-width:0;overflow:hidden;"
+                    + `text-overflow:ellipsis;white-space:nowrap;color:${HUB.ink};`;
+                label.textContent = "📁  " + t.name;
+                head.appendChild(label);
+                const count = document.createElement("span");
+                count.textContent = (t.sheetCount ?? (t.sheets?.length || 0)) + " ▦";
+                count.style.cssText =
+                    `font:12px ${HUB.mono};color:${HUB.inkSubtle};flex:none;`;
+                head.appendChild(count);
+                const use = document.createElement("button");
+                use.textContent = sel ? "✓ in use" : "use";
+                use.className = "sym-btn sym-btn-accent";
+                use.style.cssText =
+                    `padding:5px 12px;background:${sel ? HUB.surface1 : HUB.accent};` +
+                    `color:${sel ? HUB.inkSubtle : HUB.onAccent};` +
+                    `border:0;border-radius:8px;cursor:pointer;font:12px ${HUB.font};flex:none;`;
+                use.addEventListener("click", () => { select(t); close(); });
+                head.appendChild(use);
+                const del = document.createElement("button");
+                del.textContent = "×";
+                del.className = "sym-btn";
+                del.style.cssText = ghostButtonCss
+                    + `color:${HUB.danger};flex:none;line-height:1;`;
+                del.addEventListener("click", () => doDelete(t));
+                head.appendChild(del);
+                row.appendChild(head);
+                const paths = t.sheetPaths ?? [];
+                if (paths.length) {
+                    const sheets = document.createElement("div");
+                    sheets.style.cssText =
+                        "display:flex;gap:6px;flex-wrap:wrap;padding:6px 0 2px 26px;";
+                    for (const p of paths) {
+                        sheets.appendChild(symImg(localImageUrl(p), 54));
+                    }
+                    row.appendChild(sheets);
+                }
+                pane.appendChild(row);
+            }
+        };
+        paneRender();
     }
 
     // Refresh on project change (chain onto the widget callback) + on load. A
@@ -1068,7 +1113,13 @@ app.registerExtension({
                 origCfg?.apply(this, arguments);
                 // Workflow load: re-list the project's templates and re-drive
                 // any downstream Auto Packer from the saved `selected` template.
-                queueMicrotask(() => this._symRefreshTemplates?.());
+                // Also re-fit the height: workflows saved before the overlay
+                // browser serialized a node tall enough for the old embedded
+                // panel, which no longer exists.
+                queueMicrotask(() => {
+                    this._symRefreshTemplates?.();
+                    this.setSize?.([this.size[0], this.computeSize()[1]]);
+                });
             };
         }
 
