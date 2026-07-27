@@ -108,6 +108,29 @@ feature/group dropdowns after the first queue. On a fully cached run the
 browser panel is not re-pushed — change any input (or re-parse) to
 repopulate it after a page reload.
 
+## Hypereel (streamer-reel pipeline)
+
+The Hypereel product ported node for node from the Symbiotica platform: find viral
+moments in gameplay, cut them, animate a consistent streamer facecam (Seedance 2.0
+partner node), and stack facecam over real gameplay into a vertical reel.
+
+- `Hypereel Highlight Pick` — parses a Gemini highlight list (`HIGHLIGHT n |
+  start=.. | end=.. | label | WHY: .. | MOOD: ..`, seconds or MM:SS) and exposes one
+  highlight's start/end/duration plus the text row for the script LLM
+- `Hypereel Clip (cut by seconds)` — cuts a `[start, start+duration]` window out of a
+  VIDEO with ffmpeg. No frame tensors: a 7-minute or 7-hour source costs the same.
+  The window is clamped inside the source, so a highlight near EOF still yields a
+  full slice
+- `Hypereel Stack Composite (facecam over gameplay)` — named layout templates:
+  vertical facecam-top 40/60 (the platform's Modal geometry), vertical half/half,
+  and gameplay-full layouts (vertical or horizontal) with the facecam PiP in a
+  chosen corner. Voice at full volume with game audio mixed at a gain only when the
+  gameplay has an audio track (`amix ... normalize=0` so the voice is never
+  halved), up to 4 pairs hard-cut-concatenated in order
+
+Runs anywhere ffmpeg exists — local mac (Homebrew) or a Modal image with
+`apt_install("ffmpeg")`.
+
 ## Configuration
 
 ### API keys
