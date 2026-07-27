@@ -84,8 +84,61 @@ class TestSsrfGuard:
     def test_blocked(self, bad):
         assert is_public_http_target(bad) is False
 
+    @pytest.mark.parametrize("bad", [
+        "http://2130706433/x",        # decimal 127.0.0.1
+        "http://0x7f000001/x",        # hex 127.0.0.1
+        "http://0177.0.0.1/x",        # octal 127.0.0.1
+        "http://127.1/x",             # short-form 127.0.0.1
+        "http://0/x",                 # 0.0.0.0
+        "http://2852039166/x",        # decimal 169.254.169.254 (metadata)
+    ])
+    def test_numeric_obfuscated_loopback_blocked(self, bad):
+        # ipaddress.ip_address rejects these, but socket.inet_aton / the OS
+        # resolver expand them to a real private IPv4 — so they must be blocked.
+        assert is_public_http_target(bad) is False
+
     def test_public_ok(self):
         assert is_public_http_target("https://goodgame.com/e4k") is True
+
+
+class TestSafeGetRedirects:
+    def _resp(self, status=200, location=None, url=""):
+        from types import SimpleNamespace
+        return SimpleNamespace(status_code=status, ok=(200 <= status < 300),
+                               headers={"location": location} if location else {},
+                               url=url, text="body", content=b"body")
+
+    def test_direct_200_returns_response(self):
+        from _hypereel_scrape import safe_get
+        got = safe_get(lambda u: self._resp(200, url=u), "https://good.com/x")
+        assert got.ok and got.url == "https://good.com/x"
+
+    def test_redirect_to_private_is_blocked(self):
+        from _hypereel_scrape import safe_get
+        calls = []
+        def get(u):
+            calls.append(u)
+            if u == "https://good.com/x":
+                return self._resp(302, location="http://169.254.169.254/latest")
+            return self._resp(200, url=u)
+        assert safe_get(get, "https://good.com/x") is None
+        # the private target is never actually fetched
+        assert calls == ["https://good.com/x"]
+
+    def test_public_redirect_chain_followed(self):
+        from _hypereel_scrape import safe_get
+        def get(u):
+            if u == "https://good.com/a":
+                return self._resp(301, location="https://good.com/b")
+            return self._resp(200, url=u)
+        got = safe_get(get, "https://good.com/a")
+        assert got.ok and got.url == "https://good.com/b"
+
+    def test_redirect_loop_bounded(self):
+        from _hypereel_scrape import safe_get
+        got = safe_get(lambda u: self._resp(302, location="https://good.com/loop"),
+                       "https://good.com/loop", max_redirects=3)
+        assert got is None
 
 
 class TestStoreFollow:

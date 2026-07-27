@@ -74,6 +74,19 @@ def audio_mix_filter(gain):
     )
 
 
+def audio_plan(has_facecam_audio, has_gameplay_audio, gain, video_filter):
+    """(filtergraph, output audio map) for a pair. Mix her voice ([0:a], full) with
+    the game ([1:a], at `gain`) only when BOTH inputs carry audio — the mix filter
+    references both streams, so a voiceless facecam or silent gameplay would make
+    ffmpeg fail on a missing stream. Otherwise carry whichever single track exists
+    via an optional (`?`) map that never crashes."""
+    if has_facecam_audio and has_gameplay_audio:
+        return f"{video_filter};{audio_mix_filter(gain)}", ["-map", "[v]", "-map", "[a]"]
+    if has_gameplay_audio:  # facecam silent — carry the gameplay track
+        return video_filter, ["-map", "[v]", "-map", "1:a?"]
+    return video_filter, ["-map", "[v]", "-map", "0:a?"]  # gameplay silent (or neither)
+
+
 # Named layout templates — each carries its canvas and how the facecam meets the
 # gameplay. Stack layouts split the canvas; PiP layouts run the gameplay full-frame
 # with the facecam overlaid in a corner (24px margin).
@@ -198,13 +211,9 @@ def _compose_pair(ffmpeg, ffprobe, facecam, gameplay, out, layout, corner, gain,
     gdur = probe_duration(ffprobe, gameplay)
     dur = min(fdur, gdur) if (fdur and gdur) else (fdur or gdur or 5.0)
     video, _, _ = layout_video_filter(layout, corner, with_mask=mask is not None)
-    if probe_has_audio(ffprobe, gameplay):
-        filtergraph = f"{video};{audio_mix_filter(gain)}"
-        amap = ["-map", "[v]", "-map", "[a]"]
-    else:
-        # Gameplay is silent — carry only the streamer's voice.
-        filtergraph = video
-        amap = ["-map", "[v]", "-map", "0:a?"]
+    filtergraph, amap = audio_plan(
+        probe_has_audio(ffprobe, facecam), probe_has_audio(ffprobe, gameplay),
+        gain, video)
     inputs = [ffmpeg, "-y", "-i", facecam, "-i", gameplay]
     if mask is not None:
         inputs += ["-i", mask]
@@ -219,12 +228,16 @@ def _compose_pair(ffmpeg, ffprobe, facecam, gameplay, out, layout, corner, gain,
 
 def compose_pairs(pairs, out, layout=DEFAULT_LAYOUT, corner="bottom-right",
                   game_audio_gain=0.30, fps=30, crf=20,
-                  ffmpeg="ffmpeg", ffprobe="ffprobe"):
+                  ffmpeg="ffmpeg", ffprobe="ffprobe", interrupt=None):
     """Compose each (facecam, gameplay) file pair into one cut in the chosen
-    layout and hard-cut-concat the cuts in order into `out`. Returns the cut count."""
+    layout and hard-cut-concat the cuts in order into `out`. Returns the cut count.
+    `interrupt()` (optional) is polled before each pair — a truthy return raises
+    InterruptedError so a pressed Cancel stops the multi-encode job promptly."""
     with tempfile.TemporaryDirectory() as d:
         segs = []
         for i, pair in enumerate(pairs):
+            if interrupt and interrupt():
+                raise InterruptedError("compose cancelled")
             fc, gp = pair[0], pair[1]
             mask = pair[2] if len(pair) > 2 else None
             seg = os.path.join(d, f"seg{i}.mp4")

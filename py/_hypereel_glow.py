@@ -10,14 +10,18 @@ def probe_video(ffprobe, path):
     """(width, height, fps, nb_frames_estimate) of the first video stream."""
     out = subprocess.run(
         [ffprobe, "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=width,height,r_frame_rate,duration",
+         "-show_entries", "stream=width,height,r_frame_rate,duration:format=duration",
          "-of", "json", path],
         check=True, capture_output=True, text=True,
     ).stdout
-    s = json.loads(out)["streams"][0]
+    data = json.loads(out)
+    s = data["streams"][0]
     num, den = s["r_frame_rate"].split("/")
     fps = float(num) / float(den)
-    duration = float(s.get("duration") or 0)
+    # Stream-level duration is missing on many containers; the format-level
+    # duration is the fallback, without which nframes collapses to 1 and the
+    # glow signal flattens to a single static color for the whole clip.
+    duration = float(s.get("duration") or data.get("format", {}).get("duration") or 0)
     return int(s["width"]), int(s["height"]), fps, max(1, int(round(duration * fps)))
 
 
@@ -75,7 +79,7 @@ def blend_glow(frame, glow_rgb, gradient, strength):
 
 
 def run_glow(facecam, gameplay, out, strength=0.35, smoothing=0.5,
-             ffmpeg="ffmpeg", ffprobe="ffprobe"):
+             ffmpeg="ffmpeg", ffprobe="ffprobe", interrupt=None):
     """Streams the facecam frame by frame, screen-blending the gameplay's smoothed
     per-frame color as a bottom-up glow; the facecam's own audio is mapped through
     untouched. Constant memory — clip length never matters."""
@@ -101,6 +105,8 @@ def run_glow(facecam, gameplay, out, strength=0.35, smoothing=0.5,
     i = 0
     try:
         while True:
+            if interrupt and i % 30 == 0 and interrupt():
+                raise InterruptedError("glow cancelled")
             buf = dec.stdout.read(frame_bytes)
             if not buf or len(buf) < frame_bytes:
                 break

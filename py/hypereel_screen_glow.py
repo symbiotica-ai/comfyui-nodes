@@ -7,6 +7,7 @@ import time
 import folder_paths
 
 from ._bins import FFMPEG, FFPROBE
+from ._hypereel_cancel import as_comfy_cancel, cancelled
 from ._hypereel_glow import run_glow
 
 
@@ -46,9 +47,12 @@ class HypereelScreenGlow:
                 folder_paths.get_output_directory(),
                 f"hypereel_glow_{int(time.time() * 1000)}.mp4",
             )
-            run_glow(fc, gp, out, strength=strength, smoothing=smoothing,
-                     ffmpeg=FFMPEG, ffprobe=FFPROBE)
-            return (InputImpl.VideoFromFile(out),)
+            try:
+                run_glow(fc, gp, out, strength=strength, smoothing=smoothing,
+                         ffmpeg=FFMPEG, ffprobe=FFPROBE, interrupt=cancelled)
+                return (InputImpl.VideoFromFile(out),)
+            except InterruptedError as e:
+                as_comfy_cancel(e)
         finally:
             for f in (fc, gp):
                 try:

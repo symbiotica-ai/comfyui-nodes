@@ -3,6 +3,7 @@
 import html as html_mod
 import ipaddress
 import re
+import socket
 from urllib.parse import urljoin, urlparse
 
 # Patterns that mark an image as chrome (badges/icons), not a product asset.
@@ -40,11 +41,38 @@ def is_public_http_target(raw):
         return False
     try:
         ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
-            return False
     except ValueError:
-        pass  # a hostname, not a literal IP
+        # Not a standard IP literal. The OS resolver still expands non-standard
+        # numeric forms (decimal 2130706433, hex 0x7f000001, octal, short 127.1)
+        # to a real IPv4 — socket.inet_aton accepts exactly those, so normalize
+        # through it before deciding the host is a name rather than an address.
+        try:
+            ip = ipaddress.ip_address(socket.inet_aton(host))
+        except (OSError, ValueError):
+            ip = None
+    if ip is not None and (ip.is_private or ip.is_loopback or ip.is_link_local
+                           or ip.is_reserved or ip.is_unspecified):
+        return False
     return True
+
+
+def safe_get(get, url, max_redirects=4):
+    """Fetch `url`, following up to `max_redirects` hops and re-checking
+    is_public_http_target at EVERY hop — a 3xx to a private/metadata address is
+    the classic SSRF bypass of a pre-fetch-only guard. `get(u)` must NOT follow
+    redirects itself; it returns a response with `.status_code`, `.headers`,
+    `.ok`, `.text`/`.content`. Returns the final response, or None when a hop is
+    unsafe or the redirect budget is exhausted."""
+    for _ in range(max_redirects + 1):
+        if not is_public_http_target(url):
+            return None
+        res = get(url)
+        status = getattr(res, "status_code", 0)
+        location = res.headers.get("location") if 300 <= status < 400 else None
+        if not location:
+            return res
+        url = urljoin(url, location)
+    return None
 
 
 def _absolutize(src, base):

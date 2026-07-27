@@ -97,3 +97,37 @@ class TestGlowSmoke:
                  "stream=codec_type", "-of", "default=nw=1", out],
                 capture_output=True, text=True).stdout
             assert "audio" in probe
+
+
+class TestProbeDuration:
+    def _payload(self, stream_duration, format_duration):
+        import json
+        s = {"width": 100, "height": 200, "r_frame_rate": "30/1"}
+        if stream_duration is not None:
+            s["duration"] = stream_duration
+        fmt = {} if format_duration is None else {"duration": format_duration}
+        return json.dumps({"streams": [s], "format": fmt})
+
+    def test_falls_back_to_format_duration(self, monkeypatch):
+        # Many containers carry duration only at format level; without the
+        # fallback nframes collapses to 1 and the glow goes flat.
+        import subprocess
+        from types import SimpleNamespace
+        import _hypereel_glow as g
+        monkeypatch.setattr(g.subprocess, "run",
+                            lambda *a, **k: SimpleNamespace(stdout=self._payload(None, "4.0")))
+        assert g.probe_video("ffprobe", "x.mp4") == (100, 200, 30.0, 120)
+
+    def test_prefers_stream_duration_when_present(self, monkeypatch):
+        from types import SimpleNamespace
+        import _hypereel_glow as g
+        monkeypatch.setattr(g.subprocess, "run",
+                            lambda *a, **k: SimpleNamespace(stdout=self._payload("2.0", "99.0")))
+        assert g.probe_video("ffprobe", "x.mp4")[3] == 60  # 2.0s * 30fps, not 99
+
+    def test_no_duration_anywhere_stays_at_one(self, monkeypatch):
+        from types import SimpleNamespace
+        import _hypereel_glow as g
+        monkeypatch.setattr(g.subprocess, "run",
+                            lambda *a, **k: SimpleNamespace(stdout=self._payload(None, None)))
+        assert g.probe_video("ffprobe", "x.mp4")[3] == 1

@@ -7,26 +7,30 @@ import requests
 import torch
 from PIL import Image
 
-from ._hypereel_scrape import build_summary, is_public_http_target, scrape_product
+from ._hypereel_scrape import build_summary, safe_get, scrape_product
 
 _UA = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
 _PLATFORMS = ["mobile app", "desktop app", "physical product"]
 
 
+def _get(url, timeout):
+    # allow_redirects=False: safe_get re-checks each hop's target itself, so a
+    # 3xx to a private/metadata address can't slip past the SSRF guard.
+    return requests.get(url, headers=_UA, timeout=timeout, allow_redirects=False)
+
+
 def _fetch_html(url):
-    res = requests.get(url, headers=_UA, timeout=8)
-    return res.text if res.ok else None
+    res = safe_get(lambda u: _get(u, 8), url)
+    return res.text if res and res.ok else None
 
 
 def _fetch_image(url):
     """URL -> (1,H,W,3) float tensor, or None when the download/decode fails."""
-    if not is_public_http_target(url):
+    res = safe_get(lambda u: _get(u, 10), url)
+    if not res or not res.ok:
         return None
     try:
-        res = requests.get(url, headers=_UA, timeout=10)
-        if not res.ok:
-            return None
         img = Image.open(io.BytesIO(res.content)).convert("RGB")
         arr = np.asarray(img, dtype=np.float32) / 255.0
         return torch.from_numpy(arr).unsqueeze(0)

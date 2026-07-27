@@ -7,6 +7,7 @@ import time
 import folder_paths
 
 from ._bins import FFMPEG, FFPROBE
+from ._hypereel_cancel import as_comfy_cancel, cancelled
 from ._hypereel_ffmpeg import DEFAULT_LAYOUT, LAYOUTS, compose_pairs
 
 
@@ -84,10 +85,10 @@ class HypereelStackComposite:
                     # MASK tensor (B,H,W, float 0-1) -> grayscale video at the
                     # facecam's frame rate, so alphamerge pairs frames 1:1.
                     frames = (mk.cpu().numpy() * 255.0 + 0.5).astype(np.uint8)
-                    _, _, fps, _ = probe_video(FFPROBE, fc_path)
+                    _, _, mask_fps, _ = probe_video(FFPROBE, fc_path)
                     mk_path = os.path.join(tempdir, f"mask{i}.mp4")
                     write_gray_video(FFMPEG, frames, frames.shape[2], frames.shape[1],
-                                     fps, mk_path)
+                                     mask_fps, mk_path)
                     temp_files.append(mk_path)
                 pairs.append((fc_path, gp_path, mk_path))
 
@@ -95,10 +96,13 @@ class HypereelStackComposite:
                 folder_paths.get_output_directory(),
                 f"hypereel_reel_{int(time.time() * 1000)}.mp4",
             )
-            cuts = compose_pairs(pairs, out, layout=layout, corner=corner,
-                                 game_audio_gain=game_audio_gain,
-                                 fps=fps, crf=crf, ffmpeg=FFMPEG, ffprobe=FFPROBE)
-            return (InputImpl.VideoFromFile(out), cuts)
+            try:
+                cuts = compose_pairs(pairs, out, layout=layout, corner=corner,
+                                     game_audio_gain=game_audio_gain, fps=fps, crf=crf,
+                                     ffmpeg=FFMPEG, ffprobe=FFPROBE, interrupt=cancelled)
+                return (InputImpl.VideoFromFile(out), cuts)
+            except InterruptedError as e:
+                as_comfy_cancel(e)
         finally:
             for f in temp_files:
                 try:

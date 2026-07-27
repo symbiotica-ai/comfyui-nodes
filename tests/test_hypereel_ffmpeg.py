@@ -9,6 +9,7 @@ import pytest
 
 from _hypereel_ffmpeg import (
     audio_mix_filter,
+    audio_plan,
     clamp_window,
     clip_cmd,
     compose_pairs,
@@ -239,3 +240,46 @@ class TestCutoutSmoke:
             cx, cy = 1920 - 24 - 280, 1080 - 24 - 158  # middle of 560-wide pip
             pip = frame[cy, cx]
             assert not (pip[2] > 100 and pip[0] < 80)
+
+
+class TestAudioPlan:
+    """No filtergraph may reference a [N:a] stream that doesn't exist — that's a
+    hard ffmpeg failure. Voice+game mix only when both carry audio."""
+
+    def test_both_audio_mixes(self):
+        fg, amap = audio_plan(True, True, 0.30, "V")
+        assert "amix" in fg and "[0:a]" in fg and "[1:a]" in fg
+        assert amap == ["-map", "[v]", "-map", "[a]"]
+
+    def test_facecam_silent_gameplay_audio_no_mix(self):
+        fg, amap = audio_plan(False, True, 0.30, "V")
+        assert "amix" not in fg and "[0:a]" not in fg  # would crash on a voiceless facecam
+        assert amap == ["-map", "[v]", "-map", "1:a?"]
+
+    def test_gameplay_silent_carries_facecam_voice(self):
+        fg, amap = audio_plan(True, False, 0.30, "V")
+        assert fg == "V" and amap == ["-map", "[v]", "-map", "0:a?"]
+
+    def test_neither_has_audio_is_safe(self):
+        fg, amap = audio_plan(False, False, 0.30, "V")
+        assert amap == ["-map", "[v]", "-map", "0:a?"]  # optional map, no crash
+
+
+class TestComposeInterrupt:
+    def test_polls_interrupt_before_each_pair(self, monkeypatch):
+        import _hypereel_ffmpeg as ff
+        calls = []
+        monkeypatch.setattr(ff, "_compose_pair", lambda *a, **k: calls.append(1))
+        flags = iter([False, True])  # cancel arrives before the 2nd pair
+        with pytest.raises(InterruptedError):
+            ff.compose_pairs([("a", "b"), ("c", "d"), ("e", "f")], "out",
+                             interrupt=lambda: next(flags))
+        assert len(calls) == 1  # only the first pair encoded before the cancel
+
+    def test_no_interrupt_runs_all(self, monkeypatch, tmp_path):
+        import _hypereel_ffmpeg as ff
+        calls = []
+        monkeypatch.setattr(ff, "_compose_pair", lambda *a, **k: calls.append(1))
+        monkeypatch.setattr(ff.subprocess, "run", lambda *a, **k: None)  # concat no-op
+        ff.compose_pairs([("a", "b"), ("c", "d")], str(tmp_path / "o.mp4"))
+        assert len(calls) == 2
