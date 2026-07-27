@@ -114,19 +114,41 @@ The Hypereel product ported node for node from the Symbiotica platform: find vir
 moments in gameplay, cut them, animate a consistent streamer facecam (Seedance 2.0
 partner node), and stack facecam over real gameplay into a vertical reel.
 
+- `Hypereel Product Scrape (URL to references)` — scrapes a product, app, or
+  app-store page into a logo + screenshots (IMAGE outputs) and a product summary for
+  the script LLM; follows the first app-store link for the curated promo screens,
+  promotes the AppIcon to logo, drops badges and template URLs, and refuses
+  non-public targets (SSRF-guarded — the host is resolved before it is trusted)
+- `Hypereel UGC Presets (style · hook · setting)` — the platform's UGC preset
+  catalogs as dropdowns: pick a style, hook and setting by name and get each template
+  plus a combined pre-labeled block (STYLE NOTE / HOOK PATTERN / SETTING NOTE) ready
+  to concatenate after the product summary
+- `Hypereel Analysis Prompt (auto duration)` — builds the highlight-analysis prompt
+  from the video itself: the real duration becomes the timestamp boundary line and
+  the same number feeds Highlight Pick's `source_duration` guard, so the prompt and
+  the guard can never disagree
 - `Hypereel Highlight Pick` — parses a Gemini highlight list (`HIGHLIGHT n |
   start=.. | end=.. | label | WHY: .. | MOOD: ..`, seconds or MM:SS) and exposes one
   highlight's start/end/duration plus the text row for the script LLM
+- `Hypereel Duration Parse (script to prompt + seconds)` — reads the script LLM's
+  output, strips the trailing `DURATION: N` line and returns the clean prompt plus
+  the clamped seconds (4–15, default 12 when the line is missing); wire the prompt
+  onward and the seconds into the video node's duration input
 - `Hypereel Clip (cut by seconds)` — cuts a `[start, start+duration]` window out of a
   VIDEO with ffmpeg. No frame tensors: a 7-minute or 7-hour source costs the same.
   The window is clamped inside the source, so a highlight near EOF still yields a
   full slice
+- `Hypereel Screen Glow (light from gameplay)` — samples the gameplay's per-frame
+  mean color (an explosion flashes orange, a dark corridor goes dim) and
+  screen-blends it onto the facecam as a bottom-up monitor glow, frame-locked to the
+  footage; the facecam's own audio passes through untouched
 - `Hypereel Stack Composite (facecam over gameplay)` — named layout templates:
   vertical facecam-top 40/60 (the platform's Modal geometry), vertical half/half,
   and gameplay-full layouts (vertical or horizontal) with the facecam PiP in a
   chosen corner. Voice at full volume with game audio mixed at a gain only when the
   gameplay has an audio track (`amix ... normalize=0` so the voice is never
-  halved), up to 4 pairs hard-cut-concatenated in order
+  halved), up to 4 pairs hard-cut-concatenated in order. Wire a keyer's MASK into a
+  pair to drop the facecam in as a cutout silhouette instead of a rectangle
 
 Runs anywhere ffmpeg exists — local mac (Homebrew) or a Modal image with
 `apt_install("ffmpeg")`.

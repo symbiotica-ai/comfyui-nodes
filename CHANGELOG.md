@@ -6,6 +6,52 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.20
+
+**New nodes** — this release adds the **Hypereel** streamer-reel pipeline: 8 new
+node ids under `Symbiotica/Hypereel`. No existing node's inputs, outputs, or id
+changed.
+
+### Added
+- **The Hypereel streamer-reel pipeline**, a node-for-node port of the Symbiotica
+  platform's reel workflow: turn a product URL and raw gameplay into a vertical
+  facecam-over-gameplay reel.
+  - `Hypereel Product Scrape (URL to references)` — a product, app, or app-store
+    page becomes a logo + screenshots (IMAGE outputs) and a product summary for the
+    script LLM; follows the first app-store link for the curated promo screens and
+    refuses non-public targets (the SSRF guard resolves the host before it trusts it).
+  - `Hypereel UGC Presets (style · hook · setting)` — the platform's UGC preset
+    catalogs as dropdowns, emitting each template plus a combined pre-labeled block.
+  - `Hypereel Analysis Prompt (auto duration)` — builds the highlight-analysis
+    prompt from the video's real duration, which also feeds Highlight Pick's guard.
+  - `Hypereel Highlight Pick` — parses a Gemini highlight list into one highlight's
+    start/end/duration plus the text row.
+  - `Hypereel Duration Parse (script to prompt + seconds)` — strips the script's
+    trailing `DURATION: N` line into a clean prompt plus clamped seconds.
+  - `Hypereel Clip (cut by seconds)` — an ffmpeg window cut whose cost is constant
+    regardless of source length, clamped inside the source.
+  - `Hypereel Screen Glow (light from gameplay)` — screen-blends the gameplay's
+    per-frame color onto the facecam as a bottom-up monitor glow; audio untouched.
+  - `Hypereel Stack Composite (facecam over gameplay)` — named vertical/PiP layouts,
+    a voice+game audio mix, up to 4 hard-cut pairs, and an optional MASK cutout.
+
+### Fixed
+- **SSRF hardening in Product Scrape** — the fetch guard now resolves the host
+  before judging it, so a public name whose A record points at a private or
+  metadata address is rejected; it also normalizes numeric-obfuscated IPs,
+  re-checks every redirect hop, and blocks CGNAT/multicast. A timing-out image URL
+  degrades to a skipped screenshot instead of crashing the whole node.
+- **Stack Composite** — a masked pair no longer lets the facecam's native fps
+  override the requested output fps, and a voiceless facecam no longer crashes the
+  audio mix.
+- **Screen Glow** — falls back to format-level duration so the glow signal can't
+  flatten to a single static color.
+- **Cancel** — long ffmpeg encodes (composite, glow) now stop promptly on ComfyUI
+  Cancel instead of running to completion.
+- Clip duration is no longer capped at 600s; clock-mismatched timestamps fail
+  loudly instead of silently clamping; scraped names/descriptions decode HTML
+  entities and match the platform's product line exactly.
+
 ## 2026.7.19
 
 ### Added
