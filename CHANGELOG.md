@@ -6,6 +6,20 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.15
+
+A browse-time fix for wired Studio Library paths. No node's inputs, outputs, or
+ids changed — nothing here breaks an existing workflow.
+
+### Fixed
+- **Wiring `project_path` from the Symbiotica Studio Library node now fills the
+  Order Specs pickers.** The wire carries the node's volume-relative selection
+  (`studios/<slug>/...`), which the browse routes' directory checks rejected —
+  "Read folder" and the month/feature dropdowns came up empty while execute-time
+  rendering worked. The `list-orders`, `parse-order`, `list-assets`, and
+  `pack-template-list` routes now resolve that form to its absolute path through
+  the Studio Library's confinement resolver; any other path behaves as before.
+
 ## 2026.7.14
 
 ### Fixed
