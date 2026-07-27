@@ -257,3 +257,29 @@ def test_round_trip_child_rel_lists(vol2):
     first_dir = next(e for e in root["entries"] if e["type"] == "dir")
     child = list_studio_dir(str(vol2), "ggs", first_dir["rel"])
     assert "error" not in child and child["rel"] == first_dir["rel"]
+
+
+def test_expand_studio_path_resolves_volume_relative(vol):
+    from pipeline.studio_library import expand_studio_path
+    got = expand_studio_path(str(vol), "studios/ggs/references")
+    assert got == os.path.realpath(str(vol / "studios" / "ggs" / "references"))
+
+
+def test_expand_studio_path_passes_through_other_strings(vol):
+    from pipeline.studio_library import expand_studio_path
+    # Absolute paths, plain names, and empty input are not the volume-relative
+    # currency — they pass through untouched for the caller's own checks.
+    assert expand_studio_path(str(vol), "/tmp/somewhere") == "/tmp/somewhere"
+    assert expand_studio_path(str(vol), "projects/bakery") == "projects/bakery"
+    assert expand_studio_path(str(vol), "") == ""
+    assert expand_studio_path(str(vol), None) == ""
+    assert expand_studio_path(str(vol), "  /x/y ") == "/x/y"
+
+
+def test_expand_studio_path_unresolvable_passes_through(vol):
+    from pipeline.studio_library import expand_studio_path
+    # A studios/... string that cannot resolve (missing, escaping, bad slug)
+    # comes back unchanged — the route's own isdir/error handling deals with it.
+    assert expand_studio_path(str(vol), "studios/ggs/nope") == "studios/ggs/nope"
+    assert expand_studio_path(str(vol), "studios/ggs/../../etc") == "studios/ggs/../../etc"
+    assert expand_studio_path(str(vol), "studios/Bad_Slug/x") == "studios/Bad_Slug/x"
