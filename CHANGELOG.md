@@ -6,6 +6,18 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.18
+
+### Changed
+- **The Template Library browses in an overlay now, not an embedded panel.**
+  The node carries a native "📂 Browse template library" button (the Studio
+  Library pattern) plus a read-only summary of the current pick; clicking it
+  opens a centered overlay with the template list — output checkboxes, sheet
+  counts, thumbnails, "use", and delete all live there. The embedded DOM panel
+  did not reliably render in the Vue UI, which left the node blank on a fresh
+  start. No node inputs, outputs, or ids changed; workflows saved with the old
+  panel re-fit their height on load.
+
 ## 2026.7.17
 
 ### Changed
