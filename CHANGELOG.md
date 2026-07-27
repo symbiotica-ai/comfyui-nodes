@@ -6,6 +6,16 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.17
+
+### Changed
+- **Order Specs "📁 Read folder" and Auto Packer "💾 Save as template" are now
+  native litegraph buttons** (like the Studio Library's "Browse" button), not
+  DOM widgets. Native buttons render in both UIs and are never hidden at low
+  zoom, so neither comes up missing on a fresh Comfy start. (The old DOM-widget
+  workaround dated from a frontend version that didn't draw native buttons; it
+  does now.)
+
 ## 2026.7.16
 
 ### Fixed
