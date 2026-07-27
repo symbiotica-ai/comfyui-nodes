@@ -86,6 +86,25 @@ class TestGlowSmoke:
 
             assert mean_luma(out_b) > mean_luma(out_d) + 10
 
+    def test_interrupt_stops_the_glow_encode(self):
+        # A pressed Cancel (interrupt()->True) must raise out of the frame loop
+        # instead of running the whole encode; the poll fires at i=0.
+        with tempfile.TemporaryDirectory() as d:
+            facecam = self._clip(d, "fc.mp4", "color=c=gray:size=320x240:rate=24", audio=True)
+            gp = self._clip(d, "gp.mp4", "color=c=white:size=320x240:rate=24")
+            out = os.path.join(d, "out.mp4")
+            with pytest.raises(InterruptedError):
+                run_glow(facecam, gp, out, interrupt=lambda: True)
+
+    def test_never_firing_interrupt_runs_to_completion(self):
+        # interrupt()->False must not disturb the normal path.
+        with tempfile.TemporaryDirectory() as d:
+            facecam = self._clip(d, "fc.mp4", "color=c=gray:size=320x240:rate=24", audio=True)
+            gp = self._clip(d, "gp.mp4", "color=c=white:size=320x240:rate=24")
+            out = os.path.join(d, "out.mp4")
+            frames = run_glow(facecam, gp, out, interrupt=lambda: False)
+            assert frames > 0 and os.path.exists(out)
+
     def test_audio_survives(self):
         with tempfile.TemporaryDirectory() as d:
             facecam = self._clip(d, "fc.mp4", "color=c=gray:size=320x240:rate=24", audio=True)

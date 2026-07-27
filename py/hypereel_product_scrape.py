@@ -26,11 +26,13 @@ def _fetch_html(url):
 
 
 def _fetch_image(url):
-    """URL -> (1,H,W,3) float tensor, or None when the download/decode fails."""
-    res = safe_get(lambda u: _get(u, 10), url)
-    if not res or not res.ok:
-        return None
+    """URL -> (1,H,W,3) float tensor, or None when the download/decode fails.
+    The fetch is inside the guard too: a scraped screenshot URL that times out or
+    refuses the connection must degrade to None, not abort the node's whole loop."""
     try:
+        res = safe_get(lambda u: _get(u, 10), url)
+        if not res or not res.ok:
+            return None
         img = Image.open(io.BytesIO(res.content)).convert("RGB")
         arr = np.asarray(img, dtype=np.float32) / 255.0
         return torch.from_numpy(arr).unsqueeze(0)

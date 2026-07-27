@@ -1,5 +1,7 @@
 # ABOUTME: Tests the product-scrape port — asset extraction, store handling, size
 # ABOUTME: scoring, SSRF guard, store-follow merge. Ports the platform's field cases.
+import socket
+
 import pytest
 
 from _hypereel_scrape import (
@@ -7,6 +9,24 @@ from _hypereel_scrape import (
     is_public_http_target,
     scrape_product,
 )
+
+
+@pytest.fixture(autouse=True)
+def _pin_dns(monkeypatch):
+    """is_public_http_target resolves the host before judging it, so pin DNS to
+    keep these tests hermetic and off the network. The `rebind` names model a
+    public hostname whose A record points inward (the 169.254.169.254.nip.io
+    class a name-only guard misses); every other name resolves to a public IP."""
+    rebind = {
+        "169.254.169.254.nip.io": "169.254.169.254",  # public wildcard -> metadata
+        "intranet.corp.test": "10.0.0.5",
+    }
+
+    def fake_getaddrinfo(host, *args, **kwargs):
+        ip = rebind.get(host, "93.184.216.34")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
 
 GENERIC_PAGE = """
@@ -99,6 +119,32 @@ class TestSsrfGuard:
 
     def test_public_ok(self):
         assert is_public_http_target("https://goodgame.com/e4k") is True
+
+    @pytest.mark.parametrize("bad", [
+        "http://169.254.169.254.nip.io/latest/meta-data/",  # name -> metadata IP
+        "http://intranet.corp.test/x",                       # name -> private IP
+    ])
+    def test_hostname_resolving_inward_is_blocked(self, bad):
+        # A name-only guard trusts anything that isn't an IP literal; the host
+        # must be RESOLVED so a public name whose A record points at a private or
+        # metadata address (the nip.io rebinding class) is rejected on the IP.
+        assert is_public_http_target(bad) is False
+
+    @pytest.mark.parametrize("bad", [
+        "http://100.64.0.1/x",   # RFC 6598 CGNAT — not private, but not global
+        "http://224.0.0.1/x",    # multicast
+    ])
+    def test_non_global_literals_blocked(self, bad):
+        # The enumerated private/loopback/link-local flags miss these; testing
+        # `is_global` (plus multicast) catches every non-routable class.
+        assert is_public_http_target(bad) is False
+
+    def test_unresolvable_host_is_refused(self, monkeypatch):
+        # A host that resolves to nothing is refused, not waved through.
+        def boom(*a, **k):
+            raise socket.gaierror("name does not resolve")
+        monkeypatch.setattr(socket, "getaddrinfo", boom)
+        assert is_public_http_target("http://nx.example.invalid/") is False
 
 
 class TestSafeGetRedirects:

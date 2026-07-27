@@ -25,9 +25,35 @@ def is_store_host(url):
     return h in ("apps.apple.com", "play.google.com")
 
 
+def _host_ips(host):
+    """Every IP `host` denotes: the address itself for a literal (including the
+    non-standard numeric forms the OS resolver expands — decimal 2130706433,
+    hex 0x7f000001, octal, short 127.1 — which socket.inet_aton accepts), else
+    the A/AAAA records from DNS. Empty when the host cannot be resolved."""
+    try:
+        return [ipaddress.ip_address(host)]
+    except ValueError:
+        pass
+    try:
+        return [ipaddress.ip_address(socket.inet_aton(host))]
+    except (OSError, ValueError):
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError):
+        return []
+    return [ipaddress.ip_address(info[4][0]) for info in infos]
+
+
 def is_public_http_target(raw):
-    """No SSRF into loopback / private-range / link-local / metadata endpoints
-    or .internal/.local/localhost hosts."""
+    """No SSRF into loopback / private-range / CGNAT / link-local / metadata
+    endpoints or .internal/.local/localhost hosts. The host is RESOLVED before
+    it is judged, so a public name whose A record points inward (e.g. the
+    169.254.169.254.nip.io rebinding trick) is rejected on the resolved address
+    rather than trusted for not being a literal, and every resolved IP must be
+    globally routable. A DNS-rebinding TOCTOU window remains between this check
+    and the caller's connect — acceptable for a best-effort scraper, not a hard
+    security boundary."""
     try:
         u = urlparse(raw)
     except ValueError:
@@ -39,21 +65,10 @@ def is_public_http_target(raw):
         return False
     if host == "localhost" or host.endswith((".localhost", ".internal", ".local")):
         return False
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        # Not a standard IP literal. The OS resolver still expands non-standard
-        # numeric forms (decimal 2130706433, hex 0x7f000001, octal, short 127.1)
-        # to a real IPv4 — socket.inet_aton accepts exactly those, so normalize
-        # through it before deciding the host is a name rather than an address.
-        try:
-            ip = ipaddress.ip_address(socket.inet_aton(host))
-        except (OSError, ValueError):
-            ip = None
-    if ip is not None and (ip.is_private or ip.is_loopback or ip.is_link_local
-                           or ip.is_reserved or ip.is_unspecified):
+    ips = _host_ips(host)
+    if not ips:
         return False
-    return True
+    return all(ip.is_global and not ip.is_multicast for ip in ips)
 
 
 def safe_get(get, url, max_redirects=4):
