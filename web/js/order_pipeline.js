@@ -316,34 +316,25 @@ function wireOrderSpecs(node) {
     // registers the refs root (that is what lets the Auto Packer thumbnails
     // load). No need to wire + queue a packer just to populate the pickers.
     //
-    // A DOM widget, NOT node.addWidget("button", …): the new Vue node UI does
-    // not render litegraph button widgets, but it DOES render addDOMWidget
-    // elements (the Auto Packer's assets panel proves it).
-    const readBtn = document.createElement("button");
-    readBtn.textContent = "📁 Read folder";
-    readBtn.style.cssText = "width:100%;box-sizing:border-box;padding:5px 8px;"
-        + "cursor:pointer;border-radius:8px;border:1px solid #555;background:#333;"
-        + "color:#ddd;font-size:12px;";
+    // A NATIVE litegraph button (like the Studio Library's "Browse" button):
+    // it renders in both UIs and — unlike a DOM widget — is never hidden below
+    // the zoom threshold, so it can't come up missing on a fresh Comfy start.
     let reading = false;
-    readBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
+    const readBtn = node.addWidget("button", "📁 Read folder", null, async () => {
         if (reading) return;
         reading = true;
-        readBtn.textContent = "⏳ Reading…";
+        readBtn.name = "⏳ Reading…";
+        node.setDirtyCanvas?.(true, true);
         try {
             await node._symRefreshMonths?.();
             await refreshOrderSpecs(node, { explicit: true });
         } finally {
             reading = false;
-            readBtn.textContent = "📁 Read folder";
+            readBtn.name = "📁 Read folder";
             node.setDirtyCanvas?.(true, true);
         }
     });
-    // NOT hideOnZoom: this is the first thing to click after loading a graph,
-    // and hiding it below the zoom threshold made it look missing on every
-    // fresh Comfy start. It's one small button — always render it.
-    node.addDOMWidget("read_folder", "sym_readfolder", readBtn,
-                      { serialize: false });
+    readBtn.serialize = false;
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
     // own project_path hook — both fire). `feature` too, so a downstream Auto
     // Packer panel re-renders for the newly picked event.
@@ -571,14 +562,10 @@ function assetsPanel(node) {
 function wireSaveButton(node) {
     const saveW = widgetOf(node, "save_as");
     if (saveW) { saveW.hidden = true; saveW.computeSize = () => [0, -4]; }
-    const btn = document.createElement("button");
-    btn.textContent = "💾 Save as template";
-    btn.style.cssText = "width:100%;box-sizing:border-box;padding:5px 8px;"
-        + "cursor:pointer;border-radius:8px;border:1px solid #555;background:#333;"
-        + "color:#ddd;font-size:12px;";
+    // A native litegraph button (like Order Specs' Read-folder): renders in both
+    // UIs and never hides at low zoom, unlike the DOM widget it replaces.
     let saving = false;
-    btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
+    const btn = node.addWidget("button", "💾 Save as template", null, async () => {
         if (saving) return;
         const { event: ev } = assetSourceFor(node);
         const cat = widgetOf(node, "category")?.value?.trim() || "All";
@@ -589,7 +576,8 @@ function wireSaveButton(node) {
             "Save this pack as a template named:", suggested);
         if (!name || !name.trim()) return;
         saving = true;
-        btn.textContent = "⏳ Saving…";
+        btn.name = "⏳ Saving…";
+        node.setDirtyCanvas?.(true, true);
         if (saveW) saveW.value = name.trim();
         try {
             // Serialize NOW so save_as is captured, THEN clear + queue the
@@ -604,12 +592,11 @@ function wireSaveButton(node) {
         } finally {
             if (saveW) saveW.value = "";
             saving = false;
-            btn.textContent = "💾 Save as template";
+            btn.name = "💾 Save as template";
             node.setDirtyCanvas?.(true, true);
         }
     });
-    node.addDOMWidget("save_template", "sym_savetpl", btn,
-                      { serialize: false, hideOnZoom: true });
+    btn.serialize = false;
 }
 
 // The Template Library node: a folder browser of the project's saved Auto
