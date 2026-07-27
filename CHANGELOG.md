@@ -6,6 +6,14 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.16
+
+### Fixed
+- **Order Specs "📁 Read folder" button no longer disappears on a fresh Comfy
+  start.** It's a DOM widget that was flagged `hideOnZoom`, so ComfyUI hid it
+  (like the other DOM widgets) whenever the canvas was below the zoom threshold —
+  it looked missing at a normal working zoom. It now always renders.
+
 ## 2026.7.15
 
 A browse-time fix for wired Studio Library paths. No node's inputs, outputs, or

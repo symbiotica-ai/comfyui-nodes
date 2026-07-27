@@ -339,8 +339,11 @@ function wireOrderSpecs(node) {
             node.setDirtyCanvas?.(true, true);
         }
     });
+    // NOT hideOnZoom: this is the first thing to click after loading a graph,
+    // and hiding it below the zoom threshold made it look missing on every
+    // fresh Comfy start. It's one small button — always render it.
     node.addDOMWidget("read_folder", "sym_readfolder", readBtn,
-                      { serialize: false, hideOnZoom: true });
+                      { serialize: false });
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
     // own project_path hook — both fire). `feature` too, so a downstream Auto
     // Packer panel re-renders for the newly picked event.
