@@ -56,8 +56,10 @@ so the node grows with its content and scrolls past a cap instead of running off
 the canvas.
 
 Chrome comes from the Studio Library browser (`↑ up`, breadcrumb, "Filter this
-folder…", folder-first rows, HUB theme tokens), extracted into a shared
-`web/js/browser_chrome.js` that both nodes import — no new visual assets.
+folder…", folder-first rows, HUB theme tokens), lifted into a shared
+`web/js/browser_chrome.js` — no new visual assets. The Studio Library overlay
+keeps its own working copy for now; it moves onto the shared parts the next time
+it is touched, rather than being refactored blind here.
 Thumbnails use the Auto Packer's `/symbiotica/local-image` URL builder, keeping
 the `/api/` prefix that the Modal gateway requires.
 

@@ -172,7 +172,13 @@ function referencePanel(node) {
             render();
             return;
         }
-        const files = (data.images ?? []).map((i) => i.rel);
+        // The library keeps a `thumbNNNN.png` catalogue tile beside an item's
+        // real art (smaller, and not a stage of the item) — ticking the folder
+        // should not turn that into a cell. It is still listed in the grid, so
+        // it can be added back by hand.
+        const all = (data.images ?? []).map((i) => i.rel);
+        const art = all.filter((rel) => !baseName(rel).toLowerCase().startsWith("thumb"));
+        const files = art.length ? art : all;
         if (!files.length) {
             error = `${baseName(dirRel)} has no images directly inside it`;
             render();
