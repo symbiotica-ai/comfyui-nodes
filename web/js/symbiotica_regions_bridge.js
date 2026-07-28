@@ -7,6 +7,7 @@
 // ABOUTME: editor's skeleton and goes straight to the image-edit node.
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { registerSymbioticaExtension } from "./register.js";
 
 const BUILDER_TYPE = "RegionalPromptBuilder";
 const EDITOR_TYPE = "SymbioticaTemplateEditor";
@@ -334,7 +335,7 @@ function applyDescsToBuilders(rpId, descs) {
     }
 }
 
-app.registerExtension({
+registerSymbioticaExtension(app, {
     name: "symbiotica.regionsBridge",
     setup() {
         api.addEventListener("symbiotica.region_descs", ({ detail }) => {

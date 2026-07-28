@@ -5,6 +5,7 @@ import { api } from "../../../scripts/api.js";
 import { openTemplateEditor } from "./template_editor/editor.js";
 import { createOrderCache } from "./order_cache.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
+import { registerSymbioticaExtension } from "./register.js";
 
 // node.id -> {events, refFileCount, refsRoot} (last parse per Order Read node)
 const orderCache = new Map();
@@ -1049,7 +1050,7 @@ function renderBrowser(container, data) {
 }
 
 // --- extension ---------------------------------------------------------------
-app.registerExtension({
+registerSymbioticaExtension(app, {
     name: "symbiotica.order_pipeline",
 
     setup() {

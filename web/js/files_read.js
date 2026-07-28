@@ -3,6 +3,7 @@
 // ABOUTME: the node's selection JSON. Tree mechanics referenced from rail.js.
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { registerSymbioticaExtension } from "./register.js";
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
 const el = (tag, style = "", text = "") => {
@@ -387,7 +388,7 @@ function openBrowser(node) {
         });
 }
 
-app.registerExtension({
+registerSymbioticaExtension(app, {
     name: "symbiotica.files_read",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "SymbioticaFilesRead") return;
