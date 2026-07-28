@@ -9,7 +9,7 @@ class NSLLMModelSelector:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model": (all_models, {"default": "claude-opus-4-8"}),
+                "model": (all_models, {"default": "claude-opus-5"}),
             },
         }
 

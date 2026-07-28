@@ -16,7 +16,7 @@ from torch import Tensor
 
 claude_models = [
     "claude-fable-5",
-    "claude-opus-4-8",
+    "claude-opus-5",
     "claude-sonnet-5",
     "claude-haiku-4-5",
 ]
@@ -110,7 +110,7 @@ def call_claude_api(
         "max_tokens": max_tokens,
     }
     # `temperature` intentionally omitted for Claude — current-gen models
-    # (Opus 4.8, Sonnet 4.6, Haiku 4.5) have adaptive thinking always-on
+    # (Fable 5, Opus 5, Sonnet 5) have adaptive thinking always-on
     # and reject the parameter with "`temperature` is deprecated for this
     # model." The slider stays effective for Gemini/OpenAI/Grok callers.
 
