@@ -1,11 +1,13 @@
-# ABOUTME: Files Read builder — turn a browser selection over a loose client
-# ABOUTME: reference folder into the standard Order payload the AutoPacker eats.
+# ABOUTME: Reference Browser builder — turn a browser selection over the game's
+# ABOUTME: asset library into the standard Order payload the AutoPacker eats.
 from __future__ import annotations
 
 import json
 import os
 
 from PIL import Image
+
+from .compose import IMG_EXTS
 
 
 def _px_dims(path: str) -> tuple[int, int] | None:
@@ -19,7 +21,53 @@ def _px_dims(path: str) -> tuple[int, int] | None:
         return None
 
 
-def build_files_order(refs_root: str, selection, name: str = "") -> dict:
+def list_level(refs_root: str, rel: str = "") -> dict:
+    """One level of the library tree: the folders and the images directly inside
+    `refs_root/rel`. Never raises — a bad or escaping rel returns {"error": ...}.
+
+    Confinement is by realpath containment, the same rule the builder applies, so
+    the browser can never list (and then pick) anything outside the root the user
+    wired in. Image entries carry pixel size because the row's canvas comes from
+    the largest image in it; an unreadable header yields w/h of None rather than
+    dropping the file, so the user still sees it in the tree.
+    """
+    refs_root = (refs_root or "").strip()
+    try:
+        root_real = os.path.realpath(refs_root)
+        if not refs_root or not os.path.isdir(root_real):
+            return {"error": f"not a readable directory: {refs_root!r}"}
+        rel = str(rel or "").strip().strip("/")
+        target = os.path.realpath(os.path.join(root_real, *rel.split("/"))) \
+            if rel else root_real
+        if not (target == root_real or target.startswith(root_real + os.sep)):
+            return {"error": "outside the reference folder"}
+        if not os.path.isdir(target):
+            return {"error": f"not a folder: {rel!r}"}
+        dirs, images = [], []
+        with os.scandir(target) as it:
+            for e in it:
+                if e.name.startswith("."):
+                    continue
+                child_rel = f"{rel}/{e.name}" if rel else e.name
+                if e.is_dir():  # follow symlinks: the containment check above
+                    dirs.append({"name": e.name, "rel": child_rel})
+                    continue
+                if os.path.splitext(e.name)[1].lower() not in IMG_EXTS:
+                    continue
+                dims = _px_dims(e.path)
+                images.append({"name": e.name, "rel": child_rel,
+                               "w": dims[0] if dims else None,
+                               "h": dims[1] if dims else None})
+    except OSError as exc:
+        return {"error": f"could not read {rel or '.'}: {exc}"}
+    dirs.sort(key=lambda d: d["name"].lower())
+    images.sort(key=lambda i: i["name"].lower())
+    parent = None if not rel else "/".join(rel.split("/")[:-1])
+    return {"root": root_real, "rel": rel, "parent": parent,
+            "dirs": dirs, "images": images}
+
+
+def build_reference_order(refs_root: str, selection, name: str = "") -> dict:
     """Selection JSON -> Order payload. One group = one asset (one sheet row);
     the group's files are its refFiles verbatim (rel paths, may nest). canvas =
     the group's max pixel dims, so (category, canvas) sheet grouping and the
@@ -27,8 +75,9 @@ def build_files_order(refs_root: str, selection, name: str = "") -> dict:
     dropped; a group with nothing left raises (its name in the message)."""
     refs_root = (refs_root or "").strip()
     if not os.path.isdir(refs_root):
-        raise ValueError(f"reference folder not found: {refs_root!r} — set "
-                         "refs_path to the client folder of reference images")
+        raise ValueError(f"reference folder not found: {refs_root!r} — wire the "
+                         "Studio Library's path into root_path, or type the "
+                         "library folder")
     if isinstance(selection, str):
         try:
             selection = json.loads(selection or "{}")
@@ -38,8 +87,8 @@ def build_files_order(refs_root: str, selection, name: str = "") -> dict:
     # a number) — treat anything but a dict of groups as empty.
     groups = selection.get("groups") if isinstance(selection, dict) else None
     if not groups:
-        raise ValueError("no groups selected — open the files browser and "
-                         "tick folders/files to build groups")
+        raise ValueError("nothing picked — browse the library in the node and "
+                         "tick folders or images")
     root_real = os.path.realpath(refs_root)
     assets, used = [], set()
     for g in groups:
@@ -68,7 +117,7 @@ def build_files_order(refs_root: str, selection, name: str = "") -> dict:
             w, h = max(w, dims[0]), max(h, dims[1])
         if not files:
             raise ValueError(f"group {gname!r} has no readable images under "
-                             f"{refs_root!r} — re-open the files browser")
+                             f"{refs_root!r} — re-pick it in the browser")
         assets.append({
             "assetName": gname,
             "category": (g.get("category") or "").strip() or gname,
@@ -78,8 +127,8 @@ def build_files_order(refs_root: str, selection, name: str = "") -> dict:
             "prompt": (g.get("desc") or "").strip(),
         })
     if not assets:
-        raise ValueError("no valid groups — open the files browser and tick "
-                         "folders/files to build groups")
+        raise ValueError("nothing valid picked — browse the library in the node "
+                         "and tick folders or images")
     feature = (name or "").strip() or os.path.basename(refs_root.rstrip(os.sep))
     return {"feature": feature, "eventName": feature, "assets": assets,
             "refsRoot": refs_root, "assetsRoot": "", "guide": None}

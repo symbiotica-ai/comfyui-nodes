@@ -167,6 +167,21 @@ async def browse_dirs(request):
     return web.json_response(info)
 
 
+@PromptServer.instance.routes.get("/symbiotica/browse-refs")
+async def browse_refs(request):
+    """One level of the Reference Browser's tree: folders + images (with pixel
+    sizes) directly under root/dir. The user wired the root into the node, so
+    that IS the intent — register it for thumbnail serving, like list-assets."""
+    from .reference_browser import list_level
+
+    root = _expand_project(request.query.get("root", ""))
+    result = list_level(root, request.query.get("dir", ""))
+    if "error" in result:
+        return web.json_response(result, status=400)
+    register_root(result["root"])
+    return web.json_response(result)
+
+
 @PromptServer.instance.routes.get("/symbiotica/list-orders")
 async def list_orders(request):
     """The months available under a project folder's orders/ subdir, for the
