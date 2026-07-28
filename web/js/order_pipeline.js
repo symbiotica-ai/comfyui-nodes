@@ -578,6 +578,38 @@ function assetsPanel(node) {
     render();
 }
 
+// The API-format prompt reduced to `rootId` and everything it feeds from, plus
+// a preview terminal so the run has an output node.
+//
+// Saving used to queue the WHOLE graph, which drags in everything DOWNSTREAM of
+// the packer — image models, API nodes — none of which the pack needs. That
+// made a save fail on unrelated errors (a missing checkpoint), pop ComfyUI's
+// "Sign In Required to Use API Nodes" dialog when an API node was present, and
+// pay for a full generation just to write a template. The ancestor closure
+// keeps the order/preset/settings/library feeding this packer and nothing else.
+function packOnlyPrompt(output, rootId) {
+    const keep = new Set();
+    const walk = (id) => {
+        if (keep.has(id) || !output[id]) return;
+        keep.add(id);
+        for (const value of Object.values(output[id].inputs ?? {})) {
+            // A wired input is [originNodeId, slot]; widgets are plain values.
+            if (Array.isArray(value) && value.length === 2) walk(String(value[0]));
+        }
+    };
+    walk(String(rootId));
+    const pruned = {};
+    for (const id of keep) pruned[id] = output[id];
+    // The packer is not an output node, and a prompt with no outputs is
+    // rejected before anything runs — so terminate the pruned graph with a
+    // preview of the sheets being saved.
+    pruned["symbiotica-save-preview"] = {
+        class_type: "PreviewImage",
+        inputs: { images: [String(rootId), 0] },
+    };
+    return pruned;
+}
+
 // The default template name: what is being packed (the order's event or the
 // library folder) plus the picked category, slugified.
 function suggestedName(node) {
@@ -626,7 +658,10 @@ function wireSaveButton(node) {
             // downstream run. graphToPrompt snapshots the graph synchronously.
             const prompt = await app.graphToPrompt();
             if (saveW) saveW.value = "";
-            await api.queuePrompt(0, prompt);
+            await api.queuePrompt(0, {
+                output: packOnlyPrompt(prompt.output, node.id),
+                workflow: prompt.workflow,
+            });
         } catch (err) {
             console.error("[symbiotica] template save queue failed", err);
             toast("error", "Template not saved",
