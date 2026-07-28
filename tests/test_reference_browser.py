@@ -229,3 +229,22 @@ def test_list_level_unreadable_image_keeps_entry_without_dims(refs, monkeypatch)
     lvl = list_level(str(refs), "Stoves")
     assert [(i["name"], i["w"]) for i in lvl["images"]] == [
         ("stove_blue.png", None), ("stove_red.png", None)]
+
+
+# --- project derivation: where "Save as template" files the sheet ------------
+
+def test_order_carries_the_project_the_library_sits_under(tmp_path):
+    project = tmp_path / "bakery"
+    (project / "orders").mkdir(parents=True)
+    deep = project / "reference-assets" / "Minis" / "Mini 01" / "Food" / "31 Tartlets"
+    _png(deep / "a.png", 128, 128)
+    order = build_reference_order(str(deep), _sel([
+        {"name": "31 Tartlets", "category": "Food", "files": ["a.png"]}]))
+    assert order["project_path"] == str(project.resolve())
+
+
+def test_project_is_empty_outside_a_project_folder(tmp_path):
+    _png(tmp_path / "loose" / "a.png")
+    order = build_reference_order(str(tmp_path / "loose"), _sel([
+        {"name": "x", "category": "x", "files": ["a.png"]}]))
+    assert order["project_path"] == ""

@@ -8,6 +8,7 @@ import os
 from PIL import Image
 
 from .compose import IMG_EXTS
+from .project_layout import project_root_of
 
 
 def _px_dims(path: str) -> tuple[int, int] | None:
@@ -131,4 +132,9 @@ def build_reference_order(refs_root: str, selection, name: str = "") -> dict:
                          "and tick folders or images")
     feature = (name or "").strip() or os.path.basename(refs_root.rstrip(os.sep))
     return {"feature": feature, "eventName": feature, "assets": assets,
-            "refsRoot": refs_root, "assetsRoot": "", "guide": None}
+            "refsRoot": refs_root, "assetsRoot": "", "guide": None,
+            # The client project this library lives under, so "Save as template"
+            # files the sheet in <project>/templates/ beside the order-built
+            # ones. "" when the folder is not inside a project — the packer then
+            # falls back to output/templates as before.
+            "project_path": project_root_of(refs_root), "month": ""}
