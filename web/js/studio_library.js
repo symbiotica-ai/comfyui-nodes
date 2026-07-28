@@ -3,6 +3,7 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
+import { registerSymbioticaExtension } from "./register.js";
 
 const ROUTE = "/symbiotica/studio-library";
 
@@ -197,7 +198,7 @@ function openBrowser(node) {
     show("");
 }
 
-app.registerExtension({
+registerSymbioticaExtension(app, {
     name: "symbiotica.studio_library",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "SymbioticaStudioLibrary") return;

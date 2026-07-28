@@ -2,8 +2,9 @@
 // ABOUTME: Adds dynamic input expansion via "Update inputs" button
 
 import { app } from "../../../scripts/app.js";
+import { registerSymbioticaExtension } from "./register.js";
 
-app.registerExtension({
+registerSymbioticaExtension(app, {
     name: "neuralsins.videoConcatMulti",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name !== "NSVideoConcatMulti") {

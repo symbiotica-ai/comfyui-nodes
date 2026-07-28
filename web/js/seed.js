@@ -2,13 +2,14 @@
 // ABOUTME: Adds Randomize/Fixed Random/Last Queued buttons and intercepts API queue for range-aware seed generation.
 
 import { app } from "../../../scripts/app.js";
+import { registerSymbioticaExtension } from "./register.js";
 
 const SPECIAL_SEED_RANDOM = -1;
 const SPECIAL_SEED_INCREMENT = -2;
 const SPECIAL_SEED_DECREMENT = -3;
 const SPECIAL_SEEDS = [SPECIAL_SEED_RANDOM, SPECIAL_SEED_INCREMENT, SPECIAL_SEED_DECREMENT];
 
-app.registerExtension({
+registerSymbioticaExtension(app, {
   name: "symbiotica.seed",
 
   async beforeRegisterNodeDef(nodeType, nodeData) {

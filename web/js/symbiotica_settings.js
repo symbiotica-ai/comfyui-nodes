@@ -1,6 +1,7 @@
 // ABOUTME: Registers Symbiotica API keys in ComfyUI's Settings UI. Values live
 // ABOUTME: in the server's comfy.settings.json — never in workflows, never in git.
 import { app } from "../../../scripts/app.js";
+import { registerSymbioticaExtension } from "./register.js";
 
 const KEYS = [
     ["ANTHROPIC_API_KEY", "Anthropic (Claude) API key"],
@@ -12,7 +13,7 @@ const KEYS = [
     ["SUBMAGIC_API_KEY", "Submagic API key"],
 ];
 
-app.registerExtension({
+registerSymbioticaExtension(app, {
     name: "symbiotica.settings",
     settings: KEYS.map(([env, label]) => ({
         id: `Symbiotica.${env}`,

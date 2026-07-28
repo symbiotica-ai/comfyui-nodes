@@ -6,6 +6,33 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.21
+
+A diagnostics release. No node's inputs, outputs, or ids changed.
+
+### Fixed
+- **A failed extension registration is no longer silent.** ComfyUI imports every
+  file under a pack's `web/` directory in parallel and swallows each import's
+  error into a `console.error`, so a module that throws while registering leaves
+  its nodes showing only their bare Python widgets — no buttons, no dropdowns, no
+  panels — with nothing on the canvas saying why. All seven of the pack's
+  extensions now register through a wrapper that catches the failure, logs it
+  with the cause, and raises a dismissible banner naming the extension that died
+  and what to check.
+
+  This is what hid the real fault behind `2026.7.16`–`2026.7.19`: a stale
+  `order_pipeline.v2360.js`, left on a deploy volume by an earlier cache
+  workaround, was served alongside the current `order_pipeline.js`. Both called
+  `registerExtension` with the name `symbiotica.order_pipeline`, the frontend
+  threw `Extension named '…' already registered.` on whichever lost the import
+  race, and the loser's nodes — Template Library, Order Specs, Auto Packer — came
+  up raw. Because it was a race, it looked intermittent. The wrapper cannot
+  prevent a collision; it makes one impossible to miss.
+
+### Added
+- **`Trellis 2 Image to 3D (fal)`** — a single image to a 3D mesh via fal.
+- **`claude-opus-5`** in the LLM model lists; `claude-opus-4-8` dropped.
+
 ## 2026.7.20
 
 **New nodes** — this release adds the **Hypereel** streamer-reel pipeline: 8 new
