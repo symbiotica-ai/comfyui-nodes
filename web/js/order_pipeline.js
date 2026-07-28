@@ -578,30 +578,47 @@ function assetsPanel(node) {
     render();
 }
 
-// "💾 Save as template" on the Auto Packer: names the current pack, sets the
-// hidden `save_as` widget, queues once so Python writes the sheets + recipe to
-// the project's templates/ folder, then clears the name so the next run does
-// not re-save.
+// The default template name: what is being packed (the order's event or the
+// library folder) plus the picked category, slugified.
+function suggestedName(node) {
+    const { event: ev } = assetSourceFor(node);
+    const cat = widgetOf(node, "category")?.value?.trim() || "All";
+    return slugify([ev?.feature || "template", cat === "All" ? "" : cat]
+        .filter(Boolean).join("-"));
+}
+
+// "💾 Save as template" on the Auto Packer: takes the name from the node's own
+// `save_as` field, queues once so Python writes the sheets + recipe to the
+// project's templates/ folder, then clears the field so the next run does not
+// re-save.
+//
+// The name used to come from window.prompt(). Chrome permanently suppresses
+// dialogs in a tab once "prevent this page from creating additional dialogs" is
+// ticked — prompt() then returns null with nothing on screen, so the button
+// looked dead and no template was ever written. The field is on the node now:
+// no dialog, and the name is visible before the click.
 function wireSaveButton(node) {
     const saveW = widgetOf(node, "save_as");
-    if (saveW) { saveW.hidden = true; saveW.computeSize = () => [0, -4]; }
+    // Left EMPTY on purpose: a non-empty save_as makes Python save on any run,
+    // so a prefilled field would write a template every time the graph is
+    // queued. Empty + Save uses the suggested name instead.
+    if (saveW) saveW.label = "template name (blank = auto)";
     // A native litegraph button (like Order Specs' Read-folder): renders in both
     // UIs and never hides at low zoom, unlike the DOM widget it replaces.
     let saving = false;
     const btn = node.addWidget("button", "💾 Save as template", null, async () => {
         if (saving) return;
-        const { event: ev } = assetSourceFor(node);
-        const cat = widgetOf(node, "category")?.value?.trim() || "All";
-        const suggested = slugify(
-            [ev?.feature || "template", cat === "All" ? "" : cat]
-                .filter(Boolean).join("-"));
-        const name = window.prompt(
-            "Save this pack as a template named:", suggested);
-        if (!name || !name.trim()) return;
+        const name = (saveW?.value ?? "").trim() || suggestedName(node);
+        if (!name) {
+            toast("warn", "Name the template first",
+                  "Type a name in this node's 'template name' field, then press "
+                  + "Save as template.");
+            return;
+        }
         saving = true;
         btn.name = "⏳ Saving…";
         node.setDirtyCanvas?.(true, true);
-        if (saveW) saveW.value = name.trim();
+        if (saveW) saveW.value = name;
         try {
             // Serialize NOW so save_as is captured, THEN clear + queue the
             // captured prompt. app.queuePrompt only serializes when no run is in
