@@ -578,6 +578,34 @@ function assetsPanel(node) {
     render();
 }
 
+// Ask for the template name. ComfyUI's own dialog (frontend 1.45+) rather than
+// window.prompt(): Chrome permanently suppresses window.prompt in a tab once
+// "prevent this page from creating additional dialogs" is armed, and it then
+// returns null with nothing on screen — a dead Save button with no explanation.
+//
+// Returns the typed name, "" for an empty answer, or null when cancelled. If the
+// frontend has no dialog service, window.prompt is tried, and if that is the
+// suppressed one, the node's own `template name` field carries the answer.
+async function askName(suggested) {
+    const dialog = app.extensionManager?.dialog;
+    if (typeof dialog?.prompt === "function") {
+        const answer = await dialog.prompt({
+            title: "Save as template",
+            message: "Name this template:",
+            defaultValue: suggested,
+        });
+        return answer == null ? null : String(answer).trim();
+    }
+    let answer;
+    try {
+        answer = window.prompt("Save this pack as a template named:", suggested);
+    } catch {
+        answer = undefined;
+    }
+    if (answer == null) return suggested ? suggested : null;
+    return String(answer).trim();
+}
+
 // The API-format prompt reduced to `rootId` and everything it feeds from, plus
 // a preview terminal so the run has an output node.
 //
@@ -640,11 +668,13 @@ function wireSaveButton(node) {
     let saving = false;
     const btn = node.addWidget("button", "💾 Save as template", null, async () => {
         if (saving) return;
-        const name = (saveW?.value ?? "").trim() || suggestedName(node);
+        const name = await askName(
+            (saveW?.value ?? "").trim() || suggestedName(node));
+        if (name === null) return;                 // cancelled
         if (!name) {
             toast("warn", "Name the template first",
-                  "Type a name in this node's 'template name' field, then press "
-                  + "Save as template.");
+                  "Give it a name in the dialog, or type one in this node's "
+                  + "'template name' field.");
             return;
         }
         saving = true;
