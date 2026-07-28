@@ -54,6 +54,19 @@ function featureKey(value) {
 }
 
 // --- graph helpers -----------------------------------------------------------
+// Canvas-level notice. Saving a template piggybacks on a normal queue of the
+// WHOLE graph, so it fails for reasons that have nothing to do with the packer
+// (a missing model three nodes away, no output node). Those failures used to go
+// to console.error only, which reads as "the button does nothing".
+function toast(severity, summary, detail) {
+    try {
+        app.extensionManager.toast.add({ severity, summary, detail, life: 6000 });
+    } catch {
+        console[severity === "error" ? "error" : "log"](
+            `[symbiotica] ${summary}: ${detail}`);
+    }
+}
+
 function upstreamNode(node, inputName) {
     const input = node.inputs?.find((i) => i.name === inputName);
     if (!input || input.link == null) return null;
@@ -599,6 +612,10 @@ function wireSaveButton(node) {
             await api.queuePrompt(0, prompt);
         } catch (err) {
             console.error("[symbiotica] template save queue failed", err);
+            toast("error", "Template not saved",
+                  `${err?.message ?? err} — saving queues the whole graph, so a `
+                  + "node error anywhere in it (a missing model, no output node) "
+                  + "blocks the save. Fix the run, then press Save again.");
         } finally {
             if (saveW) saveW.value = "";
             saving = false;
@@ -1076,12 +1093,19 @@ registerSymbioticaExtension(app, {
         api.addEventListener("symbiotica.pack_template_saved", ({ detail }) => {
             if (detail?.error) {
                 console.error("[symbiotica] template save:", detail.error);
+                toast("error", "Template not saved", detail.error);
                 return;
             }
             if (detail?.fellBack) {
                 console.warn("[symbiotica] template '" + detail.name
                     + "' saved to output/templates (project folder unwritable "
                     + "or unset) — still browsable in the Library.");
+                toast("warn", `Saved “${detail.name}” to output/templates`,
+                      "No project folder on this order (or it is not writable), "
+                      + `so it went to ${detail.dir}. The Library browses that `
+                      + "folder too, so it is still reloadable.");
+            } else {
+                toast("success", `Saved “${detail?.name}”`, detail?.dir ?? "");
             }
             for (const n of app.graph?._nodes ?? []) {
                 if (n.comfyClass === "SymbioticaTemplateLibrary") {
