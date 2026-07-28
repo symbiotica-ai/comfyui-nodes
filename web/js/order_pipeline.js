@@ -380,6 +380,14 @@ function assetSourceFor(node) {
         const ev = events.find((e) => e.feature === feature) || events[0] || null;
         return { event: ev, refsRoot: specs._symRefsRoot ?? "" };
     }
+    // A Reference Browser feeds the same `order` wire from the asset library.
+    // It publishes its picks in the event shape (see reference_browser.js), so
+    // the Assets panel, the category combo, and the per-asset hide/reorder all
+    // work on library rows exactly as they do on an order's.
+    if (specs?.comfyClass === "SymbioticaReferenceBrowser") {
+        return { event: specs._symPickedEvent ?? null,
+                 refsRoot: specs._symRefsRoot ?? "" };
+    }
     const lib = upstreamNode(node, "template");
     if (lib?.comfyClass === "SymbioticaTemplateLibrary") {
         return { event: (lib._symEvents ?? [])[0] || null,
@@ -469,7 +477,8 @@ function assetsPanel(node) {
         list.replaceChildren();
         const { assets, refsRoot } = eventAssetsFor(node);
         if (!assets.length) {
-            list.textContent = "Wire an Order Specs and pick an event.";
+            list.textContent = "Wire an Order Specs (and pick an event), a "
+                + "Reference Browser, or a Template Library.";
             list.style.opacity = ".6";
             refit();
             return;

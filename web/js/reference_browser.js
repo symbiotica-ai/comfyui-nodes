@@ -75,6 +75,33 @@ function writeState(node, state) {
     node.setDirtyCanvas?.(true, true);
 }
 
+// The picks, in the shape an Auto Packer's Assets panel reads (the same one
+// Order Specs publishes). Without this the packer downstream shows whatever it
+// last drew — an old order's assets — and its category combo offers only "All",
+// so the folder-derived categories never reach the picker. `_symRefsRoot` is the
+// ABSOLUTE root the listing resolved, which is what the thumbnail route needs.
+function publish(node, state, root) {
+    if (root) node._symRefsRoot = root;
+    node._symPickedEvent = {
+        feature: widgetOf(node, "name")?.value?.trim() || baseName(node._symRefsRoot ?? ""),
+        assets: state.groups.map((g) => ({
+            assetName: g.name,
+            category: g.category,
+            canvas: g.canvas || "",
+            rotation: g.variants ? "2" : "-",
+            refFiles: g.files,
+            prompt: "",
+        })),
+    };
+    for (const out of node.outputs ?? []) {
+        for (const linkId of out.links ?? []) {
+            const link = app.graph.links[linkId];
+            const target = link && app.graph.getNodeById(link.target_id);
+            target?._symRenderAssets?.();
+        }
+    }
+}
+
 const baseName = (rel) => (rel || "").split("/").filter(Boolean).pop() || "";
 const parentRel = (rel) => (rel || "").split("/").slice(0, -1).join("/");
 
@@ -120,9 +147,34 @@ function referencePanel(node) {
     let error = "";
     let filter = "";
     let loading = false;
+    // Pixel sizes of every image seen this session, so a row's canvas can be
+    // shown the way the packer will compute it (its largest cell). Python
+    // recomputes it at execute — this is the label, not the contract.
+    const dims = new Map();
+
+    const noteDims = (images) => {
+        for (const im of images ?? []) {
+            if (im.w && im.h) dims.set(im.rel, [im.w, im.h]);
+        }
+    };
+    const canvasOf = (files) => {
+        let w = 0;
+        let h = 0;
+        for (const f of files) {
+            const d = dims.get(f);
+            if (!d) return "";
+            w = Math.max(w, d[0]);
+            h = Math.max(h, d[1]);
+        }
+        return w && h ? `${w}x${h}` : "";
+    };
 
     const state = () => readState(node);
-    const save = (s) => writeState(node, s);
+    const save = (s) => {
+        for (const g of s.groups) g.canvas = canvasOf(g.files) || g.canvas || "";
+        writeState(node, s);
+        publish(node, s, level?.root);
+    };
 
     async function load(dir) {
         const root = rootPathOf(node);
@@ -138,6 +190,7 @@ function referencePanel(node) {
             const q = new URLSearchParams({ root, dir: dir || "" });
             level = await fetchJson(`/symbiotica/browse-refs?${q.toString()}`);
             error = "";
+            noteDims(level.images);
             const s = state();
             s.dir = level.rel || "";
             save(s);
@@ -172,6 +225,7 @@ function referencePanel(node) {
             render();
             return;
         }
+        noteDims(data.images);
         // The library keeps a `thumbNNNN.png` catalogue tile beside an item's
         // real art (smaller, and not a stage of the item) — ticking the folder
         // should not turn that into a cell. It is still listed in the grid, so
@@ -399,9 +453,11 @@ function referencePanel(node) {
         }
     }
 
-    // First paint: show whatever was picked before the reload, then list the
-    // folder the workflow was saved on.
+    // First paint: show whatever was picked before the reload, hand those picks
+    // to any packer already downstream, then list the folder the workflow was
+    // saved on.
     render();
+    publish(node, readState(node), null);
     load(readState(node).dir);
 }
 
@@ -434,6 +490,12 @@ registerSymbioticaExtension(app, {
             onConnectionsChange?.apply(this, arguments);
             if (ioSlot?.name === "root_path") {
                 queueMicrotask(() => this._symReloadBrowser?.());
+            }
+            // Wiring `order` into a packer AFTER picking: hand it the rows now,
+            // or its Assets panel keeps showing whatever it drew last.
+            if (ioSlot?.name === "order") {
+                queueMicrotask(() =>
+                    publish(this, readState(this), this._symRefsRoot ?? null));
             }
         };
     },
