@@ -19,7 +19,9 @@ from .pack_library import (
     delete_pack_template_dirs,
     list_pack_templates_dirs,
     pack_dirs,
+    qualified_name,
     save_dirs,
+    split_qualified,
 )
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -438,12 +440,23 @@ async def pack_template_delete(request):
         body = await request.json()
     except Exception:
         body = {}
+    # Search EVERY pool (kind ""), not the request's: a template saved before
+    # the split lives in the legacy flat <project>/templates, which pack_dirs
+    # only returns for kind "" — and the browser always sends a concrete kind
+    # (the list route infers one for legacy sidecars), so narrowing here made
+    # those rows undeletable. The pool-qualified name is what keeps the delete
+    # inside one pool: delete_pack_template_dirs skips a folder whose template
+    # is another kind.
+    #
     # Same expansion as the list route: the Library sends whatever its
     # project_path resolves to, which on Modal is the volume-relative
     # studios/<slug>/… form — unexpanded it points at no pool at all and the
     # delete silently removes nothing.
-    dirs = _pack_dirs(_expand_project(str(body.get("project") or "")),
-                      str(body.get("kind") or ""),
+    name = str(body.get("name") or "")
+    kind = _kind(str(body.get("kind") or ""))
+    if kind and not split_qualified(name)[0]:
+        name = qualified_name(kind, name)   # an older client sent a bare slug
+    dirs = _pack_dirs(_expand_project(str(body.get("project") or "")), "",
                       str(body.get("month") or ""))
-    removed = delete_pack_template_dirs(dirs, str(body.get("name") or ""))
+    removed = delete_pack_template_dirs(dirs, name)
     return web.json_response({"ok": True, "removed": removed})

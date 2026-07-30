@@ -2,6 +2,7 @@
 # ABOUTME: volume-relative studios/<slug>/... currency the Studio Library emits.
 import asyncio
 import importlib
+import json
 import sys
 import types
 from types import SimpleNamespace
@@ -75,6 +76,16 @@ def _req(**query):
     return SimpleNamespace(query=query)
 
 
+class _Body:
+    """A POST request whose json() resolves to the given dict."""
+
+    def __init__(self, body):
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+
 def test_list_orders_accepts_volume_relative_project(routes_mod):
     asyncio.run(routes_mod.list_orders(_req(project="studios/imperia/bakery")))
     months = routes_mod._captured["body"]["months"]
@@ -125,6 +136,39 @@ def test_pack_template_list_order_kind_browses_the_month(routes_mod, volume):
         _req(project="studios/imperia/bakery", kind="order", month="October")))
     body = routes_mod._captured["body"]
     assert body["dir"] == str(project / "orders" / "Bakery-October" / "templates")
+
+
+def test_pack_template_delete_reaches_a_pre_split_template(routes_mod, volume):
+    """A template saved before the split sits in the flat <project>/templates
+    but lists with an inferred kind — the delete must still find it, or its row
+    can never be removed from the browser."""
+    project = (volume / "studios" / "imperia" / "bakery").resolve()
+    flat = project / "templates" / "old-food"
+    flat.mkdir(parents=True)
+    (flat / "template.json").write_text(json.dumps(
+        {"name": "old-food", "sheets": [],
+         "order": {"month": "October", "feature": "Mini 1"}}))
+    asyncio.run(routes_mod.pack_template_delete(_Body(
+        {"project": "studios/imperia/bakery", "name": "order/old-food",
+         "kind": "order", "month": "October"})))
+    assert routes_mod._captured["body"] == {"ok": True, "removed": True}
+    assert not flat.exists()
+
+
+def test_pack_template_delete_still_spares_the_other_pool(routes_mod, volume):
+    project = (volume / "studios" / "imperia" / "bakery").resolve()
+    for kind, path in (("order", project / "orders" / "Bakery-October"
+                        / "templates" / "food"),
+                       ("reference", project / "templates" / "reference"
+                        / "food")):
+        path.mkdir(parents=True)
+        (path / "template.json").write_text(json.dumps(
+            {"name": "food", "sheets": [], "kind": kind, "order": {}}))
+    asyncio.run(routes_mod.pack_template_delete(_Body(
+        {"project": "studios/imperia/bakery", "name": "order/food",
+         "kind": "order", "month": "October"})))
+    assert routes_mod._captured["body"]["removed"] is True
+    assert (project / "templates" / "reference" / "food").is_dir()
 
 
 def test_pack_template_list_order_kind_without_refs_folder(routes_mod, volume):

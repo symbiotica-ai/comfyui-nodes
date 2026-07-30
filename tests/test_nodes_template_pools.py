@@ -103,6 +103,29 @@ def test_unwritable_project_falls_back_into_the_same_pool(nodes_mod, tmp_path):
     assert doc.is_file(), "the fallback must keep the reference pool"
 
 
+def test_a_no_project_save_reports_the_fallback(nodes_mod, monkeypatch):
+    """A Reference Browser rooted outside any project has no project_path, so
+    the save goes to output/ — the UI has to say so, or the sheets look filed
+    when they are not."""
+    pushed = []
+    monkeypatch.setattr(nodes_mod, "_push", lambda ev, p: pushed.append(p))
+    _save(nodes_mod, {"project_path": "", "month": "", "source": "reference",
+                      "feature": "Food", "assets": [], "refsRoot": "",
+                      "assetsRoot": ""})
+    assert pushed and pushed[0]["fellBack"] is True
+    assert pushed[0]["kind"] == "reference"
+    assert pushed[0]["key"] == "reference/food"
+
+
+def test_a_filed_save_does_not_claim_a_fallback(nodes_mod, project, monkeypatch):
+    pushed = []
+    monkeypatch.setattr(nodes_mod, "_push", lambda ev, p: pushed.append(p))
+    _save(nodes_mod, {"project_path": str(project), "month": "", "source":
+                      "reference", "feature": "Food", "assets": [],
+                      "refsRoot": "", "assetsRoot": ""})
+    assert pushed and pushed[0]["fellBack"] is False
+
+
 def test_library_reads_only_the_pool_it_is_set_to(nodes_mod, project):
     ref_order = {"project_path": str(project), "month": "", "source": "reference",
                  "feature": "Food", "assets": [{"assetName": "cake"}],
@@ -144,7 +167,19 @@ def test_library_bundle_carries_the_pool(nodes_mod, project):
     assert bundle["name"] == "food"
 
 
-def test_library_schema_exposes_kind_and_month(nodes_mod):
+def test_library_schema_appends_the_new_inputs(nodes_mod):
+    """ComfyUI restores a saved workflow's widget values POSITIONALLY, so the
+    three original inputs must keep slots 0-2 — otherwise every saved workflow
+    loads with its template pick dropped onto the wrong widget."""
     schema = nodes_mod.SymbioticaTemplateLibrary.define_schema()
     names = [i.id if hasattr(i, "id") else i.name for i in schema.inputs]
-    assert "kind" in names and "month" in names
+    assert names == ["project_path", "selected", "checked", "kind", "month"]
+
+
+def test_library_survives_a_pre_split_workflow(nodes_mod, project):
+    """That old workflow reaches execute() with no kind/month at all."""
+    out = nodes_mod.SymbioticaTemplateLibrary.execute(
+        project_path=str(project), selected="", checked="[]")
+    assert out.args[0]["kind"] == ""          # the neutral bundle, no crash
+    # …and a None month (a restored empty slot) must not blow up slugify.
+    nodes_mod.SymbioticaTemplateLibrary._dirs(str(project), None, None)

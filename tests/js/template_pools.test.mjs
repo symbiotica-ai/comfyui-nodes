@@ -131,6 +131,42 @@ test("'use' puts the qualified id on the selected widget", async () => {
     assert.equal(node.widgets.find((w) => w.name === "selected").value, "order/food");
 });
 
+test("a bare slug from an old workflow binds to one row, not both", async () => {
+    // Python resolves a bare "food" to the FIRST pool it finds. If the UI ticked
+    // both rows, unticking one would clear the shared entry and silently drop
+    // the other pool's sheets from the output.
+    reset();
+    setResponder(() => ({ ok: true, body: BOTH_POOLS }));
+    const node = await library({ kind: "All", checked: '["food"]' });
+    const overlay = await openOverlay(node);
+    const boxes = findAll(overlay, (n) => n.type === "checkbox");
+    assert.deepEqual(boxes.map((b) => b.checked), [true, false]);
+    // Unticking the order row (the one the bare slug means) empties the wire.
+    boxes[0].checked = false;
+    fire(boxes[0], "click");
+    assert.deepEqual(
+        JSON.parse(node.widgets.find((w) => w.name === "checked").value), []);
+});
+
+test("a pre-split workflow load leaves kind/month usable", async () => {
+    // Those two widgets did not exist when the workflow was saved, so they can
+    // come back as null — which would reach Python as a "null" pool.
+    reset();
+    setResponder(() => ({ ok: true, body: BOTH_POOLS }));
+    const node = await library({ kind: "All" });
+    // As LiteGraph leaves it: the three saved values land on the three original
+    // widgets (they still hold slots 0-2), the two new ones get nothing.
+    node.widgets.find((w) => w.name === "selected").value = "food";
+    node.widgets.find((w) => w.name === "kind").value = null;
+    node.widgets.find((w) => w.name === "month").value = null;
+    node.onConfigure?.({ widgets_values: ["/p", "food", '["food"]'] });
+    await tick();
+    assert.equal(node.widgets.find((w) => w.name === "kind").value, "All");
+    assert.equal(node.widgets.find((w) => w.name === "month").value, "");
+    assert.equal(node.widgets.find((w) => w.name === "selected").value, "food",
+                 "the restored pick must survive the normalisation");
+});
+
 // --- the Auto Packer's save button names its destination pool ----------------
 
 async function packerWith(sourceClass) {

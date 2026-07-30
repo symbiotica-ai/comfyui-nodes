@@ -368,6 +368,37 @@ def test_pack_dirs_per_kind(tmp_path):
     assert out in every
 
 
+def test_every_alias_of_a_month_is_one_folder(tmp_path):
+    """"", the month name, and the xlsx filename all name the same order — so
+    they must name the same template folder, or a save lands where no browse
+    looks."""
+    project = _project(tmp_path, month_refs="")   # fallback path, the risky one
+    out = str(tmp_path / "output" / "templates")
+    want = str(project / "templates" / "orders" / "october")
+    for alias in ("", "October", "october", "Bakery October Art.xlsx"):
+        assert order_templates_dir(str(project), alias) == want, alias
+        assert pack_dirs(str(project), "order", alias, out)[0] == want, alias
+        assert save_dirs(str(project), "order", alias, out)[0] == want, alias
+    # …and the output fallback agrees, so a read-only project lands in one place.
+    fallbacks = {save_dirs(str(project), "order", a, out)[1]
+                 for a in ("", "October", "Bakery October Art.xlsx")}
+    assert fallbacks == {str(tmp_path / "output" / "templates" / "orders"
+                             / "october")}
+
+
+def test_all_browses_every_month_not_just_the_asked_one(tmp_path):
+    """The save follows the ORDER's month, the Library browses its own — so All
+    has to cover every month or a November template is invisible in October."""
+    project = _project(tmp_path, month_refs="Bakery-October")
+    (project / "orders" / "Bakery November Art.xlsx").write_bytes(b"x")
+    (project / "orders" / "Bakery-November").mkdir()
+    out = str(tmp_path / "output" / "templates")
+    write_pack_template(str(project / "orders" / "Bakery-November" / "templates"),
+                        "nov-food", [_img()], _sidecar(kind="order"))
+    every = pack_dirs(str(project), "", "October", out)
+    assert [t["name"] for t in list_pack_templates_dirs(every)] == ["nov-food"]
+
+
 def test_save_dirs_project_then_output_fallback(tmp_path):
     project = _project(tmp_path)
     out = str(tmp_path / "output" / "templates")

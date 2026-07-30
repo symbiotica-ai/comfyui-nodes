@@ -680,7 +680,10 @@ class SymbioticaAutoPacker(io.ComfyNode):
             try:
                 result = write_pack_template(candidate, name, images, sidecar)
                 base = candidate
-                fell_back = i > 0
+                # With no project the project candidate is not in the list at
+                # all, so index 0 IS the output fallback — the save still went
+                # somewhere the user did not pick, and the UI must say so.
+                fell_back = i > 0 or not project_path
                 break
             except Exception as e:  # unwritable project folder → try the fallback
                 err = e
@@ -710,10 +713,23 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
                         "into the Auto Packer to re-pack or edit). CHECK any → "
                         "their saved sheets + prompts stream out of "
                         "'sheets'/'sheet_prompts' with no re-render.",
+            # `kind` and `month` are APPENDED, never inserted: ComfyUI restores
+            # a saved workflow's widget values positionally, so putting a new
+            # input ahead of `selected`/`checked` would drop the saved template
+            # pick onto the wrong widget and silently lose it. Added last, an
+            # older workflow's three values still land on the three original
+            # inputs and the new ones keep their defaults.
             inputs=[
                 io.String.Input("project_path", default="",
                                 tooltip="The client project folder — its "
                                         "templates are browsed"),
+                io.String.Input("selected", default="",
+                                tooltip="Which saved template to output as a "
+                                        "recipe — set by the browser's 'use'"),
+                io.String.Input("checked", default="[]",
+                                tooltip="Templates whose saved sheets/prompts to "
+                                        "emit — JSON list, set by the browser's "
+                                        "checkboxes"),
                 io.String.Input("kind", default="All",
                                 tooltip="Which pool to browse: Reference "
                                         "(universal, from the asset library), "
@@ -722,13 +738,6 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
                                 tooltip="Which month's order templates to browse "
                                         "— only used when kind is Order/All "
                                         "(empty = the project's first month)"),
-                io.String.Input("selected", default="",
-                                tooltip="Which saved template to output as a "
-                                        "recipe — set by the browser's 'use'"),
-                io.String.Input("checked", default="[]",
-                                tooltip="Templates whose saved sheets/prompts to "
-                                        "emit — JSON list, set by the browser's "
-                                        "checkboxes"),
             ],
             outputs=[
                 PackTemplateWire.Output(display_name="template"),
@@ -751,7 +760,9 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
         out = os.path.join(folder_paths.get_output_directory(), "templates")
         # Project dirs first so a filed template shadows a fallback of the same
         # name; output/templates covers read-only-project + no-project saves.
-        return pack_dirs(project_path, cls._kind(kind), month, out)
+        # str(month or "") because a workflow saved before these inputs existed
+        # can restore them as None, which slugify would choke on.
+        return pack_dirs(project_path, cls._kind(kind), str(month or ""), out)
 
     @staticmethod
     def _kind(kind):

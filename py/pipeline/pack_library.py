@@ -43,6 +43,25 @@ def reference_templates_dir(project_path: str) -> str:
     return os.path.join(base, KIND_REFERENCE) if base else ""
 
 
+def _resolved_month(project_path: str, month: str) -> dict:
+    from .project_layout import resolve_month
+    try:
+        return resolve_month(project_path, month) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def order_month_key(project_path: str, month: str) -> str:
+    """One folder stem per month, whatever alias named it.
+
+    "" (the node's "first month"), "October", and "Bakery October Art.xlsx" all
+    denote the same order — keying folders off the raw widget string would file
+    one month's templates in three places, and a save would land where no browse
+    looks."""
+    canon = _resolved_month(project_path, month).get("month") or ""
+    return canon or (month or "")
+
+
 def order_templates_dir(project_path: str, month: str = "") -> str:
     """Where a month's order templates live: the templates/ folder INSIDE that
     month's client-refs folder (<project>/orders/<Client-Month>/templates), so
@@ -55,14 +74,11 @@ def order_templates_dir(project_path: str, month: str = "") -> str:
     project_path = (project_path or "").strip()
     if not project_path:
         return ""
-    from .project_layout import resolve_month
-    try:
-        refs = (resolve_month(project_path, month) or {}).get("refs_path") or ""
-    except (OSError, ValueError):
-        refs = ""
+    resolved = _resolved_month(project_path, month)
+    refs = resolved.get("refs_path") or ""
     if refs:
         return os.path.join(refs, "templates")
-    stem = slugify(month) or "unscheduled"
+    stem = slugify(resolved.get("month") or month) or "unscheduled"
     return os.path.join(templates_dir(project_path), "orders", stem)
 
 
@@ -266,17 +282,47 @@ def delete_pack_template_dirs(dirs, name) -> bool:
     return removed
 
 
+def _every_order_dir(project_path: str, output_templates_dir: str = "") -> list[str]:
+    """Every month's order pool, plus any output-fallback month folder on disk.
+
+    A save follows the ORDER's month while the Library browses its own — so
+    "All" has to cover them all, or a template saved for November is in no pool
+    the October-defaulted Library ever scans."""
+    from .project_layout import list_order_months
+    try:
+        months = [o.get("label", "") for o in list_order_months(project_path)]
+    except (OSError, ValueError):
+        months = []
+    dirs = []
+    for m in months:
+        dirs.append(order_templates_dir(project_path, m))
+        dirs.append(output_kind_dir(output_templates_dir, KIND_ORDER, m))
+    # Month folders under the output fallback that no order names — e.g.
+    # "unscheduled", written when the packing order had no month at all.
+    base = (output_templates_dir or "").strip()
+    root = os.path.join(base, "orders") if base else ""
+    try:
+        for e in sorted(os.listdir(root)) if root else []:
+            if os.path.isdir(os.path.join(root, e)):
+                dirs.append(os.path.join(root, e))
+    except OSError:
+        pass
+    return dirs
+
+
 def pack_dirs(project_path: str, kind: str = "", month: str = "",
               output_templates_dir: str = "") -> list[str]:
     """Every folder to browse for `kind`, most-specific first.
 
     kind "order"/"reference" narrows to that kind's folders (project first, then
     the output/templates fallback). Anything else ("", "all") returns all of
-    them PLUS the legacy flat pools, so a template saved before the split is
-    still visible — under All only, which is where it belongs now.
+    them — every month's order pool, not only the asked-for one — PLUS the
+    legacy flat pools, so a template saved before the split is still visible
+    under All, which is where it belongs now.
     """
     kind = (kind or "").strip().lower()
     out = (output_templates_dir or "").strip()
+    month = order_month_key(project_path, month)
     if kind == KIND_REFERENCE:
         dirs = [reference_templates_dir(project_path),
                 output_kind_dir(out, KIND_REFERENCE)]
@@ -285,6 +331,7 @@ def pack_dirs(project_path: str, kind: str = "", month: str = "",
                 output_kind_dir(out, KIND_ORDER, month)]
     else:
         dirs = [order_templates_dir(project_path, month),
+                *_every_order_dir(project_path, out),
                 reference_templates_dir(project_path),
                 templates_dir(project_path),
                 output_kind_dir(out, KIND_ORDER, month),
@@ -305,6 +352,7 @@ def save_dirs(project_path: str, kind: str, month: str = "",
     the output/templates fallback for that kind. The caller writes to the first
     that accepts it."""
     out = (output_templates_dir or "").strip()
+    month = order_month_key(project_path, month)
     if kind == KIND_REFERENCE:
         primary = reference_templates_dir(project_path)
     else:

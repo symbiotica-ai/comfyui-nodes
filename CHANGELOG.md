@@ -9,8 +9,11 @@ node's inputs, outputs, or id says so at the top of its entry.
 ## 2026.7.23
 
 **Node change.** `SymbioticaTemplateLibrary` gains two inputs, `kind` and
-`month`. Saved workflows keep working — an omitted `kind` reads as "All", which
-browses every pool, exactly the old behaviour.
+`month`, **appended after** `selected`/`checked` — ComfyUI restores a saved
+workflow's widget values by position, so a new input ahead of them would drop
+the saved template pick onto the wrong widget. Saved workflows keep their pick,
+and an omitted `kind` reads as "All", which browses every pool: the old
+behaviour.
 
 ### Added
 - **Saved templates now have two pools, by where they came from.** The Auto
@@ -50,6 +53,24 @@ browses every pool, exactly the old behaviour.
   saved before this release has its kind inferred from its frozen order (a month
   or a catalog root means it came from an order) and stays where it is — visible
   under **All**, which also browses the old flat `<project>/templates/`.
+- A month is now resolved to one canonical name before it names a folder, so
+  "", "October" and "Bakery October Art.xlsx" — three ways to say the same order
+  — no longer file that month's templates in three different places.
+  `resolve_month` returns that name as `month`.
+- **All** browses every month's order pool, not only the one in the Library's
+  `month` widget: the save follows the ORDER's month, so a template packed for
+  November has to be findable from a Library sitting on October.
+
+### Fixed
+- Deleting a template saved before the split did nothing: the delete searched
+  only the pool folders for the kind the browser sent, and a pre-split template
+  lives in neither. The delete now scans every pool and lets the pool-qualified
+  name keep it scoped.
+- `POST /symbiotica/pack-template-delete` never expanded a volume-relative
+  `studios/<slug>/…` project path, so on Modal it removed nothing.
+- A save with no project folder (a Reference Browser rooted outside a project)
+  reported as if it had been filed. It lands in `output/templates/reference/`
+  and now says so.
 
 ## 2026.7.22
 

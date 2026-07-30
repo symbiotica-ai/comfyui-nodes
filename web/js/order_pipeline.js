@@ -808,7 +808,14 @@ function wireTemplateLibrary(node) {
     // so the same slug can exist in both pools. Workflows saved before the split
     // hold a bare slug — still matched, first pool wins (what Python does too).
     const idOf = (t) => t.key ?? t.name;
-    const isId = (t, v) => !!v && (v === idOf(t) || v === t.name);
+    // A bare slug is ambiguous once the same name lives in both pools, so bind
+    // it to the FIRST listed row of that name — the one Python resolves it to.
+    // Matching every pool would tick rows the queue never emits, and one untick
+    // would then clear them all.
+    const bareOwner = (name) => (node._symTemplates ?? []).find(
+        (x) => x.name === name);
+    const isId = (t, v) => !!v && (v === idOf(t)
+                                   || (v === t.name && bareOwner(v) === t));
     const badgeOf = (t) => (t.kind === "reference" ? "ref"
                             : t.kind === "order" ? (t.month || "order") : "");
 
@@ -1439,6 +1446,17 @@ registerSymbioticaExtension(app, {
             const origCfg = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function () {
                 origCfg?.apply(this, arguments);
+                // A workflow saved before `kind`/`month` existed restores three
+                // values onto five widgets; LiteGraph stops at the third, so the
+                // new two keep whatever they were created with. Normalise them
+                // anyway — a restored null would render as a "null" pool and
+                // reach Python as one.
+                const kw = widgetOf(this, "kind");
+                if (kw && !["All", "Order", "Reference"].includes(kw.value)) {
+                    kw.value = "All";
+                }
+                const mw = widgetOf(this, "month");
+                if (mw && typeof mw.value !== "string") mw.value = "";
                 // Workflow load: re-list the project's templates and re-drive
                 // any downstream Auto Packer from the saved `selected` template.
                 // Also re-fit the height: workflows saved before the overlay
