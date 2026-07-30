@@ -14,6 +14,7 @@ from server import PromptServer
 from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
+from .paths import resolve_within
 from .pack_library import (
     delete_pack_template_dirs,
     list_pack_templates_dirs,
@@ -391,12 +392,37 @@ async def template_image(request):
     return web.FileResponse(path, headers={"Cache-Control": "private, max-age=60"})
 
 
+def _project_roots() -> list[str]:
+    """Where a project may legitimately live: the studio-assets Volume, ComfyUI's
+    own output folder, and any root a graph execution registered. Declared here
+    rather than taken from the request, so a caller cannot name its own root."""
+    roots = [studio_library_mod.STUDIO_ASSETS_DIR, _template_dir()]
+    with _lock:
+        roots.extend(_roots)
+    return [r for r in roots if r]
+
+
 def _pack_dirs(project: str) -> list[str]:
     """Where Auto Packer templates live: the project's templates/ subfolder AND
     output/templates (the fallback for a read-only project / no-project save).
-    Project first so a filed template shadows a fallback of the same name."""
+    Project first so a filed template shadows a fallback of the same name.
+
+    The project folder is admitted only when it resolves inside a declared root —
+    these directories are handed to a recursive delete, so an unconfined project
+    string would reach any tree on the host."""
     out = _template_dir()
-    return [d for d in (templates_dir(project), out) if d]
+    proj = templates_dir(project) if project else None
+    if proj and not resolve_within(_project_roots(), proj, kind="dir"):
+        proj = None
+    return [d for d in (proj, out) if d]
+
+
+def pack_dirs_for_project(value: str) -> list[str]:
+    """_pack_dirs for a project as it arrives on the wire — a volume-relative
+    studios/<slug>/... string or an absolute path. Both the list and the delete
+    route resolve through here so they can never disagree about what a project
+    means."""
+    return _pack_dirs(_expand_project(value))
 
 
 @PromptServer.instance.routes.get("/symbiotica/pack-template-list")
@@ -422,6 +448,7 @@ async def pack_template_delete(request):
         body = await request.json()
     except Exception:
         body = {}
-    removed = delete_pack_template_dirs(_pack_dirs(str(body.get("project") or "")),
-                                        str(body.get("name") or ""))
+    removed = delete_pack_template_dirs(
+        pack_dirs_for_project(str(body.get("project") or "")),
+        str(body.get("name") or ""))
     return web.json_response({"ok": True, "removed": removed})
