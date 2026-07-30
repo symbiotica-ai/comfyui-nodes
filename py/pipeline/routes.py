@@ -15,9 +15,11 @@ from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
 from .pack_library import (
+    KINDS,
     delete_pack_template_dirs,
     list_pack_templates_dirs,
-    templates_dir,
+    pack_dirs,
+    save_dirs,
 )
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -391,37 +393,57 @@ async def template_image(request):
     return web.FileResponse(path, headers={"Cache-Control": "private, max-age=60"})
 
 
-def _pack_dirs(project: str) -> list[str]:
-    """Where Auto Packer templates live: the project's templates/ subfolder AND
-    output/templates (the fallback for a read-only project / no-project save).
-    Project first so a filed template shadows a fallback of the same name."""
-    out = _template_dir()
-    return [d for d in (templates_dir(project), out) if d]
+def _kind(value: str) -> str:
+    """A request's kind param as a pool id: "order"/"reference", or "" for every
+    pool (what the UI's "All" sends)."""
+    k = str(value or "").strip().lower()
+    return k if k in KINDS else ""
+
+
+def _pack_dirs(project: str, kind: str = "", month: str = "") -> list[str]:
+    """Where Auto Packer templates of this kind live: the project's folders for
+    that pool AND the matching output/templates fallback (used when the project
+    is read-only or absent). Project first so a filed template shadows a
+    fallback of the same name; kind "" adds the legacy flat pools too."""
+    return pack_dirs(project, _kind(kind), month, _template_dir() or "")
 
 
 @PromptServer.instance.routes.get("/symbiotica/pack-template-list")
 async def pack_template_list(request):
-    """The saved Auto Packer templates for a project — from its templates/
-    subfolder AND output/templates (the save fallback). Registers both so
-    /symbiotica/local-image can serve each template's sheet thumbnails (abs
-    sheetPaths ride along)."""
+    """The saved Auto Packer templates for a project, in one pool — reference
+    (universal), order (one month), or all — plus the output/templates fallback.
+    Registers every browsed dir so /symbiotica/local-image can serve each
+    template's sheet thumbnails (abs sheetPaths ride along)."""
     project = _expand_project(request.query.get("project", ""))
-    dirs = _pack_dirs(project)
+    kind = _kind(request.query.get("kind", ""))
+    month = request.query.get("month", "")
+    dirs = _pack_dirs(project, kind, month)
     for d in dirs:
         register_root(d)
-    return web.json_response({"dir": templates_dir(project),
+    # `dir` is what a save of this kind would write to — the crumb the browser
+    # shows. With no kind picked, the order pool is the representative one.
+    saves = save_dirs(project, kind or "order", month, _template_dir() or "")
+    return web.json_response({"dir": saves[0] if saves else "",
+                              "dirs": dirs, "kind": kind,
                               "templates": list_pack_templates_dirs(dirs)})
 
 
 @PromptServer.instance.routes.post("/symbiotica/pack-template-delete")
 async def pack_template_delete(request):
     """Delete one saved Auto Packer template folder from wherever it lives
-    (project templates/ or output/templates). basename/realpath-guarded; missing
-    is a no-op, not an error."""
+    (project pool or output/templates). A kind-qualified name ("order/mini-1")
+    only deletes that pool's copy. basename/realpath-guarded; missing is a
+    no-op, not an error."""
     try:
         body = await request.json()
     except Exception:
         body = {}
-    removed = delete_pack_template_dirs(_pack_dirs(str(body.get("project") or "")),
-                                        str(body.get("name") or ""))
+    # Same expansion as the list route: the Library sends whatever its
+    # project_path resolves to, which on Modal is the volume-relative
+    # studios/<slug>/… form — unexpanded it points at no pool at all and the
+    # delete silently removes nothing.
+    dirs = _pack_dirs(_expand_project(str(body.get("project") or "")),
+                      str(body.get("kind") or ""),
+                      str(body.get("month") or ""))
+    removed = delete_pack_template_dirs(dirs, str(body.get("name") or ""))
     return web.json_response({"ok": True, "removed": removed})

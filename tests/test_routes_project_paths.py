@@ -106,7 +106,32 @@ def test_list_assets_accepts_volume_relative_dir(routes_mod, volume):
 
 
 def test_pack_template_list_accepts_volume_relative_project(routes_mod, volume):
-    asyncio.run(routes_mod.pack_template_list(_req(project="studios/imperia/bakery")))
+    """The reference pool of a volume-relative project resolves to its absolute
+    <project>/templates/reference — the universal, month-free pool."""
+    asyncio.run(routes_mod.pack_template_list(
+        _req(project="studios/imperia/bakery", kind="reference")))
     body = routes_mod._captured["body"]
-    assert body["dir"] == str(
-        (volume / "studios" / "imperia" / "bakery" / "templates").resolve())
+    project = (volume / "studios" / "imperia" / "bakery").resolve()
+    assert body["dir"] == str(project / "templates" / "reference")
+    assert str(project / "templates" / "reference") in body["dirs"]
+
+
+def test_pack_template_list_order_kind_browses_the_month(routes_mod, volume):
+    """Order templates live beside the month's order — inside that month's
+    client-refs folder, not in the project-level pool."""
+    project = (volume / "studios" / "imperia" / "bakery").resolve()
+    (project / "orders" / "Bakery-October").mkdir()
+    asyncio.run(routes_mod.pack_template_list(
+        _req(project="studios/imperia/bakery", kind="order", month="October")))
+    body = routes_mod._captured["body"]
+    assert body["dir"] == str(project / "orders" / "Bakery-October" / "templates")
+
+
+def test_pack_template_list_order_kind_without_refs_folder(routes_mod, volume):
+    """No client-refs folder for the month → still month-scoped, under the
+    project's templates/orders/<month>, never the reference pool."""
+    project = (volume / "studios" / "imperia" / "bakery").resolve()
+    asyncio.run(routes_mod.pack_template_list(
+        _req(project="studios/imperia/bakery", kind="order", month="October")))
+    body = routes_mod._captured["body"]
+    assert body["dir"] == str(project / "templates" / "orders" / "october")

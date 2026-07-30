@@ -267,6 +267,12 @@ class SymbioticaOrderSpecs(io.ComfyNode):
             # older consumers ignore them.
             "project_path": (project_path or "").strip(),
             "month": (month or "").strip(),
+            # Where this pack came from — an order, not the asset library. The
+            # Auto Packer files "Save as template" by this: an order template is
+            # the design guide for ONE month and lives beside that month's
+            # order; a reference template is universal (see the Reference
+            # Browser).
+            "source": "order",
         }
         return io.NodeOutput(payload)
 
@@ -628,26 +634,36 @@ class SymbioticaAutoPacker(io.ComfyNode):
     @classmethod
     def _save_template(cls, name, order, preset, settings, category,
                        overrides, packed) -> None:
-        """Write this run's sheets + recipe as a Template Library folder under
-        the project's templates/ dir. Never raises — a save failure must not
-        lose the packed output; it falls back to output/templates and tells the
-        UI via a push."""
-        from .pack_library import templates_dir, write_pack_template
+        """Write this run's sheets + recipe as a Template Library folder, filed
+        by KIND: a pack from an Order Specs goes beside that month's order
+        (<project>/orders/<Client-Month>/templates), a pack from the Reference
+        Browser goes to the universal pool (<project>/templates/reference).
+        Never raises — a save failure must not lose the packed output; it falls
+        back to output/templates/<kind> and tells the UI via a push."""
+        from .pack_library import kind_of_order, qualified_name, save_dirs, write_pack_template
         project_path = str(order.get("project_path", "")).strip()
-        base = templates_dir(project_path)
-        fell_back = not base
-        if not base:
-            base = os.path.join(folder_paths.get_output_directory(), "templates")
+        month = str(order.get("month", ""))
+        kind = kind_of_order(order)
+        out_root = os.path.join(folder_paths.get_output_directory(), "templates")
+        dirs = save_dirs(project_path, kind, month, out_root)
         sidecar = {
             "eventName": order.get("eventName", ""),
+            # The kind is written down, not re-derived: a template that is later
+            # copied elsewhere (or read by an older browse) still knows which
+            # pool it belongs to.
+            "kind": kind,
+            "month": month,
             "order": {
                 "project_path": project_path,
-                "month": str(order.get("month", "")),
+                "month": month,
                 "feature": order.get("feature", ""),
                 "eventName": order.get("eventName", ""),
                 "assets": order.get("assets", []),
                 "refsRoot": order.get("refsRoot", ""),
                 "assetsRoot": order.get("assetsRoot", ""),
+                # So re-packing THIS template from the Library and saving again
+                # lands in the same pool.
+                "source": kind,
             },
             "preset": preset,
             "settings": settings,
@@ -659,23 +675,23 @@ class SymbioticaAutoPacker(io.ComfyNode):
             "sheetPrompts": [p.get("prompts", "") for p in packed],
         }
         images = [p["image"] for p in packed]
-        try:
-            result = write_pack_template(base, name, images, sidecar)
-        except Exception:
-            # Project folder not writable (e.g. a read-only Modal Volume) — keep
-            # the sheets by saving to output/templates instead. The Library +
-            # list route browse output/templates too, so it stays reloadable.
-            base = os.path.join(folder_paths.get_output_directory(), "templates")
-            fell_back = True
+        result = base = err = None
+        for i, candidate in enumerate(dirs):
             try:
-                result = write_pack_template(base, name, images, sidecar)
-            except Exception as e:
-                _push("symbiotica.pack_template_saved",
-                      {"error": f"could not save template: {e}"})
-                return
+                result = write_pack_template(candidate, name, images, sidecar)
+                base = candidate
+                fell_back = i > 0
+                break
+            except Exception as e:  # unwritable project folder → try the fallback
+                err = e
+        if result is None:
+            _push("symbiotica.pack_template_saved",
+                  {"error": f"could not save template: {err}"})
+            return
         _register_refs_root(base)
         _push("symbiotica.pack_template_saved",
-              {"name": result["name"], "dir": result["dir"],
+              {"name": result["name"], "key": qualified_name(kind, result["name"]),
+               "kind": kind, "month": month, "dir": result["dir"],
                "project_path": project_path, "fellBack": fell_back})
 
 
@@ -687,15 +703,25 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
             display_name="Symbiotica Template Library",
             category="symbiotica/pipeline",
             description="Browse the Auto Packer templates saved for a project "
-                        "(as folders, with sheet thumbnails). 'use' one → its "
-                        "full recipe on 'template' (wire into the Auto Packer to "
-                        "re-pack or edit). CHECK any → their saved sheets + "
-                        "prompts stream out of 'sheets'/'sheet_prompts' with no "
-                        "re-render.",
+                        "(as folders, with sheet thumbnails). `kind` picks the "
+                        "pool: Reference = universal style guides built from the "
+                        "game's asset library, Order = the wired month's design "
+                        "guides. 'use' one → its full recipe on 'template' (wire "
+                        "into the Auto Packer to re-pack or edit). CHECK any → "
+                        "their saved sheets + prompts stream out of "
+                        "'sheets'/'sheet_prompts' with no re-render.",
             inputs=[
                 io.String.Input("project_path", default="",
                                 tooltip="The client project folder — its "
-                                        "templates/ subfolder is browsed"),
+                                        "templates are browsed"),
+                io.String.Input("kind", default="All",
+                                tooltip="Which pool to browse: Reference "
+                                        "(universal, from the asset library), "
+                                        "Order (this month's order), or All"),
+                io.String.Input("month", default="",
+                                tooltip="Which month's order templates to browse "
+                                        "— only used when kind is Order/All "
+                                        "(empty = the project's first month)"),
                 io.String.Input("selected", default="",
                                 tooltip="Which saved template to output as a "
                                         "recipe — set by the browser's 'use'"),
@@ -717,20 +743,29 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
         )
 
     _NEUTRAL = {"order": {}, "preset": {}, "settings": {}, "category": "",
-                "overrides": {}, "name": ""}
+                "overrides": {}, "name": "", "kind": "", "month": ""}
 
     @classmethod
-    def _dirs(cls, project_path):
-        from .pack_library import templates_dir
+    def _dirs(cls, project_path, kind="", month=""):
+        from .pack_library import pack_dirs
         out = os.path.join(folder_paths.get_output_directory(), "templates")
-        # Project dir first so a filed template shadows a fallback of the same
+        # Project dirs first so a filed template shadows a fallback of the same
         # name; output/templates covers read-only-project + no-project saves.
-        return [d for d in (templates_dir(project_path), out) if d]
+        return pack_dirs(project_path, cls._kind(kind), month, out)
+
+    @staticmethod
+    def _kind(kind):
+        """The widget's label ("All"/"Order"/"Reference") as a pool id; "" =
+        every pool."""
+        from .pack_library import KINDS
+        k = str(kind or "").strip().lower()
+        return k if k in KINDS else ""
 
     @classmethod
-    def execute(cls, project_path="", selected="", checked="[]") -> io.NodeOutput:
+    def execute(cls, project_path="", kind="All", month="", selected="",
+                checked="[]") -> io.NodeOutput:
         from .pack_library import (collect_checked, load_pack_template_dirs)
-        dirs = cls._dirs(project_path)
+        dirs = cls._dirs(project_path, kind, month)
         for d in dirs:
             _register_refs_root(d)
         # (1) The recipe bundle for the single 'use'-selected template. Missing
@@ -751,6 +786,10 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
                     "category": tpl.get("category", "All"),
                     "overrides": tpl.get("overrides") or {},
                     "name": tpl.get("name", ""),
+                    # Which pool it came from, so a re-pack saved from the Auto
+                    # Packer goes back to the same one.
+                    "kind": tpl.get("kind", ""),
+                    "month": str(tpl.get("month", "")),
                 }
         # (2) Saved sheets + prompts for the CHECKED templates — loaded from
         # disk, no re-pack. Falls back to the 'use'-selected template when
