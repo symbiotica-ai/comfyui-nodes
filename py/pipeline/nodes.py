@@ -70,6 +70,14 @@ def _register_refs_root(path: str) -> None:
         pass
 
 
+def _expand_studio(value: str) -> str:
+    """A `studios/<slug>/...` string — what the Studio Library node's wire
+    carries — becomes its absolute path under the studio-assets Volume. Any
+    other path passes through, so a typed local folder still works."""
+    from .studio_library import STUDIO_ASSETS_DIR, expand_studio_path
+    return expand_studio_path(STUDIO_ASSETS_DIR, value)
+
+
 def _pil_to_tensor(img) -> torch.Tensor:
     arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
     return torch.from_numpy(arr)[None, ...]
@@ -263,33 +271,37 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         return io.NodeOutput(payload)
 
 
-class SymbioticaFilesRead(io.ComfyNode):
+class SymbioticaReferenceBrowser(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
         return io.Schema(
-            node_id="SymbioticaFilesRead",
-            display_name="Symbiotica Files Read",
+            node_id="SymbioticaReferenceBrowser",
+            display_name="Symbiotica Reference Browser",
             category="symbiotica/pipeline",
-            description="Build an order from loose client reference folders — "
-                        "no xlsx. Open the files browser, tick folders/files "
-                        "into groups (folder = one sheet row, ticked files = "
-                        "its cells), and wire 'order' into the Auto Packer.",
+            description="Build a reference template from the game's asset "
+                        "library — no order, no briefs. Wire the Studio "
+                        "Library's path in, browse the folders in this node, "
+                        "tick what you want (a folder = one sheet row, its "
+                        "images = that row's cells), and wire 'order' into the "
+                        "Auto Packer.",
             inputs=[
-                io.String.Input("refs_path", default="",
-                                tooltip="The client folder of reference "
-                                        "images (subfolders welcome)"),
+                io.String.Input("root_path", default="",
+                                tooltip="The library folder to browse — wire "
+                                        "the Studio Library's path here, or "
+                                        "type one"),
                 io.String.Input("name", default="",
                                 tooltip="Base name for the sheets (empty = "
                                         "the folder's name)"),
                 io.String.Input("selection", default="{}", advanced=True,
-                                tooltip="Groups JSON, set by the files "
+                                tooltip="Picks JSON, set by the node's "
                                         "browser"),
             ],
             outputs=[Order.Output(display_name="order")],
         )
 
     @classmethod
-    def fingerprint_inputs(cls, refs_path="", name="", selection="{}"):
+    def fingerprint_inputs(cls, root_path="", name="", selection="{}"):
+        refs_path = _expand_studio(root_path)
         h = hashlib.sha256(f"{refs_path}|{name}|{selection}".encode())
         # Re-run when any selected file changes on disk.
         try:
@@ -310,9 +322,9 @@ class SymbioticaFilesRead(io.ComfyNode):
         return h.hexdigest()
 
     @classmethod
-    def execute(cls, refs_path="", name="", selection="{}") -> io.NodeOutput:
-        from .files_read import build_files_order
-        order = build_files_order(refs_path, selection, name)
+    def execute(cls, root_path="", name="", selection="{}") -> io.NodeOutput:
+        from .reference_browser import build_reference_order
+        order = build_reference_order(_expand_studio(root_path), selection, name)
         _register_refs_root(order["refsRoot"])
         return io.NodeOutput(order)
 
@@ -1955,7 +1967,7 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
 PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
-    SymbioticaFilesRead,
+    SymbioticaReferenceBrowser,
     SymbioticaModelPreset,
     SymbioticaAutoPackerSettings,
     SymbioticaAutoPacker,

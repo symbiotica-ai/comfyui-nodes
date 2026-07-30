@@ -54,6 +54,19 @@ function featureKey(value) {
 }
 
 // --- graph helpers -----------------------------------------------------------
+// Canvas-level notice. Saving a template piggybacks on a normal queue of the
+// WHOLE graph, so it fails for reasons that have nothing to do with the packer
+// (a missing model three nodes away, no output node). Those failures used to go
+// to console.error only, which reads as "the button does nothing".
+function toast(severity, summary, detail) {
+    try {
+        app.extensionManager.toast.add({ severity, summary, detail, life: 6000 });
+    } catch {
+        console[severity === "error" ? "error" : "log"](
+            `[symbiotica] ${summary}: ${detail}`);
+    }
+}
+
 function upstreamNode(node, inputName) {
     const input = node.inputs?.find((i) => i.name === inputName);
     if (!input || input.link == null) return null;
@@ -380,6 +393,14 @@ function assetSourceFor(node) {
         const ev = events.find((e) => e.feature === feature) || events[0] || null;
         return { event: ev, refsRoot: specs._symRefsRoot ?? "" };
     }
+    // A Reference Browser feeds the same `order` wire from the asset library.
+    // It publishes its picks in the event shape (see reference_browser.js), so
+    // the Assets panel, the category combo, and the per-asset hide/reorder all
+    // work on library rows exactly as they do on an order's.
+    if (specs?.comfyClass === "SymbioticaReferenceBrowser") {
+        return { event: specs._symPickedEvent ?? null,
+                 refsRoot: specs._symRefsRoot ?? "" };
+    }
     const lib = upstreamNode(node, "template");
     if (lib?.comfyClass === "SymbioticaTemplateLibrary") {
         return { event: (lib._symEvents ?? [])[0] || null,
@@ -469,7 +490,8 @@ function assetsPanel(node) {
         list.replaceChildren();
         const { assets, refsRoot } = eventAssetsFor(node);
         if (!assets.length) {
-            list.textContent = "Wire an Order Specs and pick an event.";
+            list.textContent = "Wire an Order Specs (and pick an event), a "
+                + "Reference Browser, or a Template Library.";
             list.style.opacity = ".6";
             refit();
             return;
@@ -556,30 +578,109 @@ function assetsPanel(node) {
     render();
 }
 
-// "💾 Save as template" on the Auto Packer: names the current pack, sets the
-// hidden `save_as` widget, queues once so Python writes the sheets + recipe to
-// the project's templates/ folder, then clears the name so the next run does
-// not re-save.
+// Ask for the template name. ComfyUI's own dialog (frontend 1.45+) rather than
+// window.prompt(): Chrome permanently suppresses window.prompt in a tab once
+// "prevent this page from creating additional dialogs" is armed, and it then
+// returns null with nothing on screen — a dead Save button with no explanation.
+//
+// Returns the typed name, "" for an empty answer, or null when cancelled. If the
+// frontend has no dialog service, window.prompt is tried, and if that is the
+// suppressed one, the node's own `template name` field carries the answer.
+async function askName(suggested) {
+    const dialog = app.extensionManager?.dialog;
+    if (typeof dialog?.prompt === "function") {
+        const answer = await dialog.prompt({
+            title: "Save as template",
+            message: "Name this template:",
+            defaultValue: suggested,
+        });
+        return answer == null ? null : String(answer).trim();
+    }
+    let answer;
+    try {
+        answer = window.prompt("Save this pack as a template named:", suggested);
+    } catch {
+        answer = undefined;
+    }
+    if (answer == null) return suggested ? suggested : null;
+    return String(answer).trim();
+}
+
+// The API-format prompt reduced to `rootId` and everything it feeds from, plus
+// a preview terminal so the run has an output node.
+//
+// Saving used to queue the WHOLE graph, which drags in everything DOWNSTREAM of
+// the packer — image models, API nodes — none of which the pack needs. That
+// made a save fail on unrelated errors (a missing checkpoint), pop ComfyUI's
+// "Sign In Required to Use API Nodes" dialog when an API node was present, and
+// pay for a full generation just to write a template. The ancestor closure
+// keeps the order/preset/settings/library feeding this packer and nothing else.
+function packOnlyPrompt(output, rootId) {
+    const keep = new Set();
+    const walk = (id) => {
+        if (keep.has(id) || !output[id]) return;
+        keep.add(id);
+        for (const value of Object.values(output[id].inputs ?? {})) {
+            // A wired input is [originNodeId, slot]; widgets are plain values.
+            if (Array.isArray(value) && value.length === 2) walk(String(value[0]));
+        }
+    };
+    walk(String(rootId));
+    const pruned = {};
+    for (const id of keep) pruned[id] = output[id];
+    // The packer is not an output node, and a prompt with no outputs is
+    // rejected before anything runs — so terminate the pruned graph with a
+    // preview of the sheets being saved.
+    pruned["symbiotica-save-preview"] = {
+        class_type: "PreviewImage",
+        inputs: { images: [String(rootId), 0] },
+    };
+    return pruned;
+}
+
+// The default template name: what is being packed (the order's event or the
+// library folder) plus the picked category, slugified.
+function suggestedName(node) {
+    const { event: ev } = assetSourceFor(node);
+    const cat = widgetOf(node, "category")?.value?.trim() || "All";
+    return slugify([ev?.feature || "template", cat === "All" ? "" : cat]
+        .filter(Boolean).join("-"));
+}
+
+// "💾 Save as template" on the Auto Packer: takes the name from the node's own
+// `save_as` field, queues once so Python writes the sheets + recipe to the
+// project's templates/ folder, then clears the field so the next run does not
+// re-save.
+//
+// The name used to come from window.prompt(). Chrome permanently suppresses
+// dialogs in a tab once "prevent this page from creating additional dialogs" is
+// ticked — prompt() then returns null with nothing on screen, so the button
+// looked dead and no template was ever written. The field is on the node now:
+// no dialog, and the name is visible before the click.
 function wireSaveButton(node) {
     const saveW = widgetOf(node, "save_as");
-    if (saveW) { saveW.hidden = true; saveW.computeSize = () => [0, -4]; }
+    // Left EMPTY on purpose: a non-empty save_as makes Python save on any run,
+    // so a prefilled field would write a template every time the graph is
+    // queued. Empty + Save uses the suggested name instead.
+    if (saveW) saveW.label = "template name (blank = auto)";
     // A native litegraph button (like Order Specs' Read-folder): renders in both
     // UIs and never hides at low zoom, unlike the DOM widget it replaces.
     let saving = false;
     const btn = node.addWidget("button", "💾 Save as template", null, async () => {
         if (saving) return;
-        const { event: ev } = assetSourceFor(node);
-        const cat = widgetOf(node, "category")?.value?.trim() || "All";
-        const suggested = slugify(
-            [ev?.feature || "template", cat === "All" ? "" : cat]
-                .filter(Boolean).join("-"));
-        const name = window.prompt(
-            "Save this pack as a template named:", suggested);
-        if (!name || !name.trim()) return;
+        const name = await askName(
+            (saveW?.value ?? "").trim() || suggestedName(node));
+        if (name === null) return;                 // cancelled
+        if (!name) {
+            toast("warn", "Name the template first",
+                  "Give it a name in the dialog, or type one in this node's "
+                  + "'template name' field.");
+            return;
+        }
         saving = true;
         btn.name = "⏳ Saving…";
         node.setDirtyCanvas?.(true, true);
-        if (saveW) saveW.value = name.trim();
+        if (saveW) saveW.value = name;
         try {
             // Serialize NOW so save_as is captured, THEN clear + queue the
             // captured prompt. app.queuePrompt only serializes when no run is in
@@ -587,9 +688,16 @@ function wireSaveButton(node) {
             // downstream run. graphToPrompt snapshots the graph synchronously.
             const prompt = await app.graphToPrompt();
             if (saveW) saveW.value = "";
-            await api.queuePrompt(0, prompt);
+            await api.queuePrompt(0, {
+                output: packOnlyPrompt(prompt.output, node.id),
+                workflow: prompt.workflow,
+            });
         } catch (err) {
             console.error("[symbiotica] template save queue failed", err);
+            toast("error", "Template not saved",
+                  `${err?.message ?? err} — saving queues the whole graph, so a `
+                  + "node error anywhere in it (a missing model, no output node) "
+                  + "blocks the save. Fix the run, then press Save again.");
         } finally {
             if (saveW) saveW.value = "";
             saving = false;
@@ -1067,12 +1175,19 @@ registerSymbioticaExtension(app, {
         api.addEventListener("symbiotica.pack_template_saved", ({ detail }) => {
             if (detail?.error) {
                 console.error("[symbiotica] template save:", detail.error);
+                toast("error", "Template not saved", detail.error);
                 return;
             }
             if (detail?.fellBack) {
                 console.warn("[symbiotica] template '" + detail.name
                     + "' saved to output/templates (project folder unwritable "
                     + "or unset) — still browsable in the Library.");
+                toast("warn", `Saved “${detail.name}” to output/templates`,
+                      "No project folder on this order (or it is not writable), "
+                      + `so it went to ${detail.dir}. The Library browses that `
+                      + "folder too, so it is still reloadable.");
+            } else {
+                toast("success", `Saved “${detail?.name}”`, detail?.dir ?? "");
             }
             for (const n of app.graph?._nodes ?? []) {
                 if (n.comfyClass === "SymbioticaTemplateLibrary") {

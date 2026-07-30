@@ -6,6 +6,34 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.22
+
+**Node change.** `SymbioticaFilesRead` is gone, replaced by
+`SymbioticaReferenceBrowser`. A workflow that used Files Read will report the
+node as missing; drop a Reference Browser in its place and re-pick.
+
+### Added
+- **Symbiotica Reference Browser** — build a template sheet out of the game's
+  existing asset library, with no order and no client briefs. Wire the Studio
+  Library's `path` into it, browse the library **inside the node**, and tick what
+  you want: a folder becomes one sheet row and the images inside it become that
+  row's cells; the folder that holds the row is its category. The `order` output
+  is the same wire Order Specs emits, so the Auto Packer, Model Preset, and Auto
+  Packer Settings nodes work exactly as they do for a month's order — which means
+  the Auto Packer can now build templates from scratch, not only from an order.
+
+  A category's layout convention ("food is three rows, decorations are two per
+  row") is a Model Preset plus Auto Packer Settings pairing, so save it once with
+  `💾 Save as template` and reload it from the Template Library.
+- `GET /symbiotica/browse-refs` — one level of a reference root: its folders and
+  its images with pixel sizes, confined to the root by realpath containment.
+
+### Removed
+- **Files Read.** It put the folder tree behind a fullscreen overlay, made you
+  type the folder path, and grouped by tick order rather than by the library's
+  own structure. Its builder, hardening, and tests carry over to the Reference
+  Browser intact; only the interface was wrong.
+
 ## 2026.7.21
 
 A diagnostics release. No node's inputs, outputs, or ids changed.
