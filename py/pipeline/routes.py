@@ -227,7 +227,9 @@ async def browse_refs(request):
     result = list_level(root, request.query.get("dir", ""))
     if "error" in result:
         return web.json_response(result, status=400)
-    register_root_within(result["root"])
+    if not register_root_within(result["root"]):
+        return web.json_response({"error": "folder is outside every allowed root"},
+                                 status=403)
     return web.json_response(result)
 
 
@@ -267,6 +269,13 @@ async def parse_order(request):
         assets_root = r["assets_root"]
     if not order_path:
         return web.json_response({"error": "order_path required"}, status=400)
+    roots = declared_roots()
+    if resolve_within(roots, order_path, kind="file") is None:
+        return web.json_response({"error": "order path is outside every allowed root"},
+                                 status=403)
+    if refs_path and resolve_within(roots, refs_path, kind="dir") is None:
+        return web.json_response({"error": "refs path is outside every allowed root"},
+                                 status=403)
     try:
         loaded = load_order(order_path, refs_path)
     except ValueError as e:
@@ -288,7 +297,9 @@ async def list_assets(request):
     root = os.path.realpath(_expand_project(request.query.get("dir", "")))
     if not root or not os.path.isdir(root):
         return web.json_response({"error": "not a readable directory"}, status=400)
-    register_root_within(root)
+    if not register_root_within(root):
+        return web.json_response({"error": "folder is outside every allowed root"},
+                                 status=403)
     try:
         rels = scan_images(root)
     except OSError:
