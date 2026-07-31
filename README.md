@@ -102,6 +102,13 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
 - **Symbiotica Studio Library** — pick a file or folder from the active
   studio's asset library; outputs its absolute sandbox path and whether it is
   a folder.
+- **Symbiotica Refs Folder** — load every image in one folder, in filename
+  order, from an absolute path and nothing else. No browsing and no picking, so
+  a dispatcher can bind the path and run the graph headless over the API.
+  Outputs the images, their filenames index-aligned, and a count; `max_count`
+  caps how many come back. A file that will not decode is skipped, but a
+  missing folder — or one where nothing decodes — raises rather than handing
+  the graph zero references in silence.
 
 The web extension adds an events browser on Order Read and populates the
 feature/group dropdowns after the first queue. On a fully cached run the
