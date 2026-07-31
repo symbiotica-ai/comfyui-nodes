@@ -134,7 +134,12 @@ def build_reference_order(refs_root: str, selection, name: str = "") -> dict:
     return {"feature": feature, "eventName": feature, "assets": assets,
             "refsRoot": refs_root, "assetsRoot": "", "guide": None,
             # The client project this library lives under, so "Save as template"
-            # files the sheet in <project>/templates/ beside the order-built
-            # ones. "" when the folder is not inside a project — the packer then
-            # falls back to output/templates as before.
-            "project_path": project_root_of(refs_root), "month": ""}
+            # files the sheet in <project>/templates/reference/ — the universal
+            # pool, month-free on purpose: a style guide built from the game's
+            # asset library applies to every order. "" when the folder is not
+            # inside a project — the packer then falls back to
+            # output/templates/reference.
+            "project_path": project_root_of(refs_root), "month": "",
+            # Reference, not order: this is what routes the save (and what the
+            # Template Library's kind filter reads back).
+            "source": "reference"}

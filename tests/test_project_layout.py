@@ -63,7 +63,16 @@ def test_resolve_defaults_to_first_month_when_blank(project):
 
 def test_resolve_empty_project_is_all_empty(tmp_path):
     r = resolve_month(str(tmp_path), "october")
-    assert r == {"order_path": "", "refs_path": "", "assets_root": ""}
+    assert r == {"order_path": "", "refs_path": "", "assets_root": "",
+                 "month": ""}
+
+
+def test_resolve_reports_one_canonical_month_per_order(project):
+    """Every alias of a month resolves to the same canonical name — what the
+    order template pool keys its folder off."""
+    names = {resolve_month(str(project), alias)["month"]
+             for alias in ("", "october", "October", "Bakery October Art.xlsx")}
+    assert names == {"october"}
 
 
 def test_refs_folder_falls_back_to_name_overlap(tmp_path):

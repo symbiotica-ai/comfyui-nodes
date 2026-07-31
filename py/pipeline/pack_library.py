@@ -1,6 +1,7 @@
 # ABOUTME: On-disk store for Auto Packer "templates" — a saved recipe (order +
 # ABOUTME: preset + settings + overrides) plus the packed sheet PNGs, one folder
-# ABOUTME: per template under a project's templates/ subfolder.
+# ABOUTME: per template, split by KIND: order templates beside the month's order,
+# ABOUTME: reference templates project-level (universal, any order).
 from __future__ import annotations
 
 import json
@@ -10,12 +11,123 @@ from datetime import datetime
 
 from .order_sheet import slugify
 
+# The two kinds of saved pack. They differ in what they are FOR and therefore in
+# where they live:
+#   order      — packed from an Order Specs event: the design guide for ONE
+#                month's order, so it lives beside that order's client refs
+#                (<project>/orders/<Client-Month>/templates/).
+#   reference  — packed from the Reference Browser over the game's asset
+#                library: a style guide that is valid for any month, so it lives
+#                project-level (<project>/templates/reference/).
+KIND_ORDER = "order"
+KIND_REFERENCE = "reference"
+KINDS = (KIND_ORDER, KIND_REFERENCE)
+
 
 def templates_dir(project_path: str) -> str:
     """The templates/ subfolder of a client project folder (the same folder that
-    holds orders/ and reference-assets/). Empty string when no project given."""
+    holds orders/ and reference-assets/). Empty string when no project given.
+
+    This is the LEGACY flat pool — templates saved before the order/reference
+    split. New saves go to reference_templates_dir / order_templates_dir; this
+    folder is still browsed so old templates stay reloadable."""
     project_path = (project_path or "").strip()
     return os.path.join(project_path, "templates") if project_path else ""
+
+
+def reference_templates_dir(project_path: str) -> str:
+    """Where reference (game-asset) templates live: <project>/templates/reference.
+    Deliberately month-free — a style guide built from the sprite catalog applies
+    to every order."""
+    base = templates_dir(project_path)
+    return os.path.join(base, KIND_REFERENCE) if base else ""
+
+
+def _resolved_month(project_path: str, month: str) -> dict:
+    from .project_layout import resolve_month
+    try:
+        return resolve_month(project_path, month) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def order_month_key(project_path: str, month: str) -> str:
+    """One folder stem per month, whatever alias named it.
+
+    "" (the node's "first month"), "October", and "Bakery October Art.xlsx" all
+    denote the same order — keying folders off the raw widget string would file
+    one month's templates in three places, and a save would land where no browse
+    looks."""
+    canon = _resolved_month(project_path, month).get("month") or ""
+    return canon or (month or "")
+
+
+def order_templates_dir(project_path: str, month: str = "") -> str:
+    """Where a month's order templates live: the templates/ folder INSIDE that
+    month's client-refs folder (<project>/orders/<Client-Month>/templates), so
+    the month order stays self-contained — xlsx, client refs, and the design
+    sheets built from them.
+
+    When the month has no refs folder (or none could be resolved) it falls back
+    to <project>/templates/orders/<month>, which keeps order templates month-
+    scoped and still out of the reference pool. "" when there is no project."""
+    project_path = (project_path or "").strip()
+    if not project_path:
+        return ""
+    resolved = _resolved_month(project_path, month)
+    refs = resolved.get("refs_path") or ""
+    if refs:
+        return os.path.join(refs, "templates")
+    stem = slugify(resolved.get("month") or month) or "unscheduled"
+    return os.path.join(templates_dir(project_path), "orders", stem)
+
+
+def output_kind_dir(output_templates_dir: str, kind: str, month: str = "") -> str:
+    """The same split under ComfyUI's output/templates — the fallback used when
+    the project folder is unwritable (a read-only Modal Volume) or absent. Keeps
+    a fallback save in its own kind, so the Library's filter still holds."""
+    base = (output_templates_dir or "").strip()
+    if not base:
+        return ""
+    if kind == KIND_REFERENCE:
+        return os.path.join(base, KIND_REFERENCE)
+    return os.path.join(base, "orders", slugify(month) or "unscheduled")
+
+
+def kind_of_order(order) -> str:
+    """Which kind an ORDER payload packs into. Order Specs and the Reference
+    Browser both stamp `source`; anything older (a frozen order inside a saved
+    template, a hand-built payload) is inferred — an order read from a month's
+    xlsx carries a month and/or the shared catalog root, a library pick carries
+    neither."""
+    if not isinstance(order, dict):
+        return KIND_ORDER
+    src = str(order.get("source") or "").strip().lower()
+    if src in KINDS:
+        return src
+    if str(order.get("month") or "").strip() or str(order.get("assetsRoot") or "").strip():
+        return KIND_ORDER
+    return KIND_REFERENCE
+
+
+def split_qualified(name: str) -> tuple[str, str]:
+    """("order"|"reference"|"", slug) for a possibly kind-qualified template id.
+
+    The Library writes "order/mini-1-food" into its `selected`/`checked` widgets
+    so the same slug can exist in both kinds; a bare slug (every workflow saved
+    before the split) still resolves, first dir wins."""
+    raw = str(name or "").strip().strip("/")
+    head, sep, tail = raw.partition("/")
+    if sep and head.lower() in KINDS and tail:
+        return head.lower(), tail
+    return "", raw
+
+
+def qualified_name(kind: str, name: str) -> str:
+    """"order/mini-1-food" for a kinded template, the bare slug for a legacy
+    (unkinded) one — the id the Library puts on the wire."""
+    kind = (kind or "").strip().lower()
+    return f"{kind}/{name}" if kind in KINDS else str(name or "")
 
 
 def _template_subdir(base_dir: str, name: str) -> tuple[str, str]:
@@ -81,6 +193,12 @@ def load_pack_template(base_dir: str, name: str) -> dict | None:
     doc["dir"] = sub
     doc["sheetPaths"] = [os.path.join(sub, s) for s in doc.get("sheets", [])
                          if os.path.isfile(os.path.join(sub, s))]
+    # Kind rides in the sidecar for every save after the split; a legacy flat
+    # template gets it inferred from its frozen order, so the browser can badge
+    # it and a re-save routes it to the right folder.
+    kind = str(doc.get("kind") or "").strip().lower()
+    doc["kind"] = kind if kind in KINDS else kind_of_order(doc.get("order"))
+    doc["key"] = qualified_name(doc["kind"], doc.get("name", stem))
     return doc
 
 
@@ -121,32 +239,126 @@ def delete_pack_template(base_dir: str, name: str) -> bool:
 # output/templates. So the browse side must read BOTH — otherwise a saved
 # template is invisible and can never be reloaded. These merge across the dirs.
 def list_pack_templates_dirs(dirs) -> list[dict]:
-    """Merge templates across dirs, de-duped by name (earlier dir wins — the
-    project folder is passed first, so a filed template shadows a fallback one
-    of the same name). Sorted by name."""
-    seen: dict[str, dict] = {}
+    """Merge templates across dirs, de-duped by (kind, name) — earlier dir wins,
+    so a filed template shadows a fallback one of the same name, while the SAME
+    slug saved as both an order and a reference template stays two rows. Sorted
+    by name (kind breaks ties)."""
+    seen: dict[tuple[str, str], dict] = {}
     for base in dirs:
         for d in list_pack_templates(base):
-            seen.setdefault(str(d.get("name", "")), d)
-    return sorted(seen.values(), key=lambda d: str(d.get("name", "")))
+            seen.setdefault((str(d.get("kind", "")), str(d.get("name", ""))), d)
+    return sorted(seen.values(),
+                  key=lambda d: (str(d.get("name", "")), str(d.get("kind", ""))))
 
 
 def load_pack_template_dirs(dirs, name) -> dict | None:
-    """First readable template named `name` across dirs (project dir first)."""
+    """First readable template `name` across dirs (project dir first). `name` may
+    be kind-qualified ("reference/blossom-tower"), in which case a template of
+    another kind with that slug is skipped rather than returned."""
+    want_kind, slug = split_qualified(name)
     for base in dirs:
-        doc = load_pack_template(base, name)
-        if doc is not None:
-            return doc
+        doc = load_pack_template(base, slug)
+        if doc is None:
+            continue
+        if want_kind and str(doc.get("kind", "")) != want_kind:
+            continue
+        return doc
     return None
 
 
 def delete_pack_template_dirs(dirs, name) -> bool:
-    """Delete `name` from every dir it exists in. True if anything was removed."""
+    """Delete `name` from every dir it exists in. True if anything was removed.
+    A kind-qualified name only deletes templates of that kind — deleting the
+    order template must never take the same-named reference one with it."""
+    want_kind, slug = split_qualified(name)
     removed = False
     for base in dirs:
-        if delete_pack_template(base, name):
+        if want_kind:
+            doc = load_pack_template(base, slug)
+            if doc is None or str(doc.get("kind", "")) != want_kind:
+                continue
+        if delete_pack_template(base, slug):
             removed = True
     return removed
+
+
+def _every_order_dir(project_path: str, output_templates_dir: str = "") -> list[str]:
+    """Every month's order pool, plus any output-fallback month folder on disk.
+
+    A save follows the ORDER's month while the Library browses its own — so
+    "All" has to cover them all, or a template saved for November is in no pool
+    the October-defaulted Library ever scans."""
+    from .project_layout import list_order_months
+    try:
+        months = [o.get("label", "") for o in list_order_months(project_path)]
+    except (OSError, ValueError):
+        months = []
+    dirs = []
+    for m in months:
+        dirs.append(order_templates_dir(project_path, m))
+        dirs.append(output_kind_dir(output_templates_dir, KIND_ORDER, m))
+    # Month folders under the output fallback that no order names — e.g.
+    # "unscheduled", written when the packing order had no month at all.
+    base = (output_templates_dir or "").strip()
+    root = os.path.join(base, "orders") if base else ""
+    try:
+        for e in sorted(os.listdir(root)) if root else []:
+            if os.path.isdir(os.path.join(root, e)):
+                dirs.append(os.path.join(root, e))
+    except OSError:
+        pass
+    return dirs
+
+
+def pack_dirs(project_path: str, kind: str = "", month: str = "",
+              output_templates_dir: str = "") -> list[str]:
+    """Every folder to browse for `kind`, most-specific first.
+
+    kind "order"/"reference" narrows to that kind's folders (project first, then
+    the output/templates fallback). Anything else ("", "all") returns all of
+    them — every month's order pool, not only the asked-for one — PLUS the
+    legacy flat pools, so a template saved before the split is still visible
+    under All, which is where it belongs now.
+    """
+    kind = (kind or "").strip().lower()
+    out = (output_templates_dir or "").strip()
+    month = order_month_key(project_path, month)
+    if kind == KIND_REFERENCE:
+        dirs = [reference_templates_dir(project_path),
+                output_kind_dir(out, KIND_REFERENCE)]
+    elif kind == KIND_ORDER:
+        dirs = [order_templates_dir(project_path, month),
+                output_kind_dir(out, KIND_ORDER, month)]
+    else:
+        dirs = [order_templates_dir(project_path, month),
+                *_every_order_dir(project_path, out),
+                reference_templates_dir(project_path),
+                templates_dir(project_path),
+                output_kind_dir(out, KIND_ORDER, month),
+                output_kind_dir(out, KIND_REFERENCE),
+                out]
+    # De-dupe while keeping order: with no project the kind dirs collapse to "".
+    seen, kept = set(), []
+    for d in dirs:
+        if d and d not in seen:
+            seen.add(d)
+            kept.append(d)
+    return kept
+
+
+def save_dirs(project_path: str, kind: str, month: str = "",
+              output_templates_dir: str = "") -> list[str]:
+    """Where a save of this kind should go, best first: the project folder, then
+    the output/templates fallback for that kind. The caller writes to the first
+    that accepts it."""
+    out = (output_templates_dir or "").strip()
+    month = order_month_key(project_path, month)
+    if kind == KIND_REFERENCE:
+        primary = reference_templates_dir(project_path)
+    else:
+        primary = order_templates_dir(project_path, month)
+    fallback = output_kind_dir(out, kind, month)
+    return [d for d in (primary, fallback) if d]
 
 
 def collect_checked(dirs, names):

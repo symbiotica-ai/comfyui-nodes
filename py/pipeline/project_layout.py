@@ -127,7 +127,12 @@ def list_order_months(project_path: str) -> list[dict]:
 
 def resolve_month(project_path: str, month: str) -> dict:
     """Resolve the picked month (its xlsx filename, or a month name) to
-    {order_path, refs_path, assets_root}. Empty strings where unresolved."""
+    {order_path, refs_path, assets_root, month}. Empty strings where unresolved.
+
+    `month` is the CANONICAL name of the order that was picked — "", the month
+    name, and the xlsx filename all resolve to the same one. Callers that key
+    storage off the month (the order template pool) must use this, not the raw
+    string, or three aliases of one month become three folders."""
     months = list_order_months(project_path)
     picked = None
     m = (month or "").strip().lower()
@@ -139,9 +144,11 @@ def resolve_month(project_path: str, month: str) -> dict:
         picked = months[0]
     ad = assets_dir(project_path) or ""
     if picked is None:
-        return {"order_path": "", "refs_path": "", "assets_root": ad}
+        return {"order_path": "", "refs_path": "", "assets_root": ad,
+                "month": ""}
     return {
         "order_path": picked["order_path"],
         "refs_path": picked["refs_path"],
         "assets_root": ad,
+        "month": picked["month"] or picked["label"],
     }

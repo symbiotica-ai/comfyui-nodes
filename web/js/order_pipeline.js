@@ -488,6 +488,9 @@ function assetsPanel(node) {
     node._symRenderAssets = () => render();
     function render() {
         list.replaceChildren();
+        // The asset source just changed (or first resolved) — so may the pool
+        // the Save button writes to.
+        node._symRefreshSaveLabel?.();
         const { assets, refsRoot } = eventAssetsFor(node);
         if (!assets.length) {
             list.textContent = "Wire an Order Specs (and pick an event), a "
@@ -647,6 +650,32 @@ function suggestedName(node) {
         .filter(Boolean).join("-"));
 }
 
+// Which pool this packer's save writes to, read off its asset source — the same
+// answer Python derives from the order's `source`, shown BEFORE the click so the
+// destination is never a surprise:
+//   Reference Browser -> "reference" (universal: <project>/templates/reference)
+//   Order Specs       -> "order"     (that month: <...>/orders/<Month>/templates)
+//   Template Library  -> whatever pool the template came from
+// "" when nothing is wired yet (the button stays generic).
+function packKindFor(node) {
+    const specs = upstreamNode(node, "order");
+    if (specs?.comfyClass === "SymbioticaReferenceBrowser") return "reference";
+    if (specs?.comfyClass === "SymbioticaOrderSpecs") return "order";
+    const lib = upstreamNode(node, "template");
+    if (lib?.comfyClass === "SymbioticaTemplateLibrary") {
+        const picked = String(widgetOf(lib, "kind")?.value ?? "").trim().toLowerCase();
+        if (picked === "order" || picked === "reference") return picked;
+        // kind "All": the pool is the selected template's own.
+        const sel = widgetOf(lib, "selected")?.value ?? "";
+        const t = (lib._symTemplates ?? []).find(
+            (x) => sel === (x.key ?? x.name) || sel === x.name);
+        return t?.kind || "";
+    }
+    return "";
+}
+
+const KIND_LABEL = { order: "order", reference: "reference" };
+
 // "💾 Save as template" on the Auto Packer: takes the name from the node's own
 // `save_as` field, queues once so Python writes the sheets + recipe to the
 // project's templates/ folder, then clears the field so the next run does not
@@ -666,7 +695,13 @@ function wireSaveButton(node) {
     // A native litegraph button (like Order Specs' Read-folder): renders in both
     // UIs and never hides at low zoom, unlike the DOM widget it replaces.
     let saving = false;
-    const btn = node.addWidget("button", "💾 Save as template", null, async () => {
+    // The label names the destination pool — a save from the Reference Browser
+    // is universal, one from an order belongs to that month only.
+    const idleLabel = () => {
+        const kind = KIND_LABEL[packKindFor(node)];
+        return kind ? `💾 Save as ${kind} template` : "💾 Save as template";
+    };
+    const btn = node.addWidget("button", idleLabel(), null, async () => {
         if (saving) return;
         const name = await askName(
             (saveW?.value ?? "").trim() || suggestedName(node));
@@ -701,11 +736,27 @@ function wireSaveButton(node) {
         } finally {
             if (saveW) saveW.value = "";
             saving = false;
-            btn.name = "💾 Save as template";
+            btn.name = idleLabel();
             node.setDirtyCanvas?.(true, true);
         }
     });
     btn.serialize = false;
+    // Keep the label honest as the graph is rewired (Reference Browser swapped
+    // for an Order Specs, a Library's kind changed). The assets panel calls this
+    // on every re-render, i.e. whenever an upstream publishes.
+    node._symRefreshSaveLabel = () => {
+        if (saving) return;
+        const next = idleLabel();
+        if (btn.name === next) return;
+        btn.name = next;
+        node.setDirtyCanvas?.(true, true);
+    };
+    const prevConnChange = node.onConnectionsChange;
+    node.onConnectionsChange = function () {
+        const r = prevConnChange?.apply(this, arguments);
+        node._symRefreshSaveLabel();
+        return r;
+    };
 }
 
 // The Template Library node: a native "Browse" button (the Studio Library
@@ -731,6 +782,42 @@ function wireTemplateLibrary(node) {
         try { return new Set(JSON.parse(chkW?.value || "[]")); }
         catch { return new Set(); }
     };
+
+    // Which pool this node browses. Reference templates are universal (built
+    // from the game's asset library, valid for any order); order templates
+    // belong to ONE month and live beside that month's order — so `month` only
+    // matters for the order pool and hides for Reference.
+    const KIND_VALUES = ["All", "Order", "Reference"];
+    const kindW = comboify(node, "kind", () => KIND_VALUES)
+        ?? widgetOf(node, "kind");
+    if (kindW && !KIND_VALUES.includes(kindW.value)) kindW.value = "All";
+    const kindOf = () => String(kindW?.value ?? "All").trim().toLowerCase();
+    const kindParam = () => (kindOf() === "all" ? "" : kindOf());
+    wireMonthPicker(node);   // month dropdown, filled from <project>/orders
+    const monthW = widgetOf(node, "month");
+    const monthOf = () => (widgetOf(node, "month")?.value?.trim()
+                           || inputString(node, "month", new Set()));
+    const syncMonthVisibility = () => {
+        if (!monthW) return;
+        const hide = kindOf() === "reference";
+        monthW.hidden = hide;
+        monthW.computeSize = hide ? () => [0, -4] : undefined;
+    };
+
+    // A template's id on the wire is kind-qualified ("reference/blossom-tower"),
+    // so the same slug can exist in both pools. Workflows saved before the split
+    // hold a bare slug — still matched, first pool wins (what Python does too).
+    const idOf = (t) => t.key ?? t.name;
+    // A bare slug is ambiguous once the same name lives in both pools, so bind
+    // it to the FIRST listed row of that name — the one Python resolves it to.
+    // Matching every pool would tick rows the queue never emits, and one untick
+    // would then clear them all.
+    const bareOwner = (name) => (node._symTemplates ?? []).find(
+        (x) => x.name === name);
+    const isId = (t, v) => !!v && (v === idOf(t)
+                                   || (v === t.name && bareOwner(v) === t));
+    const badgeOf = (t) => (t.kind === "reference" ? "ref"
+                            : t.kind === "order" ? (t.month || "order") : "");
 
     // While the overlay is open this re-renders its rows; null when closed.
     let paneRender = null;
@@ -771,7 +858,8 @@ function wireTemplateLibrary(node) {
         stripList.replaceChildren();
         const checkedSet = readChecked();
         const shown = (node._symTemplates ?? []).filter(
-            (t) => t.name === selW?.value || checkedSet.has(t.name));
+            (t) => isId(t, selW?.value)
+                || [...checkedSet].some((v) => isId(t, v)));
         if (!shown.length) {
             stripList.textContent = "No template in use — 📂 Browse to pick one.";
             stripList.style.opacity = ".6";
@@ -786,7 +874,9 @@ function wireTemplateLibrary(node) {
             head.style.cssText = "display:flex;align-items:center;gap:5px;"
                 + "min-width:0;opacity:.75;font-size:10px;";
             const tag = document.createElement("span");
-            tag.textContent = (t.name === selW?.value ? "✓ " : "▦ ") + t.name;
+            const badge = badgeOf(t);
+            tag.textContent = (isId(t, selW?.value) ? "✓ " : "▦ ") + t.name
+                + (badge ? `  · ${badge}` : "");
             tag.style.cssText = "flex:1;min-width:0;overflow:hidden;"
                 + "text-overflow:ellipsis;white-space:nowrap;";
             head.appendChild(tag);
@@ -810,8 +900,10 @@ function wireTemplateLibrary(node) {
 
     const refreshSummary = () => {
         const n = readChecked().size;
+        const pool = kindOf() === "order" ? `order · ${monthOf() || "first month"}`
+            : kindOf() === "reference" ? "reference" : "all pools";
         summary.value = (selW?.value ? `use: ${selW.value}` : "no template")
-            + (n ? ` · out: ${n} ▦` : "");
+            + (n ? ` · out: ${n} ▦` : "") + ` · ${pool}`;
         renderStrip();
         node.setDirtyCanvas?.(true, true);
     };
@@ -854,7 +946,7 @@ function wireTemplateLibrary(node) {
     };
 
     const select = (tpl) => {
-        if (selW) selW.value = tpl?.name || "";
+        if (selW) selW.value = tpl ? idOf(tpl) : "";
         primePackers(tpl);
         exposeEvent(tpl); // relights + re-renders packers with the primed values
         refreshSummary();
@@ -864,31 +956,56 @@ function wireTemplateLibrary(node) {
     const doDelete = async (tpl) => {
         const project = resolveProjectPath(node) || "";
         try {
+            // The qualified id keeps the delete inside one pool — removing an
+            // order template must not take the same-named reference one.
             await postJson("/symbiotica/pack-template-delete",
-                           { project, name: tpl.name });
+                           { project, name: idOf(tpl), kind: tpl.kind ?? "",
+                             month: tpl.month ?? monthOf() });
         } catch (err) { console.error("[symbiotica] delete failed", err); }
-        if (selW?.value === tpl.name) { selW.value = ""; exposeEvent(null); }
+        if (isId(tpl, selW?.value)) { selW.value = ""; exposeEvent(null); }
         await refresh();
     };
 
     const refresh = async () => {
         // Fetch even with an empty project — the route also lists
-        // output/templates (Files Read / fallback saves live there).
+        // output/templates (fallback saves live there).
         const project = resolveProjectPath(node) || "";
+        const q = new URLSearchParams({ project });
+        if (kindParam()) q.set("kind", kindParam());
+        // The reference pool is month-free by design — sending a month there
+        // would suggest it scopes something.
+        if (monthOf() && kindOf() !== "reference") q.set("month", monthOf());
         try {
-            const data = await fetchJson(
-                "/symbiotica/pack-template-list?project="
-                + encodeURIComponent(project));
+            const data = await fetchJson("/symbiotica/pack-template-list?" + q);
             node._symTemplates = data.templates ?? [];
+            node._symTemplateDir = data.dir ?? "";
         } catch { node._symTemplates = []; }
         // Re-expose the selected template's event — its data may only arrive now
         // — WITHOUT re-priming the packer's widgets (those are the user's now).
-        const cur = node._symTemplates.find((t) => t.name === selW?.value);
+        const cur = node._symTemplates.find((t) => isId(t, selW?.value));
         if (cur) exposeEvent(cur);
+        syncMonthVisibility();
         refreshSummary();
         paneRender?.();
     };
     node._symRefreshTemplates = refresh;
+
+    // Switching pool (or month) re-lists — and a downstream packer's Save button
+    // names the new pool.
+    for (const name of ["kind", "month", "project_path"]) {
+        const w = widgetOf(node, name);
+        if (!w) continue;
+        const prev = w.callback;
+        w.callback = function () {
+            const r = prev?.apply(this, arguments);
+            refresh();
+            for (const ap of downstreamNodes(node, "SymbioticaAutoPacker")) {
+                ap._symRefreshSaveLabel?.();
+            }
+            return r;
+        };
+    }
+    syncMonthVisibility();
 
     // The overlay browser — the Studio Library's modal chrome (centered panel
     // over a dimmed backdrop; Done/✕, Escape, and backdrop click all close),
@@ -916,7 +1033,10 @@ function wireTemplateLibrary(node) {
         crumb.style.cssText =
             `flex:1;font:12px ${HUB.mono};color:${HUB.inkSubtle};` +
             "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-        crumb.textContent = resolveProjectPath(node) || "output/templates";
+        // The folder a save of this pool lands in — the answer to "where did my
+        // template go?", which now depends on the kind AND the month.
+        crumb.textContent = node._symTemplateDir
+            || resolveProjectPath(node) || "output/templates";
         const closeBtn = document.createElement("button");
         closeBtn.textContent = "Done";
         closeBtn.className = "sym-btn";
@@ -956,14 +1076,21 @@ function wireTemplateLibrary(node) {
             pane.replaceChildren();
             const templates = node._symTemplates ?? [];
             if (!templates.length) {
+                const pool = kindOf() === "reference"
+                    ? "No reference templates yet — pack one from a Reference "
+                      + "Browser and press 💾."
+                    : kindOf() === "order"
+                    ? `No order templates for ${monthOf() || "this month"} yet — `
+                      + "pack one from an Order Specs and press 💾."
+                    : "No templates yet — save one from the Auto Packer (💾).";
                 pane.appendChild(emptyState(resolveProjectPath(node)
-                    ? "No templates yet — save one from the Auto Packer (💾)."
+                    ? pool
                     : "Set the project folder to browse its templates."));
                 return;
             }
             const checkedSet = readChecked();
             for (const t of templates) {
-                const sel = selW?.value === t.name;
+                const sel = isId(t, selW?.value);
                 const row = document.createElement("div");
                 row.className = "sym-row";
                 row.style.cssText = "padding:6px 10px;min-width:0;"
@@ -976,12 +1103,15 @@ function wireTemplateLibrary(node) {
                 // config selection).
                 const chk = document.createElement("input");
                 chk.type = "checkbox";
-                chk.checked = checkedSet.has(t.name);
+                chk.checked = [...checkedSet].some((v) => isId(t, v));
                 chk.title = "Output this template's saved sheets + prompts";
                 chk.style.cssText = "flex:none;cursor:pointer;margin:0;";
                 chk.addEventListener("click", () => {
                     const s = readChecked();
-                    if (chk.checked) s.add(t.name); else s.delete(t.name);
+                    // Drop any legacy bare-slug entry for this template as well,
+                    // so unticking really unticks.
+                    for (const v of [...s]) if (isId(t, v)) s.delete(v);
+                    if (chk.checked) s.add(idOf(t));
                     if (chkW) chkW.value = JSON.stringify([...s]);
                     refreshSummary();
                 });
@@ -991,6 +1121,18 @@ function wireTemplateLibrary(node) {
                     + `text-overflow:ellipsis;white-space:nowrap;color:${HUB.ink};`;
                 label.textContent = "📁  " + t.name;
                 head.appendChild(label);
+                // Which pool the row is from — the only thing telling an order
+                // template apart from a reference one of the same name.
+                const badge = badgeOf(t);
+                if (badge) {
+                    const b = document.createElement("span");
+                    b.textContent = badge;
+                    b.style.cssText =
+                        `font:11px ${HUB.mono};color:${HUB.inkSubtle};flex:none;`
+                        + `border:1px solid ${HUB.hairline};border-radius:6px;`
+                        + "padding:1px 6px;";
+                    head.appendChild(b);
+                }
                 const count = document.createElement("span");
                 count.textContent = (t.sheetCount ?? (t.sheets?.length || 0)) + " ▦";
                 count.style.cssText =
@@ -1182,12 +1324,20 @@ registerSymbioticaExtension(app, {
                 console.warn("[symbiotica] template '" + detail.name
                     + "' saved to output/templates (project folder unwritable "
                     + "or unset) — still browsable in the Library.");
-                toast("warn", `Saved “${detail.name}” to output/templates`,
+                toast("warn", `Saved “${detail.name}” to the output fallback`,
                       "No project folder on this order (or it is not writable), "
                       + `so it went to ${detail.dir}. The Library browses that `
                       + "folder too, so it is still reloadable.");
             } else {
-                toast("success", `Saved “${detail?.name}”`, detail?.dir ?? "");
+                // Name the pool: an order template is that month's design guide,
+                // a reference one is universal — the dir alone doesn't say it.
+                const pool = detail?.kind === "reference"
+                    ? "reference template (any order)"
+                    : detail?.kind === "order"
+                    ? `order template · ${detail?.month || "this month"}`
+                    : "";
+                toast("success", `Saved “${detail?.name}”`,
+                      [pool, detail?.dir ?? ""].filter(Boolean).join(" — "));
             }
             for (const n of app.graph?._nodes ?? []) {
                 if (n.comfyClass === "SymbioticaTemplateLibrary") {
@@ -1296,6 +1446,17 @@ registerSymbioticaExtension(app, {
             const origCfg = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function () {
                 origCfg?.apply(this, arguments);
+                // A workflow saved before `kind`/`month` existed restores three
+                // values onto five widgets; LiteGraph stops at the third, so the
+                // new two keep whatever they were created with. Normalise them
+                // anyway — a restored null would render as a "null" pool and
+                // reach Python as one.
+                const kw = widgetOf(this, "kind");
+                if (kw && !["All", "Order", "Reference"].includes(kw.value)) {
+                    kw.value = "All";
+                }
+                const mw = widgetOf(this, "month");
+                if (mw && typeof mw.value !== "string") mw.value = "";
                 // Workflow load: re-list the project's templates and re-drive
                 // any downstream Auto Packer from the saved `selected` template.
                 // Also re-fit the height: workflows saved before the overlay

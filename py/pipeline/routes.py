@@ -16,9 +16,13 @@ from .compose import scan_images
 from .order_sheet import slugify
 from .paths import parse_roots, resolve_within
 from .pack_library import (
+    KINDS,
     delete_pack_template_dirs,
     list_pack_templates_dirs,
-    templates_dir,
+    pack_dirs,
+    qualified_name,
+    save_dirs,
+    split_qualified,
 )
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -420,6 +424,13 @@ async def template_image(request):
     return web.FileResponse(path, headers={"Cache-Control": "private, max-age=60"})
 
 
+def _kind(value: str) -> str:
+    """A request's kind param as a pool id: "order"/"reference", or "" for every
+    pool (what the UI's "All" sends)."""
+    k = str(value or "").strip().lower()
+    return k if k in KINDS else ""
+
+
 def _project_roots() -> list[str]:
     """Where a project may legitimately live: the studio-assets Volume, ComfyUI's
     own output folder, and any root a graph execution registered. Declared here
@@ -430,53 +441,77 @@ def _project_roots() -> list[str]:
     return [r for r in roots if r]
 
 
-def _pack_dirs(project: str) -> list[str]:
-    """Where Auto Packer templates live: the project's templates/ subfolder AND
-    output/templates (the fallback for a read-only project / no-project save).
-    Project first so a filed template shadows a fallback of the same name.
+def _pack_dirs(project: str, kind: str = "", month: str = "") -> list[str]:
+    """Where Auto Packer templates of this kind live: the project's folders for
+    that pool AND the matching output/templates fallback (used when the project
+    is read-only or absent). Project first so a filed template shadows a
+    fallback of the same name; kind "" adds the legacy flat pools too.
 
-    The project folder is admitted only when it resolves inside a declared root —
-    these directories are handed to a recursive delete, so an unconfined project
-    string would reach any tree on the host."""
-    out = _template_dir()
-    proj = templates_dir(project) if project else None
-    if proj and not resolve_within(_project_roots(), proj, kind="dir"):
-        proj = None
-    return [d for d in (proj, out) if d]
+    A project outside every declared root is dropped rather than browsed. These
+    folders are handed to a recursive delete, so an unconfined project string
+    would reach any tree on the host — and dropping it here contains every pool
+    derived from it at once, leaving only the server's own output fallback.
+    """
+    if project and not resolve_within(_project_roots(), project, kind="dir"):
+        project = ""
+    return pack_dirs(project, _kind(kind), month, _template_dir() or "")
 
 
-def pack_dirs_for_project(value: str) -> list[str]:
+def pack_dirs_for_project(value: str, kind: str = "", month: str = "") -> list[str]:
     """_pack_dirs for a project as it arrives on the wire — a volume-relative
     studios/<slug>/... string or an absolute path. Both the list and the delete
     route resolve through here so they can never disagree about what a project
     means."""
-    return _pack_dirs(_expand_project(value))
+    return _pack_dirs(_expand_project(value), kind, month)
 
 
 @PromptServer.instance.routes.get("/symbiotica/pack-template-list")
 async def pack_template_list(request):
-    """The saved Auto Packer templates for a project — from its templates/
-    subfolder AND output/templates (the save fallback). Registers both so
-    /symbiotica/local-image can serve each template's sheet thumbnails (abs
-    sheetPaths ride along)."""
+    """The saved Auto Packer templates for a project, in one pool — reference
+    (universal), order (one month), or all — plus the output/templates fallback.
+    Registers every browsed dir so /symbiotica/local-image can serve each
+    template's sheet thumbnails (abs sheetPaths ride along)."""
     project = _expand_project(request.query.get("project", ""))
-    dirs = _pack_dirs(project)
+    kind = _kind(request.query.get("kind", ""))
+    month = request.query.get("month", "")
+    dirs = _pack_dirs(project, kind, month)
     for d in dirs:
         register_root_within(d)
-    return web.json_response({"dir": templates_dir(project),
+    # `dir` is what a save of this kind would write to — the crumb the browser
+    # shows. With no kind picked, the order pool is the representative one.
+    saves = save_dirs(project, kind or "order", month, _template_dir() or "")
+    return web.json_response({"dir": saves[0] if saves else "",
+                              "dirs": dirs, "kind": kind,
                               "templates": list_pack_templates_dirs(dirs)})
 
 
 @PromptServer.instance.routes.post("/symbiotica/pack-template-delete")
 async def pack_template_delete(request):
     """Delete one saved Auto Packer template folder from wherever it lives
-    (project templates/ or output/templates). basename/realpath-guarded; missing
-    is a no-op, not an error."""
+    (project pool or output/templates). A kind-qualified name ("order/mini-1")
+    only deletes that pool's copy. basename/realpath-guarded; missing is a
+    no-op, not an error."""
     try:
         body = await request.json()
     except Exception:
         body = {}
-    removed = delete_pack_template_dirs(
-        pack_dirs_for_project(str(body.get("project") or "")),
-        str(body.get("name") or ""))
+    # Search EVERY pool (kind ""), not the request's: a template saved before
+    # the split lives in the legacy flat <project>/templates, which pack_dirs
+    # only returns for kind "" — and the browser always sends a concrete kind
+    # (the list route infers one for legacy sidecars), so narrowing here made
+    # those rows undeletable. The pool-qualified name is what keeps the delete
+    # inside one pool: delete_pack_template_dirs skips a folder whose template
+    # is another kind.
+    #
+    # Same expansion as the list route: the Library sends whatever its
+    # project_path resolves to, which on Modal is the volume-relative
+    # studios/<slug>/… form — unexpanded it points at no pool at all and the
+    # delete silently removes nothing.
+    name = str(body.get("name") or "")
+    kind = _kind(str(body.get("kind") or ""))
+    if kind and not split_qualified(name)[0]:
+        name = qualified_name(kind, name)   # an older client sent a bare slug
+    dirs = _pack_dirs(_expand_project(str(body.get("project") or "")), "",
+                      str(body.get("month") or ""))
+    removed = delete_pack_template_dirs(dirs, name)
     return web.json_response({"ok": True, "removed": removed})

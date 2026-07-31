@@ -33,10 +33,23 @@ class NodeOutput:
         self.args = args
 
 
+class _IONamespace(types.SimpleNamespace):
+    """`io`, with every datatype we did not list behaving like a plain IO type.
+
+    A schema only needs Input/Output factories from io.Image, io.Int, io.Mask…,
+    never their real semantics — and hard-coding the list means a node that
+    starts using one more type fails here for no useful reason."""
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return _IOType
+
+
 def build_modules():
     """Fresh comfy_api + comfy_api.latest modules, for the caller to install
     via monkeypatch.setitem(sys.modules, ...) so it auto-reverts."""
-    io_ns = types.SimpleNamespace(
+    io_ns = _IONamespace(
         ComfyNode=ComfyNode, Schema=Schema, NodeOutput=NodeOutput,
         String=_IOType, Boolean=_IOType, Custom=lambda name: _IOType)
     latest = types.ModuleType("comfy_api.latest")
