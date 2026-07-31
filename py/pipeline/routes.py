@@ -71,6 +71,7 @@ def declared_roots() -> list[str]:
     roots += _operator_roots()
     with _lock:
         roots.extend(_roots)
+        roots.extend(_projects)
     return [r for r in roots if r]
 
 

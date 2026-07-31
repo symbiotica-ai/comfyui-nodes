@@ -341,8 +341,14 @@ class SymbioticaReferenceBrowser(io.ComfyNode):
 
     @classmethod
     def execute(cls, root_path="", name="", selection="{}") -> io.NodeOutput:
+        from .project_layout import project_root_of
         from .reference_browser import build_reference_order
-        order = build_reference_order(_expand_studio(root_path), selection, name)
+        refs_root = _expand_studio(root_path)
+        # Reference-only work never touches an order node, so this is the only
+        # place that flow names its project — and it names it whether or not the
+        # selection is usable, because the root alone identifies the project.
+        _register_project(project_root_of(refs_root))
+        order = build_reference_order(refs_root, selection, name)
         _register_refs_root(order["refsRoot"])
         return io.NodeOutput(order)
 

@@ -186,3 +186,63 @@ class TestTheNodeVouchesForItsProject:
             pass  # the rest of execute needs a graph; the registration is the point
         assert str(project) in seen, "an execution did not vouch for its project"
         sys.modules.pop("pipeline.nodes", None)
+
+
+class TestAVouchedProjectIsFullyUsable:
+    def test_its_thumbnails_can_be_served(self, tmp_path, monkeypatch):
+        """Listing a project the Library may browse is no use if its sheets
+        cannot be served — the browse registration gates on the same root set."""
+        routes = _load_routes(monkeypatch)
+        monkeypatch.setattr(routes, "_template_dir", lambda: None)
+        monkeypatch.setattr(routes, "_operator_roots", lambda: [])
+        project = tmp_path / "my-game"
+        pool = project / "templates" / "reference"
+        _template(str(pool), "blossom-tower")
+        routes.register_project(str(project))
+
+        assert routes.register_root_within(str(pool / "blossom-tower")) is True, (
+            "a vouched project's own template folder is not servable")
+
+
+class TestTheReferenceFlowVouchesToo:
+    def test_the_reference_browser_registers_its_project(self, tmp_path, monkeypatch):
+        """Reference-only work (Studio Library -> Reference Browser -> save) never
+        touches an order node, so if it does not vouch, that whole flow keeps the
+        silent-empty-Library symptom the other fix removed."""
+        import importlib
+        sys.path.insert(0, os.path.dirname(__file__))
+        from comfy_api_stub import build_modules
+        pkg, latest = build_modules()
+        monkeypatch.setitem(sys.modules, "comfy_api", pkg)
+        monkeypatch.setitem(sys.modules, "comfy_api.latest", latest)
+        monkeypatch.setitem(sys.modules, "folder_paths", types.ModuleType("folder_paths"))
+        sys.modules.pop("pipeline.nodes", None)
+        import pipeline.nodes as nodes
+        importlib.reload(nodes)
+        seen = []
+        monkeypatch.setattr(nodes, "_register_project", lambda p: seen.append(p))
+        monkeypatch.setattr(nodes, "_register_refs_root", lambda p: None)
+        refs = tmp_path / "my-game" / "reference-assets"
+        refs.mkdir(parents=True)
+        try:
+            nodes.SymbioticaReferenceBrowser.execute(root_path=str(refs), selection="{}")
+        except Exception:
+            pass
+        assert any(s for s in seen), "the reference flow did not vouch for its project"
+        sys.modules.pop("pipeline.nodes", None)
+
+
+class TestAPoolRootIsNeverATemplate:
+    def test_a_pre_split_template_named_like_a_pool_cannot_take_the_pool(self, tmp_path):
+        """Before the split, saves went flat into templates/<slug>. A template
+        named "reference" therefore now sits exactly where the reference POOL
+        lives — sidecar and all — so the sidecar check alone would admit it."""
+        from pipeline.pack_library import delete_pack_template_dirs
+        base = tmp_path / "templates"
+        _template(str(base), "reference")           # the pre-split template
+        _template(str(base / "reference"), "keep-me")  # today's pool contents
+
+        delete_pack_template_dirs([str(base)], "reference")
+
+        assert (base / "reference" / "keep-me").is_dir(), (
+            "deleting a pool-named template took the whole pool with it")

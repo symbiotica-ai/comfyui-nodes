@@ -23,6 +23,9 @@ KIND_ORDER = "order"
 KIND_REFERENCE = "reference"
 KINDS = (KIND_ORDER, KIND_REFERENCE)
 
+# Directory names that hold a pool rather than one template.
+POOL_DIRS = (KIND_REFERENCE, "orders")
+
 
 def templates_dir(project_path: str) -> str:
     """The templates/ subfolder of a client project folder (the same folder that
@@ -273,6 +276,11 @@ def delete_pack_template_dirs(dirs, name) -> bool:
     want_kind, slug = split_qualified(name)
     removed = False
     for base in dirs:
+        # A pool root is never a template, whatever it carries. Pre-split saves
+        # went flat into templates/<slug>, so a template named after a pool sits
+        # exactly where that pool now lives — sidecar included.
+        if slug in POOL_DIRS:
+            continue
         # The target must BE a template, not merely a folder of that name: the
         # pools (reference/, orders/) live inside a dir that is itself a delete
         # base, so an unqualified pool name would otherwise take the whole pool.
