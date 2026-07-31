@@ -246,3 +246,25 @@ class TestAPoolRootIsNeverATemplate:
 
         assert (base / "reference" / "keep-me").is_dir(), (
             "deleting a pool-named template took the whole pool with it")
+
+
+class TestTheOperatorSettingIsReal:
+    """The escape hatch is the only way a project outside ComfyUI's own folders
+    becomes usable, so the code path that reads it must actually work — the other
+    test monkeypatches _operator_roots and so never exercises it."""
+
+    def test_the_env_var_is_read(self, tmp_path, monkeypatch):
+        routes = _load_routes(monkeypatch)
+        a, b = tmp_path / "art", tmp_path / "more art"
+        a.mkdir(), b.mkdir()
+        monkeypatch.setenv(routes.ASSET_ROOTS_ENV, f"{a}, {b}")
+        got = routes._operator_roots()
+        assert str(a) in got and str(b) in got
+
+    def test_a_project_named_by_the_env_var_is_admitted(self, tmp_path, monkeypatch):
+        routes = _load_routes(monkeypatch)
+        monkeypatch.setattr(routes, "_template_dir", lambda: None)
+        project = tmp_path / "my-game"
+        (project / "templates").mkdir(parents=True)
+        monkeypatch.setenv(routes.ASSET_ROOTS_ENV, str(project))
+        assert routes._project_allowed(str(project)) is True
