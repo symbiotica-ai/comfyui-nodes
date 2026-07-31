@@ -6,6 +6,18 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.24
+
+A fix for one defect in 2026.7.23. No node's inputs, outputs, or id changed.
+
+### Fixed
+- **An empty project folder made ComfyUI's own working directory browsable.**
+  The Order Read node records its project before it checks that an order file
+  exists, and an empty path resolved to the process working directory, so
+  queueing that node with its project widget left at the default added ComfyUI's
+  folder to the set the template browser may read and delete within. Only an
+  absolute path is recorded now.
+
 ## 2026.7.23
 
 **Node change.** `SymbioticaTemplateLibrary` gains two inputs, `kind` and
