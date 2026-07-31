@@ -15,6 +15,40 @@ the saved template pick onto the wrong widget. Saved workflows keep their pick,
 and an omitted `kind` reads as "All", which browses every pool: the old
 behaviour.
 
+**Node change.** `Hypereel UGC Presets` no longer carries its preset templates
+in the published pack, so its `style`, `hook` and `setting` dropdowns hold one
+placeholder entry instead of the catalog. **A saved workflow using this node
+will fail to run**: ComfyUI validates a combo value against the node's current
+list and rejects one that is no longer in it. The other Hypereel nodes are
+unaffected. The templates were the platform's own, and a published pack is a
+world-readable archive. The node stays, so the graph shape is preserved.
+
+**Where assets may be read from.** A folder outside ComfyUI's `input/` and
+`output/` is no longer readable just because a request names it. A project kept
+elsewhere is declared once, in **Settings → Symbiotica → Paths → Asset folders**
+or `SYMBIOTICA_ASSET_ROOTS`. A folder a running graph pointed at stays readable
+as before. Without this a project outside those folders browses empty.
+
+### Security
+- **A request could name any folder and then read it.** Four routes registered
+  the directory the caller asked about into the process-wide allowlist that
+  guards image serving, so asking to browse a folder was what granted access to
+  it. Registration is now confined to folders already declared, and the routes
+  that took a path refuse one they cannot place instead of reading or listing
+  it.
+- **One request could delete a folder anywhere on the host.** The template name
+  was slugified and confined, but the project folder it was joined to was
+  whatever the caller sent, and the result went to a recursive delete. A project
+  is admitted only when a running graph named it or it lies in a declared
+  folder. A pool directory is never treated as a template either, so a pool
+  name cannot take the pool.
+- `GET /symbiotica/parse-order` read any file the caller named and returned the
+  contents of any zip container, and its three failure shapes made it an
+  existence oracle for arbitrary paths. It refuses an unplaceable path now, so
+  all three answer alike.
+- `/symbiotica/browse-dirs`, which listed any directory on the host, is gone.
+  Nothing had called it since the folder-browser button was removed.
+
 ### Added
 - **Saved templates now have two pools, by where they came from.** The Auto
   Packer already knows its source; now the save follows it:
@@ -71,6 +105,13 @@ behaviour.
 - A save with no project folder (a Reference Browser rooted outside a project)
   reported as if it had been filed. It lands in `output/templates/reference/`
   and now says so.
+- **The Submagic captions node could hang forever.** None of its four requests
+  carried a timeout, and `requests` waits indefinitely without one, so an
+  unresponsive host held the node until ComfyUI itself was restarted. Every call
+  is bounded now, and the poll between stages notices Cancel within half a
+  second instead of sleeping through it.
+- Long ffmpeg work in the Hypereel composite and glow nodes stops on Cancel
+  rather than running to completion.
 
 ## 2026.7.22
 
