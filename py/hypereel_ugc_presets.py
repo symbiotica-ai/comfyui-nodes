@@ -1,6 +1,7 @@
 # ABOUTME: Hypereel UGC preset picker — the platform's style/hook/setting catalogs as
 # ABOUTME: three dropdowns; outputs the templates plus a pre-labeled combined block.
-from ._hypereel_presets import HOOKS, SETTINGS, STYLES, build_notes
+from ._hypereel_presets import (HOOKS, SETTINGS, STYLES, build_notes, names,
+                                require_catalogs)
 
 
 class HypereelUgcPresets:
@@ -13,9 +14,9 @@ class HypereelUgcPresets:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "style": (list(STYLES.keys()),),
-                "hook": (list(HOOKS.keys()),),
-                "setting": (list(SETTINGS.keys()),),
+                "style": (names(STYLES),),
+                "hook": (names(HOOKS),),
+                "setting": (names(SETTINGS),),
             }
         }
 
@@ -25,6 +26,7 @@ class HypereelUgcPresets:
     CATEGORY = "Symbiotica/Hypereel"
 
     def pick(self, style, hook, setting):
+        require_catalogs()
         return (STYLES[style], HOOKS[hook], SETTINGS[setting],
                 build_notes(style, hook, setting))
 
