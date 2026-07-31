@@ -268,3 +268,25 @@ class TestTheOperatorSettingIsReal:
         (project / "templates").mkdir(parents=True)
         monkeypatch.setenv(routes.ASSET_ROOTS_ENV, str(project))
         assert routes._project_allowed(str(project)) is True
+
+
+class TestOnlyARealProjectRegisters:
+    """os.path.realpath("") is the process CWD, so an empty project widget — the
+    default, and the case that raises — silently trusted ComfyUI's own working
+    directory."""
+
+    def test_an_empty_project_registers_nothing(self, monkeypatch):
+        routes = _load_routes(monkeypatch)
+        routes.register_project("")
+        assert routes._project_allowed(os.getcwd()) is False, (
+            "an empty project string trusted the working directory")
+
+    def test_a_relative_project_registers_nothing(self, monkeypatch):
+        routes = _load_routes(monkeypatch)
+        routes.register_project("some/relative/path")
+        assert not routes._projects, "a relative path was resolved against the CWD"
+
+    def test_a_real_project_still_registers(self, tmp_path, monkeypatch):
+        routes = _load_routes(monkeypatch)
+        routes.register_project(str(tmp_path))
+        assert routes._project_allowed(str(tmp_path)) is True
