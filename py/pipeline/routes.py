@@ -453,19 +453,26 @@ def register_project(path: str) -> None:
             _projects.add(real)
 
 
-def _project_allowed(project: str) -> bool:
-    """Whether a caller-supplied project may be browsed or deleted from: it
-    resolves inside a declared root, or a graph execution used it."""
+def _allowed_project(project: str) -> str | None:
+    """The RESOLVED project a caller may browse or delete from, or None.
+
+    It qualifies when it resolves inside a declared root, or when a graph
+    execution used it. The resolved path is returned rather than a yes/no,
+    because the caller must go on to use exactly that path: resolving the
+    caller's string a second time would reopen the check-then-use race the
+    resolution closes."""
     if not project:
-        return False
-    if resolve_within(declared_roots(), project, kind="dir"):
-        return True
+        return None
+    real = resolve_within(declared_roots(), project, kind="dir")
+    if real:
+        return real
     try:
+        real = os.path.realpath(project)
         with _lock:
             known = frozenset(_projects)
-        return os.path.realpath(project) in known
+        return real if real in known else None
     except (ValueError, OSError):
-        return False
+        return None
 
 
 def _pack_dirs(project: str, kind: str = "", month: str = "") -> list[str]:
@@ -478,9 +485,8 @@ def _pack_dirs(project: str, kind: str = "", month: str = "") -> list[str]:
     these folders are handed to a recursive delete, so an unconfined project
     string would reach any tree on the host.
     """
-    if not _project_allowed(project):
-        project = ""
-    return pack_dirs(project, _kind(kind), month, _template_dir() or "")
+    return pack_dirs(_allowed_project(project) or "", _kind(kind), month,
+                     _template_dir() or "")
 
 
 def pack_dirs_for_project(value: str, kind: str = "", month: str = "") -> list[str]:
@@ -505,9 +511,8 @@ async def pack_template_list(request):
         register_root_within(d)
     # `dir` is what a save of this kind would write to — the crumb the browser
     # shows. With no kind picked, the order pool is the representative one.
-    saves = (save_dirs(project, kind or "order", month, _template_dir() or "")
-             if _project_allowed(project) else
-             save_dirs("", kind or "order", month, _template_dir() or ""))
+    saves = save_dirs(_allowed_project(project) or "", kind or "order", month,
+                      _template_dir() or "")
     return web.json_response({"dir": saves[0] if saves else "",
                               "dirs": dirs, "kind": kind,
                               "templates": list_pack_templates_dirs(dirs)})
