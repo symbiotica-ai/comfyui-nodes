@@ -51,12 +51,16 @@ List the PRs this release will publish and how each was reviewed:
 ```bash
 PREV=$(git tag --list 'v*' --sort=-version:refname | head -1)
 BOUNDARY=${PREV:-$(git log --format=%H -G'^version = ' -- pyproject.toml | head -1)}
-for n in $(git log "$BOUNDARY"..HEAD --merges --oneline | grep -oE '#[0-9]+' | tr -d '#'); do
+for n in $(git log "$BOUNDARY"..HEAD --oneline | grep -oE '#[0-9]+' | tr -d '#' | sort -u); do
   gh pr view "$n" --json number,title,author,reviewDecision --jq '
     (.reviewDecision // "") as $r
     | "  #\(.number) by \(.author.login)  [\(if $r == "" then "UNREVIEWED" else $r end)]  \(.title[0:40])"'
 done
 ```
+
+Every commit, not just merge commits: a squash merge leaves no merge commit, so
+`--merges` reports an empty list for a branch that squashed. That reads exactly
+like "nothing to review" and hides the case this check exists to catch.
 
 `BOUNDARY` is the previous release tag; before tags existed it falls back to the
 last commit that changed the version line.

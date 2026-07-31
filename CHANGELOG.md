@@ -6,6 +6,59 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.7.25
+
+**Node change.** One node is added, `Symbiotica Refs Folder`
+(`SymbioticaRefsFolder`). No existing node's inputs, outputs or id changed, so
+saved workflows are unaffected.
+
+### Added
+- **`Symbiotica Refs Folder`, for handing a graph a folder of images by path.**
+  It takes an absolute folder path and a `max_count`, and returns every image in
+  that folder in filename order, with the filenames index-aligned beside them
+  and a count. There is no browsing and no picking, so a dispatcher can bind
+  the path and run the workflow headless over the API. The Reference Browser
+  cannot do this, because its selection is authored by its own browser widget
+  and it emits an order rather than images.
+
+  A relative or empty path is refused before the folder is looked at: it would
+  resolve against wherever the ComfyUI process was started, so a folder that
+  merely happens to sit under that directory would bind the graph to it. A
+  missing folder, a folder with no images, and a folder where nothing decodes
+  all raise, rather than handing the graph zero references in silence. One
+  corrupt file is skipped instead, and `max_count` counts what comes back, so
+  a skipped file never costs a caller one of its slots.
+
+  Ordering is by lowercased filename, then the raw name, so the sequence does
+  not depend on the filesystem's own enumeration order and `max_count` is a
+  stable selection rather than an arbitrary sample. Naming files `01_`, `02_`
+  makes the cap a priority list.
+
+  The node registers nothing. The other pipeline nodes record the folder they
+  ran against so the template browser may list it and the image routes may
+  serve from it; this one returns pixels and serves no files, so binding a
+  folder to it does not widen what any browser may read.
+
+### Fixed
+- **A folder of GIFs came back silently short.** GIF's decoder keeps its file
+  handle open for frame seeking, so loading a folder of them held one handle
+  per image. Past the process limit the next open failed with an error that
+  read exactly like a corrupt file, and the folder was reported with only the
+  images that fit: 80 GIFs under a 60-handle limit returned 55 and reported
+  55 as the folder's contents. Handles are released as each image is read now,
+  and running out of them is reported rather than counted as corruption.
+- **A project folder could be swapped between the check and the use.** The
+  check that decides whether a caller may browse or delete within a project
+  answered yes or no and discarded the path it had resolved, so the routes
+  went on to build their folders from the caller's original string. A symlink
+  replaced in between pointed the listing and the delete somewhere else. The
+  check returns the resolved path now, and the routes use exactly that.
+
+### Other
+- The release preflight's review audit listed merge commits only, so a branch
+  that was squash-merged appeared as nothing to review. It reads every commit
+  now.
+
 ## 2026.7.24
 
 A fix for one defect in 2026.7.23. No node's inputs, outputs, or id changed.
