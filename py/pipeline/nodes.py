@@ -70,6 +70,16 @@ def _register_refs_root(path: str) -> None:
         pass
 
 
+def _register_project(project_path: str) -> None:
+    """The project this execution ran against, so the Template Library may browse
+    and delete its pools. Only an execution vouches for a project."""
+    try:
+        from .routes import register_project
+        register_project(project_path)
+    except Exception:
+        pass
+
+
 def _expand_studio(value: str) -> str:
     """A `studios/<slug>/...` string — what the Studio Library node's wire
     carries — becomes its absolute path under the studio-assets Volume. Any
@@ -140,6 +150,7 @@ class SymbioticaOrderRead(io.ComfyNode):
 
     @classmethod
     def execute(cls, project_path="", month="") -> io.NodeOutput:
+        _register_project(project_path)
         op, rp, assets_root = cls._paths(project_path, month)
         if not op:
             raise ValueError(
@@ -225,6 +236,7 @@ class SymbioticaOrderSpecs(io.ComfyNode):
 
     @classmethod
     def execute(cls, project_path="", month="", feature="") -> io.NodeOutput:
+        _register_project(project_path)
         op, rp, assets_root = cls._paths(project_path, month)
         if not op:
             raise ValueError(
@@ -775,6 +787,7 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
     @classmethod
     def execute(cls, project_path="", kind="All", month="", selected="",
                 checked="[]") -> io.NodeOutput:
+        _register_project(project_path)
         from .pack_library import (collect_checked, load_pack_template_dirs)
         dirs = cls._dirs(project_path, kind, month)
         for d in dirs:

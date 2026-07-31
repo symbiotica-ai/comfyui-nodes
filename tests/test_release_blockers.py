@@ -66,8 +66,9 @@ class TestAnOrdinaryProjectWorks:
         pool = project / "templates"
         pool.mkdir(parents=True)
         _template(str(pool), "my-template")
-        # What a node execution actually registers: the pool, not the project.
-        routes.register_root(str(pool))
+        # A graph execution vouches for the project by name; the pack cannot
+        # infer it from the pools, because a folder cannot vouch for its parent.
+        routes.register_project(str(project))
 
         dirs = routes._pack_dirs(str(project), "", "")
         assert any(str(project) in d for d in dirs), (
@@ -85,6 +86,27 @@ class TestAnOrdinaryProjectWorks:
         dirs = routes._pack_dirs(str(project), "", "")
         assert any(str(project) in d for d in dirs), (
             "SYMBIOTICA_ASSET_ROOTS does not admit a project for the pack routes")
+
+
+class TestAnAncestorIsNotAProject:
+    """A declared root can be shallow (ComfyUI's own output dir). Trusting any
+    ancestor of a root would hand the home directory, or /, to the delete."""
+
+    def test_naming_an_ancestor_of_a_declared_root_is_refused(self, tmp_path, monkeypatch):
+        routes = _load_routes(monkeypatch)
+        home = tmp_path / "someone"
+        comfy_out = home / "ComfyUI" / "output"
+        comfy_out.mkdir(parents=True)
+        _template(str(home / "templates"), "private-work")
+        monkeypatch.setattr(routes, "_template_dir", lambda: str(comfy_out / "templates"))
+        monkeypatch.setattr(routes, "_operator_roots", lambda: [])
+        monkeypatch.setattr(routes, "declared_roots", lambda: [str(comfy_out)])
+
+        assert routes._project_allowed(str(home)) is False, (
+            "an ancestor of a declared root was trusted as a project")
+        dirs = routes._pack_dirs(str(home), "", "")
+        assert not any(d.startswith(str(home / "templates")) for d in dirs), (
+            "reached a sibling tree by naming the ancestor")
 
 
 class TestAnUndeclaredProjectIsUntouched:
@@ -137,3 +159,30 @@ class TestAPoolIsNotATemplate:
 
         assert delete_pack_template_dirs([str(base)], "my-template") is True
         assert not os.path.isdir(target)
+
+
+class TestTheNodeVouchesForItsProject:
+    def test_executing_with_a_project_registers_it(self, tmp_path, monkeypatch):
+        """The route side can only trust a project an execution named, so the
+        node must actually name it — otherwise every Library goes empty again."""
+        import importlib
+        sys.path.insert(0, os.path.dirname(__file__))
+        from comfy_api_stub import build_modules
+        pkg, latest = build_modules()
+        monkeypatch.setitem(sys.modules, "comfy_api", pkg)
+        monkeypatch.setitem(sys.modules, "comfy_api.latest", latest)
+        monkeypatch.setitem(sys.modules, "folder_paths", types.ModuleType("folder_paths"))
+        sys.modules.pop("pipeline.nodes", None)
+        import pipeline.nodes as nodes
+        importlib.reload(nodes)
+        seen = []
+        monkeypatch.setattr(nodes, "_register_project", lambda p: seen.append(p))
+        monkeypatch.setattr(nodes, "_register_refs_root", lambda p: None)
+        project = tmp_path / "my-game"
+        (project / "templates").mkdir(parents=True)
+        try:
+            nodes.SymbioticaTemplateLibrary.execute(project_path=str(project))
+        except Exception:
+            pass  # the rest of execute needs a graph; the registration is the point
+        assert str(project) in seen, "an execution did not vouch for its project"
+        sys.modules.pop("pipeline.nodes", None)

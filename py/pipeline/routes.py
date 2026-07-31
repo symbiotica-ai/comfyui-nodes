@@ -28,6 +28,7 @@ from .pack_library import (
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 _roots: set[str] = set()
+_projects: set[str] = set()
 _lock = threading.Lock()
 
 
@@ -431,22 +432,31 @@ def _kind(value: str) -> str:
     return k if k in KINDS else ""
 
 
-def _project_allowed(project: str) -> bool:
-    """Whether a caller-supplied project may be browsed or deleted from.
+def register_project(path: str) -> None:
+    """Remember a project folder a graph execution used. Running a node with a
+    project IS the user naming it, and it is the only way the pack learns about
+    one: every other root it registers is a folder BENEATH the project, and a
+    root cannot vouch for its own parent — trusting an ancestor would hand the
+    home directory, or /, to routes that delete."""
+    real = os.path.realpath(path or "")
+    if real and os.path.isdir(real):
+        with _lock:
+            _projects.add(real)
 
-    True when the project resolves inside a declared root, and also when a graph
-    execution registered one of its own folders — running a node with a project
-    is the user naming it, and every root the pack registers is a folder BENEATH
-    the project (its pools, its refs), never the project itself. Checking only
-    the first way is what made an ordinary local project permanently invisible.
-    """
+
+def _project_allowed(project: str) -> bool:
+    """Whether a caller-supplied project may be browsed or deleted from: it
+    resolves inside a declared root, or a graph execution used it."""
     if not project:
         return False
-    roots = declared_roots()
-    if resolve_within(roots, project, kind="dir"):
+    if resolve_within(declared_roots(), project, kind="dir"):
         return True
-    real = os.path.realpath(project)
-    return any(os.path.realpath(r).startswith(real + os.sep) for r in roots)
+    try:
+        with _lock:
+            known = frozenset(_projects)
+        return os.path.realpath(project) in known
+    except (ValueError, OSError):
+        return False
 
 
 def _pack_dirs(project: str, kind: str = "", month: str = "") -> list[str]:
