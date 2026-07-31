@@ -85,6 +85,36 @@ class TestOpening:
         assert [os.path.basename(p) for p, _ in got] == ["a.png", "b.png"]
 
 
+def _open_fd_count():
+    for d in ("/dev/fd", "/proc/self/fd"):
+        if os.path.isdir(d):
+            return len(os.listdir(d))
+    return None
+
+
+class TestHandles:
+    def test_loading_a_folder_holds_no_file_open(self, tmp_path):
+        """GIF is the one format in IMG_EXTS whose decoder keeps its handle for
+        frame seeking, so a folder of them costs one descriptor per image. Once
+        the process runs out, Image.open fails with an OSError that reads
+        exactly like a corrupt file — the folder comes back silently short.
+
+        Counting descriptors rather than inspecting the image: load() sets
+        im.fp to None while the live handle survives on im._fp, so an attribute
+        check reports success on the very case this guards."""
+        d = tmp_path / "gifs"
+        d.mkdir()
+        for i in range(20):
+            Image.new("P", (4, 4)).save(d / f"g{i:02d}.gif")
+        base = _open_fd_count()
+        if base is None:
+            pytest.skip("no fd directory to count on this platform")
+        opened = open_reference_images(str(d))
+        held = _open_fd_count() - base
+        assert len(opened) == 20
+        assert held == 0, f"{held} descriptors still open after loading"
+
+
 class TestFingerprint:
     def test_an_unchanged_folder_keeps_its_fingerprint(self, real_refs):
         assert refs_fingerprint(str(real_refs), 0) == \
@@ -98,6 +128,20 @@ class TestFingerprint:
     def test_rewriting_a_file_changes_the_fingerprint(self, real_refs):
         before = refs_fingerprint(str(real_refs), 0)
         Image.new("RGB", (40, 40), (9, 9, 9)).save(real_refs / "a.png")
+        assert refs_fingerprint(str(real_refs), 0) != before
+
+    def test_an_edit_that_keeps_the_byte_count_changes_the_fingerprint(
+            self, real_refs):
+        # Size and mtime cover for each other in every other test here, so
+        # either could be dropped unnoticed. Re-saving art at the same
+        # dimensions routinely lands on the same byte count, and then mtime is
+        # the only thing that moved.
+        before = refs_fingerprint(str(real_refs), 0)
+        p = real_refs / "a.png"
+        raw = p.read_bytes()
+        p.write_bytes(b"\x00" * len(raw))
+        os.utime(p, ns=(1_000_000_000, 1_000_000_000))
+        assert p.stat().st_size == len(raw)
         assert refs_fingerprint(str(real_refs), 0) != before
 
     def test_the_cap_is_part_of_the_fingerprint(self, real_refs):

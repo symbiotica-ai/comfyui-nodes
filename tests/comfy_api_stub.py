@@ -16,16 +16,22 @@ class _IOType:
 
 
 class Schema:
-    def __init__(self, node_id=None, category=None, inputs=None,
-                 outputs=None, **kw):
+    def __init__(self, node_id=None, display_name=None, category=None,
+                 inputs=None, outputs=None, **kw):
         self.node_id = node_id
+        self.display_name = display_name
         self.category = category
         self.inputs = inputs or []
         self.outputs = outputs or []
 
 
 class ComfyNode:
-    pass
+    @classmethod
+    def GET_SCHEMA(cls):
+        """Build the node's schema, as ComfyUI's own io.ComfyNode does. The
+        registration shim calls this on every class in PIPELINE_NODE_CLASSES,
+        so a define_schema that raises must be reachable from a test."""
+        return cls.define_schema()
 
 
 class NodeOutput:
@@ -51,7 +57,9 @@ def build_modules():
     via monkeypatch.setitem(sys.modules, ...) so it auto-reverts."""
     io_ns = _IONamespace(
         ComfyNode=ComfyNode, Schema=Schema, NodeOutput=NodeOutput,
-        String=_IOType, Boolean=_IOType, Custom=lambda name: _IOType)
+        String=_IOType, Boolean=_IOType, Custom=lambda name: _IOType,
+        # Named values a schema lists rather than a type it builds from.
+        Hidden=types.SimpleNamespace(unique_id="unique_id"))
     latest = types.ModuleType("comfy_api.latest")
     latest.io = io_ns
     latest.ui = types.SimpleNamespace()

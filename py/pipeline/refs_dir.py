@@ -2,6 +2,7 @@
 # ABOUTME: list of image paths, with no browser selection and no editor.
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 
@@ -87,12 +88,23 @@ def open_reference_images(refs_dir: str, max_count: int = 0):
         if max_count and max_count > 0 and len(opened) >= max_count:
             break
         try:
-            im = Image.open(p)
-            im.load()  # Decode now: Image.open is lazy and defers the failure.
-        except (OSError, ValueError, Image.DecompressionBombError):
+            # Decode inside the `with` and hand back a detached copy: GIF's
+            # decoder keeps its handle open for frame seeking, so returning the
+            # image itself would cost one descriptor per file and a large
+            # folder would exhaust the process. im.load() forces the decode,
+            # which Image.open defers.
+            with Image.open(p) as im:
+                im.load()
+                opened.append((p, im.copy()))
+        except OSError as exc:
+            # Out of descriptors is not a corrupt file. Counting it as one
+            # would drop every remaining image and report the short list as
+            # though it were the folder's contents.
+            if exc.errno in (errno.EMFILE, errno.ENFILE):
+                raise
             unreadable += 1
-            continue
-        opened.append((p, im))
+        except (ValueError, Image.DecompressionBombError):
+            unreadable += 1
     if not opened:
         raise ValueError(f"none of the {unreadable} image files in {refs_dir!r} "
                          "could be read")
