@@ -439,8 +439,16 @@ def register_project(path: str) -> None:
     one: every other root it registers is a folder BENEATH the project, and a
     root cannot vouch for its own parent — trusting an ancestor would hand the
     home directory, or /, to routes that delete."""
-    real = os.path.realpath(path or "")
-    if real and os.path.isdir(real):
+    # Absolute only, and checked BEFORE resolving: realpath("") is the process
+    # working directory, so an empty project widget — the default, and the case
+    # that goes on to raise — would otherwise trust ComfyUI's own folder.
+    if not path or not isinstance(path, str) or not os.path.isabs(path):
+        return
+    try:
+        real = os.path.realpath(path)
+    except (ValueError, OSError):
+        return
+    if os.path.isdir(real):
         with _lock:
             _projects.add(real)
 
