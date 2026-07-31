@@ -32,10 +32,15 @@ def _load_routes(monkeypatch):
 
 
 def _template_tree(project):
-    """A saved template folder as delete_pack_template would find it."""
+    """A saved template folder as write_pack_template leaves it: the sheets AND
+    the template.json sidecar. The sidecar is what marks a folder as a template
+    rather than a pool, and list_pack_templates already refuses one without it."""
+    import json
     d = project / "templates" / "my-template"
     d.mkdir(parents=True)
-    (d / "sheet.png").write_bytes(b"x")
+    (d / "sheet-000.png").write_bytes(b"x")
+    (d / "template.json").write_text(json.dumps(
+        {"name": "my-template", "sheets": ["sheet-000.png"]}))
     return d
 
 

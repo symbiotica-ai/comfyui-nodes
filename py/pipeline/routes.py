@@ -431,14 +431,22 @@ def _kind(value: str) -> str:
     return k if k in KINDS else ""
 
 
-def _project_roots() -> list[str]:
-    """Where a project may legitimately live: the studio-assets Volume, ComfyUI's
-    own output folder, and any root a graph execution registered. Declared here
-    rather than taken from the request, so a caller cannot name its own root."""
-    roots = [studio_library_mod.STUDIO_ASSETS_DIR, _template_dir()]
-    with _lock:
-        roots.extend(_roots)
-    return [r for r in roots if r]
+def _project_allowed(project: str) -> bool:
+    """Whether a caller-supplied project may be browsed or deleted from.
+
+    True when the project resolves inside a declared root, and also when a graph
+    execution registered one of its own folders — running a node with a project
+    is the user naming it, and every root the pack registers is a folder BENEATH
+    the project (its pools, its refs), never the project itself. Checking only
+    the first way is what made an ordinary local project permanently invisible.
+    """
+    if not project:
+        return False
+    roots = declared_roots()
+    if resolve_within(roots, project, kind="dir"):
+        return True
+    real = os.path.realpath(project)
+    return any(os.path.realpath(r).startswith(real + os.sep) for r in roots)
 
 
 def _pack_dirs(project: str, kind: str = "", month: str = "") -> list[str]:
@@ -447,12 +455,11 @@ def _pack_dirs(project: str, kind: str = "", month: str = "") -> list[str]:
     is read-only or absent). Project first so a filed template shadows a
     fallback of the same name; kind "" adds the legacy flat pools too.
 
-    A project outside every declared root is dropped rather than browsed. These
-    folders are handed to a recursive delete, so an unconfined project string
-    would reach any tree on the host — and dropping it here contains every pool
-    derived from it at once, leaving only the server's own output fallback.
+    A project the caller is not entitled to is dropped rather than browsed —
+    these folders are handed to a recursive delete, so an unconfined project
+    string would reach any tree on the host.
     """
-    if project and not resolve_within(_project_roots(), project, kind="dir"):
+    if not _project_allowed(project):
         project = ""
     return pack_dirs(project, _kind(kind), month, _template_dir() or "")
 
@@ -479,7 +486,9 @@ async def pack_template_list(request):
         register_root_within(d)
     # `dir` is what a save of this kind would write to — the crumb the browser
     # shows. With no kind picked, the order pool is the representative one.
-    saves = save_dirs(project, kind or "order", month, _template_dir() or "")
+    saves = (save_dirs(project, kind or "order", month, _template_dir() or "")
+             if _project_allowed(project) else
+             save_dirs("", kind or "order", month, _template_dir() or ""))
     return web.json_response({"dir": saves[0] if saves else "",
                               "dirs": dirs, "kind": kind,
                               "templates": list_pack_templates_dirs(dirs)})
