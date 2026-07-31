@@ -14,6 +14,7 @@ from server import PromptServer
 from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
+from .paths import parse_roots, resolve_within
 from .pack_library import (
     KINDS,
     delete_pack_template_dirs,
@@ -30,6 +31,9 @@ _roots: set[str] = set()
 _lock = threading.Lock()
 
 
+ASSET_ROOTS_ENV = "SYMBIOTICA_ASSET_ROOTS"
+
+
 def register_root(path: str) -> None:
     """Allow serving images under this folder (called when an Order Read node
     executes with it — i.e. the user explicitly typed it into the graph)."""
@@ -37,6 +41,51 @@ def register_root(path: str) -> None:
     if os.path.isdir(real):
         with _lock:
             _roots.add(real)
+
+
+def _operator_roots() -> list[str]:
+    """Extra asset folders the operator declared, from the Settings UI or the
+    environment. This is how someone whose artwork lives outside ComfyUI's own
+    folders keeps browsing it — they name the folder once instead of every
+    request naming its own."""
+    try:
+        from .._settings import get_comfy_setting, setting_key
+        declared = get_comfy_setting(setting_key(ASSET_ROOTS_ENV))
+    except Exception:
+        declared = None
+    return parse_roots(declared) + parse_roots(os.environ.get(ASSET_ROOTS_ENV))
+
+
+def declared_roots() -> list[str]:
+    """The folders a request may point at: the studio-assets Volume, ComfyUI's
+    own directories, whatever the operator declared, and whatever a graph
+    execution registered. Never anything a request named for itself."""
+    roots = [studio_library_mod.STUDIO_ASSETS_DIR, _template_dir()]
+    try:
+        import folder_paths
+        roots += [folder_paths.get_input_directory(),
+                  folder_paths.get_output_directory()]
+    except Exception:
+        pass
+    roots += _operator_roots()
+    with _lock:
+        roots.extend(_roots)
+    return [r for r in roots if r]
+
+
+def register_root_within(path: str) -> bool:
+    """Register `path` only when it lies inside a declared root, and report
+    whether it was. The browse routes call this: a request may make a folder
+    servable, but only one it was already entitled to see — otherwise asking to
+    browse a folder is what grants access to it."""
+    if not path:
+        return False
+    real = resolve_within(declared_roots(), path, kind="dir")
+    if real is None:
+        return False
+    with _lock:
+        _roots.add(real)
+    return True
 
 
 def is_allowed(path: str) -> str | None:
@@ -58,26 +107,6 @@ def is_allowed(path: str) -> str | None:
         return None
     except (ValueError, OSError):
         # Malformed input (e.g. embedded null byte) is a deny, not a 500.
-        return None
-
-
-def list_subdirs(path: str) -> dict | None:
-    """Directory info for the folder browser: resolved path, parent, and the
-    visible (non-dot) subdirectory names sorted case-insensitively. None when
-    the path is not a readable directory."""
-    try:
-        real = os.path.realpath(path or os.path.expanduser("~"))
-        if not os.path.isdir(real):
-            return None
-        dirs = sorted(
-            (e.name for e in os.scandir(real)
-             if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")),
-            key=str.lower,
-        )
-        parent = os.path.dirname(real)
-        return {"path": real, "parent": parent if parent != real else None,
-                "dirs": dirs}
-    except (ValueError, OSError):
         return None
 
 
@@ -160,17 +189,6 @@ async def ref_image(request):
                             headers={"Cache-Control": "private, max-age=60"})
 
 
-@PromptServer.instance.routes.get("/symbiotica/browse-dirs")
-async def browse_dirs(request):
-    """Folder browser for picking a project reference folder. Lists directory
-    NAMES only (no files) — the same local, single-user surface as ComfyUI's
-    own filesystem pickers."""
-    info = list_subdirs(request.query.get("path", ""))
-    if info is None:
-        return web.json_response({"error": "not a readable directory"}, status=400)
-    return web.json_response(info)
-
-
 @PromptServer.instance.routes.get("/symbiotica/browse-refs")
 async def browse_refs(request):
     """One level of the Reference Browser's tree: folders + images (with pixel
@@ -182,7 +200,9 @@ async def browse_refs(request):
     result = list_level(root, request.query.get("dir", ""))
     if "error" in result:
         return web.json_response(result, status=400)
-    register_root(result["root"])
+    if not register_root_within(result["root"]):
+        return web.json_response({"error": "folder is outside every allowed root"},
+                                 status=403)
     return web.json_response(result)
 
 
@@ -222,14 +242,21 @@ async def parse_order(request):
         assets_root = r["assets_root"]
     if not order_path:
         return web.json_response({"error": "order_path required"}, status=400)
+    roots = declared_roots()
+    if resolve_within(roots, order_path, kind="file") is None:
+        return web.json_response({"error": "order path is outside every allowed root"},
+                                 status=403)
+    if refs_path and resolve_within(roots, refs_path, kind="dir") is None:
+        return web.json_response({"error": "refs path is outside every allowed root"},
+                                 status=403)
     try:
         loaded = load_order(order_path, refs_path)
     except ValueError as e:
         return web.json_response({"error": str(e)}, status=400)
     if refs_path:
-        register_root(refs_path)
+        register_root_within(refs_path)
     if assets_root:
-        register_root(assets_root)
+        register_root_within(assets_root)
     loaded["refsRoot"] = refs_path
     loaded["assetsRoot"] = assets_root
     return web.json_response(loaded)
@@ -243,7 +270,9 @@ async def list_assets(request):
     root = os.path.realpath(_expand_project(request.query.get("dir", "")))
     if not root or not os.path.isdir(root):
         return web.json_response({"error": "not a readable directory"}, status=400)
-    register_root(root)
+    if not register_root_within(root):
+        return web.json_response({"error": "folder is outside every allowed root"},
+                                 status=403)
     try:
         rels = scan_images(root)
     except OSError:
@@ -402,12 +431,38 @@ def _kind(value: str) -> str:
     return k if k in KINDS else ""
 
 
+def _project_roots() -> list[str]:
+    """Where a project may legitimately live: the studio-assets Volume, ComfyUI's
+    own output folder, and any root a graph execution registered. Declared here
+    rather than taken from the request, so a caller cannot name its own root."""
+    roots = [studio_library_mod.STUDIO_ASSETS_DIR, _template_dir()]
+    with _lock:
+        roots.extend(_roots)
+    return [r for r in roots if r]
+
+
 def _pack_dirs(project: str, kind: str = "", month: str = "") -> list[str]:
     """Where Auto Packer templates of this kind live: the project's folders for
     that pool AND the matching output/templates fallback (used when the project
     is read-only or absent). Project first so a filed template shadows a
-    fallback of the same name; kind "" adds the legacy flat pools too."""
+    fallback of the same name; kind "" adds the legacy flat pools too.
+
+    A project outside every declared root is dropped rather than browsed. These
+    folders are handed to a recursive delete, so an unconfined project string
+    would reach any tree on the host — and dropping it here contains every pool
+    derived from it at once, leaving only the server's own output fallback.
+    """
+    if project and not resolve_within(_project_roots(), project, kind="dir"):
+        project = ""
     return pack_dirs(project, _kind(kind), month, _template_dir() or "")
+
+
+def pack_dirs_for_project(value: str, kind: str = "", month: str = "") -> list[str]:
+    """_pack_dirs for a project as it arrives on the wire — a volume-relative
+    studios/<slug>/... string or an absolute path. Both the list and the delete
+    route resolve through here so they can never disagree about what a project
+    means."""
+    return _pack_dirs(_expand_project(value), kind, month)
 
 
 @PromptServer.instance.routes.get("/symbiotica/pack-template-list")
@@ -421,7 +476,7 @@ async def pack_template_list(request):
     month = request.query.get("month", "")
     dirs = _pack_dirs(project, kind, month)
     for d in dirs:
-        register_root(d)
+        register_root_within(d)
     # `dir` is what a save of this kind would write to — the crumb the browser
     # shows. With no kind picked, the order pool is the representative one.
     saves = save_dirs(project, kind or "order", month, _template_dir() or "")

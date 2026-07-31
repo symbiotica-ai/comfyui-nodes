@@ -11,6 +11,39 @@ import folder_paths
 
 API_BASE = "https://api.submagic.co/v1"
 
+# Every request is bounded: requests without a timeout waits forever, and a hung
+# connection would hold the node's worker until the whole sandbox is reaped.
+UPLOAD_TIMEOUT = 300
+REQUEST_TIMEOUT = 60
+DOWNLOAD_TIMEOUT = 300
+
+
+def _resolve_interrupt_checker():
+    """Reads ComfyUI's cancel flag, or reports "not cancelled" outside it.
+
+    Pressing Cancel in ComfyUI does not stop a running node — it sets a flag and
+    expects the node to notice. A node that never looks runs to its own timeout,
+    which here is ten minutes of the user watching a button they already pressed."""
+    try:
+        from comfy import model_management
+        return model_management.processing_interrupted
+    except Exception:
+        return lambda: False
+
+
+def _interrupted_base():
+    """ComfyUI logs its own interrupt quietly and marks no node in red, so a
+    cancel raised as that type reads as a cancel rather than a failure."""
+    try:
+        from comfy.model_management import InterruptProcessingException
+        return InterruptProcessingException
+    except Exception:
+        return Exception
+
+
+class SubmagicInterrupted(_interrupted_base()):
+    """Raised when the user cancels while a project is being polled."""
+
 SUBMAGIC_TEMPLATES = [
     "Sara", "Daniel", "Dan 2", "Hormozi 4", "Dan", "Devin", "Tayo",
     "Ella", "Tracy", "Luke", "Hormozi 1", "Hormozi 2", "Hormozi 3",
@@ -94,6 +127,7 @@ class NSSubmagicCaptions:
                     "magicZooms": str(magic_zooms).lower(),
                     "magicBrolls": str(magic_brolls).lower(),
                 },
+                timeout=UPLOAD_TIMEOUT,
             )
 
         if resp.status_code != 201:
@@ -105,9 +139,24 @@ class NSSubmagicCaptions:
         """Poll project until a field reaches the target value."""
         headers = {"x-api-key": api_key}
         start = time.time()
+        cancelled = _resolve_interrupt_checker()
+
+        def sleep_unless_cancelled(seconds):
+            """Sleep in slices so Cancel lands within a slice, not a poll."""
+            remaining = seconds
+            while remaining > 0:
+                if cancelled():
+                    raise SubmagicInterrupted("Cancelled while waiting for Submagic")
+                slice_s = min(0.5, remaining)
+                time.sleep(slice_s)
+                remaining -= slice_s
 
         while time.time() - start < timeout:
-            resp = requests.get(f"{API_BASE}/projects/{project_id}", headers=headers)
+            if cancelled():
+                raise SubmagicInterrupted("Cancelled while waiting for Submagic")
+
+            resp = requests.get(f"{API_BASE}/projects/{project_id}", headers=headers,
+                                timeout=REQUEST_TIMEOUT)
             if resp.status_code != 200:
                 raise RuntimeError(f"Submagic poll failed ({resp.status_code}): {resp.text[:500]}")
 
@@ -124,7 +173,7 @@ class NSSubmagicCaptions:
             if current.lower() == target.lower():
                 return data
 
-            time.sleep(5)
+            sleep_unless_cancelled(5)
 
         raise RuntimeError(f"Submagic timeout ({timeout}s) waiting for {field}={target}")
 
@@ -134,13 +183,14 @@ class NSSubmagicCaptions:
             f"{API_BASE}/projects/{project_id}/export",
             headers={"x-api-key": api_key, "Content-Type": "application/json"},
             json={},
+            timeout=REQUEST_TIMEOUT,
         )
         if resp.status_code != 200:
             raise RuntimeError(f"Submagic export failed ({resp.status_code}): {resp.text[:500]}")
 
     def _download(self, url, output_path):
         """Download video from URL to local file."""
-        resp = requests.get(url, stream=True)
+        resp = requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT)
         resp.raise_for_status()
         with open(output_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=8192):
