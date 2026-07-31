@@ -57,26 +57,6 @@ def is_allowed(path: str) -> str | None:
         return None
 
 
-def list_subdirs(path: str) -> dict | None:
-    """Directory info for the folder browser: resolved path, parent, and the
-    visible (non-dot) subdirectory names sorted case-insensitively. None when
-    the path is not a readable directory."""
-    try:
-        real = os.path.realpath(path or os.path.expanduser("~"))
-        if not os.path.isdir(real):
-            return None
-        dirs = sorted(
-            (e.name for e in os.scandir(real)
-             if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")),
-            key=str.lower,
-        )
-        parent = os.path.dirname(real)
-        return {"path": real, "parent": parent if parent != real else None,
-                "dirs": dirs}
-    except (ValueError, OSError):
-        return None
-
-
 def _expand_project(value: str) -> str:
     """A volume-relative studios/<slug>/... project string (the Studio Library
     node's wire currency) becomes its absolute path under the studio-assets
@@ -154,17 +134,6 @@ async def ref_image(request):
         return web.json_response({"error": "not an allowed image path"}, status=403)
     return web.FileResponse(resolved,
                             headers={"Cache-Control": "private, max-age=60"})
-
-
-@PromptServer.instance.routes.get("/symbiotica/browse-dirs")
-async def browse_dirs(request):
-    """Folder browser for picking a project reference folder. Lists directory
-    NAMES only (no files) — the same local, single-user surface as ComfyUI's
-    own filesystem pickers."""
-    info = list_subdirs(request.query.get("path", ""))
-    if info is None:
-        return web.json_response({"error": "not a readable directory"}, status=400)
-    return web.json_response(info)
 
 
 @PromptServer.instance.routes.get("/symbiotica/browse-refs")
