@@ -102,7 +102,7 @@ class TestAnAncestorIsNotAProject:
         monkeypatch.setattr(routes, "_operator_roots", lambda: [])
         monkeypatch.setattr(routes, "declared_roots", lambda: [str(comfy_out)])
 
-        assert routes._project_allowed(str(home)) is False, (
+        assert routes._allowed_project(str(home)) is None, (
             "an ancestor of a declared root was trusted as a project")
         dirs = routes._pack_dirs(str(home), "", "")
         assert not any(d.startswith(str(home / "templates")) for d in dirs), (
@@ -267,7 +267,7 @@ class TestTheOperatorSettingIsReal:
         project = tmp_path / "my-game"
         (project / "templates").mkdir(parents=True)
         monkeypatch.setenv(routes.ASSET_ROOTS_ENV, str(project))
-        assert routes._project_allowed(str(project)) is True
+        assert routes._allowed_project(str(project)) is not None
 
 
 class TestOnlyARealProjectRegisters:
@@ -278,7 +278,7 @@ class TestOnlyARealProjectRegisters:
     def test_an_empty_project_registers_nothing(self, monkeypatch):
         routes = _load_routes(monkeypatch)
         routes.register_project("")
-        assert routes._project_allowed(os.getcwd()) is False, (
+        assert routes._allowed_project(os.getcwd()) is None, (
             "an empty project string trusted the working directory")
 
     def test_a_relative_project_registers_nothing(self, monkeypatch):
@@ -289,4 +289,24 @@ class TestOnlyARealProjectRegisters:
     def test_a_real_project_still_registers(self, tmp_path, monkeypatch):
         routes = _load_routes(monkeypatch)
         routes.register_project(str(tmp_path))
-        assert routes._project_allowed(str(tmp_path)) is True
+        assert routes._allowed_project(str(tmp_path)) is not None
+
+
+class TestTheResolvedPathIsWhatGetsUsed:
+    """paths.py's contract: use exactly the path resolve_within returns, because
+    resolving a second time reopens the check-then-use race it closes."""
+
+    def test_the_pools_are_built_from_the_resolved_project(self, tmp_path, monkeypatch):
+        routes = _load_routes(monkeypatch)
+        monkeypatch.setattr(routes, "_template_dir", lambda: None)
+        monkeypatch.setattr(routes, "_operator_roots", lambda: [])
+        real = tmp_path / "real-project"
+        (real / "templates").mkdir(parents=True)
+        link = tmp_path / "link-to-project"
+        link.symlink_to(real)
+        routes.register_project(str(real))
+
+        dirs = routes._pack_dirs(str(link), "", "")
+        assert dirs, "a symlink to a vouched project was refused"
+        assert all(str(real) in d for d in dirs), (
+            f"pools were built from the unresolved path: {dirs}")
