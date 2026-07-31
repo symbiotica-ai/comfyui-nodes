@@ -5,6 +5,21 @@ from __future__ import annotations
 import os
 
 
+def parse_roots(value) -> list[str]:
+    """Absolute paths from one operator-supplied string, separated by newlines,
+    commas or semicolons so a value can be typed into a settings field or an env
+    var either way. Relative entries are dropped rather than resolved against the
+    process CWD, which would depend on how ComfyUI happened to be launched."""
+    if not value or not isinstance(value, str):
+        return []
+    out = []
+    for chunk in value.replace(";", "\n").replace(",", "\n").split("\n"):
+        entry = chunk.strip()
+        if entry and os.path.isabs(entry):
+            out.append(entry)
+    return out
+
+
 def resolve_within(roots, value, *, exts=None, kind="any") -> str | None:
     """The realpath of `value` when it lies inside one of `roots`, else None.
 

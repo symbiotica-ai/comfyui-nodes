@@ -14,7 +14,7 @@ from server import PromptServer
 from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
-from .paths import resolve_within
+from .paths import parse_roots, resolve_within
 from .pack_library import (
     delete_pack_template_dirs,
     list_pack_templates_dirs,
@@ -27,6 +27,9 @@ _roots: set[str] = set()
 _lock = threading.Lock()
 
 
+ASSET_ROOTS_ENV = "SYMBIOTICA_ASSET_ROOTS"
+
+
 def register_root(path: str) -> None:
     """Allow serving images under this folder (called when an Order Read node
     executes with it — i.e. the user explicitly typed it into the graph)."""
@@ -34,6 +37,51 @@ def register_root(path: str) -> None:
     if os.path.isdir(real):
         with _lock:
             _roots.add(real)
+
+
+def _operator_roots() -> list[str]:
+    """Extra asset folders the operator declared, from the Settings UI or the
+    environment. This is how someone whose artwork lives outside ComfyUI's own
+    folders keeps browsing it — they name the folder once instead of every
+    request naming its own."""
+    try:
+        from .._settings import get_comfy_setting, setting_key
+        declared = get_comfy_setting(setting_key(ASSET_ROOTS_ENV))
+    except Exception:
+        declared = None
+    return parse_roots(declared) + parse_roots(os.environ.get(ASSET_ROOTS_ENV))
+
+
+def declared_roots() -> list[str]:
+    """The folders a request may point at: the studio-assets Volume, ComfyUI's
+    own directories, whatever the operator declared, and whatever a graph
+    execution registered. Never anything a request named for itself."""
+    roots = [studio_library_mod.STUDIO_ASSETS_DIR, _template_dir()]
+    try:
+        import folder_paths
+        roots += [folder_paths.get_input_directory(),
+                  folder_paths.get_output_directory()]
+    except Exception:
+        pass
+    roots += _operator_roots()
+    with _lock:
+        roots.extend(_roots)
+    return [r for r in roots if r]
+
+
+def register_root_within(path: str) -> bool:
+    """Register `path` only when it lies inside a declared root, and report
+    whether it was. The browse routes call this: a request may make a folder
+    servable, but only one it was already entitled to see — otherwise asking to
+    browse a folder is what grants access to it."""
+    if not path:
+        return False
+    real = resolve_within(declared_roots(), path, kind="dir")
+    if real is None:
+        return False
+    with _lock:
+        _roots.add(real)
+    return True
 
 
 def is_allowed(path: str) -> str | None:
@@ -148,7 +196,7 @@ async def browse_refs(request):
     result = list_level(root, request.query.get("dir", ""))
     if "error" in result:
         return web.json_response(result, status=400)
-    register_root(result["root"])
+    register_root_within(result["root"])
     return web.json_response(result)
 
 
@@ -193,9 +241,9 @@ async def parse_order(request):
     except ValueError as e:
         return web.json_response({"error": str(e)}, status=400)
     if refs_path:
-        register_root(refs_path)
+        register_root_within(refs_path)
     if assets_root:
-        register_root(assets_root)
+        register_root_within(assets_root)
     loaded["refsRoot"] = refs_path
     loaded["assetsRoot"] = assets_root
     return web.json_response(loaded)
@@ -209,7 +257,7 @@ async def list_assets(request):
     root = os.path.realpath(_expand_project(request.query.get("dir", "")))
     if not root or not os.path.isdir(root):
         return web.json_response({"error": "not a readable directory"}, status=400)
-    register_root(root)
+    register_root_within(root)
     try:
         rels = scan_images(root)
     except OSError:
@@ -403,7 +451,7 @@ async def pack_template_list(request):
     project = _expand_project(request.query.get("project", ""))
     dirs = _pack_dirs(project)
     for d in dirs:
-        register_root(d)
+        register_root_within(d)
     return web.json_response({"dir": templates_dir(project),
                               "templates": list_pack_templates_dirs(dirs)})
 
