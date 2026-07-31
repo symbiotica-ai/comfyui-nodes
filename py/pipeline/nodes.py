@@ -386,6 +386,56 @@ class SymbioticaStudioLibrary(io.ComfyNode):
         return io.NodeOutput(path, is_dir)
 
 
+class SymbioticaRefsFolder(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaRefsFolder",
+            display_name="Symbiotica Refs Folder",
+            category="symbiotica/pipeline",
+            description="Load every image in one folder, in filename order. "
+                        "Takes an absolute folder path and nothing else — no "
+                        "browsing, no picking — so a dispatcher can bind the "
+                        "path and run the graph headless.",
+            inputs=[
+                io.String.Input("refs_dir", default="",
+                                tooltip="Absolute path to the folder of "
+                                        "reference images"),
+                io.Int.Input("max_count", default=0, min=0, max=512,
+                             tooltip="Keep at most this many images "
+                                     "(0 = all of them)"),
+            ],
+            outputs=[
+                io.Image.Output(display_name="images", is_output_list=True,
+                                tooltip="One image per file, in filename "
+                                        "order"),
+                io.String.Output(display_name="filenames",
+                                 is_output_list=True,
+                                 tooltip="Filename of image i — index-aligned "
+                                         "with images"),
+                io.Int.Output(display_name="count"),
+            ],
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, refs_dir="", max_count=0):
+        from .refs_dir import refs_fingerprint
+        return refs_fingerprint(_expand_studio(refs_dir), max_count)
+
+    @classmethod
+    def execute(cls, refs_dir="", max_count=0) -> io.NodeOutput:
+        from .refs_dir import open_reference_images
+        # Deliberately vouches for nothing: this node hands back pixels rather
+        # than serving files over a route, so it has no reason to widen what the
+        # browsers may read.
+        opened = open_reference_images(_expand_studio(refs_dir), max_count)
+        return io.NodeOutput(
+            [_pil_to_tensor(im) for _, im in opened],
+            [os.path.basename(p) for p, _ in opened],
+            len(opened),
+        )
+
+
 class SymbioticaModelPreset(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -2037,6 +2087,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
     SymbioticaReferenceBrowser,
+    SymbioticaRefsFolder,
     SymbioticaModelPreset,
     SymbioticaAutoPackerSettings,
     SymbioticaAutoPacker,

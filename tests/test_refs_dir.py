@@ -1,6 +1,7 @@
 # ABOUTME: Tests the refs-folder loader — a bound absolute directory becomes an
 # ABOUTME: ordered list of image paths, headless, with no browser selection.
 import os
+import random
 
 import pytest
 
@@ -48,6 +49,24 @@ class TestOpening:
 
     def test_an_undecodable_file_is_dropped_not_fatal(self, real_refs):
         (real_refs / "b-broken.png").write_bytes(b"not a png")
+        got = open_reference_images(str(real_refs))
+        assert [os.path.basename(p) for p, _ in got] == ["a.png", "b.png",
+                                                         "c.png"]
+
+    def test_a_truncated_image_is_dropped(self, real_refs):
+        # An intact PNG header over a cut-short body: Image.open succeeds and
+        # reports a size, and only the decode fails. A check that stopped at
+        # open() would pass this file on to blow up in whichever node first
+        # touched its pixels. The image has to be big enough that half of it is
+        # still past the header — half of a 4x4 PNG lands inside IHDR, which
+        # fails at open() and proves nothing.
+        rnd = random.Random(20260731)
+        big = Image.new("RGB", (256, 256))
+        big.putdata([(rnd.randrange(256), rnd.randrange(256),
+                      rnd.randrange(256)) for _ in range(256 * 256)])
+        big.save(real_refs / "b-cut.png")
+        raw = (real_refs / "b-cut.png").read_bytes()
+        (real_refs / "b-cut.png").write_bytes(raw[:len(raw) // 2])
         got = open_reference_images(str(real_refs))
         assert [os.path.basename(p) for p, _ in got] == ["a.png", "b.png",
                                                          "c.png"]
@@ -106,6 +125,18 @@ class TestWhatCounts:
         sub.mkdir()
         (sub / "z.png").write_bytes(b"x")
         assert len(list_reference_images(str(refs))) == 3
+
+    def test_ordering_ignores_case_rather_than_sorting_capitals_first(self,
+                                                                      tmp_path):
+        # Known-good order read the way a person reads the folder. A plain
+        # byte-order sort would put every capital ahead of every lowercase
+        # letter and give Boss, Zone, arrow, hero instead.
+        d = tmp_path / "mixed"
+        d.mkdir()
+        for name in ("hero.png", "Boss.png", "arrow.png", "Zone.png"):
+            (d / name).write_bytes(b"x")
+        got = [os.path.basename(p) for p in list_reference_images(str(d))]
+        assert got == ["arrow.png", "Boss.png", "hero.png", "Zone.png"]
 
     def test_extension_matching_ignores_case(self, tmp_path):
         d = tmp_path / "caps"
