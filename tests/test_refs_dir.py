@@ -1,5 +1,6 @@
 # ABOUTME: Tests the refs-folder loader — a bound absolute directory becomes an
 # ABOUTME: ordered list of image paths, headless, with no browser selection.
+import errno
 import os
 import random
 
@@ -115,6 +116,20 @@ class TestHandles:
         assert held == 0, f"{held} descriptors still open after loading"
 
 
+    def test_running_out_of_descriptors_is_not_read_as_corruption(
+            self, real_refs, monkeypatch):
+        """The dangerous shape: an exhausted process fails on EVERY remaining
+        open, so counting it as a corrupt file would drop the rest of the
+        folder and report the short list as the folder's contents. It has to
+        surface, not degrade."""
+        def out_of_fds(*a, **kw):
+            raise OSError(errno.EMFILE, "Too many open files")
+        monkeypatch.setattr(Image, "open", out_of_fds)
+        with pytest.raises(OSError) as exc:
+            open_reference_images(str(real_refs))
+        assert exc.value.errno == errno.EMFILE
+
+
 class TestFingerprint:
     def test_an_unchanged_folder_keeps_its_fingerprint(self, real_refs):
         assert refs_fingerprint(str(real_refs), 0) == \
@@ -142,6 +157,19 @@ class TestFingerprint:
         p.write_bytes(b"\x00" * len(raw))
         os.utime(p, ns=(1_000_000_000, 1_000_000_000))
         assert p.stat().st_size == len(raw)
+        assert refs_fingerprint(str(real_refs), 0) != before
+
+    def test_a_resized_file_changes_the_fingerprint_on_its_own(self,
+                                                               real_refs):
+        # The mirror of the test above: hold mtime still so only st_size can
+        # move. Without both, either field could be dropped and the other would
+        # cover for it in every test here.
+        p = real_refs / "a.png"
+        stamp = p.stat().st_mtime_ns
+        before = refs_fingerprint(str(real_refs), 0)
+        p.write_bytes(p.read_bytes() + b"trailing")
+        os.utime(p, ns=(stamp, stamp))
+        assert p.stat().st_mtime_ns == stamp
         assert refs_fingerprint(str(real_refs), 0) != before
 
     def test_the_cap_is_part_of_the_fingerprint(self, real_refs):
