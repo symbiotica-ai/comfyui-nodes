@@ -179,6 +179,23 @@ Two ways, checked in this order (after any per-node `api_key` widget):
 
 Per-node `api_key` widget overrides the env var.
 
+### Asset folders
+
+The asset and template browsers read ComfyUI's own `input/` and `output/`, the
+studio-assets volume, and any folder a running graph pointed them at. A project
+kept somewhere else — `~/games/my-game` rather than under ComfyUI — is declared
+once, either in **Settings → Symbiotica → Paths → Asset folders** or as an env
+var:
+
+```bash
+export SYMBIOTICA_ASSET_ROOTS="/Users/me/games/my-game, /Volumes/art"
+```
+
+Absolute paths, separated by commas, semicolons or newlines. Without this a
+project outside those folders browses empty: a request cannot make a folder
+readable by naming it, or asking to browse a folder would be what grants access
+to it.
+
 ### Agent and skill directories
 
 The Agent nodes scan disk for agent and skill definitions.

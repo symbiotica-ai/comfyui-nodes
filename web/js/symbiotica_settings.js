@@ -13,9 +13,24 @@ const KEYS = [
     ["SUBMAGIC_API_KEY", "Submagic API key"],
 ];
 
+// Folders outside ComfyUI's own input/output that the asset and template
+// browsers may read. A request cannot name its own folder, so a project kept
+// elsewhere is declared here once.
+const ASSET_ROOTS = {
+    id: "Symbiotica.SYMBIOTICA_ASSET_ROOTS",
+    name: "Asset folders",
+    category: ["Symbiotica", "Paths", "SYMBIOTICA_ASSET_ROOTS"],
+    type: "text",
+    defaultValue: "",
+    tooltip: "Absolute paths, separated by commas, semicolons or newlines. "
+        + "The asset and template browsers may read these folders in addition "
+        + "to ComfyUI's own. Also settable as the SYMBIOTICA_ASSET_ROOTS "
+        + "environment variable.",
+};
+
 registerSymbioticaExtension(app, {
     name: "symbiotica.settings",
-    settings: KEYS.map(([env, label]) => ({
+    settings: [ASSET_ROOTS, ...KEYS.map(([env, label]) => ({
         id: `Symbiotica.${env}`,
         name: label,
         category: ["Symbiotica", "API Keys", env],
@@ -24,5 +39,5 @@ registerSymbioticaExtension(app, {
         attrs: { type: "password" },
         tooltip: "Stored in your ComfyUI user settings on this machine — "
             + "not in workflows, safe to share workflow files.",
-    })),
+    }))],
 });
