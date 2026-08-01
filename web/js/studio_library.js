@@ -117,6 +117,8 @@ function openBrowser(node) {
     let currentEntries = [];
     let currentParent = null;
     let currentRel = "";  // what the refresh control re-reads
+    let currentHidden = 0;
+    let showModelKinds = false;
 
     function onKeydown(e) {
         if (e.key === "Escape") close();
@@ -157,9 +159,43 @@ function openBrowser(node) {
         row.appendChild(label);
         return row;
     };
+    // The studio root leaves out the folders holding model kinds, because the
+    // editor picks models in its own loader rather than by path. The studio's
+    // web view lists them, so an unexplained omission reads as a lost folder —
+    // this accounts for them and offers to list them anyway.
+    const modelKindsNote = () => {
+        const row = document.createElement("div");
+        row.style.cssText =
+            "display:flex;align-items:center;gap:8px;padding:10px;margin-top:4px;" +
+            `border-top:1px solid ${HUB.hairline};color:${HUB.inkTertiary};` +
+            `font:12px ${HUB.font};`;
+        const text = document.createElement("span");
+        text.style.cssText = "flex:1;";
+        text.textContent = showModelKinds
+            ? "Model folders shown — models are picked in the model loader node."
+            : `${currentHidden} model folder${currentHidden === 1 ? "" : "s"} hidden`
+              + " — models are picked in the model loader node.";
+        const toggle = document.createElement("button");
+        toggle.className = "sym-btn";
+        toggle.style.cssText = ghostCss + "padding:4px 10px;flex:none;";
+        toggle.textContent = showModelKinds ? "hide" : "show";
+        toggle.addEventListener("click", () => {
+            showModelKinds = !showModelKinds;
+            show(currentRel);
+        });
+        row.append(text, toggle);
+        return row;
+    };
     function renderRows() {
         pane.replaceChildren();
         if (currentParent !== null) pane.appendChild(upRow(currentParent));
+        renderEntries();
+        // Below the rows: a footnote about the level, not a row of it.
+        if (currentParent === null && (currentHidden || showModelKinds)) {
+            pane.appendChild(modelKindsNote());
+        }
+    }
+    function renderEntries() {
         if (currentEntries.length === 0) {
             pane.appendChild(emptyState("No files in this studio library yet"));
             return;
@@ -211,6 +247,7 @@ function openBrowser(node) {
         try {
             const q = new URLSearchParams({ dir });
             if (sync || firstOpen) q.set("sync", "1");
+            if (showModelKinds) q.set("models", "1");
             data = await fetchJson(`${ROUTE}?${q.toString()}`);
         } catch (e) {
             errline.textContent = e.message || "studio library unavailable";
@@ -227,6 +264,7 @@ function openBrowser(node) {
             : "";
         currentEntries = data.entries || [];
         currentParent = data.parent ?? null;
+        currentHidden = data.hidden ?? 0;
         upBtn.style.display = currentParent !== null ? "" : "none";
         // Re-reading in place is not navigation: the filter is still describing
         // the folder the user is looking at.

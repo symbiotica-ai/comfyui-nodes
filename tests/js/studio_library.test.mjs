@@ -212,6 +212,49 @@ test("'..' survives a filter that matches nothing", async () => {
     assert.ok(find(overlay, (n) => n.textContent === "No matches"));
 });
 
+function hiddenModelsResponder() {
+    setResponder((route) => route.includes("models=1")
+        ? { ok: true, body: { rel: "studios/ggs", parent: null,
+            entries: [{ name: "loras", type: "dir", rel: "studios/ggs/loras" },
+                      { name: "refs", type: "dir", rel: "studios/ggs/refs" }] } }
+        : { ok: true, body: { rel: "studios/ggs", parent: null, hidden: 2,
+            entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } });
+}
+
+test("the root says how many model folders it is not showing", async () => {
+    // The studio's own web view lists these. Without a line saying they exist,
+    // the two views disagree and the browse node looks like it lost a folder.
+    reset();
+    hiddenModelsResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    assert.ok(find(overlay, (n) => /2 model folders/.test(n.textContent ?? "")),
+        "expected the root to account for the folders it hid");
+});
+
+test("showing model folders re-lists them", async () => {
+    reset();
+    hiddenModelsResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    fire(find(overlay, (n) => n.textContent === "show"), "click");
+    await tick();
+    assert.match(calls.at(-1), /\bmodels=1\b/);
+    assert.deepEqual(rowLabels(overlay), ["📁  loras", "📁  refs"]);
+    assert.ok(find(overlay, (n) => n.textContent === "hide"), "and can be put back");
+});
+
+test("a subfolder says nothing about model folders", async () => {
+    // The omission is a studio-root rule; a nested folder called 'loras' is an
+    // ordinary asset folder and always listed.
+    reset();
+    subfolderResponder();
+    const { overlay } = await drillIntoRefs();
+    assert.ok(!find(overlay, (n) => /model folders/.test(n.textContent ?? "")));
+});
+
 test("the studio root has no '..' row", async () => {
     reset();
     subfolderResponder();
