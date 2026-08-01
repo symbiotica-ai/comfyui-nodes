@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { create, reset, setResponder, fire } from "./comfy_stub.mjs";
+import { calls, create, reset, setResponder, fire } from "./comfy_stub.mjs";
 import "../../web/js/studio_library.js";
 import { summaryLabel, applySelection, filterEntries } from "../../web/js/studio_library.js";
 
@@ -97,6 +97,38 @@ test("the Done button removes the overlay", async () => {
     assert.ok(closeBtn, "expected a Done button in the overlay");
     fire(closeBtn, "click");
     assert.ok(!document.body.children.includes(overlay));
+});
+
+// A tree with one folder, so a test can drill in and back out.
+function twoLevelResponder() {
+    setResponder((route) => route.includes("refs")
+        ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs",
+            entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }
+        : { ok: true, body: { rel: "studios/ggs", parent: null,
+            entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } });
+}
+
+test("the first listing of every browse session requests a volume sync", async () => {
+    // The mount this lists is only as fresh as its last sync, so a browse that
+    // skipped the sync would show the studio as of the sandbox's boot and look
+    // like a missing folder. Nothing else in the suite pins the flag: the route
+    // tests build the query themselves, so a client that stopped sending it
+    // leaves every one of them green.
+    reset();
+    twoLevelResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+
+    const overlay = await openOverlay(node);
+    const folder = find(overlay, (n) => n.textContent === "📁  refs");
+    fire(folder, "click");
+    await tick();
+    fire(find(overlay, (n) => n.textContent === "Done"), "click");
+    await openOverlay(node);
+
+    assert.match(calls[0], /\bsync=1\b/, "opening the browser must sync first");
+    assert.ok(!/\bsync=1\b/.test(calls[1]), "drilling in re-uses the sync we just did");
+    assert.match(calls[2], /\bsync=1\b/, "re-opening the browser must sync again");
 });
 
 test("clicking a folder row opens it (the default action)", async () => {
