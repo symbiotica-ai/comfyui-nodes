@@ -109,6 +109,7 @@ def _variant_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
                 "image": sheet, "regions": regions,
                 "prompts": build_client_prompts(regions),
                 "name": f"{base_name}-{slugify(a['assetName'])}-v{i}",
+                "category": a.get("category", ""),
             })
     return out
 
@@ -147,7 +148,8 @@ def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
             name += f"-{canvas}"
         name += suffix
         out.append({"image": sheet, "regions": regions,
-                    "prompts": build_client_prompts(regions), "name": name})
+                    "prompts": build_client_prompts(regions), "name": name,
+                    "category": cat})
 
     out = []
     for (cat, canvas), group in groups.items():
@@ -179,6 +181,36 @@ def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
                 suffix = f"-{pi}" if len(pages) > 1 else ""
                 emit(cat, canvas, page, suffix, out)
     return out
+
+
+def _no_sheets_reason(assets, category, combined_sheet, split_variants):
+    """Why nothing was drawn, named as the switch the user can flip.
+
+    An empty pack has four distinct causes and the old message named none of
+    them: no reference images at all, no asset in the picked category, both
+    emitters off, or split-only on a stage category — food is rotation '-' and
+    is never split, so split_variants alone can never draw it."""
+    with_refs = [a for a in assets if a.get("refFiles")]
+    cats = ", ".join(sorted({a.get("category", "") for a in with_refs}))
+    in_cat = [a for a in with_refs
+              if category == "All" or a.get("category") == category]
+    if not with_refs:
+        why = "no asset in the order has a reference image"
+    elif not in_cat:
+        why = f"the order only references: {cats}"
+    elif not combined_sheet and not split_variants:
+        why = ("both combined_sheet and split_variants are off — "
+               "turn combined_sheet on")
+    elif not combined_sheet and not any(_is_variant(a) for a in in_cat):
+        why = ("combined_sheet is off and split_variants emits only "
+               "directional assets (xlsx rotation 2/4); every asset here is "
+               "rotation '-' (stages), which is never split — "
+               "turn combined_sheet on")
+    else:
+        why = (f"every group rendered empty — check the reference files still "
+               f"exist under the refs folder (types seen: {cats})")
+    return (f"no assets to pack for category {category!r} — "
+            f"nothing to draw: {why}")
 
 
 def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
@@ -250,9 +282,6 @@ def autopack_order(assets, refs_root, *, sheet_w, sheet_h, columns=1,
         out.extend(_variant_sheets(assets, refs_root, sheet_w, sheet_h,
                                    settings, scales, base_name, category))
     if not out:
-        cats = sorted({a.get("category", "") for a in assets if a.get("refFiles")})
-        raise ValueError(
-            f"no assets to pack for category {category!r} — nothing to draw "
-            f"(referenced asset types: {', '.join(cats) or '(none at all)'}; "
-            f"variants split: {split_variants})")
+        raise ValueError(_no_sheets_reason(assets, category, combined_sheet,
+                                           split_variants))
     return out

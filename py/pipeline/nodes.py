@@ -621,6 +621,15 @@ class SymbioticaAutoPacker(io.ComfyNode):
                                  is_output_list=True,
                                  tooltip="Slug per sheet — wire into Save "
                                          "Image filename_prefix"),
+                # Appended, never inserted: ComfyUI links address an output by
+                # SLOT INDEX, so a new slot in the middle would re-point every
+                # saved workflow's wires.
+                io.String.Output(display_name="sheet_categories",
+                                 is_output_list=True,
+                                 tooltip="Asset type of sheet i, as written in "
+                                         "the order (e.g. 'Food - 3 stages') — "
+                                         "index-aligned with sheets. The slug "
+                                         "form is already inside sheet_names."),
             ],
         )
 
@@ -697,6 +706,7 @@ class SymbioticaAutoPacker(io.ComfyNode):
             [_pil_to_tensor(p["image"]) for p in packed],
             [p["prompts"] for p in packed],
             [p["name"] for p in packed],
+            [p.get("category", "") for p in packed],
         )
 
     @classmethod
