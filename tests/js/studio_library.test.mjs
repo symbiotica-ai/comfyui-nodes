@@ -131,6 +131,57 @@ test("the first listing of every browse session requests a volume sync", async (
     assert.match(calls[2], /\bsync=1\b/, "re-opening the browser must sync again");
 });
 
+test("the refresh control re-reads the current folder with a forced sync", async () => {
+    // A refresh that re-listed without syncing would redraw the same rows off
+    // the same stale mount and look like proof the folder is not there.
+    reset();
+    twoLevelResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await tick();
+
+    const refresh = find(overlay, (n) => n.title === "Re-read this folder");
+    assert.ok(refresh, "expected a refresh control in the overlay");
+    fire(refresh, "click");
+    await tick();
+
+    assert.match(calls.at(-1), /\bsync=1\b/, "a refresh must force the volume sync");
+    assert.match(calls.at(-1), /dir=studios%2Fggs%2Frefs/,
+        "a refresh must re-read where the user is, not the studio root");
+});
+
+test("the up control keeps its theming once it becomes visible", async () => {
+    // It starts hidden, so showing it is the first write to its style. Writing
+    // cssText there replaces the hub tokens set at build time and the button
+    // renders unstyled for the whole rest of the session.
+    reset();
+    twoLevelResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const up = find(overlay, (n) => n.textContent === "↑ up");
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await tick();
+    assert.equal(up.style.display, "", "the up control shows below the root");
+    assert.match(up.style.cssText, /cursor:pointer/, "hub button tokens survive");
+});
+
+test("a refresh keeps the filter the user typed", async () => {
+    reset();
+    twoLevelResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const filter = find(overlay, (n) => n.type === "search");
+    filter.value = "re";
+    fire(filter, "input");
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    await tick();
+    assert.equal(filter.value, "re", "re-reading in place is not navigation");
+});
+
 test("a degraded sync warns in the panel without hiding the listing", async () => {
     // The rows are still the best answer available — the mount is simply older
     // than the user thinks. Replacing them with an error would cost a browse

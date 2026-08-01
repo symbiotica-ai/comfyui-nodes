@@ -82,7 +82,14 @@ function openBrowser(node) {
     closeBtn.textContent = "Done";
     closeBtn.className = "sym-btn";
     closeBtn.style.cssText = ghostCss + "margin-left:auto;";
-    bar.append(upBtn, crumb, closeBtn);
+    const refreshBtn = document.createElement("button");
+    refreshBtn.textContent = "⟳";
+    refreshBtn.className = "sym-btn";
+    refreshBtn.title = "Re-read this folder";
+    refreshBtn.style.cssText = ghostCss + "padding:6px 10px;flex:none;";
+    refreshBtn.addEventListener("click", () => show(currentRel, { sync: true }));
+    // closeBtn carries margin-left:auto, so refresh lands to the left of Done.
+    bar.append(upBtn, crumb, refreshBtn, closeBtn);
 
     const filterBar = document.createElement("div");
     filterBar.style.cssText = `padding:10px 16px;border-bottom:1px solid ${HUB.hairline};`;
@@ -109,6 +116,7 @@ function openBrowser(node) {
     let firstOpen = true;
     let currentEntries = [];
     let currentParent = null;
+    let currentRel = "";  // what the refresh control re-reads
 
     function onKeydown(e) {
         if (e.key === "Escape") close();
@@ -176,18 +184,22 @@ function openBrowser(node) {
 
     filter.addEventListener("input", renderRows);
 
-    async function show(dir) {
+    // `sync` forces a volume refresh — the browse-session open does it once, and
+    // the refresh control does it on demand. Without it a re-read redraws the
+    // same rows off the same mount and reads as proof the folder is not there.
+    async function show(dir, { sync = false } = {}) {
         errline.textContent = "";
         let data;
         try {
             const q = new URLSearchParams({ dir });
-            if (firstOpen) q.set("sync", "1");
-            firstOpen = false;
+            if (sync || firstOpen) q.set("sync", "1");
             data = await fetchJson(`${ROUTE}?${q.toString()}`);
         } catch (e) {
             errline.textContent = e.message || "studio library unavailable";
             return;
         }
+        firstOpen = false;  // spent only once a listing has actually arrived
+        currentRel = data.rel ?? "";
         crumb.textContent = data.rel || "studios";
         // Only sent when the refresh did not happen, so its mere presence is the
         // signal. The rows still render: the mount is older than the user thinks,
@@ -197,8 +209,10 @@ function openBrowser(node) {
             : "";
         currentEntries = data.entries || [];
         currentParent = data.parent ?? null;
-        upBtn.style.cssText = currentParent !== null ? "" : "display:none;";
-        filter.value = "";
+        upBtn.style.display = currentParent !== null ? "" : "none";
+        // Re-reading in place is not navigation: the filter is still describing
+        // the folder the user is looking at.
+        if (!sync) filter.value = "";
         renderRows();
     }
     show("");
