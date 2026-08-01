@@ -216,6 +216,43 @@ test("a toggle whose listing failed still offers what it has not done", async ()
     assert.ok(find(overlay, (n) => n.textContent === "hide"));
 });
 
+test("a toggle the user navigated away from does not take effect later", async () => {
+    // Same shape as a late listing overwriting the pane, but the casualty is
+    // state rather than rows: the reply is discarded, so if it had already been
+    // adopted the browser would go on asking for model folders on behalf of a
+    // press whose result nobody ever saw.
+    reset();
+    setResponder((route) => {
+        if (route.includes("refs")) {
+            return { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs",
+                entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } };
+        }
+        const refs = { name: "refs", type: "dir", rel: "studios/ggs/refs" };
+        return route.includes("models=1")
+            ? { ok: true, body: { rel: "studios/ggs", parent: null,
+                entries: [{ name: "loras", type: "dir", rel: "studios/ggs/loras" }, refs] } }
+            : { ok: true, body: { rel: "studios/ggs", parent: null, hidden: 2,
+                entries: [refs] } };
+    });
+    setLatency((route) => (route.includes("models=1") ? 40 : 0));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    node.widgets.find((w) => w.name === "📂 Browse studio library").callback();
+    await settle(20);
+    const overlay = document.body.children.at(-1);
+
+    fire(find(overlay, (n) => n.textContent === "show"), "click");
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await settle(120);
+    setLatency(0);
+
+    fire(find(overlay, (n) => n.textContent === "↑  .."), "click");
+    await tick();
+    assert.ok(!/\bmodels=1\b/.test(calls.at(-1)),
+        "the press whose listing was discarded left nothing behind");
+    assert.ok(find(overlay, (n) => n.textContent === "show"), "and the offer stands");
+});
+
 test("a subfolder listing puts '..' above every folder", async () => {
     reset();
     subfolderResponder();
