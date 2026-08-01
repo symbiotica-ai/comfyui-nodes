@@ -299,15 +299,29 @@ SYNC_TIMEOUT_S = 10  # best-effort browse sync; time out and list the stale moun
 async def _sync_studio_assets(root):
     """Best-effort async publish/refresh of the studio-assets v2 mount before a
     browse-session listing. Never blocks the event loop; a stale listing is
-    acceptable. Mirrors services/comfy-modal/symbiotica_platform/route.py:206-213."""
+    acceptable. Mirrors services/comfy-modal/symbiotica_platform/route.py.
+
+    Returns "refreshed", "timeout" or "failed". A caller that discarded this
+    could not tell a folder that is absent from one it never went to look for —
+    the two produce the same listing, and only one of them is the studio's
+    actual contents."""
     try:
         proc = await asyncio.create_subprocess_exec("sync", root)
-    except OSError:
-        return
+    except OSError as exc:
+        print(f"[symbiotica] studio-assets sync could not start: {exc}")
+        return "failed"
     try:
-        await asyncio.wait_for(proc.wait(), timeout=SYNC_TIMEOUT_S)
+        code = await asyncio.wait_for(proc.wait(), timeout=SYNC_TIMEOUT_S)
     except asyncio.TimeoutError:
         proc.kill()
+        print(f"[symbiotica] studio-assets sync exceeded {SYNC_TIMEOUT_S}s; "
+              "listing the mount as it stands")
+        return "timeout"
+    if code != 0:
+        print(f"[symbiotica] studio-assets sync exited {code}; "
+              "listing the mount as it stands")
+        return "failed"
+    return "refreshed"
 
 
 @PromptServer.instance.routes.get("/symbiotica/studio-library")
@@ -318,10 +332,17 @@ async def studio_library(request):
     studio = (os.environ.get("CANVAS_STUDIO") or "").strip()
     if not studio:
         return web.json_response({"error": "studio library not available"}, status=503)
+    outcome = None
     if request.query.get("sync") == "1":
-        await _sync_studio_assets(studio_library_mod.STUDIO_ASSETS_DIR)
+        outcome = await _sync_studio_assets(studio_library_mod.STUDIO_ASSETS_DIR)
     result = studio_library_mod.list_studio_dir(
         studio_library_mod.STUDIO_ASSETS_DIR, studio, request.query.get("dir", ""))
+    # A degraded refresh rides along with the listing rather than replacing it:
+    # the stale mount is still the best answer available, and refusing it would
+    # cost the user a browse over a folder that is probably right anyway. Only
+    # the happy path stays silent, so `sync` present means "trust this less".
+    if outcome and outcome != "refreshed" and "error" not in result:
+        result["sync"] = outcome
     return web.json_response(result, status=400 if "error" in result else 200)
 
 

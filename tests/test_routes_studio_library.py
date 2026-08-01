@@ -153,3 +153,88 @@ def test_sync_timeout_still_lists_and_kills(routes_mod, monkeypatch, tmp_path):
     asyncio.run(routes_mod.studio_library(_req(sync="1")))
     assert killed["v"] is True
     assert routes_mod._captured["status"] == 200
+
+
+def test_sync_timeout_says_so_in_the_payload(routes_mod, monkeypatch, tmp_path):
+    """A killed sync leaves the mount as stale as it was, and the listing that
+    follows is indistinguishable from a fresh one. Saying which it was is the
+    difference between 'the folder is not there' and 'we could not go and look'."""
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+
+    class _Proc:
+        async def wait(self):
+            return 0
+        def kill(self):
+            pass
+
+    async def _fake_exec(*a, **k):
+        return _Proc()
+
+    async def _timeout(coro, timeout):
+        coro.close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(routes_mod.asyncio, "wait_for", _timeout)
+    asyncio.run(routes_mod.studio_library(_req(sync="1")))
+    assert routes_mod._captured["status"] == 200
+    assert routes_mod._captured["body"]["sync"] == "timeout"
+    assert "entries" in routes_mod._captured["body"]
+
+
+def test_a_sync_that_exits_non_zero_says_so(routes_mod, monkeypatch, tmp_path):
+    """`sync` reporting failure is not the same as `sync` never running, but the
+    listing is identical either way, so the exit code has to be read."""
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+
+    class _Proc:
+        async def wait(self):
+            return 1
+        def kill(self):
+            pass
+
+    async def _fake_exec(*a, **k):
+        return _Proc()
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+    asyncio.run(routes_mod.studio_library(_req(sync="1")))
+    assert routes_mod._captured["status"] == 200
+    assert routes_mod._captured["body"]["sync"] == "failed"
+
+
+def test_a_sync_that_never_started_says_so(routes_mod, monkeypatch, tmp_path):
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+
+    async def _fake_exec(*a, **k):
+        raise FileNotFoundError("no such file: sync")
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+    asyncio.run(routes_mod.studio_library(_req(sync="1")))
+    assert routes_mod._captured["body"]["sync"] == "failed"
+
+
+def test_a_clean_sync_leaves_the_payload_alone(routes_mod, monkeypatch, tmp_path):
+    """`sync` present at all is the client's cue to distrust the listing, so a
+    refresh that worked must not set it."""
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+
+    class _Proc:
+        async def wait(self):
+            return 0
+        def kill(self):
+            pass
+
+    async def _fake_exec(*a, **k):
+        return _Proc()
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+    asyncio.run(routes_mod.studio_library(_req(sync="1")))
+    assert "sync" not in routes_mod._captured["body"]
