@@ -3,11 +3,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { calls, create, reset, setResponder, fire } from "./comfy_stub.mjs";
+import { calls, create, reset, setResponder, setLatency, fire } from "./comfy_stub.mjs";
 import "../../web/js/studio_library.js";
 import { summaryLabel, applySelection, filterEntries } from "../../web/js/studio_library.js";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
+const settle = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Depth-first search of the stub DOM tree for the first node matching pred.
 function find(root, pred) {
@@ -321,6 +322,58 @@ test("the up control keeps its theming once it becomes visible", async () => {
     assert.match(up.style.cssText, /cursor:pointer/, "hub button tokens survive");
 });
 
+test("a slow refresh reply does not overwrite where the user has since gone", async () => {
+    // The forced sync is the slow case by construction: the server waits on the
+    // volume walk, and a degraded mount takes the whole budget. The pane stays
+    // usable meanwhile, so the user navigates — and the refresh reply, when it
+    // finally lands, is a listing of a folder they have already left.
+    reset();
+    subfolderResponder();
+    setLatency((route) => (route.includes("sync=1") ? 40 : 0));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const browse = node.widgets.find((w) => w.name === "📂 Browse studio library");
+    browse.callback();
+    await settle(80);
+    const overlay = document.body.children.at(-1);
+
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await settle(120);
+
+    setLatency(0);
+    assert.deepEqual(rowLabels(overlay), ["↑  ..", "📁  nested", "📄  a.png"],
+        "the folder the user opened must win over the reply they stopped waiting for");
+});
+
+test("the refresh control is held while its volume walk runs", async () => {
+    // The walk can take the server's whole budget. A control that looks inert
+    // for that long gets pressed again, and each press is another walk on the
+    // container the editor is running in.
+    reset();
+    subfolderResponder();
+    setLatency((route) => (route.includes("sync=1") ? 40 : 0));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    node.widgets.find((w) => w.name === "📂 Browse studio library").callback();
+    await settle(80);
+    const overlay = document.body.children.at(-1);
+    const refresh = find(overlay, (n) => n.title === "Re-read this folder");
+
+    fire(refresh, "click");
+    await tick();
+    assert.equal(refresh.disabled, true, "held while the walk runs");
+    assert.ok(find(overlay, (n) => /refreshing/i.test(n.textContent ?? "")),
+        "and says why it is unavailable");
+    const before = calls.length;
+    fire(refresh, "click");
+    assert.equal(calls.length, before, "a press while held starts no second walk");
+
+    await settle(80);
+    setLatency(0);
+    assert.equal(refresh.disabled, false, "released once the reply lands");
+});
+
 test("a refresh keeps the filter the user typed", async () => {
     reset();
     twoLevelResponder();
@@ -349,6 +402,37 @@ test("a degraded sync warns in the panel without hiding the listing", async () =
         "expected an inline warning that the listing may be stale");
     assert.ok(find(overlay, (n) => n.textContent === "📁  refs"),
         "the warning must not replace the rows");
+});
+
+test("the stale warning survives navigation until a refresh actually works", async () => {
+    // Drilling in does not sync, so the subfolder comes off the same mount that
+    // failed to refresh and is exactly as old. Dropping the warning there is
+    // worse than never showing it: the user is now a level deeper, looking for
+    // something recent, and has been told everything is fine.
+    reset();
+    const state = { degraded: true };
+    setResponder((route) => {
+        const stale = state.degraded && route.includes("sync=1") ? { sync: "timeout" } : {};
+        return route.includes("refs")
+            ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs", ...stale,
+                entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }
+            : { ok: true, body: { rel: "studios/ggs", parent: null, ...stale,
+                entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } };
+    });
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const warned = () => !!find(overlay, (n) => /out of date/.test(n.textContent ?? ""));
+    assert.ok(warned(), "the open could not refresh");
+
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await tick();
+    assert.ok(warned(), "and the folder inside it is off the same unrefreshed mount");
+
+    state.degraded = false;
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    await tick();
+    assert.ok(!warned(), "only a refresh that worked earns a clean listing");
 });
 
 test("clicking a folder row opens it (the default action)", async () => {

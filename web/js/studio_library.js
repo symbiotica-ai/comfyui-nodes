@@ -87,7 +87,13 @@ function openBrowser(node) {
     refreshBtn.className = "sym-btn";
     refreshBtn.title = "Re-read this folder";
     refreshBtn.style.cssText = ghostCss + "padding:6px 10px;flex:none;";
-    refreshBtn.addEventListener("click", () => show(currentRel, { sync: true }));
+    // Held open while the volume walk runs: it can take the server's whole sync
+    // budget, and a control that looks inert invites the clicks that pile more
+    // walks behind it.
+    refreshBtn.addEventListener("click", () => {
+        if (refreshBtn.disabled) return;
+        show(currentRel, { sync: true });
+    });
     // closeBtn carries margin-left:auto, so refresh lands to the left of Done.
     bar.append(upBtn, crumb, refreshBtn, closeBtn);
 
@@ -119,6 +125,8 @@ function openBrowser(node) {
     let currentRel = "";  // what the refresh control re-reads
     let currentHidden = 0;
     let showModelKinds = false;
+    let issued = 0;  // the pane belongs to the most recent request, not the last reply
+    let mountStale = false;
 
     function onKeydown(e) {
         if (e.key === "Escape") close();
@@ -238,30 +246,57 @@ function openBrowser(node) {
 
     filter.addEventListener("input", renderRows);
 
+    // One message line, two tones: a failure the user must act on, and a note
+    // about how much to trust what they are looking at.
+    const message = (text, tone = "error") => {
+        errline.textContent = text;
+        errline.style.color = tone === "error" ? HUB.danger : HUB.inkSubtle;
+    };
+    let walking = 0;
+    const setWalking = (on) => {
+        walking += on ? 1 : -1;
+        refreshBtn.disabled = walking > 0;
+        refreshBtn.style.opacity = walking > 0 ? "0.45" : "";
+    };
+
     // `sync` forces a volume refresh — the browse-session open does it once, and
     // the refresh control does it on demand. Without it a re-read redraws the
     // same rows off the same mount and reads as proof the folder is not there.
     async function show(dir, { sync = false } = {}) {
-        errline.textContent = "";
+        // A forced sync waits on the volume walk while the pane stays usable, so
+        // its reply can land after the user has already opened something else.
+        // Whoever asked last is who the pane belongs to; earlier replies are
+        // answers to a question nobody is still asking.
+        const seq = ++issued;
+        const walks = sync || firstOpen;
+        message(walks ? "Refreshing the studio volume…" : "", "note");
         let data;
+        if (walks) setWalking(true);
         try {
             const q = new URLSearchParams({ dir });
-            if (sync || firstOpen) q.set("sync", "1");
+            if (walks) q.set("sync", "1");
             if (showModelKinds) q.set("models", "1");
             data = await fetchJson(`${ROUTE}?${q.toString()}`);
         } catch (e) {
-            errline.textContent = e.message || "studio library unavailable";
+            if (seq === issued) message(e.message || "studio library unavailable");
             return;
+        } finally {
+            if (walks) setWalking(false);
         }
+        if (seq !== issued) return;
         firstOpen = false;  // spent only once a listing has actually arrived
         currentRel = data.rel ?? "";
         crumb.textContent = data.rel || "studios";
-        // Only sent when the refresh did not happen, so its mere presence is the
-        // signal. The rows still render: the mount is older than the user thinks,
-        // not unreadable.
-        errline.textContent = data.sync
+        // `sync` is sent only when the refresh did not happen, so its presence is
+        // the signal. It describes the MOUNT, not this listing: every folder read
+        // afterwards is off the same unrefreshed mount and is exactly as old, so
+        // the warning stands until a refresh actually succeeds. The rows still
+        // render — the mount is older than the user thinks, not unreadable.
+        if (data.sync) mountStale = true;
+        else if (walks) mountStale = false;
+        message(mountStale
             ? "Could not refresh the studio volume — this listing may be out of date."
-            : "";
+            : "", "note");
         currentEntries = data.entries || [];
         currentParent = data.parent ?? null;
         currentHidden = data.hidden ?? 0;
