@@ -655,6 +655,32 @@ test("the refresh control keeps its explanation while the user browses around it
     setLatency(0);
 });
 
+test("a failure shows through even while a walk is still running", async () => {
+    // The two can overlap: the walk holds the control, the user opens something
+    // in the meantime, and that fails. A progress note sitting on top of the
+    // failure is the message line telling the user everything is fine.
+    reset();
+    setResponder((route) => (route.includes("refs")
+        ? { ok: false, status: 500, body: { error: "studio-assets unreachable" } }
+        : { ok: true, body: { rel: "studios/ggs", parent: null,
+            entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } }));
+    setLatency((route) => (route.includes("sync=1") ? 60 : 0));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    node.widgets.find((w) => w.name === "📂 Browse studio library").callback();
+    await settle(100);
+    const overlay = document.body.children.at(-1);
+
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    await tick();
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await tick();
+    assert.ok(find(overlay, (n) => n.textContent === "studio-assets unreachable"),
+        "the failure is what the user has to act on");
+    await settle(100);
+    setLatency(0);
+});
+
 test("clicking a folder row opens it (the default action)", async () => {
     reset();
     setResponder((route) => route.includes("Export")
