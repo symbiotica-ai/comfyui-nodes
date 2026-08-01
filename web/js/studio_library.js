@@ -189,6 +189,12 @@ function openBrowser(node) {
             return;
         }
         crumb.textContent = data.rel || "studios";
+        // Only sent when the refresh did not happen, so its mere presence is the
+        // signal. The rows still render: the mount is older than the user thinks,
+        // not unreadable.
+        errline.textContent = data.sync
+            ? "Could not refresh the studio volume — this listing may be out of date."
+            : "";
         currentEntries = data.entries || [];
         currentParent = data.parent ?? null;
         upBtn.style.cssText = currentParent !== null ? "" : "display:none;";

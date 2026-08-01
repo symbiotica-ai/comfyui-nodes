@@ -131,6 +131,22 @@ test("the first listing of every browse session requests a volume sync", async (
     assert.match(calls[2], /\bsync=1\b/, "re-opening the browser must sync again");
 });
 
+test("a degraded sync warns in the panel without hiding the listing", async () => {
+    // The rows are still the best answer available — the mount is simply older
+    // than the user thinks. Replacing them with an error would cost a browse
+    // over a listing that is probably right.
+    reset();
+    setResponder(() => ({ ok: true, body: { rel: "studios/ggs", parent: null, sync: "timeout",
+        entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } }));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    assert.ok(find(overlay, (n) => /out of date/.test(n.textContent ?? "")),
+        "expected an inline warning that the listing may be stale");
+    assert.ok(find(overlay, (n) => n.textContent === "📁  refs"),
+        "the warning must not replace the rows");
+});
+
 test("clicking a folder row opens it (the default action)", async () => {
     reset();
     setResponder((route) => route.includes("Export")
