@@ -6,8 +6,11 @@ let responder = () => ({ ok: false, status: 400, body: { error: "order_path requ
 let latencyMs = 0;
 
 export function setResponder(fn) { responder = fn; }
+// A number applies to every call; a (route) => ms function lets a test make one
+// request outrun another, which is the only way to drive an out-of-order reply.
 export function setLatency(ms) { latencyMs = ms; }
 export function reset() {
+    latencyMs = 0;  // a test that fails mid-way must not slow the next one
     calls.length = 0;
     repaints.count = 0;
     nodes.clear();
@@ -76,7 +79,8 @@ export const api = {
     async fetchApi(route) {
         calls.push(route);
         const r = responder(route, calls.length);
-        if (latencyMs) await new Promise((res) => setTimeout(res, latencyMs));
+        const delay = typeof latencyMs === "function" ? latencyMs(route) : latencyMs;
+        if (delay) await new Promise((res) => setTimeout(res, delay));
         return {
             ok: r.ok,
             status: r.status ?? (r.ok ? 200 : 400),

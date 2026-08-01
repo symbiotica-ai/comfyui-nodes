@@ -98,10 +98,16 @@ def selection_fingerprint(base_dir, selection):
     return h.hexdigest()
 
 
-def list_studio_dir(base_dir, studio, rel=""):
+def list_studio_dir(base_dir, studio, rel="", show_model_kinds=False):
     """Confined single-level listing of studios/<studio>[/rel]. Never raises —
     returns {"error": ...} for a bad/escaping dir, or a normal empty listing for
-    an unprovisioned studio."""
+    an unprovisioned studio.
+
+    `show_model_kinds` lists the model folders the root otherwise omits. When
+    they are omitted, "hidden" carries how many there were: a folder that was
+    skipped and a folder that does not exist produce the same listing, and the
+    studio's own web view lists these, so the two disagree by exactly that
+    count with nothing in either to say why."""
     try:
         studio = str(studio or "")
         if not _STUDIO_SLUG.fullmatch(studio):
@@ -121,13 +127,20 @@ def list_studio_dir(base_dir, studio, rel=""):
             return {"error": "not a directory"}
         at_root = target == studio_root
         entries = []
+        hidden = 0
         with os.scandir(target) as it:
             for e in it:
                 if e.name.startswith("."):
                     continue
-                if at_root and e.name in MODEL_KINDS:
-                    continue
                 is_dir = os.path.isdir(os.path.join(target, e.name))  # follow; matches execute
+                # The omission is about the FOLDERS the model loader picks by
+                # kind. A file that happens to carry one of those names is an
+                # ordinary asset: hiding it strands it where nothing can reach
+                # it, and counting it makes the root account for a folder it
+                # does not have.
+                if at_root and is_dir and e.name in MODEL_KINDS and not show_model_kinds:
+                    hidden += 1
+                    continue
                 size = None
                 if not is_dir:
                     try:
@@ -142,6 +155,9 @@ def list_studio_dir(base_dir, studio, rel=""):
                 })
         entries.sort(key=lambda x: (x["type"] != "dir", x["name"].lower()))
         parent = None if at_root else "/".join(rel.split("/")[:-1])
-        return {"studio": studio, "rel": rel, "parent": parent, "entries": entries}
+        result = {"studio": studio, "rel": rel, "parent": parent, "entries": entries}
+        if hidden:
+            result["hidden"] = hidden
+        return result
     except (ValueError, OSError) as exc:
         return {"error": str(exc) or "listing failed"}
