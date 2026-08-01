@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { calls, create, reset, setResponder, setLatency, fire } from "./comfy_stub.mjs";
+import { HUB } from "../../web/js/hub_theme.js";
 import "../../web/js/studio_library.js";
 import { summaryLabel, applySelection, filterEntries } from "../../web/js/studio_library.js";
 
@@ -553,14 +554,7 @@ test("the stale warning survives navigation until a refresh actually works", asy
     // something recent, and has been told everything is fine.
     reset();
     const state = { degraded: true };
-    setResponder((route) => {
-        const stale = state.degraded && route.includes("sync=1") ? { sync: "timeout" } : {};
-        return route.includes("refs")
-            ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs", ...stale,
-                entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }
-            : { ok: true, body: { rel: "studios/ggs", parent: null, ...stale,
-                entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } };
-    });
+    walkResponder(state);
     const node = await create("SymbioticaStudioLibrary", { selection: "" });
     node.onNodeCreated?.();
     const overlay = await openOverlay(node);
@@ -581,7 +575,10 @@ test("the stale warning survives navigation until a refresh actually works", asy
 // arrives after the user has moved on.
 function walkResponder(state) {
     setResponder((route) => {
-        const verdict = route.includes("sync=1") && state.degraded ? { sync: "timeout" } : {};
+        // The route reports what the walk did on every path, success included:
+        // see test_a_clean_sync_says_so in tests/test_routes_studio_library.py.
+        const verdict = route.includes("sync=1")
+            ? { sync: state.degraded ? "timeout" : "refreshed" } : {};
         return route.includes("refs")
             ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs", ...verdict,
                 entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }
@@ -679,6 +676,120 @@ test("a failure shows through even while a walk is still running", async () => {
         "the failure is what the user has to act on");
     await settle(100);
     setLatency(0);
+});
+
+test("a walk that worked clears the warning even when its listing was refused", async () => {
+    // The two outcomes are independent, and this pairing is the ordinary one:
+    // the folder is gone BECAUSE the view of it was stale. Learning only from
+    // listings that succeeded means the warning outlives the staleness.
+    reset();
+    walkResponder({ degraded: true });
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const warned = () => !!find(overlay, (n) => /out of date/.test(n.textContent ?? ""));
+    assert.ok(warned(), "the open could not refresh");
+
+    // The refresh runs a clean walk and then finds the folder is not there.
+    setResponder(() => ({ ok: false, status: 400,
+        body: { error: "not a directory", sync: "refreshed" } }));
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    await tick();
+    assert.ok(find(overlay, (n) => n.textContent === "not a directory"),
+        "the folder is what failed");
+    assert.ok(!warned(), "but the volume is current, so nothing is out of date");
+});
+
+test("a failure clears once something works", async () => {
+    // The message line is derived from state now, and nothing but the next
+    // request resets the error. Leaving it set makes one transient failure
+    // permanent, over every listing that follows it.
+    reset();
+    const state = { broken: true };
+    setResponder(() => (state.broken
+        ? { ok: false, status: 500, body: { error: "studio-assets unreachable" } }
+        : { ok: true, body: { rel: "studios/ggs", parent: null, sync: "refreshed",
+            entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } }));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    assert.ok(find(overlay, (n) => n.textContent === "studio-assets unreachable"));
+
+    state.broken = false;
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    await tick();
+    assert.ok(!find(overlay, (n) => n.textContent === "studio-assets unreachable"),
+        "the listing on screen is not the one that failed");
+    assert.deepEqual(rowLabels(overlay), ["📁  refs"]);
+});
+
+test("a failure the user moved on from does not paint over what they opened", async () => {
+    // The same rule the rows follow. A refusal for a folder nobody is looking at
+    // is an answer to a question nobody is still asking.
+    reset();
+    setResponder((route) => (route.includes("sync=1") && route.includes("dir=studios%2Fggs&")
+        ? { ok: false, status: 500, body: { error: "studio-assets unreachable" } }
+        : route.includes("refs")
+            ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs",
+                entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }
+            : { ok: true, body: { rel: "studios/ggs", parent: null, sync: "refreshed",
+                entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } }));
+    setLatency((route) => (route.includes("sync=1") ? 40 : 0));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    node.widgets.find((w) => w.name === "📂 Browse studio library").callback();
+    await settle(80);
+    const overlay = document.body.children.at(-1);
+
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await settle(120);
+    setLatency(0);
+    assert.deepEqual(rowLabels(overlay), ["↑  ..", "📄  a.png"], "the folder they opened");
+    assert.ok(!find(overlay, (n) => n.textContent === "studio-assets unreachable"),
+        "and no refusal from the request they stopped waiting for");
+});
+
+test("a walk in progress outranks the warning it is trying to clear", async () => {
+    // The states overlap by construction: pressing refresh is what a stale
+    // warning is for. Repeating the accusation while acting on it leaves the
+    // held control unexplained, which is what the holding message is for.
+    reset();
+    const state = { degraded: true };
+    walkResponder(state);
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    assert.ok(find(overlay, (n) => /out of date/.test(n.textContent ?? "")));
+
+    setLatency((route) => (route.includes("sync=1") ? 60 : 0));
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    await tick();
+    assert.ok(find(overlay, (n) => /refreshing/i.test(n.textContent ?? "")),
+        "we are doing something about it");
+    assert.ok(!find(overlay, (n) => /out of date/.test(n.textContent ?? "")));
+    await settle(100);
+    setLatency(0);
+});
+
+test("a failure is shown in the danger tone, a note is not", async () => {
+    reset();
+    const state = { broken: true };
+    setResponder(() => (state.broken
+        ? { ok: false, status: 500, body: { error: "studio-assets unreachable" } }
+        : { ok: true, body: { rel: "studios/ggs", parent: null, sync: "timeout",
+            entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } }));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const line = find(overlay, (n) => n.textContent === "studio-assets unreachable");
+    assert.equal(line.style.color, HUB.danger, "a failure the user must act on");
+
+    state.broken = false;
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    await tick();
+    assert.ok(/out of date/.test(line.textContent));
+    assert.equal(line.style.color, HUB.inkSubtle, "a note about how much to trust the rows");
 });
 
 test("clicking a folder row opens it (the default action)", async () => {

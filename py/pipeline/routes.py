@@ -359,11 +359,16 @@ async def studio_library(request):
     result = studio_library_mod.list_studio_dir(
         studio_library_mod.STUDIO_ASSETS_DIR, studio, request.query.get("dir", ""),
         show_model_kinds=request.query.get("models") == "1")
-    # A degraded refresh rides along with the listing rather than replacing it:
-    # the stale mount is still the best answer available, and refusing it would
-    # cost the user a browse over a folder that is probably right anyway. Only
-    # the happy path stays silent, so `sync` present means "trust this less".
-    if outcome and outcome != "refreshed" and "error" not in result:
+    # What the walk did rides along with whatever the listing turned out to be:
+    # the two succeed or fail independently, and the folder a caller asked for
+    # can be gone precisely BECAUSE their view of the volume was stale. Reported
+    # on the refused listing too, and reported on success — silence there would
+    # be indistinguishable from a request that never asked, leaving a caller
+    # showing a staleness warning no way to learn the volume is current again.
+    # A degraded walk does not refuse the listing: the stale mount is still the
+    # best answer available, and withholding it would cost a browse over a
+    # folder that is probably right anyway.
+    if outcome:
         result["sync"] = outcome
     return web.json_response(result, status=400 if "error" in result else 200)
 

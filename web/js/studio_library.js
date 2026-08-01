@@ -32,8 +32,16 @@ export function applySelection(node, entryRel) {
 
 async function fetchJson(url) {
     const res = await api.fetchApi(url);
-    if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error ?? res.statusText);
-    return res.json();
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        // The refused body is carried along, not just its message: a refusal
+        // still reports what the volume walk did, and the walk succeeding while
+        // the folder is gone is the ordinary outcome of a stale view.
+        const err = new Error(body?.error ?? res.statusText);
+        err.payload = body;
+        throw err;
+    }
+    return body;
 }
 
 function refreshSummary(node) {
@@ -259,6 +267,14 @@ function openBrowser(node) {
                            + "this listing may be out of date."
             : "";
     };
+    // What a walk learned about the volume, taken from whatever came back —
+    // a listing or a refusal, since the two outcomes are independent and a
+    // folder can be gone precisely because the view of it was stale. It is the
+    // one part of a reply that is not about the pane it arrived for, so it is
+    // recorded even when the pane has moved on and the rest is discarded.
+    const recordWalk = (body) => {
+        if (body && body.sync) mountStale = body.sync !== "refreshed";
+    };
     const setWalking = (on) => {
         walking += on ? 1 : -1;
         refreshBtn.disabled = walking > 0;
@@ -292,20 +308,14 @@ function openBrowser(node) {
             if (models) q.set("models", "1");
             data = await fetchJson(`${ROUTE}?${q.toString()}`);
         } catch (e) {
+            if (walks) recordWalk(e.payload);
             if (seq === issued) lastError = e.message || "studio library unavailable";
             repaintMessage();
             return;
         } finally {
             if (walks) setWalking(false);
         }
-        // Recorded ahead of the pane guard, because it is the one thing in the
-        // reply that is not about this pane. `sync` comes back only when the
-        // refresh did not happen, so its presence is the signal, and it is true
-        // of the MOUNT: every folder read afterwards is off the same unrefreshed
-        // mount and is exactly as old. Discarding it with the rows would let a
-        // refresh the user asked for fail in silence — or, the other way round,
-        // leave the warning standing over a volume that did refresh.
-        if (walks) mountStale = !!data.sync;
+        if (walks) recordWalk(data);
         if (seq !== issued) {
             repaintMessage();
             return;

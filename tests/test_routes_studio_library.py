@@ -318,17 +318,18 @@ def test_a_listing_that_asked_for_no_sync_carries_no_verdict(routes_mod, monkeyp
     assert "sync" not in routes_mod._captured["body"]
 
 
-def test_a_refused_listing_reports_only_the_refusal(routes_mod, monkeypatch, tmp_path):
-    """An escaping dir gets a 400 whose body is the error. Riding a sync verdict
-    into it hands the client two things to read and a field its error path was
-    never written to expect."""
+def test_a_refused_listing_still_says_what_the_walk_did(routes_mod, monkeypatch, tmp_path):
+    """The walk and the listing succeed or fail independently: the folder a
+    caller asked for can be gone precisely BECAUSE their view was stale. A 400
+    that omits the verdict leaves the caller unable to learn the volume is now
+    current, and still showing a warning about it."""
     (tmp_path / "studios" / "ggs").mkdir(parents=True)
     monkeypatch.setenv("CANVAS_STUDIO", "ggs")
     monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
 
     class _Proc:
         async def wait(self):
-            return 1
+            return 0
         def kill(self):
             pass
 
@@ -339,7 +340,7 @@ def test_a_refused_listing_reports_only_the_refusal(routes_mod, monkeypatch, tmp
     asyncio.run(routes_mod.studio_library(_req(sync="1", dir="studios/ggs/../elsewhere")))
     assert routes_mod._captured["status"] == 400
     assert "error" in routes_mod._captured["body"]
-    assert "sync" not in routes_mod._captured["body"]
+    assert routes_mod._captured["body"]["sync"] == "refreshed"
 
 
 def test_each_degraded_sync_records_why(routes_mod, monkeypatch, tmp_path, capfd):
@@ -385,9 +386,10 @@ def test_each_degraded_sync_records_why(routes_mod, monkeypatch, tmp_path, capfd
     assert "exceeded" in out and str(routes_mod.SYNC_TIMEOUT_S) in out
 
 
-def test_a_clean_sync_leaves_the_payload_alone(routes_mod, monkeypatch, tmp_path):
-    """`sync` present at all is the client's cue to distrust the listing, so a
-    refresh that worked must not set it."""
+def test_a_clean_sync_says_so(routes_mod, monkeypatch, tmp_path):
+    """Silence on success is not enough: it is indistinguishable from a request
+    that never asked, so a caller showing a staleness warning has no way to
+    learn the volume is current again."""
     (tmp_path / "studios" / "ggs").mkdir(parents=True)
     monkeypatch.setenv("CANVAS_STUDIO", "ggs")
     monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
@@ -403,4 +405,4 @@ def test_a_clean_sync_leaves_the_payload_alone(routes_mod, monkeypatch, tmp_path
 
     monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
     asyncio.run(routes_mod.studio_library(_req(sync="1")))
-    assert "sync" not in routes_mod._captured["body"]
+    assert routes_mod._captured["body"]["sync"] == "refreshed"
