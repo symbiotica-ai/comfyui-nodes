@@ -132,10 +132,15 @@ def list_studio_dir(base_dir, studio, rel="", show_model_kinds=False):
             for e in it:
                 if e.name.startswith("."):
                     continue
-                if at_root and e.name in MODEL_KINDS and not show_model_kinds:
+                is_dir = os.path.isdir(os.path.join(target, e.name))  # follow; matches execute
+                # The omission is about the FOLDERS the model loader picks by
+                # kind. A file that happens to carry one of those names is an
+                # ordinary asset: hiding it strands it where nothing can reach
+                # it, and counting it makes the root account for a folder it
+                # does not have.
+                if at_root and is_dir and e.name in MODEL_KINDS and not show_model_kinds:
                     hidden += 1
                     continue
-                is_dir = os.path.isdir(os.path.join(target, e.name))  # follow; matches execute
                 size = None
                 if not is_dir:
                     try:

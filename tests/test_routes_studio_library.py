@@ -155,6 +155,72 @@ def test_sync_timeout_still_lists_and_kills(routes_mod, monkeypatch, tmp_path):
     assert routes_mod._captured["status"] == 200
 
 
+def test_concurrent_browsers_share_one_volume_walk(routes_mod, monkeypatch, tmp_path):
+    """`sync` on the mount is a walk that can take the whole timeout, and the
+    browse control is a button anyone can hold down. Each press starting its own
+    walk piles them onto the editor container; the hub runs the same mechanism
+    one-at-a-time per mount for exactly this reason."""
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+    state = {"spawned": 0, "release": None}
+
+    class _Proc:
+        async def wait(self):
+            await state["release"].wait()
+            return 0
+        def kill(self):
+            pass
+
+    async def _fake_exec(*a, **k):
+        state["spawned"] += 1
+        return _Proc()
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+
+    async def two_at_once():
+        state["release"] = asyncio.Event()
+        both = [asyncio.create_task(routes_mod.studio_library(_req(sync="1")))
+                for _ in range(2)]
+        for _ in range(10):  # let both reach the sync before either finishes
+            await asyncio.sleep(0)
+        state["release"].set()
+        await asyncio.gather(*both)
+
+    asyncio.run(two_at_once())
+    assert state["spawned"] == 1
+    assert routes_mod._captured["status"] == 200
+
+
+def test_a_finished_walk_is_not_reused(routes_mod, monkeypatch, tmp_path):
+    """Sharing an in-flight walk is safe because it is idempotent. Sharing a
+    FINISHED one is not: a browse after someone else's upload has to get a walk
+    that could see it."""
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+    spawned = {"n": 0}
+
+    class _Proc:
+        async def wait(self):
+            return 0
+        def kill(self):
+            pass
+
+    async def _fake_exec(*a, **k):
+        spawned["n"] += 1
+        return _Proc()
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+
+    async def one_after_the_other():
+        await routes_mod.studio_library(_req(sync="1"))
+        await routes_mod.studio_library(_req(sync="1"))
+
+    asyncio.run(one_after_the_other())
+    assert spawned["n"] == 2
+
+
 def test_the_root_hides_model_folders_and_counts_them(routes_mod, monkeypatch, tmp_path):
     (tmp_path / "studios" / "ggs" / "loras").mkdir(parents=True)
     (tmp_path / "studios" / "ggs" / "refs").mkdir()

@@ -324,6 +324,27 @@ async def _sync_studio_assets(root):
     return "refreshed"
 
 
+_SYNCS: dict[str, asyncio.Task] = {}
+
+
+async def _coalesced_sync(root):
+    """The outcome of one `sync` walk per mount at a time: a browse arriving
+    while one is in flight awaits that one instead of starting a second. Safe
+    because the walk is idempotent, so the shared answer is the answer the
+    second caller would have computed — and necessary because the control that
+    triggers it is a button that can be held down, and each walk is a FUSE
+    traversal lasting up to the whole timeout. A finished walk is never reused:
+    a browse after somebody else's upload needs one that could see it.
+
+    Shielded, so a browser that navigates away mid-walk leaves the walk — and
+    everyone waiting on it — running. Mirrors the hub's _coalesced."""
+    task = _SYNCS.get(root)
+    if task is None or task.done():
+        task = asyncio.create_task(_sync_studio_assets(root))
+        _SYNCS[root] = task
+    return await asyncio.shield(task)
+
+
 @PromptServer.instance.routes.get("/symbiotica/studio-library")
 async def studio_library(request):
     """Lazy per-level listing of the active studio's asset tree, confined to the
@@ -334,7 +355,7 @@ async def studio_library(request):
         return web.json_response({"error": "studio library not available"}, status=503)
     outcome = None
     if request.query.get("sync") == "1":
-        outcome = await _sync_studio_assets(studio_library_mod.STUDIO_ASSETS_DIR)
+        outcome = await _coalesced_sync(studio_library_mod.STUDIO_ASSETS_DIR)
     result = studio_library_mod.list_studio_dir(
         studio_library_mod.STUDIO_ASSETS_DIR, studio, request.query.get("dir", ""),
         show_model_kinds=request.query.get("models") == "1")

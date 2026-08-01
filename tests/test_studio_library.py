@@ -200,6 +200,18 @@ def test_the_root_reports_how_many_model_folders_it_hid(vol2):
     assert res["hidden"] == 2  # checkpoints + loras; the other six are not there
 
 
+def test_a_plain_file_named_like_a_model_kind_is_an_ordinary_asset(tmp_path):
+    """The omission exists because the model loader picks these folders by kind.
+    A FILE called 'vae' is not one of those: the loader knows nothing about it,
+    so hiding it strands it, and counting it makes the root claim a folder it
+    does not have."""
+    (tmp_path / "studios" / "ggs" / "loras").mkdir(parents=True)
+    _touch(tmp_path / "studios" / "ggs" / "vae", b"not a folder")
+    res = list_studio_dir(str(tmp_path), "ggs", "")
+    assert res["hidden"] == 1  # the loras directory, not the file
+    assert [e["name"] for e in res["entries"]] == ["vae"]
+
+
 def test_a_root_with_nothing_hidden_reports_no_count(tmp_path):
     (tmp_path / "studios" / "ggs" / "references").mkdir(parents=True)
     assert "hidden" not in list_studio_dir(str(tmp_path), "ggs", "")
