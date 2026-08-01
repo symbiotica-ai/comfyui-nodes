@@ -307,6 +307,84 @@ def test_a_sync_that_never_started_says_so(routes_mod, monkeypatch, tmp_path):
     assert routes_mod._captured["body"]["sync"] == "failed"
 
 
+def test_a_listing_that_asked_for_no_sync_carries_no_verdict(routes_mod, monkeypatch,
+                                                             tmp_path):
+    """`sync` present at all is the client's cue to distrust the listing, so a
+    request that never asked for one must not carry the key at any value."""
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+    asyncio.run(routes_mod.studio_library(_req()))
+    assert "sync" not in routes_mod._captured["body"]
+
+
+def test_a_refused_listing_reports_only_the_refusal(routes_mod, monkeypatch, tmp_path):
+    """An escaping dir gets a 400 whose body is the error. Riding a sync verdict
+    into it hands the client two things to read and a field its error path was
+    never written to expect."""
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+
+    class _Proc:
+        async def wait(self):
+            return 1
+        def kill(self):
+            pass
+
+    async def _fake_exec(*a, **k):
+        return _Proc()
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+    asyncio.run(routes_mod.studio_library(_req(sync="1", dir="studios/ggs/../elsewhere")))
+    assert routes_mod._captured["status"] == 400
+    assert "error" in routes_mod._captured["body"]
+    assert "sync" not in routes_mod._captured["body"]
+
+
+def test_each_degraded_sync_records_why(routes_mod, monkeypatch, tmp_path, capfd):
+    """The payload collapses a spawn failure and a non-zero exit into the same
+    "failed", so the log is the only place the reason survives for whoever is
+    working out why a studio looks out of date."""
+    (tmp_path / "studios" / "ggs").mkdir(parents=True)
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+
+    class _Proc:
+        def __init__(self, code):
+            self._code = code
+        async def wait(self):
+            return self._code
+        def kill(self):
+            pass
+
+    def _exec_returning(code):
+        async def _fake(*a, **k):
+            return _Proc(code)
+        return _fake
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _exec_returning(3))
+    asyncio.run(routes_mod.studio_library(_req(sync="1")))
+    assert "exited 3" in capfd.readouterr().out
+
+    async def _cannot_spawn(*a, **k):
+        raise FileNotFoundError("no such file: sync")
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _cannot_spawn)
+    asyncio.run(routes_mod.studio_library(_req(sync="1")))
+    assert "could not start" in capfd.readouterr().out
+
+    async def _timeout(coro, timeout):
+        coro.close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _exec_returning(0))
+    monkeypatch.setattr(routes_mod.asyncio, "wait_for", _timeout)
+    asyncio.run(routes_mod.studio_library(_req(sync="1")))
+    out = capfd.readouterr().out
+    assert "exceeded" in out and str(routes_mod.SYNC_TIMEOUT_S) in out
+
+
 def test_a_clean_sync_leaves_the_payload_alone(routes_mod, monkeypatch, tmp_path):
     """`sync` present at all is the client's cue to distrust the listing, so a
     refresh that worked must not set it."""

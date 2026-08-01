@@ -237,6 +237,61 @@ test("'..' carries no select control", async () => {
         "navigating up must not touch the selection");
 });
 
+test("clicking '..' opens the parent", async () => {
+    // The row's whole purpose. Asserting only that it does not touch the
+    // selection is satisfied by a dead label, which is the shape the naive
+    // version of this row would ship as.
+    reset();
+    subfolderResponder();
+    const { overlay } = await drillIntoRefs();
+    fire(find(overlay, (n) => n.textContent === "↑  .."), "click");
+    await tick();
+    assert.deepEqual(rowLabels(overlay), ["📁  refs"], "back at the studio root");
+});
+
+test("hiding the model folders puts them back", async () => {
+    reset();
+    hiddenModelsResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    fire(find(overlay, (n) => n.textContent === "show"), "click");
+    await tick();
+    fire(find(overlay, (n) => n.textContent === "hide"), "click");
+    await tick();
+    assert.ok(!/\bmodels=1\b/.test(calls.at(-1)), "the listing stops asking for them");
+    assert.deepEqual(rowLabels(overlay), ["📁  refs"]);
+});
+
+test("navigating to another folder drops the filter", async () => {
+    // The other half of the in-place rule. A query carried into a folder it was
+    // never typed for renders 'No matches' over a folder that has contents —
+    // the same 'the folder is empty' lie this browser exists to avoid.
+    reset();
+    subfolderResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const filter = find(overlay, (n) => n.type === "search");
+    filter.value = "refs";
+    fire(filter, "input");
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await tick();
+    assert.equal(filter.value, "", "a different folder, so a query that was never about it");
+    assert.deepEqual(rowLabels(overlay), ["↑  ..", "📁  nested", "📄  a.png"]);
+});
+
+test("a root hiding exactly one model folder says so in the singular", async () => {
+    reset();
+    setResponder(() => ({ ok: true, body: { rel: "studios/ggs", parent: null, hidden: 1,
+        entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } }));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    assert.ok(find(overlay, (n) => /\b1 model folder hidden\b/.test(n.textContent ?? "")),
+        "expected 'folder', not 'folders'");
+});
+
 test("'..' does not mask the empty state", async () => {
     reset();
     setResponder((route) => route.includes("refs")
