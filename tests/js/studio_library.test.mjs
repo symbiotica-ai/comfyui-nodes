@@ -166,6 +166,56 @@ async function drillIntoRefs() {
     return { node, overlay };
 }
 
+test("the model-folder toggle keeps the filter, because it re-reads in place", async () => {
+    // The typed query is usually the REASON for the click: the user searched for
+    // a lora, got 'No matches', and pressed show to look among the hidden ones.
+    reset();
+    hiddenModelsResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const filter = find(overlay, (n) => n.type === "search");
+    filter.value = "lora";
+    fire(filter, "input");
+    fire(find(overlay, (n) => n.textContent === "show"), "click");
+    await tick();
+    assert.equal(filter.value, "lora", "the folder did not change, so neither did the query");
+    assert.deepEqual(rowLabels(overlay), ["📁  loras"], "and it still narrows the rows");
+});
+
+test("a toggle whose listing failed still offers what it has not done", async () => {
+    // Flipping the state before the request means a failure leaves the two
+    // disagreeing: the label offers 'show' while the state already says shown,
+    // so the next click asks for the opposite of what it promises.
+    reset();
+    const state = { broken: false };
+    setResponder((route) => {
+        if (route.includes("models=1") && state.broken) {
+            return { ok: false, status: 500, body: { error: "studio-assets unreachable" } };
+        }
+        return route.includes("models=1")
+            ? { ok: true, body: { rel: "studios/ggs", parent: null,
+                entries: [{ name: "loras", type: "dir", rel: "studios/ggs/loras" }] } }
+            : { ok: true, body: { rel: "studios/ggs", parent: null, hidden: 2,
+                entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } };
+    });
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+
+    state.broken = true;
+    fire(find(overlay, (n) => n.textContent === "show"), "click");
+    await tick();
+    assert.ok(find(overlay, (n) => n.textContent === "show"),
+        "nothing was shown, so the offer stands");
+
+    state.broken = false;
+    fire(find(overlay, (n) => n.textContent === "show"), "click");
+    await tick();
+    assert.match(calls.at(-1), /\bmodels=1\b/, "the retry asks for what the label promised");
+    assert.ok(find(overlay, (n) => n.textContent === "hide"));
+});
+
 test("a subfolder listing puts '..' above every folder", async () => {
     reset();
     subfolderResponder();

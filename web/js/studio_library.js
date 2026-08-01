@@ -92,7 +92,7 @@ function openBrowser(node) {
     // walks behind it.
     refreshBtn.addEventListener("click", () => {
         if (refreshBtn.disabled) return;
-        show(currentRel, { sync: true });
+        show(currentRel, { sync: true, inPlace: true });
     });
     // closeBtn carries margin-left:auto, so refresh lands to the left of Done.
     bar.append(upBtn, crumb, refreshBtn, closeBtn);
@@ -188,8 +188,7 @@ function openBrowser(node) {
         toggle.style.cssText = ghostCss + "padding:4px 10px;flex:none;";
         toggle.textContent = showModelKinds ? "hide" : "show";
         toggle.addEventListener("click", () => {
-            showModelKinds = !showModelKinds;
-            show(currentRel);
+            show(currentRel, { inPlace: true, models: !showModelKinds });
         });
         row.append(text, toggle);
         return row;
@@ -262,7 +261,13 @@ function openBrowser(node) {
     // `sync` forces a volume refresh — the browse-session open does it once, and
     // the refresh control does it on demand. Without it a re-read redraws the
     // same rows off the same mount and reads as proof the folder is not there.
-    async function show(dir, { sync = false } = {}) {
+    // `inPlace` says this is a re-read of the folder already on screen rather
+    // than a move to a different one, which is what decides whether the user's
+    // filter still describes what they are looking at. `models` travels as an
+    // argument rather than being read off the state, so a listing that fails
+    // leaves the state saying what is actually on screen.
+    async function show(dir, { sync = false, inPlace = false,
+                               models = showModelKinds } = {}) {
         // A forced sync waits on the volume walk while the pane stays usable, so
         // its reply can land after the user has already opened something else.
         // Whoever asked last is who the pane belongs to; earlier replies are
@@ -275,7 +280,7 @@ function openBrowser(node) {
         try {
             const q = new URLSearchParams({ dir });
             if (walks) q.set("sync", "1");
-            if (showModelKinds) q.set("models", "1");
+            if (models) q.set("models", "1");
             data = await fetchJson(`${ROUTE}?${q.toString()}`);
         } catch (e) {
             if (seq === issued) message(e.message || "studio library unavailable");
@@ -285,6 +290,7 @@ function openBrowser(node) {
         }
         if (seq !== issued) return;
         firstOpen = false;  // spent only once a listing has actually arrived
+        showModelKinds = models;  // adopted only now that a listing proves it
         currentRel = data.rel ?? "";
         crumb.textContent = data.rel || "studios";
         // `sync` is sent only when the refresh did not happen, so its presence is
@@ -303,7 +309,7 @@ function openBrowser(node) {
         upBtn.style.display = currentParent !== null ? "" : "none";
         // Re-reading in place is not navigation: the filter is still describing
         // the folder the user is looking at.
-        if (!sync) filter.value = "";
+        if (!inPlace) filter.value = "";
         renderRows();
     }
     show("");
