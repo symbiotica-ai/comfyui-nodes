@@ -577,6 +577,84 @@ test("the stale warning survives navigation until a refresh actually works", asy
     assert.ok(!warned(), "only a refresh that worked earns a clean listing");
 });
 
+// A tree plus a switchable mount state, for the cases where a walk's verdict
+// arrives after the user has moved on.
+function walkResponder(state) {
+    setResponder((route) => {
+        const verdict = route.includes("sync=1") && state.degraded ? { sync: "timeout" } : {};
+        return route.includes("refs")
+            ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs", ...verdict,
+                entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }
+            : { ok: true, body: { rel: "studios/ggs", parent: null, ...verdict,
+                entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } };
+    });
+}
+
+test("a refresh that failed is reported even if the user moved on meanwhile", async () => {
+    // The verdict is about the MOUNT, so it outlives the pane it arrived for.
+    // Dropping it with the rows is the worst of both: the user asked whether the
+    // studio was up to date, it was not, and nothing said so.
+    reset();
+    const state = { degraded: false };
+    walkResponder(state);
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const warned = () => !!find(overlay, (n) => /out of date/.test(n.textContent ?? ""));
+    assert.ok(!warned(), "the open refreshed cleanly");
+
+    state.degraded = true;
+    setLatency((route) => (route.includes("sync=1") ? 40 : 0));
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await settle(120);
+    setLatency(0);
+    assert.ok(warned(), "the walk failed, whichever folder the user ended up in");
+});
+
+test("a refresh that worked clears the warning even if the user moved on meanwhile", async () => {
+    reset();
+    const state = { degraded: true };
+    walkResponder(state);
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    const warned = () => !!find(overlay, (n) => /out of date/.test(n.textContent ?? ""));
+    assert.ok(warned(), "the open could not refresh");
+
+    state.degraded = false;
+    setLatency((route) => (route.includes("sync=1") ? 40 : 0));
+    fire(find(overlay, (n) => n.title === "Re-read this folder"), "click");
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await settle(120);
+    setLatency(0);
+    assert.ok(!warned(), "the mount is fresh, so nothing is out of date");
+});
+
+test("the refresh control keeps its explanation while the user browses around it", async () => {
+    // The control stays held for the whole walk, so the line explaining why must
+    // last as long. A greyed control with nothing next to it reads as broken.
+    reset();
+    walkResponder({ degraded: false });
+    setLatency((route) => (route.includes("sync=1") ? 60 : 0));
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    node.widgets.find((w) => w.name === "📂 Browse studio library").callback();
+    await settle(100);
+    const overlay = document.body.children.at(-1);
+    const refresh = find(overlay, (n) => n.title === "Re-read this folder");
+
+    fire(refresh, "click");
+    await tick();
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await tick();
+    assert.equal(refresh.disabled, true, "still held");
+    assert.ok(find(overlay, (n) => /refreshing/i.test(n.textContent ?? "")),
+        "and still saying why");
+    await settle(100);
+    setLatency(0);
+});
+
 test("clicking a folder row opens it (the default action)", async () => {
     reset();
     setResponder((route) => route.includes("Export")

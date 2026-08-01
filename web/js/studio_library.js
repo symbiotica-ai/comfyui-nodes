@@ -245,17 +245,25 @@ function openBrowser(node) {
 
     filter.addEventListener("input", renderRows);
 
-    // One message line, two tones: a failure the user must act on, and a note
-    // about how much to trust what they are looking at.
-    const message = (text, tone = "error") => {
-        errline.textContent = text;
-        errline.style.color = tone === "error" ? HUB.danger : HUB.inkSubtle;
-    };
+    // One message line derived from state rather than written at each event, so
+    // it cannot be cleared by something that did not change what it was saying:
+    // a walk outlives the listing that started it, and staleness outlives both.
     let walking = 0;
+    let lastError = "";
+    const repaintMessage = () => {
+        const failed = !!lastError;
+        errline.style.color = failed ? HUB.danger : HUB.inkSubtle;
+        errline.textContent = failed ? lastError
+            : walking > 0 ? "Refreshing the studio volume…"
+            : mountStale ? "Could not refresh the studio volume — "
+                           + "this listing may be out of date."
+            : "";
+    };
     const setWalking = (on) => {
         walking += on ? 1 : -1;
         refreshBtn.disabled = walking > 0;
         refreshBtn.style.opacity = walking > 0 ? "0.45" : "";
+        repaintMessage();
     };
 
     // `sync` forces a volume refresh — the browse-session open does it once, and
@@ -274,7 +282,8 @@ function openBrowser(node) {
         // answers to a question nobody is still asking.
         const seq = ++issued;
         const walks = sync || firstOpen;
-        message(walks ? "Refreshing the studio volume…" : "", "note");
+        lastError = "";
+        repaintMessage();
         let data;
         if (walks) setWalking(true);
         try {
@@ -283,26 +292,31 @@ function openBrowser(node) {
             if (models) q.set("models", "1");
             data = await fetchJson(`${ROUTE}?${q.toString()}`);
         } catch (e) {
-            if (seq === issued) message(e.message || "studio library unavailable");
+            if (seq === issued) lastError = e.message || "studio library unavailable";
+            repaintMessage();
             return;
         } finally {
             if (walks) setWalking(false);
         }
-        if (seq !== issued) return;
+        // Recorded ahead of the pane guard, because it is the one thing in the
+        // reply that is not about this pane. `sync` comes back only when the
+        // refresh did not happen, so its presence is the signal, and it is true
+        // of the MOUNT: every folder read afterwards is off the same unrefreshed
+        // mount and is exactly as old. Discarding it with the rows would let a
+        // refresh the user asked for fail in silence — or, the other way round,
+        // leave the warning standing over a volume that did refresh.
+        if (walks) mountStale = !!data.sync;
+        if (seq !== issued) {
+            repaintMessage();
+            return;
+        }
+        repaintMessage();
         firstOpen = false;  // spent only once a listing has actually arrived
         showModelKinds = models;  // adopted only now that a listing proves it
         currentRel = data.rel ?? "";
         crumb.textContent = data.rel || "studios";
-        // `sync` is sent only when the refresh did not happen, so its presence is
-        // the signal. It describes the MOUNT, not this listing: every folder read
-        // afterwards is off the same unrefreshed mount and is exactly as old, so
-        // the warning stands until a refresh actually succeeds. The rows still
-        // render — the mount is older than the user thinks, not unreadable.
-        if (data.sync) mountStale = true;
-        else if (walks) mountStale = false;
-        message(mountStale
-            ? "Could not refresh the studio volume — this listing may be out of date."
-            : "", "note");
+        // The rows still render on a stale mount: it is older than the user
+        // thinks, not unreadable.
         currentEntries = data.entries || [];
         currentParent = data.parent ?? null;
         currentHidden = data.hidden ?? 0;
