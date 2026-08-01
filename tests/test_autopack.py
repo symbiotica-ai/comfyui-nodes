@@ -266,6 +266,42 @@ def test_autopack_split_skips_food_rotation_dash(tmp_path):
                        combined_sheet=False, split_variants=True)
 
 
+def test_empty_split_only_on_stages_blames_combined_sheet(tmp_path):
+    # The real report: combined_sheet off + split on, category = food. Neither
+    # emitter can produce a sheet, and the message has to name the switch.
+    food = _variant("Cake", ("c0.png",), "-", category="Food - 3 stages")
+    root = _make_refs(tmp_path, [food])
+    with pytest.raises(ValueError, match="turn combined_sheet on") as e:
+        autopack_order([food], root, sheet_w=512, sheet_h=512,
+                       category="Food - 3 stages", combined_sheet=False,
+                       split_variants=True)
+    assert "rotation 2/4" in str(e.value)
+
+
+def test_empty_both_emitters_off_says_so(tmp_path):
+    a = asset("Booth")
+    root = _make_refs(tmp_path, [a])
+    with pytest.raises(ValueError,
+                       match="both combined_sheet and split_variants are off"):
+        autopack_order([a], root, sheet_w=512, sheet_h=512,
+                       combined_sheet=False, split_variants=False)
+
+
+def test_empty_wrong_category_lists_the_types_present(tmp_path):
+    a = asset("Booth")
+    root = _make_refs(tmp_path, [a])
+    with pytest.raises(ValueError, match="only references: Decoration"):
+        autopack_order([a], root, sheet_w=512, sheet_h=512,
+                       category="Food - 3 stages")
+
+
+def test_empty_without_refs_says_no_reference_image(tmp_path):
+    with pytest.raises(ValueError, match="no asset in the order has a "
+                                         "reference image"):
+        autopack_order([asset("norefs", refs=())], str(tmp_path),
+                       sheet_w=256, sheet_h=256)
+
+
 def test_autopack_combined_variant_keeps_asset_refs_together(tmp_path):
     # Two 2-ref rotation-2 decorations, same canvas → the combined sheet keeps
     # each asset's refs together (no per-ref v1/v2 split). At max_rows=4 all four
