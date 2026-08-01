@@ -114,12 +114,20 @@ function countText(root, text) {
     return n;
 }
 
+// What the route says about the volume walk, on every sync=1 reply and success
+// included. Every responder below goes through this: a fixture that stays
+// silent describes a server that no longer exists, and a client regression can
+// then hide behind a green run.
+const walkVerdict = (route, degraded = false) =>
+    (route.includes("sync=1") ? { sync: degraded ? "timeout" : "refreshed" } : {});
+
 // A tree with one folder, so a test can drill in and back out.
 function twoLevelResponder() {
     setResponder((route) => route.includes("refs")
         ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs",
+            ...walkVerdict(route),
             entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }
-        : { ok: true, body: { rel: "studios/ggs", parent: null,
+        : { ok: true, body: { rel: "studios/ggs", parent: null, ...walkVerdict(route),
             entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } });
 }
 
@@ -148,13 +156,13 @@ test("the first listing of every browse session requests a volume sync", async (
 
 // A sub-listing holding both a folder and a file, so a test can tell a real
 // folder row apart from the synthesised '..'.
-function subfolderResponder(body = {}) {
+function subfolderResponder() {
     setResponder((route) => route.includes("refs")
         ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs",
+            ...walkVerdict(route),
             entries: [{ name: "nested", type: "dir", rel: "studios/ggs/refs/nested" },
-                      { name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }],
-            ...body } }
-        : { ok: true, body: { rel: "studios/ggs", parent: null,
+                      { name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }
+        : { ok: true, body: { rel: "studios/ggs", parent: null, ...walkVerdict(route),
             entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } });
 }
 
@@ -358,10 +366,11 @@ test("'..' survives a filter that matches nothing", async () => {
 
 function hiddenModelsResponder() {
     setResponder((route) => route.includes("models=1")
-        ? { ok: true, body: { rel: "studios/ggs", parent: null,
+        ? { ok: true, body: { rel: "studios/ggs", parent: null, ...walkVerdict(route),
             entries: [{ name: "loras", type: "dir", rel: "studios/ggs/loras" },
                       { name: "refs", type: "dir", rel: "studios/ggs/refs" }] } }
         : { ok: true, body: { rel: "studios/ggs", parent: null, hidden: 2,
+            ...walkVerdict(route),
             entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } });
 }
 
@@ -575,10 +584,7 @@ test("the stale warning survives navigation until a refresh actually works", asy
 // arrives after the user has moved on.
 function walkResponder(state) {
     setResponder((route) => {
-        // The route reports what the walk did on every path, success included:
-        // see test_a_clean_sync_says_so in tests/test_routes_studio_library.py.
-        const verdict = route.includes("sync=1")
-            ? { sync: state.degraded ? "timeout" : "refreshed" } : {};
+        const verdict = walkVerdict(route, state.degraded);
         return route.includes("refs")
             ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs", ...verdict,
                 entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }

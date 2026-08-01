@@ -104,7 +104,8 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   a folder. The browser refreshes the studio volume when it opens and whenever
   you press ⟳, and says so when that refresh did not happen, since a folder
   nobody went to look for and a folder that is not there otherwise look the
-  same. The studio root leaves out the eight model-kind folders
+  same. Every folder below the studio root lists `..` as its first row.
+  The studio root leaves out the eight model-kind folders
   (`checkpoints`, `loras`, `vae`, `controlnet`, `upscale_models`,
   `embeddings`, `diffusion_models`, `text_encoders`) because models are picked
   in the model loader node, not by path; it says how many it left out and
