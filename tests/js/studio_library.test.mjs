@@ -99,6 +99,19 @@ test("the Done button removes the overlay", async () => {
     assert.ok(!document.body.children.includes(overlay));
 });
 
+// Every row label in pane order, so a test can pin what is listed AND its order.
+function rowLabels(root, out = []) {
+    if (root?.className === "sym-name") out.push(root.textContent);
+    for (const child of root?.children ?? []) rowLabels(child, out);
+    return out;
+}
+
+function countText(root, text) {
+    let n = root?.textContent === text ? 1 : 0;
+    for (const child of root?.children ?? []) n += countText(child, text);
+    return n;
+}
+
 // A tree with one folder, so a test can drill in and back out.
 function twoLevelResponder() {
     setResponder((route) => route.includes("refs")
@@ -129,6 +142,83 @@ test("the first listing of every browse session requests a volume sync", async (
     assert.match(calls[0], /\bsync=1\b/, "opening the browser must sync first");
     assert.ok(!/\bsync=1\b/.test(calls[1]), "drilling in re-uses the sync we just did");
     assert.match(calls[2], /\bsync=1\b/, "re-opening the browser must sync again");
+});
+
+// A sub-listing holding both a folder and a file, so a test can tell a real
+// folder row apart from the synthesised '..'.
+function subfolderResponder(body = {}) {
+    setResponder((route) => route.includes("refs")
+        ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs",
+            entries: [{ name: "nested", type: "dir", rel: "studios/ggs/refs/nested" },
+                      { name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }],
+            ...body } }
+        : { ok: true, body: { rel: "studios/ggs", parent: null,
+            entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } });
+}
+
+async function drillIntoRefs() {
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await tick();
+    return { node, overlay };
+}
+
+test("a subfolder listing puts '..' above every folder", async () => {
+    reset();
+    subfolderResponder();
+    const { overlay } = await drillIntoRefs();
+    assert.deepEqual(rowLabels(overlay), ["↑  ..", "📁  nested", "📄  a.png"]);
+});
+
+test("'..' carries no select control", async () => {
+    // Every dir row gets a 'select' button that writes its rel into the node's
+    // serialised widget. On '..' that silently sets the node to the parent
+    // folder and closes — a navigation affordance that changes the value.
+    reset();
+    subfolderResponder();
+    const { node, overlay } = await drillIntoRefs();
+    assert.equal(countText(overlay, "select"), 1, "only the real folder is selectable");
+    fire(find(overlay, (n) => n.textContent === "↑  .."), "click");
+    await tick();
+    assert.equal(node.widgets.find((w) => w.name === "selection").value, "",
+        "navigating up must not touch the selection");
+});
+
+test("'..' does not mask the empty state", async () => {
+    reset();
+    setResponder((route) => route.includes("refs")
+        ? { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs", entries: [] } }
+        : { ok: true, body: { rel: "studios/ggs", parent: null,
+            entries: [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }] } });
+    const { overlay } = await drillIntoRefs();
+    assert.ok(find(overlay, (n) => n.textContent === "No files in this studio library yet"),
+        "an empty subfolder still says it is empty");
+    assert.ok(find(overlay, (n) => n.textContent === "↑  .."),
+        "and can still be left");
+});
+
+test("'..' survives a filter that matches nothing", async () => {
+    // The filter narrows the folder's own entries. Dropping the way out along
+    // with them strands the user exactly when they are deepest in the tree.
+    reset();
+    subfolderResponder();
+    const { overlay } = await drillIntoRefs();
+    const filter = find(overlay, (n) => n.type === "search");
+    filter.value = "zzz";
+    fire(filter, "input");
+    assert.ok(find(overlay, (n) => n.textContent === "↑  .."));
+    assert.ok(find(overlay, (n) => n.textContent === "No matches"));
+});
+
+test("the studio root has no '..' row", async () => {
+    reset();
+    subfolderResponder();
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    assert.deepEqual(rowLabels(overlay), ["📁  refs"]);
 });
 
 test("the refresh control re-reads the current folder with a forced sync", async () => {

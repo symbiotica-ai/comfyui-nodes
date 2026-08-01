@@ -140,8 +140,26 @@ function openBrowser(node) {
         d.textContent = text;
         return d;
     };
+    // The way out, rendered as the first row rather than only as the header
+    // button. It is synthesised here and never joins currentEntries, so it
+    // cannot be filtered away with the folder's own contents and cannot be
+    // handed a select control — picking it would write the parent folder into
+    // the node's value while the user thought they were navigating.
+    const upRow = (parentRel) => {
+        const row = document.createElement("div");
+        row.className = "sym-row";
+        row.style.cssText = "display:flex;align-items:center;gap:10px;padding:9px 10px;";
+        const label = document.createElement("span");
+        label.className = "sym-name";
+        label.style.cssText = `flex:1;color:${HUB.inkSubtle};cursor:pointer;`;
+        label.textContent = "↑  ..";
+        label.addEventListener("click", () => show(parentRel));
+        row.appendChild(label);
+        return row;
+    };
     function renderRows() {
         pane.replaceChildren();
+        if (currentParent !== null) pane.appendChild(upRow(currentParent));
         if (currentEntries.length === 0) {
             pane.appendChild(emptyState("No files in this studio library yet"));
             return;
