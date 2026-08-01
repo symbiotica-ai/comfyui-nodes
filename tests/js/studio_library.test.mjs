@@ -697,7 +697,15 @@ test("a walk that worked clears the warning even when its listing was refused", 
     await tick();
     assert.ok(find(overlay, (n) => n.textContent === "not a directory"),
         "the folder is what failed");
-    assert.ok(!warned(), "but the volume is current, so nothing is out of date");
+
+    // Read the mount's state only once the refusal has stopped covering it: an
+    // ordinary navigation runs no walk, so it says nothing about the volume and
+    // whatever shows now is what the refresh taught us.
+    setResponder(() => ({ ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs",
+        entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } }));
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await tick();
+    assert.ok(!warned(), "the volume is current, so nothing is out of date");
 });
 
 test("a failure clears once something works", async () => {
