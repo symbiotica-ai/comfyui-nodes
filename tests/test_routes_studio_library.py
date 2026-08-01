@@ -155,6 +155,28 @@ def test_sync_timeout_still_lists_and_kills(routes_mod, monkeypatch, tmp_path):
     assert routes_mod._captured["status"] == 200
 
 
+def test_the_root_hides_model_folders_and_counts_them(routes_mod, monkeypatch, tmp_path):
+    (tmp_path / "studios" / "ggs" / "loras").mkdir(parents=True)
+    (tmp_path / "studios" / "ggs" / "refs").mkdir()
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+    asyncio.run(routes_mod.studio_library(_req()))
+    body = routes_mod._captured["body"]
+    assert [e["name"] for e in body["entries"]] == ["refs"]
+    assert body["hidden"] == 1
+
+
+def test_models_flag_lists_the_model_folders(routes_mod, monkeypatch, tmp_path):
+    (tmp_path / "studios" / "ggs" / "loras").mkdir(parents=True)
+    (tmp_path / "studios" / "ggs" / "refs").mkdir()
+    monkeypatch.setenv("CANVAS_STUDIO", "ggs")
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(tmp_path))
+    asyncio.run(routes_mod.studio_library(_req(models="1")))
+    body = routes_mod._captured["body"]
+    assert [e["name"] for e in body["entries"]] == ["loras", "refs"]
+    assert "hidden" not in body
+
+
 def test_sync_timeout_says_so_in_the_payload(routes_mod, monkeypatch, tmp_path):
     """A killed sync leaves the mount as stale as it was, and the listing that
     follows is indistinguishable from a fresh one. Saying which it was is the

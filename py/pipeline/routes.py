@@ -336,7 +336,8 @@ async def studio_library(request):
     if request.query.get("sync") == "1":
         outcome = await _sync_studio_assets(studio_library_mod.STUDIO_ASSETS_DIR)
     result = studio_library_mod.list_studio_dir(
-        studio_library_mod.STUDIO_ASSETS_DIR, studio, request.query.get("dir", ""))
+        studio_library_mod.STUDIO_ASSETS_DIR, studio, request.query.get("dir", ""),
+        show_model_kinds=request.query.get("models") == "1")
     # A degraded refresh rides along with the listing rather than replacing it:
     # the stale mount is still the best answer available, and refusing it would
     # cost the user a browse over a folder that is probably right anyway. Only
