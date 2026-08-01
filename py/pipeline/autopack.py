@@ -109,6 +109,7 @@ def _variant_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
                 "image": sheet, "regions": regions,
                 "prompts": build_client_prompts(regions),
                 "name": f"{base_name}-{slugify(a['assetName'])}-v{i}",
+                "category": a.get("category", ""),
             })
     return out
 
@@ -147,7 +148,8 @@ def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
             name += f"-{canvas}"
         name += suffix
         out.append({"image": sheet, "regions": regions,
-                    "prompts": build_client_prompts(regions), "name": name})
+                    "prompts": build_client_prompts(regions), "name": name,
+                    "category": cat})
 
     out = []
     for (cat, canvas), group in groups.items():

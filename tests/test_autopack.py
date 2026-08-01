@@ -111,6 +111,33 @@ def test_autopack_empty_raises_actionable(tmp_path):
                        sheet_w=256, sheet_h=256, category="Food - 3 stages")
 
 
+def test_autopack_sheets_carry_their_category(tmp_path):
+    # Every sheet names the asset type it holds — index-aligned with the sheets
+    # and their names, so downstream can file/label by category.
+    assets = [asset("Booth"), asset("Cake", refs=("s1.png", "s2.png"),
+                                    category="Food - 3 stages")]
+    root = _make_refs(tmp_path, assets)
+    out = autopack_order(assets, root, sheet_w=256, sheet_h=256,
+                         base_name="mini-2")
+    assert [o["category"] for o in out] == ["Decoration", "Food - 3 stages"]
+
+
+def test_autopack_paginated_sheets_repeat_the_category(tmp_path):
+    assets = [asset(f"d{i}") for i in range(5)]
+    root = _make_refs(tmp_path, assets)
+    out = autopack_order(assets, root, sheet_w=256, sheet_h=256,
+                         columns=1, max_rows=3, base_name="ev")
+    assert [o["category"] for o in out] == ["Decoration", "Decoration"]
+
+
+def test_autopack_split_variant_sheets_carry_the_category(tmp_path):
+    a = _variant("Stall", ("s0.png", "s1.png"), "2")
+    root = _make_refs(tmp_path, [a])
+    out = autopack_order([a], root, sheet_w=1024, sheet_h=1024,
+                         combined_sheet=False, split_variants=True)
+    assert [o["category"] for o in out] == ["Decoration", "Decoration"]
+
+
 def test_autopack_scale_enlarges_cells(tmp_path):
     assets = [asset("A", refs=("a.png",))]  # default canvas 128x128
     root = _make_refs(tmp_path, assets)
