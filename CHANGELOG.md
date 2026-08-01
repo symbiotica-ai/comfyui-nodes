@@ -8,12 +8,25 @@ node's inputs, outputs, or id says so at the top of its entry.
 
 ## 2026.8.1
 
-**No node change.** No node is added, removed, or renamed, and no node's inputs
-or outputs changed, so saved workflows are unaffected. The
+**Node change.** `Symbiotica Auto Packer` gains a fourth output,
+`sheet_categories`. It is appended rather than inserted, so every existing wire
+keeps its slot and saved workflows are unaffected. No node is added, removed or
+renamed, and no other node's inputs, outputs or id changed. The
 `/symbiotica/studio-library` route's reply gained a `sync` field, which only
 this pack's own browser reads.
 
+### Added
+- **The Auto Packer says what each sheet holds.** It reported which sheets it
+  drew and what to call them, but not their asset type, so a graph that wanted
+  to file or label sheets per type had to re-derive it by string-matching the
+  slug in `sheet_names` — which only works while the slug format holds. Each
+  sheet now carries its category, and `sheet_categories` exposes it in the form
+  the order writes it ("Food - 3 stages"), index-aligned with `sheets`.
+
 ### Fixed
+- **The auto-packer left you to guess which switch emptied it.** When a
+  combination of settings left it with nothing to draw, it said so without
+  saying which setting was responsible.
 - **The Studio Library browser could not be refreshed, and could not tell you
   when a refresh had failed.** The volume sync it runs before a listing threw
   away its own outcome three ways: a failure to start returned silently, the
