@@ -246,13 +246,33 @@ test("showing model folders re-lists them", async () => {
     assert.ok(find(overlay, (n) => n.textContent === "hide"), "and can be put back");
 });
 
-test("a subfolder says nothing about model folders", async () => {
-    // The omission is a studio-root rule; a nested folder called 'loras' is an
-    // ordinary asset folder and always listed.
+test("the model-folder note stays at the root once they are shown", async () => {
+    // The omission is a studio-root rule, so the note has nothing to say about
+    // a subfolder — but the toggle it carries is sticky across navigation, so
+    // the note follows the user down unless the level is what gates it.
     reset();
-    subfolderResponder();
-    const { overlay } = await drillIntoRefs();
-    assert.ok(!find(overlay, (n) => /model folders/.test(n.textContent ?? "")));
+    setResponder((route) => {
+        if (route.includes("refs")) {
+            return { ok: true, body: { rel: "studios/ggs/refs", parent: "studios/ggs",
+                entries: [{ name: "a.png", type: "file", rel: "studios/ggs/refs/a.png" }] } };
+        }
+        const entries = [{ name: "refs", type: "dir", rel: "studios/ggs/refs" }];
+        return route.includes("models=1")
+            ? { ok: true, body: { rel: "studios/ggs", parent: null,
+                entries: [{ name: "loras", type: "dir", rel: "studios/ggs/loras" }, ...entries] } }
+            : { ok: true, body: { rel: "studios/ggs", parent: null, hidden: 2, entries } };
+    });
+    const node = await create("SymbioticaStudioLibrary", { selection: "" });
+    node.onNodeCreated?.();
+    const overlay = await openOverlay(node);
+    fire(find(overlay, (n) => n.textContent === "show"), "click");
+    await tick();
+    assert.ok(find(overlay, (n) => n.textContent === "hide"), "the root is showing them");
+
+    fire(find(overlay, (n) => n.textContent === "📁  refs"), "click");
+    await tick();
+    assert.ok(!find(overlay, (n) => /model folder/i.test(n.textContent ?? "")),
+        "a subfolder hides nothing, so it has nothing to account for");
 });
 
 test("the studio root has no '..' row", async () => {
