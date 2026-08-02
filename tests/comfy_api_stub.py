@@ -16,13 +16,22 @@ class _IOType:
 
 
 class Schema:
+    """Mirrors the real Schema closely enough to assert on.
+
+    Every remaining kwarg is KEPT as an attribute rather than swallowed: a
+    behaviour-changing flag like `is_input_list` is invisible to a test that
+    only sees the fields this stub happens to name, and its absence would look
+    exactly like a passing test."""
+
     def __init__(self, node_id=None, display_name=None, category=None,
-                 inputs=None, outputs=None, **kw):
+                 inputs=None, outputs=None, is_input_list=False, **kw):
         self.node_id = node_id
         self.display_name = display_name
         self.category = category
         self.inputs = inputs or []
         self.outputs = outputs or []
+        self.is_input_list = is_input_list
+        self.__dict__.update(kw)
 
 
 class ComfyNode:

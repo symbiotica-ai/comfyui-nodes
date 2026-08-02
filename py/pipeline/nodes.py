@@ -33,6 +33,10 @@ from .regional_prompt import (
 from .skeleton import build_client_prompts, build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
+from .order_assets import (assets_by_category, dataset_dir,
+                           pick_reference_per_category)
+from .project_layout import project_root_of
+from .prompt_book import prompts_dir, resolve_category_prompts
 from .texture_pack import PackSettings
 
 OrderEvents = io.Custom("SYMBIOTICA_ORDER_EVENTS")
@@ -624,12 +628,21 @@ class SymbioticaAutoPacker(io.ComfyNode):
                 # Appended, never inserted: ComfyUI links address an output by
                 # SLOT INDEX, so a new slot in the middle would re-point every
                 # saved workflow's wires.
+                io.String.Output(display_name="categories",
+                                 is_output_list=True,
+                                 tooltip="The asset types this pack covers, "
+                                         "each named ONCE (e.g. 'Food - 3 "
+                                         "stages'), in first-appearance order. "
+                                         "Not one per sheet — a type that "
+                                         "paginates is still one type."),
                 io.String.Output(display_name="sheet_categories",
                                  is_output_list=True,
-                                 tooltip="Asset type of sheet i, as written in "
-                                         "the order (e.g. 'Food - 3 stages') — "
-                                         "index-aligned with sheets. The slug "
-                                         "form is already inside sheet_names."),
+                                 tooltip="Asset type of sheet i — ONE PER "
+                                         "SHEET, index-aligned with sheets. "
+                                         "Wire THIS into Category Prompts, not "
+                                         "the deduped `categories` above: a "
+                                         "short list does not error, it "
+                                         "silently reuses its last entry."),
             ],
         )
 
@@ -661,7 +674,7 @@ class SymbioticaAutoPacker(io.ComfyNode):
         # Optional pack-settings node (unwired = today's defaults: shelf, no
         # distribute, scale 1 — nothing regresses).
         s = cfg["settings"]
-        from .autopack import apply_overrides, autopack_order
+        from .autopack import apply_overrides, autopack_order, packed_categories
         try:
             ov = json.loads(cfg["overrides"]) if cfg["overrides"] else {}
         except (ValueError, TypeError):
@@ -706,6 +719,10 @@ class SymbioticaAutoPacker(io.ComfyNode):
             [_pil_to_tensor(p["image"]) for p in packed],
             [p["prompts"] for p in packed],
             [p["name"] for p in packed],
+            # NOT index-aligned with sheets, unlike the three lists above: one
+            # entry per distinct asset type, not one per sheet.
+            packed_categories(packed),
+            # Index-aligned again — this is the one that pairs with sheets.
             [p.get("category", "") for p in packed],
         )
 
@@ -751,6 +768,11 @@ class SymbioticaAutoPacker(io.ComfyNode):
             # Saved so the Template Library can re-emit each sheet's client
             # prompts without re-packing (index-aligned with sheets/sheetNames).
             "sheetPrompts": [p.get("prompts", "") for p in packed],
+            # Per-sheet asset type, so a Library replay can drive the Category
+            # Prompts node without re-packing. Written now because it cannot be
+            # recovered later: nothing in a saved template says which type a
+            # sheet held.
+            "sheetCategories": [p.get("category", "") for p in packed],
         }
         images = [p["image"] for p in packed]
         result = base = err = None
@@ -774,6 +796,266 @@ class SymbioticaAutoPacker(io.ComfyNode):
               {"name": result["name"], "key": qualified_name(kind, result["name"]),
                "kind": kind, "month": month, "dir": result["dir"],
                "project_path": project_path, "fellBack": fell_back})
+
+
+class SymbioticaCategoryPrompts(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaCategoryPrompts",
+            display_name="Symbiotica Category Prompts",
+            category="symbiotica/pipeline",
+            description="One architect system prompt per sheet, chosen by that "
+                        "sheet's asset type and read from "
+                        "<project>/prompts/<type>.md. Wire the Auto Packer's "
+                        "sheet_categories in and system_prompts into your LLM "
+                        "node's system prompt: one queue press then covers "
+                        "every asset type in the order, instead of one pass "
+                        "per type.",
+            # The WHOLE list at once. Mapped per category instead, the engine
+            # would re-read each file once per sheet and raise on the first
+            # missing prompt alone — fail, write one file, fail again.
+            is_input_list=True,
+            inputs=[
+                io.String.Input("sheet_categories", force_input=True,
+                                tooltip="Per-sheet asset type: the Auto "
+                                        "Packer's sheet_categories output. NOT "
+                                        "its deduped `categories` — a short "
+                                        "list does not error, it silently "
+                                        "repeats its last entry."),
+                io.String.Input("project_path", default="",
+                                tooltip="Client project folder, holding the "
+                                        "prompt book at <project>/prompts/. "
+                                        "Filled in from the order when one is "
+                                        "wired."),
+                Order.Input("order", optional=True),
+            ],
+            outputs=[
+                # Same split as the packer's categories / sheet_categories, and
+                # for the same reason: one list is for reading, the other for
+                # driving the render.
+                io.String.Output(display_name="system_prompts",
+                                 is_output_list=True,
+                                 tooltip="The architect prompts this order "
+                                         "uses, each ONCE, in first-appearance "
+                                         "order — one per asset type, for "
+                                         "reading. Two types, two entries, "
+                                         "however many sheets they pack into."),
+                io.String.Output(display_name="sheet_system_prompts",
+                                 is_output_list=True,
+                                 tooltip="Architect prompt for sheet i — one "
+                                         "per SHEET, index-aligned with the "
+                                         "packer's sheets. Wire THIS into the "
+                                         "LLM's system prompt."),
+            ],
+        )
+
+    @staticmethod
+    def _one(value, default=""):
+        """is_input_list hands EVERY input in as a list, widgets included."""
+        if isinstance(value, list):
+            return value[0] if value else default
+        return default if value is None else value
+
+    @classmethod
+    def _project(cls, project_path, order):
+        """The order's own project, then a Reference Browser order's refs root,
+        then the widget. A reference order carries no project_path at all, so
+        without the refsRoot walk its error would name a path like
+        '/prompts/signage.md' that the user cannot act on."""
+        o = cls._one(order, {}) or {}
+        candidates = (
+            str(o.get("project_path", "") or "").strip(),
+            project_root_of(str(o.get("refsRoot", "") or "").strip()),
+            str(cls._one(project_path)).strip(),
+        )
+        for cand in candidates:
+            if cand and os.path.isdir(cand):
+                return cand
+        return ""
+
+    @classmethod
+    def fingerprint_inputs(cls, sheet_categories=None, project_path="",
+                           order=None):
+        # Only WIDGET values are real here: ComfyUI calls this with
+        # execution_list=None, so every linked input arrives as None and the
+        # order wire cannot be read. Hash the whole prompt book from the widget
+        # — that catches an edited file and a missing one being created. It must
+        # never raise: a raise sets is_changed to NaN, which folds into every
+        # descendant's cache key and re-bills the LLM and Gemini every queue.
+        root = prompts_dir(str(cls._one(project_path)).strip())
+        h = hashlib.sha256(root.encode())
+        try:
+            for name in sorted(os.listdir(root)):
+                st = os.stat(os.path.join(root, name))
+                h.update(f"{name}:{st.st_mtime_ns}:{st.st_size}".encode())
+        except OSError:
+            pass
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, sheet_categories=None, project_path="",
+                order=None) -> io.NodeOutput:
+        cats = list(sheet_categories or [])
+        if not cats:
+            raise ValueError("no sheets to prompt for — wire the Auto Packer's "
+                             "sheet_categories output into this node")
+        project = cls._project(project_path, order)
+        if not project:
+            raise ValueError(
+                "this order names no project folder, so there is nowhere to "
+                "read the prompt book from — set project_path on this node")
+        per_sheet = resolve_category_prompts(project, cats)
+        # Deduped by TEXT, not by category: two types that share a prompt file
+        # are one document to read. Order follows first appearance.
+        seen, unique = set(), []
+        for text in per_sheet:
+            if text not in seen:
+                seen.add(text)
+                unique.append(text)
+        return io.NodeOutput(unique, per_sheet)
+
+
+class SymbioticaOrderAssets(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaOrderAssets",
+            display_name="Symbiotica Order Assets",
+            category="symbiotica/pipeline",
+            description="The event's assets as ONE ITEM PER ASSET, grouped by "
+                        "asset type: every decoration, then every food. Wire "
+                        "the three lists into one render lane and ComfyUI runs "
+                        "it once per asset, in that order — no loop node, and "
+                        "no second copy of the lane per type. Use this, not the "
+                        "Auto Packer, when the render works from a dataset "
+                        "reference rather than a packed sheet.",
+            inputs=[Order.Input("order")],
+            outputs=[
+                io.String.Output(display_name="asset_names",
+                                 is_output_list=True,
+                                 tooltip="One per asset — wire into Save "
+                                         "Image's filename_prefix so each "
+                                         "render lands under its own name."),
+                io.String.Output(display_name="categories",
+                                 is_output_list=True,
+                                 tooltip="Asset type per asset. Feed Category "
+                                         "Prompts and Dataset Reference from "
+                                         "this — all three stay aligned."),
+                io.String.Output(display_name="client_prompts",
+                                 is_output_list=True,
+                                 tooltip="The client's brief per asset, "
+                                         "verbatim from the order sheet."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, order=None) -> io.NodeOutput:
+        if not isinstance(order, dict) or "assets" not in order:
+            raise ValueError("wire an Order Specs (or a Reference Browser) "
+                             "into 'order'")
+        items = assets_by_category(order)
+        if not items:
+            raise ValueError(
+                f"the event {order.get('feature', '')!r} has no named assets — "
+                "pick a feature on the Order Specs node")
+        return io.NodeOutput([a["assetName"] for a in items],
+                             [a["category"] for a in items],
+                             [a["prompt"] for a in items])
+
+
+class SymbioticaDatasetReference(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaDatasetReference",
+            display_name="Symbiotica Dataset Reference",
+            category="symbiotica/pipeline",
+            description="One style reference per asset, drawn at random from "
+                        "<project>/dataset/<Asset Type>/ — the existing game "
+                        "art for that type. The draw is PER TYPE, so every food "
+                        "item in a run shares one food reference and the batch "
+                        "comes out consistent. Seeded, so the same seed redraws "
+                        "the same references and bumping it picks new ones.",
+            # The whole list at once: the draw is per TYPE, which cannot be
+            # decided from one asset's category in isolation.
+            is_input_list=True,
+            inputs=[
+                io.String.Input("categories", force_input=True,
+                                tooltip="Asset type per asset — the Order "
+                                        "Assets node's `categories` output."),
+                io.Int.Input("seed", default=0, min=0, max=0xFFFFFFFFFFFFFFF,
+                             control_after_generate=True,
+                             tooltip="Which reference each type draws. Same "
+                                     "seed = same references; bump it to draw "
+                                     "again. A type keeps its own pick when "
+                                     "another type joins the order."),
+                io.String.Input("folder", default="dataset",
+                                tooltip="Folder under the project holding the "
+                                        "per-type reference folders."),
+                io.String.Input("project_path", default="",
+                                tooltip="Client project folder. Filled in from "
+                                        "the order when one is wired."),
+                Order.Input("order", optional=True),
+            ],
+            outputs=[
+                io.Image.Output(display_name="images", is_output_list=True,
+                                tooltip="The reference for asset i — index-"
+                                        "aligned with Order Assets. Wire into "
+                                        "the LLM/Gemini image input."),
+                io.String.Output(display_name="reference_names",
+                                 is_output_list=True,
+                                 tooltip="Filename of the reference drawn for "
+                                         "asset i, so a good draw can be "
+                                         "traced back to its file."),
+            ],
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, categories=None, seed=0, folder="dataset",
+                           project_path="", order=None):
+        # Widgets only — linked inputs arrive as None here (see Category
+        # Prompts). Hash the folder listing so adding or removing a reference
+        # redraws, and never raise: a raise becomes NaN and re-bills every
+        # descendant on each queue press.
+        one = SymbioticaCategoryPrompts._one
+        root = dataset_dir(str(one(project_path)).strip(),
+                           str(one(folder, "dataset")).strip() or "dataset")
+        h = hashlib.sha256(f"{root}:{one(seed, 0)}".encode())
+        try:
+            for cat in sorted(os.listdir(root)):
+                sub = os.path.join(root, cat)
+                if not os.path.isdir(sub):
+                    continue
+                h.update(cat.encode())
+                for name in sorted(os.listdir(sub)):
+                    h.update(name.encode())
+        except OSError:
+            pass
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, categories=None, seed=0, folder="dataset",
+                project_path="", order=None) -> io.NodeOutput:
+        one = SymbioticaCategoryPrompts._one
+        cats = list(categories or [])
+        if not cats:
+            raise ValueError("no assets to reference — wire the Order Assets "
+                             "node's `categories` output into this node")
+        project = SymbioticaCategoryPrompts._project(project_path, order)
+        if not project:
+            raise ValueError(
+                "this order names no project folder, so there is nowhere to "
+                "read the dataset from — set project_path on this node")
+        paths, names = pick_reference_per_category(
+            project, cats, int(one(seed, 0) or 0),
+            str(one(folder, "dataset")).strip() or "dataset")
+        from PIL import Image
+        images = []
+        for p in paths:
+            with Image.open(p) as im:
+                images.append(_pil_to_tensor(im.convert("RGB")))
+        return io.NodeOutput(images, names)
 
 
 class SymbioticaTemplateLibrary(io.ComfyNode):
@@ -2101,6 +2383,9 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaModelPreset,
     SymbioticaAutoPackerSettings,
     SymbioticaAutoPacker,
+    SymbioticaCategoryPrompts,
+    SymbioticaOrderAssets,
+    SymbioticaDatasetReference,
     SymbioticaTemplateLibrary,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
