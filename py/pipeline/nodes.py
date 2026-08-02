@@ -885,10 +885,18 @@ class SymbioticaCategoryPrompts(io.ComfyNode):
         # descendant's cache key and re-bills the LLM and Gemini every queue.
         root = prompts_dir(str(cls._one(project_path)).strip())
         h = hashlib.sha256(root.encode())
+        # RECURSIVE: the shared rules live in prompts/_rules/. Listing one level
+        # deep would miss an edited lighting rule entirely — ComfyUI would reuse
+        # the cached prompt and the run would render from the old text while the
+        # new text sat on disk, which reads as "my edit did nothing".
         try:
-            for name in sorted(os.listdir(root)):
-                st = os.stat(os.path.join(root, name))
-                h.update(f"{name}:{st.st_mtime_ns}:{st.st_size}".encode())
+            for where, dirs, files in os.walk(root):
+                dirs.sort()
+                for name in sorted(files):
+                    p = os.path.join(where, name)
+                    st = os.stat(p)
+                    rel = os.path.relpath(p, root)
+                    h.update(f"{rel}:{st.st_mtime_ns}:{st.st_size}".encode())
         except OSError:
             pass
         return h.hexdigest()

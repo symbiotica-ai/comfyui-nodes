@@ -147,3 +147,41 @@ def test_types_sharing_one_document_collapse_in_the_reading_list(nodes_mod,
         project_path=[str(proj)])
     assert out.args[0] == ["SAME"]
     assert out.args[1] == ["SAME", "SAME"]
+
+
+def test_fingerprint_sees_an_edited_shared_rule(nodes_mod, tmp_path):
+    # Listing prompts/ one level deep would miss this entirely: the queue would
+    # reuse the cached prompt and render from the old lighting rule while the
+    # new one sat on disk — which reads as "my edit did nothing".
+    proj = _project(tmp_path, **{"Decoration": "D"})
+    rules = proj / "prompts" / "_rules"
+    rules.mkdir()
+    (rules / "01-lighting.md").write_text("SOFT LIGHT")
+    fp = nodes_mod.SymbioticaCategoryPrompts.fingerprint_inputs
+    before = fp(project_path=[str(proj)])
+    f = rules / "01-lighting.md"
+    f.write_text("HARD RIM LIGHT")
+    os.utime(f, (10 ** 9, 10 ** 9))
+    assert fp(project_path=[str(proj)]) != before
+
+
+def test_fingerprint_sees_a_new_shared_rule(nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{"Decoration": "D"})
+    rules = proj / "prompts" / "_rules"
+    rules.mkdir()
+    (rules / "01-lighting.md").write_text("LIGHT")
+    fp = nodes_mod.SymbioticaCategoryPrompts.fingerprint_inputs
+    before = fp(project_path=[str(proj)])
+    (rules / "02-negatives.md").write_text("NO BLUR")
+    assert fp(project_path=[str(proj)]) != before
+
+
+def test_composed_prompt_reaches_the_node_output(nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{"Decoration": "DECO", "Food - 3 stages": "FOOD"})
+    rules = proj / "prompts" / "_rules"
+    rules.mkdir()
+    (rules / "01-lighting.md").write_text("LIGHT")
+    out = nodes_mod.SymbioticaCategoryPrompts.execute(
+        sheet_categories=["Decoration", "Food - 3 stages"],
+        project_path=[str(proj)])
+    assert out.args[1] == ["LIGHT\n\nDECO", "LIGHT\n\nFOOD"]

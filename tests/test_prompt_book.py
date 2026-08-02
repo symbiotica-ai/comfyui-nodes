@@ -70,3 +70,60 @@ def test_missing_prompts_dir_names_every_type(tmp_path):
 
 def test_prompts_dir_is_under_the_project():
     assert prompts_dir("/a/b").endswith("/a/b/prompts")
+
+
+def _with_rules(tmp_path, rules, **types):
+    p = _book(tmp_path, **types)
+    d = tmp_path / "prompts" / "_rules"
+    d.mkdir()
+    for name, text in rules.items():
+        (d / f"{name}.md").write_text(text)
+    return p
+
+
+def test_shared_rules_come_first_and_the_type_block_last(tmp_path):
+    # The type block wins ties by position: it is the most specific instruction
+    # and sits where a long prompt is weighted heaviest.
+    p = _with_rules(tmp_path, {"02-style": "STYLE", "01-reference": "REFS"},
+                    **{"Decoration": "DECO BLOCK"})
+    assert resolve_category_prompts(p, ["Decoration"]) == [
+        "REFS\n\nSTYLE\n\nDECO BLOCK"]
+
+
+def test_rules_order_follows_the_filename_prefix(tmp_path):
+    p = _with_rules(tmp_path, {"03-c": "C", "01-a": "A", "02-b": "B"},
+                    **{"Decoration": "D"})
+    assert resolve_category_prompts(p, ["Decoration"]) == ["A\n\nB\n\nC\n\nD"]
+
+
+def test_no_rules_directory_is_todays_behaviour(tmp_path):
+    # Nothing may change for a project that has not been split into blocks.
+    p = _book(tmp_path, **{"Decoration": "JUST THE TYPE"})
+    assert resolve_category_prompts(p, ["Decoration"]) == ["JUST THE TYPE"]
+
+
+def test_blank_rule_files_are_skipped_not_emitted(tmp_path):
+    # An emptied rule must vanish from the prompt, not leave a hole in it.
+    p = _with_rules(tmp_path, {"01-a": "A", "02-empty": "   \n ", "03-c": "C"},
+                    **{"Decoration": "D"})
+    assert resolve_category_prompts(p, ["Decoration"]) == ["A\n\nC\n\nD"]
+
+
+def test_every_type_shares_the_rules_and_differs_by_its_own_block(tmp_path):
+    p = _with_rules(tmp_path, {"01-lighting": "LIGHT"},
+                    **{"Decoration": "DECO", "Food - 3 stages": "FOOD"})
+    out = resolve_category_prompts(p, ["Decoration", "Food - 3 stages"])
+    assert out == ["LIGHT\n\nDECO", "LIGHT\n\nFOOD"]
+
+
+def test_a_missing_type_block_still_raises_even_with_rules(tmp_path):
+    # The shared half describes the game, not this asset — it cannot stand in.
+    p = _with_rules(tmp_path, {"01-lighting": "LIGHT"}, **{"Decoration": "D"})
+    with pytest.raises(MissingPromptsError, match="Signage.md"):
+        resolve_category_prompts(p, ["Decoration", "Signage"])
+
+
+def test_non_markdown_files_in_rules_are_ignored(tmp_path):
+    p = _with_rules(tmp_path, {"01-a": "A"}, **{"Decoration": "D"})
+    (tmp_path / "prompts" / "_rules" / "notes.txt").write_text("NOT A RULE")
+    assert resolve_category_prompts(p, ["Decoration"]) == ["A\n\nD"]
