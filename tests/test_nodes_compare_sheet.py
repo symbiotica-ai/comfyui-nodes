@@ -88,6 +88,68 @@ def test_takes_both_rows_whole(nodes_mod):
     schema = nodes_mod.SymbioticaCompareSheet.define_schema()
     # Mapped per image this would emit one sheet per cell.
     assert schema.is_input_list is True
+    # The mask inputs are APPENDED — ComfyUI restores widgets_values
+    # positionally, so a new one in the middle loads a saved pick onto the
+    # wrong widget.
     assert [i.id for i in schema.inputs] == [
-        "references", "results", "cell_size", "spacing", "background"]
+        "references", "results", "cell_size", "spacing", "background",
+        "reference_masks", "result_masks", "mask_is_transparency"]
     assert [o.display_name for o in schema.outputs] == ["sheet"]
+
+
+def _black_flattened(size=64):
+    """What a loader hands on for a transparent PNG: art on black."""
+    import torch
+    t = torch.zeros(1, size, size, 3)
+    t[:, 20:44, 20:44, 1] = 0.8
+    return t
+
+
+def _mask(size=64, transparency=True):
+    """LoadImage polarity by default: 1 where the picture is see-through."""
+    import torch
+    m = torch.ones(1, size, size) if transparency else torch.zeros(1, size,
+                                                                   size)
+    m[:, 20:44, 20:44] = 0.0 if transparency else 1.0
+    return m
+
+
+def test_a_mask_puts_the_background_behind_a_flattened_sprite(nodes_mod):
+    out = nodes_mod.SymbioticaCompareSheet.execute(
+        references=[_black_flattened()], results=[_black_flattened()],
+        cell_size=[64], spacing=[0], background=["#808080"],
+        reference_masks=[_mask()], result_masks=[_mask()],
+        mask_is_transparency=[True]).args[0]
+    px = out[0]
+    assert [round(float(v) * 255) for v in px[2][2]] == [128, 128, 128]
+    assert round(float(px[30][30][1]) * 255) > 150, "art kept"
+
+
+def test_without_masks_the_flattened_black_still_shows(nodes_mod):
+    """Pins why the mask inputs exist at all."""
+    out = nodes_mod.SymbioticaCompareSheet.execute(
+        references=[_black_flattened()], results=[_black_flattened()],
+        cell_size=[64], spacing=[0], background=["#808080"]).args[0]
+    assert [round(float(v) * 255) for v in out[0][2][2]] == [0, 0, 0]
+
+
+def test_straight_alpha_masks_work_when_declared(nodes_mod):
+    out = nodes_mod.SymbioticaCompareSheet.execute(
+        references=[_black_flattened()], results=[_black_flattened()],
+        cell_size=[64], spacing=[0], background=["#808080"],
+        reference_masks=[_mask(transparency=False)],
+        result_masks=[_mask(transparency=False)],
+        mask_is_transparency=[False]).args[0]
+    assert [round(float(v) * 255) for v in out[0][2][2]] == [128, 128, 128]
+
+
+def test_fewer_masks_than_images_leaves_the_rest_opaque(nodes_mod):
+    import torch
+    two = torch.cat([_black_flattened(), _black_flattened()], dim=0)
+    out = nodes_mod.SymbioticaCompareSheet.execute(
+        references=[two], results=[_black_flattened()],
+        cell_size=[64], spacing=[0], background=["#808080"],
+        reference_masks=[_mask()], mask_is_transparency=[True]).args[0]
+    px = out[0]
+    assert [round(float(v) * 255) for v in px[2][2]] == [128, 128, 128]
+    assert [round(float(v) * 255) for v in px[2][66]] == [0, 0, 0]

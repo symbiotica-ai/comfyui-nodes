@@ -100,3 +100,89 @@ def test_mixed_sizes_share_one_cell():
 def test_nothing_to_lay_out_is_an_error_not_a_blank_image():
     with pytest.raises(ValueError, match="nothing to lay out"):
         compose_rows([], cell=100, spacing=10, background=(0, 0, 0))
+
+
+# --- transparency ------------------------------------------------------------
+# ComfyUI carries an image and its transparency on separate wires, and a loader
+# flattens alpha before the image reaches this node. For sprites exported over
+# black that means a transparent area arrives BLACK, and pasting it would put a
+# black rectangle where the sheet's own colour belongs.
+
+def _sprite_over_black(size=100):
+    """A loader's output: art in the middle, black where it was see-through."""
+    im = Image.new("RGB", (size, size), (0, 0, 0))
+    im.paste(Image.new("RGB", (40, 40), (0, 200, 0)), (30, 30))
+    return im
+
+
+def _alpha_mask(size=100, invert=False):
+    """Opaque only where the art is. `invert` gives ComfyUI's LoadImage form."""
+    m = Image.new("L", (size, size), 0 if not invert else 255)
+    m.paste(Image.new("L", (40, 40), 255 if not invert else 0), (30, 30))
+    return m
+
+
+def test_a_flattened_sprite_without_its_mask_still_shows_black():
+    """The bug, pinned: this is what the node did before masks existed."""
+    sheet = compose_rows([[_sprite_over_black()]], cell=100, spacing=10,
+                         background=(128, 128, 128))
+    assert sheet.getpixel((15, 15)) == (0, 0, 0)
+
+
+def test_loadimage_polarity_puts_the_background_back():
+    from pipeline.compare_sheet import with_alpha
+    img = with_alpha(_sprite_over_black(), _alpha_mask(invert=True),
+                     mask_is_transparency=True)
+    sheet = compose_rows([[img]], cell=100, spacing=10,
+                         background=(128, 128, 128))
+    assert sheet.getpixel((15, 15)) == (128, 128, 128), "background restored"
+    assert sheet.getpixel((60, 60)) == (0, 200, 0), "art untouched"
+
+
+def test_straight_alpha_polarity_works_when_declared():
+    """Asset Refs emits straight alpha — 1 where the art is."""
+    from pipeline.compare_sheet import with_alpha
+    img = with_alpha(_sprite_over_black(), _alpha_mask(invert=False),
+                     mask_is_transparency=False)
+    sheet = compose_rows([[img]], cell=100, spacing=10,
+                         background=(128, 128, 128))
+    assert sheet.getpixel((15, 15)) == (128, 128, 128)
+    assert sheet.getpixel((60, 60)) == (0, 200, 0)
+
+
+def test_the_wrong_polarity_cuts_the_sprite_out_instead():
+    """Worth pinning: a flipped mask does not fail, it silently inverts what is
+    kept — which is why the node asks rather than guesses."""
+    from pipeline.compare_sheet import with_alpha
+    img = with_alpha(_sprite_over_black(), _alpha_mask(invert=False),
+                     mask_is_transparency=True)
+    sheet = compose_rows([[img]], cell=100, spacing=10,
+                         background=(128, 128, 128))
+    assert sheet.getpixel((60, 60)) == (128, 128, 128), "art removed"
+
+
+def test_a_mask_of_another_size_is_resized_to_its_image():
+    """LoadImage hands back a 64x64 all-zero mask for a file with no alpha —
+    zero means opaque in its polarity, so the picture must survive whole."""
+    from pipeline.compare_sheet import with_alpha
+    img = with_alpha(_sprite_over_black(), Image.new("L", (64, 64), 0),
+                     mask_is_transparency=True)
+    sheet = compose_rows([[img]], cell=100, spacing=10,
+                         background=(128, 128, 128))
+    assert sheet.getpixel((15, 15)) == (0, 0, 0), "fully opaque, black kept"
+
+
+def test_no_mask_leaves_the_image_alone():
+    from pipeline.compare_sheet import with_alpha
+    src = _sprite_over_black()
+    assert with_alpha(src, None) is src
+
+
+def test_an_rgba_image_composites_without_any_mask():
+    """A path where alpha survived to PIL — paste through it, never convert."""
+    im = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    im.paste(Image.new("RGBA", (40, 40), (0, 200, 0, 255)), (30, 30))
+    sheet = compose_rows([[im]], cell=100, spacing=10,
+                         background=(128, 128, 128))
+    assert sheet.getpixel((15, 15)) == (128, 128, 128)
+    assert sheet.getpixel((60, 60)) == (0, 200, 0)

@@ -45,6 +45,35 @@ def auto_cell(sizes, fallback=512):
     return max(edges) if edges else fallback
 
 
+def with_alpha(image, mask, mask_is_transparency=True):
+    """An image given back its transparency from a separate mask.
+
+    ComfyUI moves an IMAGE and its transparency on different wires, and a
+    loader hands on the pixels with alpha already flattened — for sprites
+    exported over black, that means every transparent area arrives BLACK. The
+    mask is the only surviving record of what was see-through.
+
+    The two masks in play point opposite ways, which is why this must be told
+    rather than guess: ComfyUI's own `LoadImage` emits `1 - alpha`, so 1.0
+    means transparent, while a straight alpha channel — what this pack's Asset
+    Refs hands out — means 1.0 is opaque.
+
+    The mask is resized to the image when the two disagree, which also handles
+    `LoadImage`'s 64x64 all-zero stand-in for a file that had no alpha at all.
+    """
+    from PIL import Image
+    if mask is None:
+        return image
+    mask = mask.convert("L")
+    if mask.size != image.size:
+        mask = mask.resize(image.size, Image.NEAREST)
+    if mask_is_transparency:
+        mask = Image.eval(mask, lambda v: 255 - v)
+    out = image.convert("RGBA")
+    out.putalpha(mask)
+    return out
+
+
 def compose_rows(rows, cell, spacing, background):
     """Rows of PIL images laid out as a grid, returned as one RGB image.
 
@@ -67,7 +96,17 @@ def compose_rows(rows, cell, spacing, background):
             if not new_w or not new_h:
                 continue
             x, y = cell_origin(column, row_index, cell, spacing)
-            sheet.paste(image.convert("RGB").resize((new_w, new_h),
-                                                    Image.LANCZOS),
-                        (x + dx, y + dy))
+            # Pasted THROUGH its alpha where it has any. `convert("RGB")` would
+            # discard it instead of applying it, and these sprites are exported
+            # over black — so every transparent area would land as a black
+            # rectangle rather than the sheet's own colour.
+            if image.mode in ("RGBA", "LA", "PA") or (
+                    image.mode == "P" and "transparency" in image.info):
+                scaled = image.convert("RGBA").resize((new_w, new_h),
+                                                      Image.LANCZOS)
+                sheet.paste(scaled, (x + dx, y + dy), scaled)
+            else:
+                sheet.paste(image.convert("RGB").resize((new_w, new_h),
+                                                        Image.LANCZOS),
+                            (x + dx, y + dy))
     return sheet

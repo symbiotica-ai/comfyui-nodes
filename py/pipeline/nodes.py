@@ -117,6 +117,16 @@ def _pil_to_tensor(img) -> torch.Tensor:
     return torch.from_numpy(arr)[None, ...]
 
 
+def _tensor_to_pil_mask(frame):
+    """One MASK frame as an L-mode image. A mask is HxW, but ComfyUI is loose
+    about a trailing channel axis, so squeeze one if it is there."""
+    from PIL import Image
+    arr = frame.detach().cpu().clamp(0.0, 1.0).numpy()
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = arr[..., 0]
+    return Image.fromarray((arr * 255.0).round().astype(np.uint8), mode="L")
+
+
 def _tensor_to_pil(frame):
     """One HxWxC frame — NOT a batch — as an RGB image.
 
@@ -1351,6 +1361,25 @@ class SymbioticaCompareSheet(io.ComfyNode):
                 io.String.Input("background", default=DEFAULT_BACKGROUND,
                                 tooltip="What the gutters and any empty cell "
                                         "are filled with."),
+                # Appended: links address an input by slot index.
+                io.Mask.Input("reference_masks", optional=True,
+                              tooltip="Transparency for the top row. A loader "
+                                      "hands the pixels on with alpha already "
+                                      "flattened — over black, for these "
+                                      "sprites — so without the mask a "
+                                      "transparent PNG lands as a black "
+                                      "rectangle instead of the background."),
+                io.Mask.Input("result_masks", optional=True,
+                              tooltip="Transparency for the bottom row."),
+                io.Boolean.Input("mask_is_transparency", default=True,
+                                 tooltip="ON for ComfyUI's own Load Image, "
+                                         "whose mask is 1 where the picture is "
+                                         "SEE-THROUGH. OFF for a straight "
+                                         "alpha channel, where 1 is where the "
+                                         "art is — which is what this pack's "
+                                         "Asset Refs `masks` hands out. Wrong "
+                                         "way round and every sprite is cut "
+                                         "out instead of its background."),
             ],
             outputs=[
                 io.Image.Output(display_name="sheet",
@@ -1361,13 +1390,15 @@ class SymbioticaCompareSheet(io.ComfyNode):
 
     @classmethod
     def execute(cls, references=None, results=None, cell_size=0, spacing=16,
-                background=DEFAULT_BACKGROUND) -> io.NodeOutput:
+                background=DEFAULT_BACKGROUND, reference_masks=None,
+                result_masks=None, mask_is_transparency=True) -> io.NodeOutput:
         from .asset_refs import parse_hex
-        from .compare_sheet import auto_cell, compose_rows
+        from .compare_sheet import auto_cell, compose_rows, with_alpha
         one = SymbioticaCategoryPrompts._one
+        transparency = bool(one(mask_is_transparency, True))
 
-        def as_images(batch):
-            """Every frame in the wire, whatever shape it arrived in. A list
+        def frames(batch):
+            """Every frame on the wire, whatever shape it arrived in. A list
             input carries one tensor per upstream execution, and each of those
             may itself hold a batch — flattening both is what lets this take a
             fanned-out lane and a plain batch on the same socket."""
@@ -1376,11 +1407,26 @@ class SymbioticaCompareSheet(io.ComfyNode):
                 if tensor is None:
                     continue
                 for frame in tensor:
-                    out.append(_tensor_to_pil(frame))
+                    out.append(frame)
             return out
 
-        top = as_images(references)
-        bottom = as_images(results)
+        def as_images(batch, masks):
+            """The row's images, each given back its transparency where a mask
+            came with it. Paired by position, and a row with fewer masks than
+            images keeps the extra images opaque rather than dropping them."""
+            mask_frames = frames(masks)
+            out = []
+            for index, frame in enumerate(frames(batch)):
+                image = _tensor_to_pil(frame)
+                if index < len(mask_frames):
+                    image = with_alpha(image,
+                                       _tensor_to_pil_mask(mask_frames[index]),
+                                       transparency)
+                out.append(image)
+            return out
+
+        top = as_images(references, reference_masks)
+        bottom = as_images(results, result_masks)
         if not top and not bottom:
             raise ValueError("wire images into 'references' and 'results' — "
                              "both rows are empty")
