@@ -419,3 +419,66 @@ def test_a_missing_alias_is_left_out_rather_than_printed_as_none():
     message = ai_gateway.http_error(500, "boom", studio="a-studio")
     assert "None" not in message
     assert "a-studio" in message
+
+
+# The state dev's anthropic provider is in today: no BYOK credential exists for
+# the provider at all, so the alias is never consulted and the call falls
+# through to Cloudflare's own billing. Captured against the real gateway.
+NO_PROVIDER_KEY_BODY = (
+    '{"success":false,"error":[{"code":2021,"message":"Insufficient wholesale '
+    'credits"}],"name":"AiGatewayError","httpCode":402,"internalCode":2021,'
+    '"message":"Insufficient wholesale credits"}')
+
+
+def test_a_provider_with_no_byok_key_at_all_is_told_that_and_not_to_add_an_alias():
+    """Distinct from 2040 in who fixes it and how: 2040 means this studio is
+    unprovisioned, 2021 means the provider is, and the alias was never read."""
+    message = ai_gateway.http_error(402, NO_PROVIDER_KEY_BODY,
+                                    studio=STUDIO, alias=STUDIO)
+    assert "no BYOK key" in message
+    assert "studio's slug as its BYOK alias" not in message
+
+
+def test_the_provider_with_no_key_case_warns_that_the_spend_left_the_boundary():
+    """The only code here whose bad outcome has no error path. It failed as a
+    402 because the balance was empty; Cloudflare's documented precedence is
+    request key, then stored BYOK by alias, then their own credentials billed
+    to that balance — so a funded account turns this same call into a success
+    attributed to nobody."""
+    remedy = ai_gateway.gateway_remedy(NO_PROVIDER_KEY_BODY)
+    assert "wholesale" in remedy
+    assert "BYOK boundary" in remedy
+
+
+def test_each_of_the_three_codes_keeps_its_own_advice():
+    """One dict, three opposite readers — an operator sent at the wrong system
+    is the failure this table exists to prevent."""
+    remedies = {code: ai_gateway.GATEWAY_REMEDIES[code]
+                for code in (2009, 2040, 2021)}
+    assert len(set(remedies.values())) == 3
+    assert "SYMBIOTICA_AIG_TOKEN" in remedies[2009]
+    assert "this studio" in remedies[2040]
+    assert "this provider" in remedies[2021]
+
+
+def test_an_anthropic_key_is_scrubbed_from_a_failure_like_a_google_one():
+    """Anthropic presents its key as x-api-key. A scrubber that knew only
+    Google's header name would pass a Claude key straight into the log."""
+    key = "sk-ant-not-a-real-key-at-all"
+    secrets = ai_gateway.header_secrets({"x-api-key": key})
+    message = ai_gateway.http_error(401, f'{{"error":"bad key {key}"}}',
+                                    secrets=secrets)
+    assert key not in message
+    assert "[redacted]" in message
+
+
+def test_a_header_the_call_needs_beyond_the_gateways_own_rides_both_arms():
+    """anthropic-version is required by Anthropic and injected by nobody. It
+    is merged here rather than added to the returned headers, because
+    header_secrets reads off these headers to guarantee the wire and the
+    scrubber agree — and a header added afterwards is one this never saw."""
+    version = {"anthropic-version": "2023-06-01"}
+    assert resolve(gateway_env(), extra_headers=version)[1][
+        "anthropic-version"] == "2023-06-01"
+    assert resolve({}, lambda: "k", extra_headers=version)[1][
+        "anthropic-version"] == "2023-06-01"
