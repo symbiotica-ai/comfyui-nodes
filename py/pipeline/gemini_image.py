@@ -70,7 +70,26 @@ def resolve_transport(environ, model: str,
     Every gateway-arm decision lives here so that the whole of it can be
     exercised without importing ComfyUI."""
     gateway = (environ.get("GEMINI_GATEWAY_URL") or "").strip().rstrip("/")
+    if not gateway and (environ.get("ORDER_STUDIO") or "").strip():
+        # The launcher sets ORDER_STUDIO whether or not the secret populated,
+        # so its presence without a URL is a broken sandbox rather than a
+        # canvas box. Left to fall through, this either fails citing a
+        # Settings UI that does not exist here, or succeeds on a stray
+        # personal key and takes the spend out of the gateway in silence.
+        raise ValueError(
+            "ORDER_STUDIO is set but GEMINI_GATEWAY_URL is empty, so this "
+            "looks like an order sandbox whose symbiotica-comfy-gemini secret "
+            "did not populate. Rendering here would either fail asking for a "
+            "key this box cannot hold, or quietly bill one that is not the "
+            "studio's."
+        )
     if gateway:
+        if not gateway.startswith("https://"):
+            raise ValueError(
+                f"GEMINI_GATEWAY_URL must be https, got {gateway!r}. The "
+                f"gateway token is a bearer credential for this studio's "
+                f"whole spend and would cross the wire in the clear."
+            )
         token = (environ.get("GEMINI_GATEWAY_TOKEN") or "").strip()
         if not token:
             raise ValueError(
@@ -79,6 +98,7 @@ def resolve_transport(environ, model: str,
                 "cannot fall back to a personal Google key here, because the "
                 "spend for this box belongs in the gateway."
             )
+        token = usable_as_header(token, "GEMINI_GATEWAY_TOKEN", quote_it=False)
         studio = (environ.get("ORDER_STUDIO") or "").strip()
         if not studio:
             # No fall back to the gateway's default alias. That would bill a
@@ -91,15 +111,9 @@ def resolve_transport(environ, model: str,
                 "alongside the gateway secret; a render here would either be "
                 "charged to another studio or attributed to none."
             )
-        # The slug becomes a header value. A stray newline from a hand-edited
-        # secret would otherwise surface as requests' own InvalidHeader, which
-        # names neither the variable nor the value that broke it.
-        if any(c in studio for c in "\r\n\t") or not studio.isprintable():
-            raise ValueError(
-                f"ORDER_STUDIO is not usable as a studio slug: {studio!r}. It "
-                f"becomes an HTTP header naming which studio's key pays, so "
-                f"it cannot contain control characters."
-            )
+        # Quoted, unlike the token: a studio slug is not a secret, and seeing
+        # the value is most of the diagnosis.
+        studio = usable_as_header(studio, "ORDER_STUDIO", quote_it=True)
         # No x-goog-api-key: with BYOK the gateway holds the Google key and
         # injects it upstream. There is no Google key on this box to send.
         return Transport(gateway + generate_content_path(model), {
@@ -114,9 +128,27 @@ def resolve_transport(environ, model: str,
             "Content-Type": "application/json",
         }, studio)
     return Transport(GOOGLE_API_BASE + generate_content_path(model), {
-        "x-goog-api-key": interactive_key(),
+        "x-goog-api-key": usable_as_header(
+            interactive_key(), "The Gemini API key", quote_it=False),
         "Content-Type": "application/json",
     }, None)
+
+
+def usable_as_header(value: str, source: str, quote_it: bool) -> str:
+    """`value`, once it is something an HTTP header can actually carry.
+
+    requests rejects control characters itself, but its exception quotes the
+    whole header value — so a credential with an interior newline, which is
+    what a mangled multi-line paste into a secret store produces, ends up in
+    the toast and the log by a path that never reaches the scrubber. Refusing
+    here keeps the diagnosis and loses the value: `quote_it` is False for
+    anything secret, so the message names the variable and not its contents."""
+    if any(c in value for c in "\r\n\t") or not value.isprintable():
+        shown = f": {value!r}" if quote_it else ""
+        raise ValueError(
+            f"{source} contains characters an HTTP header cannot carry{shown}. "
+            f"Check the secret for a stray newline or a truncated paste.")
+    return value
 
 
 def studio_tag(studio: str) -> str:

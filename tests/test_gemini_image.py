@@ -142,12 +142,17 @@ def test_the_studio_is_never_quietly_replaced_by_the_default_alias():
 
 
 def test_the_direct_arm_carries_no_studio_headers_at_all():
-    """Google has no idea what a studio is; the headers mean something only to
-    Cloudflare, and ORDER_STUDIO being set does not make this a studio call."""
+    """Google has no idea what a studio is; those headers mean something only
+    to Cloudflare and would be noise it might reject.
+
+    Reached with no ORDER_STUDIO, because a studio set without a gateway URL
+    is now refused as a broken sandbox — so this arm can only ever be a canvas
+    box, which is the only place it was ever meant to run."""
     headers = gemini_image.resolve_transport(
-        {"ORDER_STUDIO": STUDIO}, MODEL, lambda: "google-key").headers
+        {}, MODEL, lambda: "google-key").headers
     assert "cf-aig-byok-alias" not in headers
     assert "cf-aig-metadata" not in headers
+    assert "cf-aig-authorization" not in headers
 
 
 def test_with_no_gateway_the_call_goes_straight_to_google_on_a_resolved_key():
@@ -175,6 +180,70 @@ def test_a_gateway_url_written_with_a_trailing_slash_still_joins_cleanly():
     assert transport.url == (
         "https://gateway.example.invalid/v1/acct/gw/google-ai-studio"
         "/v1beta/models/gemini-3.1-flash-image:generateContent")
+
+
+def test_a_sandbox_whose_gateway_url_failed_to_populate_refuses_to_render():
+    """ORDER_STUDIO is set by the sandbox launcher, independently of the
+    secret. Its presence without a gateway URL is unambiguous evidence of a
+    broken sandbox — and the direct arm there would either fail complaining
+    about a Settings UI that does not exist, or succeed on a stray personal
+    key and take the spend out of the gateway silently."""
+    broken = [{"ORDER_STUDIO": STUDIO},                      # var misspelt
+              {"ORDER_STUDIO": STUDIO, "GEMINI_GATEWAY_URL": ""},
+              {"ORDER_STUDIO": STUDIO, "GEMINI_GATEWAY_URL": "   "}]
+    for env in broken:
+        env["GEMINI_API_KEY"] = "a-personal-key-that-must-not-quietly-pay"
+        with pytest.raises(ValueError, match="GEMINI_GATEWAY_URL"):
+            gemini_image.resolve_transport(env, MODEL, lambda: "personal")
+
+
+def test_a_canvas_box_without_a_studio_still_reaches_google_directly():
+    """Canvas boxes never set ORDER_STUDIO, so the guard above costs
+    interactive users nothing."""
+    assert gemini_image.resolve_transport(
+        {}, MODEL, lambda: "k").url.startswith(
+            "https://generativelanguage.googleapis.com")
+
+
+def test_a_gateway_url_that_is_not_https_is_refused():
+    """The token is a bearer credential for the studio's whole gateway spend.
+    Over http it crosses the wire in the clear."""
+    with pytest.raises(ValueError, match="https"):
+        gemini_image.resolve_transport(
+            gateway_env(GEMINI_GATEWAY_URL="http://gateway.example.invalid/x"),
+            MODEL, never_asked)
+
+
+def test_a_token_that_cannot_be_a_header_is_refused_without_being_echoed():
+    """An interior newline reaches requests, which raises InvalidHeader with
+    the whole header value in its message — the credential, in the toast and
+    the log, by a path that never touches the scrubber."""
+    bad = "tok\nen-with-a-newline"
+    with pytest.raises(ValueError) as caught:
+        gemini_image.resolve_transport(
+            gateway_env(GEMINI_GATEWAY_TOKEN=bad), MODEL, never_asked)
+    assert "GEMINI_GATEWAY_TOKEN" in str(caught.value)
+    assert "en-with-a-newline" not in str(caught.value)
+
+
+def test_a_google_key_that_cannot_be_a_header_is_refused_the_same_way():
+    with pytest.raises(ValueError) as caught:
+        gemini_image.resolve_transport({}, MODEL, lambda: "key\nwith-newline")
+    assert "with-newline" not in str(caught.value)
+
+
+def test_a_token_of_only_whitespace_is_no_token():
+    with pytest.raises(ValueError, match="GEMINI_GATEWAY_TOKEN"):
+        gemini_image.resolve_transport(
+            gateway_env(GEMINI_GATEWAY_TOKEN="   "), MODEL, never_asked)
+
+
+def test_a_slug_carrying_an_invisible_control_character_is_refused():
+    """\\x00 is not \\r, \\n or \\t, and a guard written against only those
+    three would pass it into the header."""
+    with pytest.raises(ValueError, match="ORDER_STUDIO"):
+        gemini_image.resolve_transport(
+            gateway_env(ORDER_STUDIO="studio\x00null"), MODEL, never_asked)
 
 
 def test_a_blank_gateway_url_is_no_gateway_at_all():

@@ -214,13 +214,19 @@ consulted:
 
 | Variable | Content |
 |---|---|
-| `GEMINI_GATEWAY_URL` | Cloudflare AI Gateway base through the provider slug, e.g. `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/google-ai-studio` |
+| `GEMINI_GATEWAY_URL` | Cloudflare AI Gateway base through the provider slug, e.g. `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/google-ai-studio`. Must be `https` — the token is a bearer credential for the studio's whole spend. |
 | `GEMINI_GATEWAY_TOKEN` | AI Gateway token, sent as `cf-aig-authorization`. Not a Google key — the Google key is stored in the gateway as BYOK and injected there. |
 | `ORDER_STUDIO` | The studio slug. Selects that studio's own stored Google key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
 
 Setting the URL without the token is an error, not a fall back: a call that
 succeeds on somebody's personal key while its spend leaves the gateway is a
 failure nobody can detect afterwards.
+
+`ORDER_STUDIO` set with no gateway URL is an error too, and the most useful one:
+the sandbox launcher sets it whether or not the secret populated, so its
+presence without a URL means the secret is broken. Left to fall through, that
+box would either fail asking for a key it cannot hold, or succeed on a stray
+personal key and take the spend out of the gateway without anyone noticing.
 
 A gateway render with no `ORDER_STUDIO` is an error for the same reason. The
 alias picks which studio's key pays; the metadata tag is what the analytics can
