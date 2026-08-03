@@ -1,0 +1,231 @@
+# ABOUTME: Claude text generation through Cloudflare AI Gateway — the request
+# ABOUTME: it sends, how large it lets that get, and what it reads back.
+from __future__ import annotations
+
+import base64
+import io
+
+from PIL import Image
+
+# Cloudflare's slug for Anthropic, the last path segment of the gateway
+# endpoint, and Anthropic's own path appended after it verbatim.
+PROVIDER = "anthropic"
+MESSAGES_PATH = "/v1/messages"
+ANTHROPIC_API_BASE = "https://api.anthropic.com"
+# Sent by us rather than by the gateway. ComfyUI's own Claude node omits it
+# because the comfy.org proxy adds it server-side; through AI Gateway there is
+# nothing in the path that would.
+ANTHROPIC_VERSION = "2023-06-01"
+
+# Live from GET /v1/models, minus claude-opus-4-1-20250805, which retires
+# 2026-08-05 — offering it in a combo box means a saved workflow that stops
+# working two days from now.
+MODELS = ["claude-opus-5", "claude-sonnet-5", "claude-fable-5",
+          "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6",
+          "claude-opus-4-6", "claude-opus-4-5-20251101",
+          "claude-haiku-4-5-20251001", "claude-sonnet-4-5-20250929"]
+
+# Anthropic's high-resolution tier: these accept a 2576px long edge, and
+# everything else caps at 1568 and downscales server-side. The default is the
+# smaller one, so an id nobody has taught this about costs bytes rather than
+# shipping them into a request that will shrink them anyway.
+HIGH_RESOLUTION_MODELS = frozenset(
+    ["claude-opus-5", "claude-sonnet-5", "claude-fable-5",
+     "claude-opus-4-8", "claude-opus-4-7"])
+HIGH_RESOLUTION_EDGE_PX = 2576
+STANDARD_EDGE_PX = 1568
+
+
+def max_image_edge(model: str) -> int:
+    """The longest edge worth sending to this model.
+
+    Not merely a fidelity question: every pixel above the model's own ceiling
+    is thrown away upstream, and on the way there it is spent against
+    Cloudflare's 10 MB log ceiling, past which the call is not recorded at all
+    (see MAX_REQUEST_BYTES)."""
+    return (HIGH_RESOLUTION_EDGE_PX if model in HIGH_RESOLUTION_MODELS
+            else STANDARD_EDGE_PX)
+
+
+# Anthropic's own limit, and where its behaviour changes: past twenty images a
+# request is downscaled to a stricter per-image ceiling, so this is a boundary
+# in the API rather than a matter of taste.
+MAX_IMAGES = 20
+# Cloudflare does not store a log larger than 10 MB, and AI Gateway analytics
+# reads the log — so a request past that ceiling is spend that reaches no
+# cockpit row, which is the whole reason this node routes through the gateway.
+# The margin is deliberate: the JSON envelope, the prompt and the system prompt
+# all ride along with the images. In practice this binds long before MAX_IMAGES
+# does — roughly two high-resolution images, or eight standard-tier ones.
+MAX_REQUEST_BYTES = 8_000_000
+
+
+def image_blocks(pil_images, model: str) -> list:
+    """Each reference image as a base64 PNG content block, in the order given.
+
+    PNG rather than JPEG, as elsewhere in this pack. JPEG would buy five to ten
+    times the headroom below and is the obvious lever if this proves too tight,
+    but that is a quality trade for reference images where artifacts may matter
+    — not a default to arrive at by accident.
+
+    Over budget this raises rather than dropping images to fit. An answer drawn
+    from three of eight references is a wrong answer that looks right, and a
+    wrong answer that looks right is what this pack exists to refuse."""
+    images = list(pil_images)
+    # Before any encoding, so a graph wired to twenty-five references fails at
+    # once rather than after twenty-five PNG compressions.
+    if len(images) > MAX_IMAGES:
+        raise ValueError(
+            f"{len(images)} reference images were given and Claude takes at "
+            f"most {MAX_IMAGES}. Past that Anthropic downscales every image to "
+            f"a stricter ceiling, so the extras cost fidelity rather than "
+            f"adding any.")
+    edge = max_image_edge(model)
+    blocks = [{"type": "image",
+               "source": {"type": "base64", "media_type": "image/png",
+                          "data": encode_png(im, edge)}}
+              for im in images]
+    # Measured on what will actually cross the wire. A check written against
+    # width and height cannot tell a flat colour from noise at the same
+    # dimensions, and those differ by orders of magnitude once encoded.
+    size = sum(len(block["source"]["data"]) for block in blocks)
+    if size > MAX_REQUEST_BYTES:
+        raise ValueError(
+            f"The reference images encode to {size} bytes, over the "
+            f"{MAX_REQUEST_BYTES} this node sends. Cloudflare stores no log "
+            f"above 10 MB and AI Gateway analytics reads the log, so a request "
+            f"this size would run without its spend ever being attributed to "
+            f"the studio. Send fewer references, or smaller ones.")
+    return blocks
+
+
+def encode_png(image, edge: int) -> str:
+    """One image as base64 PNG, no larger than `edge` on its long side.
+
+    Never upscaled: enlarging a small reference invents detail the model then
+    reads as real, and is charged for by the tile count either way."""
+    if max(image.size) > edge:
+        image = image.copy()
+        image.thumbnail((edge, edge), Image.LANCZOS)
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def require_prompt(prompt: str) -> str:
+    """`prompt`, once it is something Claude can answer.
+
+    Its own function so the check can run before the work that would be wasted:
+    walking the key ladder and encoding twenty PNGs, only to raise about the
+    prompt, costs a headless operator two round-trips to learn one thing."""
+    if not (prompt or "").strip():
+        raise ValueError("prompt is required — Claude has nothing to answer "
+                         "from an empty one")
+    return prompt
+
+
+def request_body(prompt: str, image_blocks: list, model: str, max_tokens: int,
+                 system_prompt: str) -> dict:
+    """One Messages-API request.
+
+    No sampling parameters and no `thinking` key. temperature, top_p and top_k
+    are removed on Opus 5, Fable 5 and Opus 4.8/4.7 and return 400 there; and
+    thinking is on by default when the parameter is omitted, while sending
+    `{"type": "disabled"}` is itself a 400 on Fable 5. Omission is the only
+    setting that works across the whole model list."""
+    blocks = list(labelled(image_blocks))
+    blocks.append({"type": "text", "text": prompt})
+    body = {
+        "model": model,
+        # Required by the API, and a budget rather than a target: on the models
+        # that think by default it caps thinking and answer together, which is
+        # why a small value truncates a real answer rather than shortening it.
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": blocks}],
+    }
+    if (system_prompt or "").strip():
+        # Its own top-level key. Anthropic has no system role, and a message
+        # claiming one is a 400.
+        body["system"] = system_prompt
+    return body
+
+
+def labelled(image_blocks: list):
+    """The image blocks, each preceded by its number when there are several.
+
+    A lone image needs no label, and one image called "Image 1:" is noise the
+    model reads past. The labels match `llm_api.call_claude_api`, so the two
+    Claude paths in this pack send the same shape."""
+    blocks = list(image_blocks)
+    for index, block in enumerate(blocks, start=1):
+        if len(blocks) > 1:
+            yield {"type": "text", "text": f"Image {index}:"}
+        yield block
+
+
+# Any of these at the top level means a Messages endpoint answered, however
+# little it had to say. Their absence is what distinguishes a wrong URL from
+# an empty answer, which have opposite fixes.
+MESSAGES_KEYS = {"content", "stop_reason", "usage", "model", "id"}
+
+
+def parse_response(payload) -> str:
+    """Claude's answer, or a raise that says why there is not one.
+
+    Order matters. A refusal is recognised before the content is read, because
+    a refusal can arrive with partial text attached and reading content first
+    hands that back as though it were an answer. Every other outcome that is
+    not a complete answer raises too: a graph handed an empty string fails
+    downstream where the cause is out of view, and in an order sandbox the
+    raise is the only artifact a human reads."""
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Claude replied with a {type(payload).__name__} rather than an "
+            f"object. Nothing at {MESSAGES_PATH} answers that way, so the "
+            f"reply came from somewhere else.")
+    if not MESSAGES_KEYS & set(payload):
+        raise ValueError(
+            f"The reply carries {sorted(payload)} rather than anything a "
+            f"{MESSAGES_PATH} reply carries, so this is not Claude answering. "
+            f"Check the gateway base and the provider slug before the prompt.")
+
+    stop = str(payload.get("stop_reason") or "")
+    # Populated only on a refusal, and null the rest of the time — so it is
+    # read through a guard rather than reached into.
+    details = payload.get("stop_details")
+    details = details if isinstance(details, dict) else {}
+    explanation = str(details.get("explanation") or "").strip()
+    said = f" Claude said: {explanation}" if explanation else ""
+
+    if stop == "refusal":
+        category = str(details.get("category") or "").strip()
+        about = f" ({category})" if category else ""
+        raise ValueError(
+            f"Claude refused this request{about}.{said} A refusal is the "
+            f"model declining the prompt itself, so retrying it unchanged "
+            f"will refuse again.")
+    if stop == "max_tokens":
+        raise ValueError(
+            f"Claude's answer was cut off at the max_tokens budget, so what "
+            f"came back is a fragment rather than an answer. Raise max_tokens "
+            f"— on the models that think by default it caps the reasoning and "
+            f"the answer together, so the reasoning can consume all of it.")
+    if stop == "model_context_window_exceeded":
+        raise ValueError(
+            "Claude stopped with model_context_window_exceeded: the request "
+            "did not fit in the model's context window, which is the inputs "
+            "being too large rather than the answer being too long "
+            "— send a shorter prompt or fewer reference images. Raising "
+            "max_tokens makes this worse, not better.")
+
+    answer = "".join(
+        block["text"] for block in payload.get("content") or []
+        if isinstance(block, dict) and block.get("type") == "text"
+        and block.get("text"))
+    if not answer:
+        raise ValueError(
+            f"Claude returned no text at all (stop_reason {stop or 'absent'})."
+            f"{said} An empty answer is handed on as a placeholder by some "
+            f"nodes; this one raises, because a placeholder reaching a client "
+            f"looks like an answer.")
+    return answer
