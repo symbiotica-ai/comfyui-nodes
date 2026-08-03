@@ -282,6 +282,19 @@ def test_a_direct_call_does_not_leak_the_google_key_either(node_module,
     assert "a-google-key" not in str(caught.value)
 
 
+def test_a_failure_that_happens_to_be_valid_json_is_still_a_failure(
+        node_module, monkeypatch):
+    """A gateway rejecting a request answers with a JSON error body, and a
+    rate limit answers 429 with one too. Without the status check those parse
+    cleanly and are read as a render that produced no image, so the operator
+    is told Gemini declined when the call never reached it."""
+    with pytest.raises(RuntimeError, match="429"):
+        run_execute(node_module, monkeypatch,
+                    FakeResponse(429, '{"error":{"message":"rate limited"}}',
+                                 payload={"error": {"message": "rate limited"}}),
+                    env=dict(GATEWAY_ENV))
+
+
 def test_a_two_hundred_that_is_not_json_is_reported_with_its_body(node_module,
                                                                   monkeypatch):
     """A gateway interstitial or a challenge page answers 200 with HTML. Bare,
