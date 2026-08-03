@@ -32,8 +32,16 @@ export function applySelection(node, entryRel) {
 
 async function fetchJson(url) {
     const res = await api.fetchApi(url);
-    if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error ?? res.statusText);
-    return res.json();
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        // The refused body is carried along, not just its message: a refusal
+        // still reports what the volume walk did, and the walk succeeding while
+        // the folder is gone is the ordinary outcome of a stale view.
+        const err = new Error(body?.error ?? res.statusText);
+        err.payload = body;
+        throw err;
+    }
+    return body;
 }
 
 function refreshSummary(node) {
@@ -82,7 +90,20 @@ function openBrowser(node) {
     closeBtn.textContent = "Done";
     closeBtn.className = "sym-btn";
     closeBtn.style.cssText = ghostCss + "margin-left:auto;";
-    bar.append(upBtn, crumb, closeBtn);
+    const refreshBtn = document.createElement("button");
+    refreshBtn.textContent = "⟳";
+    refreshBtn.className = "sym-btn";
+    refreshBtn.title = "Re-read this folder";
+    refreshBtn.style.cssText = ghostCss + "padding:6px 10px;flex:none;";
+    // Held open while the volume walk runs: it can take the server's whole sync
+    // budget, and a control that looks inert invites the clicks that pile more
+    // walks behind it.
+    refreshBtn.addEventListener("click", () => {
+        if (refreshBtn.disabled) return;
+        show(currentRel, { sync: true, inPlace: true });
+    });
+    // closeBtn carries margin-left:auto, so refresh lands to the left of Done.
+    bar.append(upBtn, crumb, refreshBtn, closeBtn);
 
     const filterBar = document.createElement("div");
     filterBar.style.cssText = `padding:10px 16px;border-bottom:1px solid ${HUB.hairline};`;
@@ -109,6 +130,11 @@ function openBrowser(node) {
     let firstOpen = true;
     let currentEntries = [];
     let currentParent = null;
+    let currentRel = "";  // what the refresh control re-reads
+    let currentHidden = 0;
+    let showModelKinds = false;
+    let issued = 0;  // the pane belongs to the most recent request, not the last reply
+    let mountStale = false;
 
     function onKeydown(e) {
         if (e.key === "Escape") close();
@@ -132,8 +158,59 @@ function openBrowser(node) {
         d.textContent = text;
         return d;
     };
+    // The way out, rendered as the first row rather than only as the header
+    // button. It is synthesised here and never joins currentEntries, so it
+    // cannot be filtered away with the folder's own contents and cannot be
+    // handed a select control — picking it would write the parent folder into
+    // the node's value while the user thought they were navigating.
+    const upRow = (parentRel) => {
+        const row = document.createElement("div");
+        row.className = "sym-row";
+        row.style.cssText = "display:flex;align-items:center;gap:10px;padding:9px 10px;";
+        const label = document.createElement("span");
+        label.className = "sym-name";
+        label.style.cssText = `flex:1;color:${HUB.inkSubtle};cursor:pointer;`;
+        label.textContent = "↑  ..";
+        label.addEventListener("click", () => show(parentRel));
+        row.appendChild(label);
+        return row;
+    };
+    // The studio root leaves out the folders holding model kinds, because the
+    // editor picks models in its own loader rather than by path. The studio's
+    // web view lists them, so an unexplained omission reads as a lost folder —
+    // this accounts for them and offers to list them anyway.
+    const modelKindsNote = () => {
+        const row = document.createElement("div");
+        row.style.cssText =
+            "display:flex;align-items:center;gap:8px;padding:10px;margin-top:4px;" +
+            `border-top:1px solid ${HUB.hairline};color:${HUB.inkTertiary};` +
+            `font:12px ${HUB.font};`;
+        const text = document.createElement("span");
+        text.style.cssText = "flex:1;";
+        text.textContent = showModelKinds
+            ? "Model folders shown — models are picked in the model loader node."
+            : `${currentHidden} model folder${currentHidden === 1 ? "" : "s"} hidden`
+              + " — models are picked in the model loader node.";
+        const toggle = document.createElement("button");
+        toggle.className = "sym-btn";
+        toggle.style.cssText = ghostCss + "padding:4px 10px;flex:none;";
+        toggle.textContent = showModelKinds ? "hide" : "show";
+        toggle.addEventListener("click", () => {
+            show(currentRel, { inPlace: true, models: !showModelKinds });
+        });
+        row.append(text, toggle);
+        return row;
+    };
     function renderRows() {
         pane.replaceChildren();
+        if (currentParent !== null) pane.appendChild(upRow(currentParent));
+        renderEntries();
+        // Below the rows: a footnote about the level, not a row of it.
+        if (currentParent === null && (currentHidden || showModelKinds)) {
+            pane.appendChild(modelKindsNote());
+        }
+    }
+    function renderEntries() {
         if (currentEntries.length === 0) {
             pane.appendChild(emptyState("No files in this studio library yet"));
             return;
@@ -176,23 +253,87 @@ function openBrowser(node) {
 
     filter.addEventListener("input", renderRows);
 
-    async function show(dir) {
-        errline.textContent = "";
+    // One message line derived from state rather than written at each event, so
+    // it cannot be cleared by something that did not change what it was saying:
+    // a walk outlives the listing that started it, and staleness outlives both.
+    let walking = 0;
+    let lastError = "";
+    const repaintMessage = () => {
+        const failed = !!lastError;
+        errline.style.color = failed ? HUB.danger : HUB.inkSubtle;
+        errline.textContent = failed ? lastError
+            : walking > 0 ? "Refreshing the studio volume…"
+            : mountStale ? "Could not refresh the studio volume — "
+                           + "this listing may be out of date."
+            : "";
+    };
+    // What a walk learned about the volume, taken from whatever came back —
+    // a listing or a refusal, since the two outcomes are independent and a
+    // folder can be gone precisely because the view of it was stale. It is the
+    // one part of a reply that is not about the pane it arrived for, so it is
+    // recorded even when the pane has moved on and the rest is discarded.
+    const recordWalk = (body) => {
+        if (body && body.sync) mountStale = body.sync !== "refreshed";
+    };
+    const setWalking = (on) => {
+        walking += on ? 1 : -1;
+        refreshBtn.disabled = walking > 0;
+        refreshBtn.style.opacity = walking > 0 ? "0.45" : "";
+        repaintMessage();
+    };
+
+    // `sync` forces a volume refresh — the browse-session open does it once, and
+    // the refresh control does it on demand. Without it a re-read redraws the
+    // same rows off the same mount and reads as proof the folder is not there.
+    // `inPlace` says this is a re-read of the folder already on screen rather
+    // than a move to a different one, which is what decides whether the user's
+    // filter still describes what they are looking at. `models` travels as an
+    // argument rather than being read off the state, so a listing that fails
+    // leaves the state saying what is actually on screen.
+    async function show(dir, { sync = false, inPlace = false,
+                               models = showModelKinds } = {}) {
+        // A forced sync waits on the volume walk while the pane stays usable, so
+        // its reply can land after the user has already opened something else.
+        // Whoever asked last is who the pane belongs to; earlier replies are
+        // answers to a question nobody is still asking.
+        const seq = ++issued;
+        const walks = sync || firstOpen;
+        lastError = "";
+        repaintMessage();
         let data;
+        if (walks) setWalking(true);
         try {
             const q = new URLSearchParams({ dir });
-            if (firstOpen) q.set("sync", "1");
-            firstOpen = false;
+            if (walks) q.set("sync", "1");
+            if (models) q.set("models", "1");
             data = await fetchJson(`${ROUTE}?${q.toString()}`);
         } catch (e) {
-            errline.textContent = e.message || "studio library unavailable";
+            if (walks) recordWalk(e.payload);
+            if (seq === issued) lastError = e.message || "studio library unavailable";
+            repaintMessage();
+            return;
+        } finally {
+            if (walks) setWalking(false);
+        }
+        if (walks) recordWalk(data);
+        if (seq !== issued) {
+            repaintMessage();
             return;
         }
+        repaintMessage();
+        firstOpen = false;  // spent only once a listing has actually arrived
+        showModelKinds = models;  // adopted only now that a listing proves it
+        currentRel = data.rel ?? "";
         crumb.textContent = data.rel || "studios";
+        // The rows still render on a stale mount: it is older than the user
+        // thinks, not unreadable.
         currentEntries = data.entries || [];
         currentParent = data.parent ?? null;
-        upBtn.style.cssText = currentParent !== null ? "" : "display:none;";
-        filter.value = "";
+        currentHidden = data.hidden ?? 0;
+        upBtn.style.display = currentParent !== null ? "" : "none";
+        // Re-reading in place is not navigation: the filter is still describing
+        // the folder the user is looking at.
+        if (!inPlace) filter.value = "";
         renderRows();
     }
     show("");

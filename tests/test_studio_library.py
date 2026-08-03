@@ -192,6 +192,38 @@ def test_lists_dirs_first_and_hides_model_kinds_at_root(vol2):
     assert ref["type"] == "dir" and ref["rel"] == "studios/ggs/references"
 
 
+def test_the_root_reports_how_many_model_folders_it_hid(vol2):
+    """A hidden folder and an absent one look identical in a listing. The hub
+    lists these, so the two views disagree by exactly this many rows, and
+    without a count nobody browsing can tell that is what happened."""
+    res = list_studio_dir(str(vol2), "ggs", "")
+    assert res["hidden"] == 2  # checkpoints + loras; the other six are not there
+
+
+def test_a_plain_file_named_like_a_model_kind_is_an_ordinary_asset(tmp_path):
+    """The omission exists because the model loader picks these folders by kind.
+    A FILE called 'vae' is not one of those: the loader knows nothing about it,
+    so hiding it strands it, and counting it makes the root claim a folder it
+    does not have."""
+    (tmp_path / "studios" / "ggs" / "loras").mkdir(parents=True)
+    _touch(tmp_path / "studios" / "ggs" / "vae", b"not a folder")
+    res = list_studio_dir(str(tmp_path), "ggs", "")
+    assert res["hidden"] == 1  # the loras directory, not the file
+    assert [e["name"] for e in res["entries"]] == ["vae"]
+
+
+def test_a_root_with_nothing_hidden_reports_no_count(tmp_path):
+    (tmp_path / "studios" / "ggs" / "references").mkdir(parents=True)
+    assert "hidden" not in list_studio_dir(str(tmp_path), "ggs", "")
+
+
+def test_asking_for_model_folders_lists_them_at_the_root(vol2):
+    res = list_studio_dir(str(vol2), "ggs", "", show_model_kinds=True)
+    names = [e["name"] for e in res["entries"]]
+    assert names == ["checkpoints", "loras", "references", "renders", "brief.txt"]
+    assert "hidden" not in res  # nothing was hidden, so there is nothing to say
+
+
 def test_model_kinds_not_hidden_in_nested_dir(vol2):
     res = list_studio_dir(str(vol2), "ggs", "studios/ggs/references")
     names = [e["name"] for e in res["entries"]]

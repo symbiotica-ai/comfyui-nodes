@@ -301,15 +301,50 @@ SYNC_TIMEOUT_S = 10  # best-effort browse sync; time out and list the stale moun
 async def _sync_studio_assets(root):
     """Best-effort async publish/refresh of the studio-assets v2 mount before a
     browse-session listing. Never blocks the event loop; a stale listing is
-    acceptable. Mirrors services/comfy-modal/symbiotica_platform/route.py:206-213."""
+    acceptable. Mirrors services/comfy-modal/symbiotica_platform/route.py.
+
+    Returns "refreshed", "timeout" or "failed". A caller that discarded this
+    could not tell a folder that is absent from one it never went to look for —
+    the two produce the same listing, and only one of them is the studio's
+    actual contents."""
     try:
         proc = await asyncio.create_subprocess_exec("sync", root)
-    except OSError:
-        return
+    except OSError as exc:
+        print(f"[symbiotica] studio-assets sync could not start: {exc}")
+        return "failed"
     try:
-        await asyncio.wait_for(proc.wait(), timeout=SYNC_TIMEOUT_S)
+        code = await asyncio.wait_for(proc.wait(), timeout=SYNC_TIMEOUT_S)
     except asyncio.TimeoutError:
         proc.kill()
+        print(f"[symbiotica] studio-assets sync exceeded {SYNC_TIMEOUT_S}s; "
+              "listing the mount as it stands")
+        return "timeout"
+    if code != 0:
+        print(f"[symbiotica] studio-assets sync exited {code}; "
+              "listing the mount as it stands")
+        return "failed"
+    return "refreshed"
+
+
+_SYNCS: dict[str, asyncio.Task] = {}
+
+
+async def _coalesced_sync(root):
+    """The outcome of one `sync` walk per mount at a time: a browse arriving
+    while one is in flight awaits that one instead of starting a second. Safe
+    because the walk is idempotent, so the shared answer is the answer the
+    second caller would have computed — and necessary because the control that
+    triggers it is a button that can be held down, and each walk is a FUSE
+    traversal lasting up to the whole timeout. A finished walk is never reused:
+    a browse after somebody else's upload needs one that could see it.
+
+    Shielded, so a browser that navigates away mid-walk leaves the walk — and
+    everyone waiting on it — running. Mirrors the hub's _coalesced."""
+    task = _SYNCS.get(root)
+    if task is None or task.done():
+        task = asyncio.create_task(_sync_studio_assets(root))
+        _SYNCS[root] = task
+    return await asyncio.shield(task)
 
 
 @PromptServer.instance.routes.get("/symbiotica/studio-library")
@@ -320,10 +355,23 @@ async def studio_library(request):
     studio = (os.environ.get("CANVAS_STUDIO") or "").strip()
     if not studio:
         return web.json_response({"error": "studio library not available"}, status=503)
+    outcome = None
     if request.query.get("sync") == "1":
-        await _sync_studio_assets(studio_library_mod.STUDIO_ASSETS_DIR)
+        outcome = await _coalesced_sync(studio_library_mod.STUDIO_ASSETS_DIR)
     result = studio_library_mod.list_studio_dir(
-        studio_library_mod.STUDIO_ASSETS_DIR, studio, request.query.get("dir", ""))
+        studio_library_mod.STUDIO_ASSETS_DIR, studio, request.query.get("dir", ""),
+        show_model_kinds=request.query.get("models") == "1")
+    # What the walk did rides along with whatever the listing turned out to be:
+    # the two succeed or fail independently, and the folder a caller asked for
+    # can be gone precisely BECAUSE their view of the volume was stale. Reported
+    # on the refused listing too, and reported on success — silence there would
+    # be indistinguishable from a request that never asked, leaving a caller
+    # showing a staleness warning no way to learn the volume is current again.
+    # A degraded walk does not refuse the listing: the stale mount is still the
+    # best answer available, and withholding it would cost a browse over a
+    # folder that is probably right anyway.
+    if outcome:
+        result["sync"] = outcome
     return web.json_response(result, status=400 if "error" in result else 200)
 
 

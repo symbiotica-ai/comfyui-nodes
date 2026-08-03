@@ -101,7 +101,15 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   wire both into an img2img edit node.
 - **Symbiotica Studio Library** — pick a file or folder from the active
   studio's asset library; outputs its absolute sandbox path and whether it is
-  a folder.
+  a folder. The browser refreshes the studio volume when it opens and whenever
+  you press ⟳, and says so when that refresh did not happen, since a folder
+  nobody went to look for and a folder that is not there otherwise look the
+  same. Every folder below the studio root lists `..` as its first row.
+  The studio root leaves out the eight model-kind folders
+  (`checkpoints`, `loras`, `vae`, `controlnet`, `upscale_models`,
+  `embeddings`, `diffusion_models`, `text_encoders`) because models are picked
+  in the model loader node, not by path; it says how many it left out and
+  `show` lists them anyway.
 - **Symbiotica Refs Folder** — load every image in one folder, in filename
   order, from an absolute path and nothing else. No browsing and no picking, so
   a dispatcher can bind the path and run the graph headless over the API.

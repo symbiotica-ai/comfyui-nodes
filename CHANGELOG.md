@@ -6,6 +6,77 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.1
+
+**Node change.** `Symbiotica Auto Packer` gains a fourth output,
+`sheet_categories`. It is appended rather than inserted, so every existing wire
+keeps its slot and saved workflows are unaffected. No node is added, removed or
+renamed, and no other node's inputs, outputs or id changed. The
+`/symbiotica/studio-library` route's reply gained a `sync` field, which only
+this pack's own browser reads.
+
+### Added
+- **The Auto Packer says what each sheet holds.** It reported which sheets it
+  drew and what to call them, but not their asset type, so a graph that wanted
+  to file or label sheets per type had to re-derive it by string-matching the
+  slug in `sheet_names` — which only works while the slug format holds. Each
+  sheet now carries its category, and `sheet_categories` exposes it in the form
+  the order writes it ("Food - 3 stages"), index-aligned with `sheets`.
+
+### Fixed
+- **The auto-packer left you to guess which switch emptied it.** When a
+  combination of settings left it with nothing to draw, it said so without
+  saying which setting was responsible.
+- **The Studio Library browser could not be refreshed, and could not tell you
+  when a refresh had failed.** The volume sync it runs before a listing threw
+  away its own outcome three ways: a failure to start returned silently, the
+  exit code was never read, and a sync that ran out of time was killed and fell
+  through. All three produced the same reply as a sync that worked, so a folder
+  created a minute ago and a folder that was never there looked identical. The
+  reply now says what the sync did, the panel says so when it did not happen,
+  and that warning stands until a sync actually succeeds — every folder opened
+  in between comes off the same unrefreshed volume and is exactly as old.
+
+  This is what makes a studio that looks out of date diagnosable. It is not a
+  guarantee that it will not happen.
+- **Nothing in the browser re-read a folder.** The sync ran once, when the
+  browser opened, so a folder created after that could not be reached without
+  closing and re-opening. There is a ⟳ control now. It forces the sync rather
+  than only re-listing, which would have redrawn the same rows off the same
+  volume and read as proof the folder was not there, and it is held while the
+  sync runs so that pressing it again cannot queue another.
+- **A slow refresh could pull you back to a folder you had left.** The sync
+  waits on the volume while the panel stays usable, so its reply could arrive
+  after you had already opened something else and quietly replace it. The panel
+  now belongs to whatever was asked for last.
+- **Repeated refreshes each walked the volume separately.** One walk runs at a
+  time per volume now, as the studio service does for the same mechanism. A
+  browser arriving while one is in flight waits for that one; a finished walk is
+  never reused, so a browse after somebody else's upload still gets a walk that
+  can see it.
+- **The way out of a folder was a button above the filter box, away from the
+  rows.** There is a `..` row at the top of every listing below the studio root.
+  It is drawn rather than listed, so it cannot be filtered away with the
+  folder's contents, cannot hide the "no files here" message, and carries no
+  select control — picking it would have written the parent folder into the
+  node's value on what looks like navigation.
+- **The studio root left out eight folders without saying so.** It omits the
+  model-kind folders (`checkpoints`, `loras`, `vae`, `controlnet`,
+  `upscale_models`, `embeddings`, `diffusion_models`, `text_encoders`) because
+  models are picked in the model loader node rather than by path. Nothing said
+  they existed, and the studio's own web view lists them, so the two disagreed
+  by exactly those rows with no way to tell a hidden folder from an absent one.
+  The root now says how many it left out, and `show` lists them. A file that
+  merely shares one of those names is an ordinary asset and is listed: before,
+  it was hidden and then counted as a folder that was not there.
+
+### Other
+- The listing route reports the volume sync's outcome on every reply, including
+  a refused one. Reporting only failure meant a caller could never learn the
+  volume was current again: refreshing inside a folder that had since vanished —
+  which is what a stale view produces — ran a clean sync, got a refusal for the
+  folder, and left the warning standing over a volume that had just refreshed.
+
 ## 2026.7.25
 
 **Node change.** One node is added, `Symbiotica Refs Folder`
