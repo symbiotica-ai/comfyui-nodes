@@ -361,6 +361,43 @@ def test_a_refusal_for_any_reason_says_which_reason():
                 reply(finish_reason=reason))
 
 
+def test_every_distinct_reason_is_reported_not_just_the_first():
+    """A response can carry several candidates stopped for different reasons.
+    Naming only one hands the operator a partial account of a failure they
+    cannot reproduce."""
+    payload = {"candidates": [
+        {"finishReason": "SAFETY", "content": {"parts": []}},
+        {"finishReason": "RECITATION", "content": {"parts": []}},
+    ]}
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response(payload)
+    assert "SAFETY" in str(caught.value)
+    assert "RECITATION" in str(caught.value)
+
+
+def test_one_reason_shared_by_several_candidates_is_said_once():
+    payload = {"candidates": [
+        {"finishReason": "SAFETY", "content": {"parts": []}},
+        {"finishReason": "SAFETY", "content": {"parts": []}},
+    ]}
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response(payload)
+    assert str(caught.value).count("SAFETY") == 1
+
+
+def test_generic_advice_is_not_offered_when_the_real_reason_is_known():
+    """Appending it regardless would undo the point of naming the reason: the
+    operator reads "rephrase your prompt" under a SAFETY stop and tries the
+    one thing that cannot help."""
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response(reply(finish_reason="SAFETY"))
+    assert "rephras" not in str(caught.value).lower()
+
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response(reply({"text": "I will not draw that."}))
+    assert "rephras" not in str(caught.value).lower()
+
+
 def test_a_finished_candidate_is_not_reported_as_a_refusal():
     """STOP is how a normal completion ends. Naming it in an error would put a
     refusal reason on every empty response that was never refused."""
