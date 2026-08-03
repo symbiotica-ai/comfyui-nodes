@@ -6,6 +6,73 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.5
+
+**Node change.** Two nodes are added: `Symbiotica Slice Cells` and `Symbiotica
+Asset Refs`. `Symbiotica Dataset Reference` gains a third output, `cell_boxes`,
+appended after `reference_names`, so every existing wire keeps its slot and
+saved workflows are unaffected. No node is removed or renamed, and no existing
+input or output changed position or meaning. Under calendar versioning the
+major is the year, so nothing in the version number signals this.
+
+### Added
+
+- **A packed sheet can be cut back into the assets it was packed from.**
+  Editing one asset out of a three-icon sheet meant describing it to the model
+  in words — "the plate, row 2 column 2" — because nothing downstream knew
+  where the cells were. The packer knew: it places every sprite on a grid and
+  then discards the boxes. Dataset Reference now reports that grid as
+  `cell_boxes`, and Slice Cells cuts an image on it, returning one image per
+  cell named by its role. A run that switches asset type re-cuts itself with no
+  rewiring — a food sheet gives prep, ready and serving; a chair sheet gives its
+  four rotations.
+
+  The grid is derived the way the packer derives it: padding is a gutter counted
+  `cols + 1` times, so an interior gap is one padding wide and not two; the
+  sheet is centred; and a short row is re-centred, which is what puts food's
+  single prep cell over the midpoint of the pair below it. A `_layout.json`
+  written beside a type's sheets wins over the computed grid, because it knows
+  the sprite aspect and the upscale policy, neither of which is otherwise
+  recoverable.
+
+- **Each asset's own client reference, paired with its cell.** Asset Refs hands
+  back the reference art the client sent for one asset, in the order the order
+  sheet pairs it — prep, ready, serving for a type packed in stages, matching
+  the order the cells come out in. One index therefore picks a generated cell
+  and the reference belonging to it. Where the two counts disagree the node says
+  so on its own body rather than implying a pairing it cannot support, and a
+  reference missing from disk is named rather than skipped, since dropping one
+  shifts every later index onto the wrong cell.
+
+  References are composited onto a colour rather than converted. These files
+  keep live pixels underneath their transparent areas, so discarding alpha
+  uncovers that backdrop and turns every soft edge fully opaque — it reads as a
+  glow around each asset. The background is selectable to match a generation,
+  transparency can be kept instead, and the alpha always comes out as `masks`,
+  because ComfyUI carries transparency on a mask wire and never as a fourth
+  channel on an image.
+
+### Fixed
+
+- **Two nodes could not see the files they read.** ComfyUI runs a node's
+  change-check before the upstream outputs exist, so an input arriving on a wire
+  reads as unset there. Dataset Reference hashed a folder listing under its
+  `project_path` widget — but the project arrives on the order wire, and that
+  widget is empty in every graph that uses one, so it resolved a relative
+  `dataset`, the walk raised, the raise was swallowed, and the guard was dead in
+  exactly the graphs it was written for. Adding a reference to a type did not
+  redraw. Both nodes now consult the projects and folders executions register.
+
+  This matters more now that `cell_boxes` shares that key: the boxes come from
+  the packer's rules and settings, which no node lists as an input, so re-ruling
+  a type changed the grid while every wired value stayed identical and the crop
+  went on cutting the old one.
+
+- **A replaced reference image is noticed.** Asset Refs had no change-check at
+  all, and both of its file-naming inputs are linked, so a client dropping in a
+  corrected reference under the same filename served the cached tensor of the
+  old picture indefinitely.
+
 ## 2026.8.4
 
 **Node change.** One node is added, `Claude (Symbiotica)`. Nothing existing is

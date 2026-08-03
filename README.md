@@ -159,7 +159,17 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   month/feature/category/asset.
 - **Symbiotica Dataset Reference** — picks a reference per category, seeded per
   `(seed, category)` so adding a type does not reshuffle a pick already
-  approved.
+  approved. Also reports `cell_boxes`: where each asset sits inside its type's
+  packed sheet, so a render of that sheet can be cut back up on the grid it was
+  packed to.
+- **Symbiotica Slice Cells** — cuts a generated sheet into one image per asset
+  on those boxes, each named by its role, so an edit addresses "serving" rather
+  than "the third one" and a run that switches asset type re-cuts itself with
+  no rewiring.
+- **Symbiotica Asset Refs** — the client's own reference art for one asset, in
+  the order the order sheet pairs it, so the index that picks a cell picks the
+  reference belonging to it. References with transparency are composited onto a
+  chosen background rather than flattened, and their alpha comes out as `masks`.
 - **Symbiotica Category Prompts** — composes a category's architect prompt from
   the project's shared `prompts/_rules/*.md` (filename order) followed by
   `prompts/<Category>.md`, which stays last because the tail of a prompt
