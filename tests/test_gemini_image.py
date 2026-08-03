@@ -489,6 +489,30 @@ def test_our_own_advice_does_not_displace_googles():
     assert said.count("rephras") == 1
 
 
+def test_an_explanation_alone_is_enough_and_our_advice_is_not_added_to_it():
+    """A candidate can explain itself without naming a finishReason. Ours is
+    generic by construction; appending it to Google's specific sentence adds
+    nothing and reads as two separate diagnoses."""
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response({"candidates": [
+            {"content": {}, "finishMessage": "the prompt asked for a real person"}]})
+    said = str(caught.value)
+    assert "real person" in said
+    assert "rephras" not in said.lower()
+
+
+def test_one_explanation_shared_by_several_candidates_is_said_once():
+    """Every candidate of a refused generation carries the same sentence.
+    Repeating it per candidate turns one reason into a wall of duplicates."""
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response({"candidates": [
+            {"content": {}, "finishReason": "IMAGE_OTHER",
+             "finishMessage": "could not generate the image"},
+            {"content": {}, "finishReason": "IMAGE_OTHER",
+             "finishMessage": "could not generate the image"}]})
+    assert str(caught.value).count("could not generate the image") == 1
+
+
 def test_a_finish_message_that_is_not_a_sentence_does_not_crash_the_report():
     """Only the string form has been observed. A shape change upstream turning
     it into a number or an object would otherwise raise AttributeError from
