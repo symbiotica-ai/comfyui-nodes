@@ -93,3 +93,57 @@ def test_note_says_when_the_type_has_no_rule_recorded():
     note = pairing_note({"assets": [SPOOKIES]}, "Spookies",
                         SPOOKIES["refFiles"], [])
     assert "no packing rule recorded" in note
+
+
+# --- transparency -----------------------------------------------------------
+# The client's references are RGBA with a live backdrop hidden under alpha 0 and
+# soft edges far brighter than the art they border. Converting instead of
+# compositing made every asset glow.
+
+def _rgba(size=(4, 4), rgb=(255, 0, 0), alpha=0):
+    from PIL import Image
+    return Image.new("RGBA", size, rgb + (alpha,))
+
+
+def test_transparent_pixels_become_the_background_not_what_hides_under_them():
+    from pipeline.asset_refs import flatten
+    hidden = _rgba(rgb=(255, 0, 0), alpha=0)      # bright red under alpha 0
+    assert flatten(hidden, "#808080").getpixel((0, 0)) == (128, 128, 128)
+
+
+def test_a_soft_edge_blends_towards_the_background():
+    from pipeline.asset_refs import flatten
+    half = _rgba(rgb=(255, 255, 255), alpha=128)
+    r, g, b = flatten(half, "#000000").getpixel((0, 0))
+    # Half-opaque white over black lands mid-grey; dropping alpha would give 255.
+    assert 120 <= r <= 136 and r == g == b
+
+
+def test_opaque_pixels_are_untouched():
+    from pipeline.asset_refs import flatten
+    solid = _rgba(rgb=(10, 20, 30), alpha=255)
+    assert flatten(solid, "#808080").getpixel((0, 0)) == (10, 20, 30)
+
+
+def test_an_image_without_alpha_passes_straight_through():
+    from PIL import Image
+
+    from pipeline.asset_refs import flatten
+    rgb = Image.new("RGB", (4, 4), (10, 20, 30))
+    assert flatten(rgb, "#ff0000").getpixel((0, 0)) == (10, 20, 30)
+
+
+def test_palette_images_with_transparency_are_composited_too():
+    from PIL import Image
+
+    from pipeline.asset_refs import flatten
+    p = Image.new("RGBA", (4, 4), (255, 0, 0, 0)).convert("P", palette=Image.ADAPTIVE)
+    p.info["transparency"] = 0
+    assert flatten(p, "#808080").mode == "RGB"
+
+
+def test_a_bad_colour_falls_back_instead_of_failing_the_render():
+    from pipeline.asset_refs import flatten, parse_hex
+    assert parse_hex("not-a-colour") == (128, 128, 128)
+    assert parse_hex("#fff") == (255, 255, 255)
+    assert flatten(_rgba(), "zzz").getpixel((0, 0)) == (128, 128, 128)

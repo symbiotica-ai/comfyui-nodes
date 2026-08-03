@@ -2,6 +2,61 @@
 # ABOUTME: art they sent for this thing, as opposed to the dataset's house style.
 import os
 
+# What a reference lands on when it arrives with transparency. Grey because the
+# packed sheets use it: a reference shown beside a cut cell should not be the one
+# image with a different backdrop.
+DEFAULT_BACKGROUND = "#808080"
+
+
+def parse_hex(value, fallback=(128, 128, 128)):
+    """A #rgb or #rrggbb string as an RGB triple, falling back rather than
+    raising — a typo in a colour widget must not take a render down."""
+    text = str(value or "").strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(ch * 2 for ch in text)
+    if len(text) != 6:
+        return fallback
+    try:
+        return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return fallback
+
+
+def alpha_of(image):
+    """The image's alpha as an L-mode image, or None when it has none.
+
+    Separated from the pixels because ComfyUI carries transparency as a MASK on
+    its own wire, never as a fourth channel on an IMAGE — so the only way to
+    hand transparency downstream is to hand back the alpha as well.
+    """
+    from PIL import Image
+    if image.mode == "P" and "transparency" in image.info:
+        image = image.convert("RGBA")
+    if image.mode in ("RGBA", "LA", "PA"):
+        return image.convert("RGBA").getchannel("A")
+    return None
+
+
+def flatten(image, background=DEFAULT_BACKGROUND):
+    """One reference as RGB, composited onto `background` if it has alpha.
+
+    `Image.convert("RGB")` alone DISCARDS alpha rather than applying it, which
+    is a silent disaster on this art: these files keep real pixels underneath
+    fully transparent areas, so the hidden backdrop reappears, and the
+    part-transparent pixels around every edge — which are much brighter than
+    the artwork they border — become fully opaque. The result reads as a glow
+    around each asset. Compositing is what makes the transparency mean what it
+    looks like.
+    """
+    from PIL import Image
+    has_alpha = (image.mode in ("RGBA", "LA", "PA")
+                 or (image.mode == "P" and "transparency" in image.info))
+    if not has_alpha:
+        return image.convert("RGB")
+    image = image.convert("RGBA")
+    plate = Image.new("RGBA", image.size, parse_hex(background) + (255,))
+    return Image.alpha_composite(plate, image).convert("RGB")
+
 
 def find_asset(order, asset_name):
     """The order's entry for `asset_name`, or None.

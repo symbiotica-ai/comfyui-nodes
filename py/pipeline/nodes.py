@@ -33,6 +33,7 @@ from .regional_prompt import (
 from .skeleton import build_client_prompts, build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
+from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import (assets_by_category, dataset_dir,
                            pick_reference_per_category, save_paths)
 from .project_layout import project_root_of
@@ -1267,6 +1268,9 @@ class SymbioticaDatasetReference(io.ComfyNode):
         return io.NodeOutput(images, names, boxes)
 
 
+_REF_SIZES = ["native", "512", "1024"]
+
+
 class SymbioticaAssetRefs(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1286,6 +1290,30 @@ class SymbioticaAssetRefs(io.ComfyNode):
                 io.String.Input("asset_name", force_input=True,
                                 tooltip="The Order Assets node's "
                                         "`asset_names` output."),
+                io.String.Input("background", default=DEFAULT_BACKGROUND,
+                                tooltip="What a reference with transparency "
+                                        "sits on. Grey by default, matching "
+                                        "the packed sheets, so the reference "
+                                        "and the cell beside it share a "
+                                        "backdrop. Set it to your "
+                                        "generations' background to compare "
+                                        "them like for like."),
+                io.Boolean.Input("keep_transparency", default=False,
+                                 tooltip="Leave the background alone and hand "
+                                         "the alpha out as `masks` instead. "
+                                         "Off composites onto the colour "
+                                         "above — which is what you want "
+                                         "feeding an image model, since these "
+                                         "files hide real pixels under their "
+                                         "transparent areas."),
+                io.Combo.Input("output_size", options=_REF_SIZES,
+                               default="native",
+                               tooltip="Send a smaller reference when the "
+                                       "detail is not worth the tokens. "
+                                       "Lanczos, the same resample Slice "
+                                       "Cells uses, so a reference and the "
+                                       "cell it pairs with are treated "
+                                       "identically."),
             ],
             outputs=[
                 io.Image.Output(display_name="images", is_output_list=True,
@@ -1295,22 +1323,57 @@ class SymbioticaAssetRefs(io.ComfyNode):
                 io.String.Output(display_name="ref_names", is_output_list=True,
                                  tooltip="Filename of each reference, so a "
                                          "wrong pick is traceable to its file."),
+                # Appended: links address an output by slot index.
+                io.Mask.Output(display_name="masks", is_output_list=True,
+                               tooltip="Each reference's alpha, opaque where "
+                                       "the art is. Emitted whether or not "
+                                       "transparency is kept, so a reference "
+                                       "can always be composited onto "
+                                       "something else downstream."),
             ],
         )
 
     @classmethod
-    def execute(cls, order=None, asset_name="") -> io.NodeOutput:
-        from .asset_refs import pairing_note, reference_files
+    def execute(cls, order=None, asset_name="",
+                background=DEFAULT_BACKGROUND, keep_transparency=False,
+                output_size="native") -> io.NodeOutput:
+        from .asset_refs import (alpha_of, flatten, pairing_note,
+                                 reference_files)
         from .sheet_cells import boxes_for_category
         if not isinstance(order, dict) or "assets" not in order:
             raise ValueError("wire an Order Specs into 'order'")
         paths, names = reference_files(order, asset_name)
 
         from PIL import Image
-        images = []
+        size = 0 if str(output_size) == "native" else int(output_size)
+        images, masks = [], []
         for path in paths:
             with Image.open(path) as im:
-                images.append(_pil_to_tensor(im.convert("RGB")))
+                alpha = alpha_of(im)
+                if keep_transparency:
+                    # The pixels as authored. Only meaningful WITH the mask —
+                    # on its own this is the glowing version, because these
+                    # files keep live pixels under their transparent areas.
+                    flat = im.convert("RGB")
+                else:
+                    # Composited, never just converted: dropping alpha lights up
+                    # every soft edge and uncovers the hidden backdrop.
+                    flat = flatten(im, background)
+                if size:
+                    # Resampled here rather than on the tensor so the mask can
+                    # travel with its image: ComfyUI's lanczos collapses a
+                    # one-channel tensor to three dimensions, and it is PIL
+                    # LANCZOS underneath anyway — the same resample Slice Cells
+                    # applies to the cell this reference pairs with.
+                    flat = flat.resize((size, size), Image.LANCZOS)
+                    if alpha is not None:
+                        alpha = alpha.resize((size, size), Image.LANCZOS)
+                images.append(_pil_to_tensor(flat))
+                if alpha is None:
+                    masks.append(torch.ones(1, flat.height, flat.width))
+                else:
+                    masks.append(torch.from_numpy(
+                        np.asarray(alpha, dtype=np.float32) / 255.0)[None, ...])
 
         # Say whether these line up with the sheet's cells rather than assume
         # it: same count means index i is role i, a different count means an
@@ -1323,7 +1386,7 @@ class SymbioticaAssetRefs(io.ComfyNode):
             str(order.get("project_path", "") or "").strip(),
             str(asset.get("category", "") or "").strip())
         note = pairing_note(order, asset_name, names, cells)
-        return io.NodeOutput(images, names, ui=ui.PreviewText(note))
+        return io.NodeOutput(images, names, masks, ui=ui.PreviewText(note))
 
 
 def _resize_square(cell, size):
