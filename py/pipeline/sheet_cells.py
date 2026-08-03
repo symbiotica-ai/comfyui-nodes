@@ -219,6 +219,46 @@ def _rescaled(boxes, width, height):
     } for b in boxes]
 
 
+def layout_fingerprint(project_path, folder="dataset"):
+    """A hash over everything that decides where the cells are.
+
+    Exists because the boxes are read from files that no node lists as an
+    input: re-rule a type in the packer and the layout changes while every
+    wired value stays identical, so a cached `cell_boxes` would go on
+    describing the old grid and the crop would silently drift. Covers the
+    per-type rules, the sheet settings, and any recorded `_layout.json`.
+
+    Content, not mtime — a file rewritten with the same bytes should not
+    invalidate a cache, and a copied project should not look changed. Never
+    raises: this feeds a change-check, and a raise there becomes NaN and
+    re-bills every downstream node on each queue press.
+    """
+    import hashlib
+    h = hashlib.sha256()
+    project_path = str(project_path or "").strip()
+    if not project_path:
+        return h.hexdigest()
+    paths = [os.path.join(project_path, "_sources", "config.json"),
+             os.path.join(project_path, "assetkit-project.json")]
+    root = os.path.join(project_path, folder)
+    try:
+        paths += [os.path.join(root, name, OVERRIDE_NAME)
+                  for name in sorted(os.listdir(root))
+                  if os.path.isdir(os.path.join(root, name))]
+    except OSError:
+        pass
+    for path in paths:
+        h.update(path.encode())
+        try:
+            with open(path, "rb") as fh:
+                h.update(fh.read())
+        except OSError:
+            # Absent is a state worth hashing too — adding a _layout.json has
+            # to invalidate exactly as editing one does.
+            h.update(b"\0")
+    return h.hexdigest()
+
+
 def crop_regions(boxes, width, height, inset=0):
     """`boxes` clamped to an actual image, as (role, left, top, right, bottom).
 

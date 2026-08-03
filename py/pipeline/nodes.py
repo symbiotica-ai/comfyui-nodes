@@ -75,6 +75,25 @@ def _register_refs_root(path: str) -> None:
         pass
 
 
+def _executed_projects() -> list[str]:
+    """Projects a graph execution registered. Empty when routes is unavailable
+    — a change-check must degrade, never raise."""
+    try:
+        from .routes import executed_projects
+        return executed_projects()
+    except Exception:
+        return []
+
+
+def _executed_roots() -> list[str]:
+    """Folders a graph execution registered, an order's references among them."""
+    try:
+        from .routes import executed_roots
+        return executed_roots()
+    except Exception:
+        return []
+
+
 def _register_project(project_path: str) -> None:
     """The project this execution ran against, so the Template Library may browse
     and delete its pools. Only an execution vouches for a project."""
@@ -1217,19 +1236,36 @@ class SymbioticaDatasetReference(io.ComfyNode):
         # redraws, and never raise: a raise becomes NaN and re-bills every
         # descendant on each queue press.
         one = SymbioticaCategoryPrompts._one
-        root = dataset_dir(str(one(project_path)).strip(),
-                           str(one(folder, "dataset")).strip() or "dataset")
-        h = hashlib.sha256(f"{root}:{one(seed, 0)}".encode())
-        try:
-            for cat in sorted(os.listdir(root)):
-                sub = os.path.join(root, cat)
-                if not os.path.isdir(sub):
-                    continue
-                h.update(cat.encode())
-                for name in sorted(os.listdir(sub)):
-                    h.update(name.encode())
-        except OSError:
-            pass
+        sub_folder = str(one(folder, "dataset")).strip() or "dataset"
+        h = hashlib.sha256(f"{sub_folder}:{one(seed, 0)}".encode())
+        # The project usually arrives on the ORDER wire, and a linked input
+        # reads as unset here — so the widget alone left this hashing a
+        # relative "dataset" that never resolves, and the folder walk below
+        # was dead in exactly the graphs it was written for. Fall back to the
+        # projects executions have registered.
+        candidates = [str(one(project_path)).strip()]
+        if not candidates[0]:
+            candidates = _executed_projects()
+        for project in candidates:
+            if not project:
+                continue
+            h.update(project.encode())
+            # The layout decides where the cells are, and it lives in files no
+            # node lists as an input — without it a re-ruled type keeps
+            # serving the boxes of the old grid.
+            from .sheet_cells import layout_fingerprint
+            h.update(layout_fingerprint(project, sub_folder).encode())
+            root = dataset_dir(project, sub_folder)
+            try:
+                for cat in sorted(os.listdir(root)):
+                    sub = os.path.join(root, cat)
+                    if not os.path.isdir(sub):
+                        continue
+                    h.update(cat.encode())
+                    for name in sorted(os.listdir(sub)):
+                        h.update(name.encode())
+            except OSError:
+                pass
         return h.hexdigest()
 
     @classmethod
@@ -1332,6 +1368,36 @@ class SymbioticaAssetRefs(io.ComfyNode):
                                        "something else downstream."),
             ],
         )
+
+    @classmethod
+    def fingerprint_inputs(cls, order=None, asset_name="",
+                           background=DEFAULT_BACKGROUND,
+                           keep_transparency=False, output_size="native"):
+        # Every input that names a FILE here is linked — the order and the
+        # asset name both arrive on wires, and a linked input reads as unset in
+        # a change-check. So a client dropping a corrected reference into the
+        # month folder changes nothing this node can see, and the cached tensor
+        # of the old picture is served forever. Hash the reference folders
+        # executions have registered instead, by name and size and mtime: a
+        # replaced file moves the hash even though its path did not change.
+        one = SymbioticaCategoryPrompts._one
+        h = hashlib.sha256(f"{one(background, '')}:"
+                           f"{one(keep_transparency, False)}:"
+                           f"{one(output_size, 'native')}".encode())
+        for root in _executed_roots():
+            h.update(root.encode())
+            try:
+                for name in sorted(os.listdir(root)):
+                    path = os.path.join(root, name)
+                    if not os.path.isfile(path):
+                        continue
+                    st = os.stat(path)
+                    h.update(f"{name}:{st.st_size}:{st.st_mtime_ns}".encode())
+            except OSError:
+                # Never raise: a raise becomes NaN and re-bills every
+                # descendant on each queue press.
+                pass
+        return h.hexdigest()
 
     @classmethod
     def execute(cls, order=None, asset_name="",

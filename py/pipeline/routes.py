@@ -77,6 +77,28 @@ def declared_roots() -> list[str]:
     return [r for r in roots if r]
 
 
+def executed_projects() -> list[str]:
+    """The project folders graph executions have used, most useful to a node
+    that must look one up when its own `project_path` widget is empty.
+
+    ComfyUI calls a node's change-check BEFORE the upstream outputs exist, so a
+    linked input reads as unset there — a node whose project arrives on the
+    ORDER wire has no other way to find it. Sorted so a hash built from this is
+    stable across calls, and copied under the lock so a caller can iterate it
+    while another execution registers one.
+    """
+    with _lock:
+        return sorted(_projects)
+
+
+def executed_roots() -> list[str]:
+    """The folders graph executions have registered, same purpose and same
+    caveat as `executed_projects` — a reference folder reaches the graph on a
+    wire, so a change-check cannot see it either."""
+    with _lock:
+        return sorted(_roots)
+
+
 def register_root_within(path: str) -> bool:
     """Register `path` only when it lies inside a declared root, and report
     whether it was. The browse routes call this: a request may make a folder
