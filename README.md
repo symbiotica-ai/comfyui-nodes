@@ -131,6 +131,23 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   caps how many come back. A file that will not decode is skipped, but a
   missing folder — or one where nothing decodes — raises rather than handing
   the graph zero references in silence.
+- **Symbiotica Order Assets** — emits one item per asset in a feature, with
+  names, categories and save paths index-aligned, so ComfyUI's own list
+  fan-out runs a single render lane once per asset instead of eight duplicated
+  groups.
+- **Symbiotica Save Render** — files each result under
+  month/feature/category/asset.
+- **Symbiotica Dataset Reference** — picks a reference per category, seeded per
+  `(seed, category)` so adding a type does not reshuffle a pick already
+  approved.
+- **Symbiotica Category Prompts** — composes a category's architect prompt from
+  the project's shared `prompts/_rules/*.md` (filename order) followed by
+  `prompts/<Category>.md`, which stays last because the tail of a prompt
+  carries the most weight.
+- **Symbiotica Prompt Book** — reads and writes those prompt blocks from the
+  canvas; every render records which blocks composed its prompt, per block
+  rather than one hash of the whole, so a lighting change is distinguishable
+  from a negatives change.
 
 The web extension adds an events browser on Order Read and populates the
 feature/group dropdowns after the first queue. On a fully cached run the
