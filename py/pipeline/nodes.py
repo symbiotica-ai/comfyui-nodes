@@ -1327,6 +1327,122 @@ class SymbioticaDatasetReference(io.ComfyNode):
         return io.NodeOutput(images, names, boxes)
 
 
+class SymbioticaReconstructCells(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaReconstructCells",
+            display_name="Symbiotica Reconstruct Cells",
+            category="symbiotica/pipeline",
+            description="Puts cells back into the sheet they were cut from — "
+                        "Slice Cells read the other way, on the same boxes. "
+                        "Edit each asset on its own, then rebuild the packed "
+                        "layout a style LoRA was trained on, at the same size "
+                        "and the same padding as the sheet that was split.",
+            # Every cell at once: a sheet cannot be laid out one cell per
+            # execution, and mapped per image this would emit one sheet each.
+            is_input_list=True,
+            inputs=[
+                io.Image.Input("cells",
+                               tooltip="The finished sprites, in the order "
+                                       "Slice Cells returned them."),
+                io.String.Input("cell_boxes", force_input=True,
+                                tooltip="The same `cell_boxes` that cut them — "
+                                        "from Dataset Reference. The sheet is "
+                                        "rebuilt on exactly those boxes."),
+                io.String.Input("background", default=DEFAULT_BACKGROUND,
+                                tooltip="What the gutters and any cell with no "
+                                        "sprite are filled with. Match the "
+                                        "packed sheets and the result is "
+                                        "indistinguishable from one."),
+                io.Int.Input("canvas_size", default=0, min=0, max=8192,
+                             tooltip="Sheet size, or 0 to recover it from the "
+                                     "boxes — the grid is centred, so the "
+                                     "margin after the last cell equals the "
+                                     "one before the first."),
+                io.Mask.Input("masks", optional=True,
+                              tooltip="Transparency for the cells. A loader "
+                                      "flattens alpha before this node sees "
+                                      "it, so without the mask a transparent "
+                                      "sprite lands on a black rectangle "
+                                      "instead of the background."),
+                io.Boolean.Input("mask_is_transparency", default=True,
+                                 tooltip="ON for ComfyUI's Load Image, whose "
+                                         "mask is 1 where the picture is "
+                                         "see-through. OFF for a straight "
+                                         "alpha channel, where 1 is the art."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="sheet",
+                                tooltip="One sheet, laid out like the packed "
+                                        "one the cells came from."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, cells=None, cell_boxes="", background=DEFAULT_BACKGROUND,
+                canvas_size=0, masks=None,
+                mask_is_transparency=True) -> io.NodeOutput:
+        from PIL import Image
+
+        from .asset_refs import parse_hex
+        from .compare_sheet import fit_box, with_alpha
+        from .sheet_cells import canvas_of
+        one = SymbioticaCategoryPrompts._one
+
+        raw = one(cell_boxes, "")
+        try:
+            boxes = json.loads(str(raw or "").strip() or "[]")
+        except ValueError:
+            boxes = None
+        if not isinstance(boxes, list) or not boxes:
+            raise ValueError(
+                "no cell boxes — wire the Dataset Reference node's "
+                "`cell_boxes` output into this node, the same one that cut "
+                "these cells")
+
+        frames = [f for t in (cells or []) if t is not None for f in t]
+        if not frames:
+            raise ValueError("wire the finished sprites into 'cells'")
+        mask_frames = [f for t in (masks or []) if t is not None for f in t]
+
+        size = int(one(canvas_size, 0) or 0)
+        width, height = (size, size) if size > 0 else canvas_of(boxes)
+        if width <= 0 or height <= 0:
+            raise ValueError("these boxes describe no sheet — set canvas_size")
+
+        sheet = Image.new("RGB", (width, height),
+                          parse_hex(one(background, DEFAULT_BACKGROUND)))
+        # Zipped, so a run with fewer sprites than cells leaves the rest as
+        # background rather than shifting every later sprite into the wrong
+        # cell — the same alignment rule the cut side keeps.
+        for index, box in enumerate(boxes):
+            if index >= len(frames):
+                break
+            image = _tensor_to_pil(frames[index])
+            if index < len(mask_frames):
+                image = with_alpha(image,
+                                   _tensor_to_pil_mask(mask_frames[index]),
+                                   bool(one(mask_is_transparency, True)))
+            box_w, box_h = int(box.get("w", 0)), int(box.get("h", 0))
+            new_w, new_h, dx, dy = fit_box(image.width, image.height,
+                                           min(box_w, box_h))
+            if not new_w or not new_h:
+                continue
+            # Centred in its own box, so a sprite whose aspect drifted during
+            # editing still sits where the cell is rather than overhanging it.
+            dx += (box_w - min(box_w, box_h)) // 2
+            dy += (box_h - min(box_w, box_h)) // 2
+            at = (int(box.get("x", 0)) + dx, int(box.get("y", 0)) + dy)
+            if image.mode == "RGBA":
+                scaled = image.resize((new_w, new_h), Image.LANCZOS)
+                sheet.paste(scaled, at, scaled)
+            else:
+                sheet.paste(image.convert("RGB").resize((new_w, new_h),
+                                                        Image.LANCZOS), at)
+        return io.NodeOutput(_pil_to_tensor(sheet))
+
+
 class SymbioticaCompareSheet(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -3029,6 +3145,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaSliceCells,
     SymbioticaAssetRefs,
     SymbioticaCompareSheet,
+    SymbioticaReconstructCells,
     SymbioticaTemplateLibrary,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,

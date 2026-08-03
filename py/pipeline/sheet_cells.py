@@ -259,6 +259,24 @@ def layout_fingerprint(project_path, folder="dataset"):
     return h.hexdigest()
 
 
+def canvas_of(boxes):
+    """The sheet size a set of boxes was cut from, as (width, height).
+
+    The boxes stop at the last cell, so the far margin is missing from them —
+    the grid is centred, which is what makes it recoverable: the gap before the
+    first cell equals the gap after the last. Without this an assembled sheet
+    would come back short by one margin on each side and no longer match the
+    layout a LoRA was trained on.
+    """
+    if not boxes:
+        return 0, 0
+    left = min(int(b["x"]) for b in boxes)
+    top = min(int(b["y"]) for b in boxes)
+    right = max(int(b["x"]) + int(b["w"]) for b in boxes)
+    bottom = max(int(b["y"]) + int(b["h"]) for b in boxes)
+    return right + left, bottom + top
+
+
 def crop_regions(boxes, width, height, inset=0):
     """`boxes` clamped to an actual image, as (role, left, top, right, bottom).
 
