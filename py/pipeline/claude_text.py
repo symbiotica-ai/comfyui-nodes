@@ -104,8 +104,10 @@ def image_blocks(pil_images, model: str) -> list:
 def encode_png(image, edge: int) -> str:
     """One image as base64 PNG, no larger than `edge` on its long side.
 
-    Never upscaled: enlarging a small reference invents detail the model then
-    reads as real, and is charged for by the tile count either way."""
+    Never enlarged — that is `thumbnail`'s own guarantee, not the guard's; the
+    guard only skips a copy for an image already small enough. Enlarging a
+    small reference would invent detail the model then reads as real, and be
+    charged for by the ⌈w/28⌉×⌈h/28⌉ tile count for the privilege."""
     if max(image.size) > edge:
         image = image.copy()
         image.thumbnail((edge, edge), Image.LANCZOS)

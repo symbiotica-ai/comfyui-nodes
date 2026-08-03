@@ -37,6 +37,26 @@ Wrappers around Wavespeed's hosted endpoints.
 - **Wan 2.5** — text-to-image, image edit
 - **Runway** — upscale
 
+### Text (Anthropic Claude)
+- **Claude (Symbiotica)** — a prompt and up to 20 reference images become an
+  answer. Claude draws nothing; this belongs in a graph as a prompt author, a
+  caption or critique step, or a structured-extraction step feeding an image
+  node.
+
+  Routed the same way as the Gemini node below, on the same two variables. Every
+  outcome that is not a complete answer raises rather than returning a string:
+  a refusal, an answer cut off at `max_tokens`, inputs too large for the context
+  window, and an empty reply are four different errors with four different
+  fixes. ComfyUI's own Claude node returns the literal text
+  `Empty response from Claude model.` for the last of those, which reaches a
+  client looking like an answer.
+
+  Large references are brought down to the model's own ceiling first — 2576px on
+  Opus 5, Sonnet 5, Fable 5 and Opus 4.8/4.7, 1568px elsewhere. A batch that
+  encodes to more than 8 MB is refused rather than trimmed: Cloudflare stores no
+  gateway log above 10 MB, and a call whose log is dropped is spend that never
+  reaches the cockpit.
+
 ### Image generation (Google Gemini)
 - **Gemini Image (Symbiotica)** — a prompt and up to 14 reference images become
   a render, at 1K/2K/4K and any of the standard aspect ratios. Returns the image
@@ -214,7 +234,7 @@ Two ways, checked in this order (after any per-node `api_key` widget):
 
 | Variable | Provider |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude |
+| `ANTHROPIC_API_KEY` | Claude, including the Claude node's direct arm |
 | `OPENAI_API_KEY` | GPT |
 | `GEMINI_API_KEY` | Gemini |
 | `XAI_API_KEY` | Grok |
@@ -225,9 +245,9 @@ Two ways, checked in this order (after any per-node `api_key` widget):
 
 Per-node `api_key` widget overrides the env var.
 
-**The Gemini image node is the exception.** On a box that carries these two,
-every one of its calls goes through the gateway and no personal key is
-consulted:
+**The Gemini and Claude nodes are the exception.** On a box that carries
+these two, every one of their calls goes through the gateway and no personal
+key is consulted:
 
 | Variable | Content |
 |---|---|
@@ -251,7 +271,16 @@ group by, because no AI Gateway dataset exposes the key alias as a dimension.
 Falling back to the shared `default` key would bill one studio while the tag
 named another, and nothing short of reconciling the Google bill against gateway
 analytics would ever show it. A studio's key must be provisioned in the gateway
-before that studio's first render.
+before that studio's first render, per provider — a studio with a Google key
+and no Anthropic one fails on the Claude node alone.
+
+A provider with **no** stored key at all is the case worth knowing about,
+because it does not look like a failure. Cloudflare's credential precedence is
+a key on the request, then a stored key by alias, then Cloudflare's own
+credentials billed to the account balance — so with nothing stored, the alias
+is never consulted and the call is served on Cloudflare's rail and attributed
+to nobody. It surfaces as `internalCode` 2021 only while that balance is
+empty; funded, the same call succeeds silently.
 
 ### Asset folders
 

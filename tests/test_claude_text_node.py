@@ -271,3 +271,24 @@ def test_the_prompt_is_checked_before_the_key_ladder_is_walked(node_module,
     with pytest.raises(ValueError, match="prompt is required"):
         node_module.SymbioticaClaude().execute(
             prompt="   ", model="claude-opus-5", seed=0, max_tokens=1024)
+
+
+def test_a_non_200_carrying_valid_json_is_still_a_failure(node_module,
+                                                          monkeypatch):
+    """The one that catches a status check that never fires. Every other
+    failure test here sends a body that is not JSON, so the parse path raises
+    with the same status and the same studio and the suite stays green with
+    the check deleted. Anthropic's own errors ARE valid JSON, and a 400 read
+    as a reply is reported as "not a Messages shape" — sending the operator to
+    check the gateway base when the model said what was wrong."""
+    error = {"type": "error",
+             "error": {"type": "invalid_request_error",
+                       "message": "max_tokens: must be greater than 0"}}
+    with pytest.raises(RuntimeError) as caught:
+        run_execute(node_module, monkeypatch, FakeResponse(400, payload=error),
+                    env=dict(GATEWAY_ENV))
+    message = str(caught.value)
+    assert "400" in message
+    assert "must be greater than 0" in message
+    assert "not a Messages shape" not in message
+    assert "/v1/messages" not in message

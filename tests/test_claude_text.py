@@ -373,3 +373,36 @@ def test_a_content_block_that_is_not_an_object_is_survived():
     loop names neither Claude nor the reply."""
     payload = reply("not a block", said("a red door"))
     assert claude_text.parse_response(payload) == "a red door"
+
+
+def test_reasoning_text_is_dropped_even_when_the_block_carries_a_text_field():
+    """A thinking block with visible reasoning is the case a `type` filter has
+    to earn. Collected by a `text`-or-`thinking` reader it prepends the model's
+    working to a caption, and by a "join everything" reader it always does."""
+    payload = reply({"type": "thinking", "thinking": "first I consider",
+                     "text": "first I consider", "signature": "sig"},
+                    said("a red door"))
+    answer = claude_text.parse_response(payload)
+    assert answer == "a red door"
+    assert "consider" not in answer
+
+
+def test_a_context_overflow_is_not_reported_as_an_empty_answer():
+    """The mutant this kills falls through to the empty-answer branch, whose
+    message happens to quote the stop reason — so asserting only that the token
+    appears passes against a reporter that never recognised the case at all."""
+    with pytest.raises(ValueError) as caught:
+        claude_text.parse_response(reply(stop_reason="model_context_window_exceeded"))
+    message = str(caught.value)
+    assert "shorter prompt" in message
+    assert "returned no text" not in message
+
+
+def test_a_truncated_answer_is_told_apart_from_one_that_never_arrived():
+    """max_tokens with text present must reach the truncation branch, not the
+    empty-answer one — they prescribe opposite things."""
+    with pytest.raises(ValueError) as caught:
+        claude_text.parse_response(reply(said("half a sen"),
+                                         stop_reason="max_tokens"))
+    assert "Raise max_tokens" in str(caught.value)
+    assert "returned no text" not in str(caught.value)
