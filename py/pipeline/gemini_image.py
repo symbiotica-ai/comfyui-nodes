@@ -17,6 +17,10 @@ GENERATE_CONTENT_PATH = "/v1beta/models/{model}:generateContent"
 GOOGLE_API_BASE = "https://generativelanguage.googleapis.com"
 # 1K renders run tens of seconds; a 4K upscale runs several minutes.
 REQUEST_TIMEOUT_S = 300
+# Separate, because a single number would spend the whole read budget waiting
+# on a connection that will never open — a black-holed egress would hold a
+# customer's order for five minutes before saying anything.
+CONNECT_TIMEOUT_S = 10
 # Google's own limit, and the stock node's wording for it.
 MAX_REFERENCE_IMAGES = 14
 # Enough of a failure body to diagnose from without pasting a whole HTML page.
@@ -132,6 +136,41 @@ def resolve_transport(environ, model: str,
             interactive_key(), "The Gemini API key", quote_it=False),
         "Content-Type": "application/json",
     }, None)
+
+
+def header_secrets(headers) -> list:
+    """The credential values these headers actually carry.
+
+    Read back off the headers rather than re-read from the environment: the
+    wire carries the token after `.strip()`, so scrubbing the raw variable
+    finds nothing to replace when the secret store kept a trailing newline —
+    and a trailing newline is both the commonest artifact in a secret store
+    and the exact reason the strip is there. The two would disagree only in
+    the case each of them exists to handle."""
+    secrets = []
+    authorization = headers.get("cf-aig-authorization")
+    if authorization:
+        # Both forms: a gateway may quote back the whole header or just the
+        # token it could not verify.
+        secrets.append(authorization)
+        secrets.append(authorization.split(" ", 1)[-1])
+    key = headers.get("x-goog-api-key")
+    if key:
+        secrets.append(key)
+    return secrets
+
+
+def require_prompt(prompt: str) -> str:
+    """`prompt`, once it is something Gemini can draw from.
+
+    Its own function so the check can run before the work that would be
+    wasted: walking the key ladder and encoding fourteen PNGs, only to raise
+    about the prompt, costs a headless operator two round-trips to learn one
+    thing."""
+    if not (prompt or "").strip():
+        raise ValueError("prompt is required — Gemini has nothing to draw from "
+                         "an empty one")
+    return prompt
 
 
 def usable_as_header(value: str, source: str, quote_it: bool) -> str:
@@ -323,9 +362,7 @@ def request_body(prompt: str, inline_images: list, aspect_ratio: str,
     when Gemini declines, it says why there, and in a headless sandbox that
     sentence is the only account anyone gets. `auto` is Google's absence of
     aspectRatio rather than a value it accepts, so it is omitted."""
-    if not (prompt or "").strip():
-        raise ValueError("prompt is required — Gemini has nothing to draw from "
-                         "an empty one")
+    require_prompt(prompt)
     image_config = {"imageSize": resolution}
     if aspect_ratio != "auto":
         image_config["aspectRatio"] = aspect_ratio

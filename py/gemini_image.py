@@ -84,27 +84,42 @@ class SymbioticaGeminiImage:
             return resolve_provider_key(
                 api_key, ["GEMINI_API_KEY", "GOOGLE_API_KEY"], "Gemini")
 
+        # First, because everything below it is wasted otherwise: the ladder
+        # can reach a file on disk and the encoding runs once per reference.
+        core.require_prompt(prompt)
         transport = core.resolve_transport(os.environ, model, interactive_key)
         body = core.request_body(prompt, core.image_parts(to_pil(images)),
                                  aspect_ratio, resolution, system_prompt)
 
-        response = requests.post(transport.url, json=body,
-                                 headers=transport.headers,
-                                 timeout=core.REQUEST_TIMEOUT_S)
-        if response.status_code != 200:
-            # The credentials are scrubbed because a gateway rejecting a token
-            # quotes it back, and this message goes on to a toast and a log.
-            # The studio rides along on every gateway failure, whatever the
-            # cause: in an order sandbox this message is the only thing that
-            # says which studio's render it was.
-            raise RuntimeError(core.http_error(
-                response.status_code, response.text,
-                secrets=[os.environ.get("GEMINI_GATEWAY_TOKEN"),
-                         transport.headers.get("x-goog-api-key")],
+        response = requests.post(
+            transport.url, json=body, headers=transport.headers,
+            timeout=(core.CONNECT_TIMEOUT_S, core.REQUEST_TIMEOUT_S))
+
+        # Anything that is not a rendered image goes through one formatter, so
+        # that a failure carries the same account whether the gateway refused
+        # it or answered with something that was never a Gemini reply at all.
+        # The studio rides along on every gateway failure whatever the cause:
+        # in an order sandbox this message is the only thing that says whose
+        # render it was, and the credentials come off the headers that were
+        # actually sent rather than back out of the environment.
+        def failure(status, text):
+            return RuntimeError(core.http_error(
+                status, text, secrets=core.header_secrets(transport.headers),
                 studio=transport.studio,
                 alias=transport.headers.get("cf-aig-byok-alias")))
 
-        rendered, text = core.parse_response(response.json())
+        if response.status_code != 200:
+            raise failure(response.status_code, response.text)
+        try:
+            payload = response.json()
+        except ValueError:
+            # A gateway interstitial or a challenge page answers 200 with HTML.
+            # Bare, this is "Expecting value: line 1 column 1" and nothing
+            # about which service produced it.
+            raise failure(response.status_code,
+                          f"reply was not JSON: {response.text}") from None
+
+        rendered, text = core.parse_response(payload)
         return (to_tensor(rendered), text)
 
 

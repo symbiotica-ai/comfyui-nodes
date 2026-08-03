@@ -1,7 +1,9 @@
 # ABOUTME: Tests the Gemini Image node's registration and schema — it must load
 # ABOUTME: without ComfyUI present, be discoverable, and offer what the spec says.
+import base64
 import importlib.util
 import inspect
+import io
 import os
 import sys
 import types
@@ -167,6 +169,154 @@ def test_a_single_render_of_any_size_is_still_fine(node_module):
     pytest.importorskip("torch")
     assert tuple(node_module.to_tensor(
         [Image.new("RGB", (7, 3))]).shape) == (1, 3, 7, 3)
+
+
+class FakeResponse:
+    """Only what execute reads off a response. Stubbing the socket, not the
+    logic: everything under test here is this pack's own code, and the one
+    thing being replaced is the network."""
+
+    def __init__(self, status_code=200, text="", payload=None):
+        self.status_code = status_code
+        self.text = text
+        self._payload = payload
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+        return self._payload
+
+
+def run_execute(node_module, monkeypatch, response, env=None, **kwargs):
+    """execute with the network replaced, returning what it sent."""
+    sent = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        sent.update(url=url, body=json, headers=headers, timeout=timeout)
+        return response
+
+    monkeypatch.setattr(node_module.requests, "post", fake_post)
+    monkeypatch.setattr(node_module.os, "environ", env or {})
+    node = node_module.SymbioticaGeminiImage()
+    call = dict(prompt="a knight", model="gemini-3.1-flash-image", seed=0,
+                aspect_ratio="auto", resolution="2K", api_key="a-google-key")
+    call.update(kwargs)
+    return sent, node.execute(**call)
+
+
+GATEWAY_ENV = {
+    "GEMINI_GATEWAY_URL": "https://gateway.example.invalid/v1/a/b/google-ai-studio",
+    "GEMINI_GATEWAY_TOKEN": "cf-token-not-a-real-one",
+    "ORDER_STUDIO": "example-studio",
+}
+
+
+def one_png(colour=(0, 255, 0)):
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), colour).save(buf, format="PNG")
+    return {"candidates": [{"content": {"parts": [
+        {"text": "here you go"},
+        {"inlineData": {"mimeType": "image/png",
+                        "data": base64.b64encode(buf.getvalue()).decode()}}]}}]}
+
+
+def test_a_render_reaches_the_gateway_and_comes_back_as_a_batch(node_module,
+                                                                monkeypatch):
+    pytest.importorskip("torch")
+    sent, (batch, text) = run_execute(
+        node_module, monkeypatch, FakeResponse(payload=one_png()),
+        env=dict(GATEWAY_ENV))
+    assert sent["url"].startswith("https://gateway.example.invalid")
+    assert sent["headers"]["cf-aig-byok-alias"] == "example-studio"
+    assert tuple(batch.shape) == (1, 4, 4, 3)
+    assert text == "here you go"
+
+
+def test_the_request_is_given_a_connect_deadline_of_its_own(node_module,
+                                                            monkeypatch):
+    """A single number applies to the read only in effect — a black-holed host
+    stalls the whole 300s before anyone learns the egress is broken, and a
+    customer order waits all of it."""
+    sent, _ = run_execute(node_module, monkeypatch,
+                          FakeResponse(payload=one_png()), env=dict(GATEWAY_ENV))
+    connect, read = sent["timeout"]
+    assert connect <= 30
+    assert read == 300
+
+
+def test_a_failed_gateway_call_names_the_studio_and_hides_the_token(
+        node_module, monkeypatch):
+    """The wiring that hands the scrubber its secrets lives here and nowhere
+    else. Proved at the pure layer, it is still only a property of a function
+    this node is never shown to call correctly."""
+    token = GATEWAY_ENV["GEMINI_GATEWAY_TOKEN"]
+    with pytest.raises(RuntimeError) as caught:
+        run_execute(node_module, monkeypatch,
+                    FakeResponse(403, f'{{"error":"bad token {token}"}}'),
+                    env=dict(GATEWAY_ENV))
+    message = str(caught.value)
+    assert "example-studio" in message
+    assert token not in message
+    assert "403" in message
+
+
+def test_a_token_stored_with_a_trailing_newline_is_still_scrubbed(
+        node_module, monkeypatch):
+    """The wire carries the stripped token; scrubbing the raw env value finds
+    nothing to replace. A trailing newline is the commonest artifact there is
+    in a secret store, and the code strips precisely because it expects one."""
+    env = dict(GATEWAY_ENV, GEMINI_GATEWAY_TOKEN="cf-token-not-a-real-one\n")
+    with pytest.raises(RuntimeError) as caught:
+        run_execute(node_module, monkeypatch,
+                    FakeResponse(401, '{"error":"bad cf-token-not-a-real-one"}'),
+                    env=env)
+    assert "cf-token-not-a-real-one" not in str(caught.value)
+
+
+def test_a_direct_call_does_not_leak_the_google_key_either(node_module,
+                                                           monkeypatch):
+    with pytest.raises(RuntimeError) as caught:
+        run_execute(node_module, monkeypatch,
+                    FakeResponse(400, '{"error":"bad key a-google-key"}'),
+                    env={})
+    assert "a-google-key" not in str(caught.value)
+
+
+def test_a_two_hundred_that_is_not_json_is_reported_with_its_body(node_module,
+                                                                  monkeypatch):
+    """A gateway interstitial or a challenge page answers 200 with HTML. Bare,
+    this is "Expecting value: line 1 column 1" and nothing about who answered."""
+    with pytest.raises(RuntimeError) as caught:
+        run_execute(node_module, monkeypatch,
+                    FakeResponse(200, "<html>Attention Required</html>"),
+                    env=dict(GATEWAY_ENV))
+    message = str(caught.value)
+    assert "Attention Required" in message
+    assert "example-studio" in message
+
+
+def test_an_empty_prompt_is_refused_before_the_key_ladder_is_walked(
+        node_module, monkeypatch):
+    """Otherwise a headless run costs two round-trips: the operator is told to
+    configure a key, configures one, re-runs, and only then learns the prompt
+    was empty."""
+    def exploding_post(*a, **k):
+        raise AssertionError("a request was built for an empty prompt")
+
+    monkeypatch.setattr(node_module.requests, "post", exploding_post)
+    monkeypatch.setattr(node_module.os, "environ", {})
+    with pytest.raises(ValueError, match="prompt"):
+        node_module.SymbioticaGeminiImage().execute(
+            prompt="   ", model="gemini-3.1-flash-image", seed=0,
+            aspect_ratio="auto", resolution="2K", api_key="")
+
+
+def test_the_prompt_is_sent_as_the_users_turn(node_module, monkeypatch):
+    """Google reads `role` to tell the user's turn from the model's. Absent,
+    the prompt can be taken for the assistant's own prior output."""
+    sent, _ = run_execute(node_module, monkeypatch,
+                          FakeResponse(payload=one_png()), env=dict(GATEWAY_ENV))
+    assert sent["body"]["contents"][0]["role"] == "user"
 
 
 def test_torch_is_reached_for_only_when_a_render_actually_runs(node_module):
