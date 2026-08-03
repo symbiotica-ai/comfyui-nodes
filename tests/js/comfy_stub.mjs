@@ -74,9 +74,12 @@ globalThis.requestAnimationFrame = (cb) => cb();
 export const api = {
     apiURL: (route) => `/api${route}`,
     addEventListener() {},
-    async fetchApi(route) {
+    async fetchApi(route, init) {
         calls.push(route);
-        const r = responder(route, calls.length);
+        // `init` is passed through so a test can assert what a POST actually
+        // sent — without it a save handler could write the wrong file, or the
+        // wrong text, and every assertion here would still pass.
+        const r = responder(route, calls.length, init);
         if (latencyMs) await new Promise((res) => setTimeout(res, latencyMs));
         return {
             ok: r.ok,

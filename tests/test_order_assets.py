@@ -125,3 +125,66 @@ def test_non_images_are_ignored(tmp_path):
     (proj / "dataset" / "Decoration" / "_caption-prompt.txt").write_text("x")
     (proj / "dataset" / "Decoration" / "notes.md").write_text("x")
     assert list_dataset_images(proj / "dataset" / "Decoration") == ["d1.png"]
+
+
+def test_category_narrows_to_one_type():
+    # Working on food means rendering three food assets, not six and discarding
+    # half — every asset here costs an LLM call and a Gemini render.
+    out = assets_by_category(MINI_1, "Food - 3 stages")
+    assert [a["assetName"] for a in out] == [
+        "Spookies", "Spooky Stack Popsicle", "Ghostly Jelly Cake"]
+    assert {a["category"] for a in out} == {"Food - 3 stages"}
+
+
+def test_all_and_blank_both_keep_every_type():
+    assert len(assets_by_category(MINI_1, "All")) == 6
+    assert len(assets_by_category(MINI_1, "")) == 6
+    assert len(assets_by_category(MINI_1)) == 6
+
+
+def test_a_type_absent_from_the_event_yields_nothing():
+    assert assets_by_category(MINI_1, "Wallpaper") == []
+
+
+ORDER = {**MINI_1, "month": "October", "eventName": "Ghostly Goodies"}
+
+
+def test_save_path_is_month_feature_category_asset():
+    from pipeline.order_assets import save_paths
+    paths = save_paths(ORDER, assets_by_category(ORDER, "Food - 3 stages"))
+    assert paths[0] == ("October/Mini 1 — Ghostly Goodies/"
+                        "Food - 3 stages/Spookies")
+    assert len(paths) == 3
+
+
+def test_names_are_kept_as_the_order_writes_them():
+    # Not slugified: these folders are read by people looking for this month's
+    # work, and a slug is harder to scan than the order it came from.
+    from pipeline.order_assets import save_paths
+    p = save_paths(ORDER, assets_by_category(ORDER, "Decoration"))[0]
+    assert "Food" not in p and p.endswith("Phantom Freezer Cart")
+    assert "Mini 1 — Ghostly Goodies" in p
+
+
+def test_a_feature_with_no_event_name_is_just_the_feature():
+    from pipeline.order_assets import save_paths
+    order = {**MINI_1, "month": "October"}
+    assert save_paths(order, assets_by_category(order))[0].startswith(
+        "October/Mini 1/")
+
+
+def test_a_separator_in_a_name_cannot_deepen_the_tree():
+    # "Sign / Board" must not become a "Sign" folder holding "Board".
+    from pipeline.order_assets import save_paths
+    order = {"month": "October", "feature": "Mini 1",
+             "assets": [_asset("Sign / Board", "Deco: Wall")]}
+    path = save_paths(order, assets_by_category(order))[0]
+    assert path == "October/Mini 1/Deco Wall/Sign Board"
+    assert path.count("/") == 3
+
+
+def test_missing_segments_are_dropped_not_left_empty():
+    # "//" would put the file at the wrong depth, silently.
+    from pipeline.order_assets import save_paths
+    order = {"feature": "Mini 1", "assets": [_asset("Cake", "")]}
+    assert save_paths(order, assets_by_category(order)) == ["Mini 1/Cake"]

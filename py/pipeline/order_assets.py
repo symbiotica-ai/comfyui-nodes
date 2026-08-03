@@ -6,8 +6,14 @@ import random
 from .compose import IMG_EXTS
 
 
-def assets_by_category(order):
+def assets_by_category(order, category="All"):
     """The order's assets as a flat list, grouped by asset type.
+
+    `category` narrows the run to one type — "All" (or empty) keeps every type.
+    Narrowing here rather than downstream is what makes it useful: the type
+    lists this returns drive the architect prompt and the dataset draw, so
+    picking "Food - 3 stages" leaves a run of three food assets with nothing
+    else to configure.
 
     One entry per ASSET — not per reference image, and not per packed sheet. A
     rotation-2 decoration with three references is still one asset here: the
@@ -18,12 +24,16 @@ def assets_by_category(order):
     so the run reads down the order sheet: every decoration, then every food.
     Assets with no name are dropped — they are spreadsheet padding.
     """
+    want = (category or "All").strip() or "All"
     groups: dict[str, list[dict]] = {}
     for a in (order or {}).get("assets", []) or []:
         name = str(a.get("assetName", "") or "").strip()
         if not name:
             continue
-        groups.setdefault(str(a.get("category", "") or "").strip(), []).append(a)
+        cat = str(a.get("category", "") or "").strip()
+        if want != "All" and cat != want:
+            continue
+        groups.setdefault(cat, []).append(a)
     out = []
     for cat, items in groups.items():
         for a in items:
@@ -33,6 +43,49 @@ def assets_by_category(order):
                 "prompt": str(a.get("prompt", "") or ""),
                 "canvas": str(a.get("canvas", "") or ""),
             })
+    return out
+
+
+def event_label(order):
+    """"Mini 1 — Ghostly Goodies": the feature with its event name, the same
+    label the node's own feature picker shows (web/js eventLabel). A feature
+    with no event name is just the feature."""
+    feature = str((order or {}).get("feature", "") or "").strip()
+    event = str((order or {}).get("eventName", "") or "").strip()
+    return f"{feature} — {event}" if feature and event else feature
+
+
+def _segment(value):
+    """One path segment from an order value.
+
+    A separator inside a name would silently deepen the tree — an asset called
+    "Sign / Board" must not become a "Sign" folder — so separators collapse to a
+    space. Windows-illegal characters go too: these paths are written to a
+    shared Drive folder that syncs to other machines.
+    """
+    out = str(value or "").strip()
+    for bad in ("/", "\\", ":", "*", "?", '"', "<", ">", "|", "\n", "\r", "\t"):
+        out = out.replace(bad, " ")
+    return " ".join(out.split()).strip(". ")
+
+
+def save_paths(order, items):
+    """month/feature/category/asset for each asset, ready for a save node's
+    filename prefix.
+
+    Kept as the order sheet writes them — "Food - 3 stages", not a slug —
+    because these folders are read by people looking for this month's work, and
+    a slug makes the delivered tree harder to scan than the order it came from.
+    Empty segments are dropped rather than left as "//", which would put the
+    file at the wrong depth.
+    """
+    month = _segment((order or {}).get("month", ""))
+    feature = _segment(event_label(order))
+    out = []
+    for a in items:
+        parts = [p for p in (month, feature, _segment(a.get("category", "")),
+                             _segment(a.get("assetName", ""))) if p]
+        out.append("/".join(parts))
     return out
 
 

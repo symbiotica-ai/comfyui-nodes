@@ -1,6 +1,7 @@
 # ABOUTME: Node-face tests for the per-asset iterator and the dataset draw —
 # ABOUTME: output order, list alignment, and the whole-list input declaration.
 import importlib
+import json
 import os
 import sys
 import types
@@ -47,8 +48,8 @@ MINI_1 = {"feature": "Mini 1", "assets": [
 def test_order_assets_outputs_stay_aligned(nodes_mod):
     schema = nodes_mod.SymbioticaOrderAssets.define_schema()
     assert [o.display_name for o in schema.outputs] == [
-        "asset_names", "categories", "client_prompts"]
-    names, cats, prompts = nodes_mod.SymbioticaOrderAssets.execute(
+        "asset_names", "categories", "client_prompts", "save_paths"]
+    names, cats, prompts, _paths = nodes_mod.SymbioticaOrderAssets.execute(
         order=MINI_1).args
     assert len(names) == len(cats) == len(prompts) == 6
     assert cats == ["Decoration"] * 3 + ["Food - 3 stages"] * 3
@@ -136,3 +137,131 @@ def test_dataset_reference_fingerprint_moves_when_a_file_is_added(nodes_mod,
     before = fp(seed=[1], project_path=[str(proj)])
     Image.new("RGB", (8, 8)).save(proj / "dataset" / "Decoration" / "new.png")
     assert fp(seed=[1], project_path=[str(proj)]) != before
+
+
+def test_category_widget_narrows_the_run(nodes_mod):
+    names, cats, prompts, _paths = nodes_mod.SymbioticaOrderAssets.execute(
+        order=MINI_1, category="Food - 3 stages").args
+    assert len(names) == len(cats) == len(prompts) == 3
+    assert cats == ["Food - 3 stages"] * 3
+    assert names[0] == "Spookies"
+
+
+def test_category_is_appended_not_inserted(nodes_mod):
+    # ComfyUI restores widgets_values POSITIONALLY. `category` must come after
+    # anything already on this node, or a saved workflow loads its pick onto
+    # the wrong widget.
+    schema = nodes_mod.SymbioticaOrderAssets.define_schema()
+    assert [i.id for i in schema.inputs] == ["order", "category"]
+
+
+def test_a_pick_with_no_assets_says_what_the_event_holds(nodes_mod):
+    with pytest.raises(ValueError, match="Decoration, Food - 3 stages"):
+        nodes_mod.SymbioticaOrderAssets.execute(order=MINI_1,
+                                                category="Wallpaper")
+
+
+def test_an_empty_event_is_still_its_own_error(nodes_mod):
+    with pytest.raises(ValueError, match="no named assets"):
+        nodes_mod.SymbioticaOrderAssets.execute(
+            order={"feature": "Mini 9", "assets": []}, category="Decoration")
+
+
+def _tensor(shade=0.5):
+    import numpy as np
+    import torch
+    arr = np.full((8, 8, 3), shade, dtype=np.float32)
+    return torch.from_numpy(arr)[None, ...]
+
+
+def _book(proj, rules=None, **types):
+    d = proj / "prompts"
+    d.mkdir(parents=True, exist_ok=True)
+    for stem, text in types.items():
+        (d / f"{stem}.md").write_text(text)
+    if rules:
+        r = d / "_rules"
+        r.mkdir(exist_ok=True)
+        for stem, text in rules.items():
+            (r / f"{stem}.md").write_text(text)
+    return str(proj)
+
+
+def test_save_render_writes_files_named_after_the_assets(nodes_mod, tmp_path):
+    proj = _book(tmp_path / "bakery", rules={"01-light": "LIGHT"},
+                 **{"Decoration": "DECO"})
+    out = nodes_mod.SymbioticaSaveRender.execute(
+        images=[_tensor(0.2), _tensor(0.8)],
+        asset_names=["Ghost Bakery Queue", "Witch Cat Tea Parlor"],
+        categories=["Decoration", "Decoration"],
+        system_prompts=["LIGHT\n\nDECO"] * 2,
+        reference_names=["Woodland.png"] * 2,
+        seed=[7], subfolder=["renders"], project_path=[proj])
+    files, shas = out.args
+    assert len(files) == 2
+    assert files[0].startswith("ghost-bakery-queue-")
+    assert files[0].endswith("-01.png")
+    assert shas[0] == shas[1], "same prompt, same hash"
+
+
+def test_save_render_embeds_provenance_in_the_png(nodes_mod, tmp_path):
+    # A record only in the log is lost the moment an image leaves the project.
+    from PIL import Image
+    proj = _book(tmp_path / "bakery", rules={"01-light": "LIGHT"},
+                 **{"Decoration": "DECO"})
+    out = nodes_mod.SymbioticaSaveRender.execute(
+        images=[_tensor()], asset_names=["Ghost"], categories=["Decoration"],
+        system_prompts=["LIGHT\n\nDECO"], reference_names=["Woodland.png"],
+        seed=[3], subfolder=["renders"], project_path=[proj])
+    path = tmp_path / "output" / "renders" / out.args[0][0]
+    with Image.open(path) as im:
+        rec = json.loads(im.text["symbiotica_provenance"])
+    assert rec["asset"] == "Ghost" and rec["seed"] == 3
+    assert rec["reference"] == "Woodland.png"
+    assert [b["block"] for b in rec["blocks"]] == ["_rules/01-light.md",
+                                                   "Decoration.md"]
+
+
+def test_save_render_appends_one_log_line_per_image(nodes_mod, tmp_path):
+    from pipeline.provenance import read_records
+    proj = _book(tmp_path / "bakery", **{"Decoration": "DECO"})
+    nodes_mod.SymbioticaSaveRender.execute(
+        images=[_tensor(), _tensor()], asset_names=["A", "B"],
+        categories=["Decoration"] * 2, system_prompts=["DECO"] * 2,
+        subfolder=["renders"], project_path=[proj])
+    assert [r["asset"] for r in read_records(proj)] == ["A", "B"]
+
+
+def test_save_render_survives_a_short_label_list(nodes_mod, tmp_path):
+    # A mis-wired label list is a wiring mistake; losing the render to it is a
+    # worse outcome than a fallback name.
+    proj = _book(tmp_path / "bakery", **{"Decoration": "DECO"})
+    out = nodes_mod.SymbioticaSaveRender.execute(
+        images=[_tensor(), _tensor()], asset_names=["OnlyOne"],
+        categories=["Decoration"], system_prompts=["DECO"],
+        subfolder=["renders"], project_path=[proj])
+    assert len(out.args[0]) == 2
+    assert out.args[0][1].startswith("render-2-")
+
+
+def test_save_render_refuses_an_empty_batch(nodes_mod, tmp_path):
+    with pytest.raises(ValueError, match="nothing to save"):
+        nodes_mod.SymbioticaSaveRender.execute(
+            images=[], asset_names=[], categories=[], system_prompts=[])
+
+
+def test_order_assets_emits_a_save_path_per_asset(nodes_mod):
+    order = {**MINI_1, "month": "October", "eventName": "Ghostly Goodies"}
+    out = nodes_mod.SymbioticaOrderAssets.execute(order=order,
+                                                  category="Food - 3 stages")
+    names, cats, prompts, paths = out.args
+    assert len(paths) == len(names) == 3
+    assert paths[0] == ("October/Mini 1 — Ghostly Goodies/"
+                        "Food - 3 stages/Spookies")
+
+
+def test_save_paths_is_the_last_output_slot(nodes_mod):
+    # Links address an output by index; inserting would re-point saved graphs.
+    schema = nodes_mod.SymbioticaOrderAssets.define_schema()
+    assert [o.display_name for o in schema.outputs] == [
+        "asset_names", "categories", "client_prompts", "save_paths"]

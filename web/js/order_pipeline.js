@@ -129,7 +129,7 @@ function applySettingsToNode(packer, s) {
 // String literal, a chain of them). The combos and the thumbnail route's root
 // registration both need the actual path string, which the widget alone can't
 // give once the socket is wired.
-function resolveProjectPath(node) {
+export function resolveProjectPath(node) {
     const v = widgetOf(node, "project_path")?.value?.trim?.();
     if (v) return v;
     return inputString(node, "project_path", new Set());
@@ -143,7 +143,7 @@ function projectPathTyped(node) {
     return !!widgetOf(node, "project_path")?.value?.trim?.();
 }
 
-function inputString(node, inputName, seen) {
+export function inputString(node, inputName, seen) {
     const input = node?.inputs?.find((i) => i.name === inputName);
     if (!input || input.link == null) return "";
     const link = app.graph.links[input.link];
@@ -1393,6 +1393,21 @@ registerSymbioticaExtension(app, {
             nodeType.prototype.onNodeCreated = function () {
                 orig?.apply(this, arguments);
                 wireOrderSpecs(this);
+            };
+        }
+
+        if (nodeData.name === "SymbioticaOrderAssets") {
+            const orig = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                orig?.apply(this, arguments);
+                // "All" + the wired event's own types, so the pick can only be
+                // a type this event actually has — the same combo the Auto
+                // Packer gets, from the same source.
+                comboify(this, "category", () => eventCategoriesFor(this));
+                // Schema default is "" (unset). A fresh node should still SHOW
+                // "All"; onConfigure restores a saved pick over this.
+                const w = widgetOf(this, "category");
+                if (w && !w.value) w.value = "All";
             };
         }
 

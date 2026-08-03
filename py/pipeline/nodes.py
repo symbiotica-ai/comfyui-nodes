@@ -34,7 +34,7 @@ from .skeleton import build_client_prompts, build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
 from .order_assets import (assets_by_category, dataset_dir,
-                           pick_reference_per_category)
+                           pick_reference_per_category, save_paths)
 from .project_layout import project_root_of
 from .prompt_book import prompts_dir, resolve_category_prompts
 from .texture_pack import PackSettings
@@ -938,7 +938,13 @@ class SymbioticaOrderAssets(io.ComfyNode):
                         "no second copy of the lane per type. Use this, not the "
                         "Auto Packer, when the render works from a dataset "
                         "reference rather than a packed sheet.",
-            inputs=[Order.Input("order")],
+            inputs=[
+                Order.Input("order"),
+                io.String.Input("category", default="",
+                                tooltip="One asset type, or All. Narrow to "
+                                        "Food while you tune food, without "
+                                        "spending a render on decorations."),
+            ],
             outputs=[
                 io.String.Output(display_name="asset_names",
                                  is_output_list=True,
@@ -954,22 +960,193 @@ class SymbioticaOrderAssets(io.ComfyNode):
                                  is_output_list=True,
                                  tooltip="The client's brief per asset, "
                                          "verbatim from the order sheet."),
+                # Appended: links address an output by slot index, so a new
+                # slot in the middle would re-point every saved workflow.
+                io.String.Output(display_name="save_paths",
+                                 is_output_list=True,
+                                 tooltip="month/feature/category/asset per "
+                                         "asset — wire into a save node's "
+                                         "filename prefix and the run files "
+                                         "itself, e.g. 'October/Mini 1 — "
+                                         "Ghostly Goodies/Food - 3 stages/"
+                                         "Spookies'."),
             ],
         )
 
     @classmethod
-    def execute(cls, order=None) -> io.NodeOutput:
+    def execute(cls, order=None, category="") -> io.NodeOutput:
         if not isinstance(order, dict) or "assets" not in order:
             raise ValueError("wire an Order Specs (or a Reference Browser) "
                              "into 'order'")
-        items = assets_by_category(order)
+        items = assets_by_category(order, category)
         if not items:
+            # A pick that matches nothing is a different mistake from an empty
+            # event, and the fix is different too — so say which one it is, and
+            # what this event actually holds.
+            present = sorted({str(a.get("category", "") or "").strip()
+                              for a in order.get("assets", []) or []
+                              if str(a.get("assetName", "") or "").strip()})
+            want = (category or "All").strip() or "All"
+            if want != "All" and present:
+                raise ValueError(
+                    f"no {want!r} assets in {order.get('feature', '')!r} — "
+                    f"this event holds: {', '.join(present)}")
             raise ValueError(
                 f"the event {order.get('feature', '')!r} has no named assets — "
                 "pick a feature on the Order Specs node")
         return io.NodeOutput([a["assetName"] for a in items],
                              [a["category"] for a in items],
-                             [a["prompt"] for a in items])
+                             [a["prompt"] for a in items],
+                             save_paths(order, items))
+
+
+class SymbioticaSaveRender(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaSaveRender",
+            display_name="Symbiotica Save Render",
+            category="symbiotica/pipeline",
+            description="Save each render under its asset name AND record what "
+                        "produced it: the architect prompt's hash, the version "
+                        "of every rule block that composed it, the reference "
+                        "drawn and the seed. Without that record, 'this one "
+                        "came out flat' has nothing to attach to — the prompt "
+                        "may have changed twice since. The record goes in the "
+                        "PNG and in <project>/prompts/renders.jsonl.",
+            # The whole run at once: the log is appended per RUN, so writing it
+            # per image would interleave with other nodes' saves.
+            is_input_list=True,
+            inputs=[
+                io.Image.Input("images"),
+                io.String.Input("asset_names", force_input=True,
+                                tooltip="Order Assets' asset_names — names the "
+                                        "file and the record."),
+                io.String.Input("categories", force_input=True),
+                io.String.Input("system_prompts", force_input=True,
+                                tooltip="Category Prompts' PER-ASSET output, "
+                                        "the text actually sent."),
+                io.String.Input("client_prompts", optional=True),
+                io.String.Input("reference_names", optional=True),
+                io.Int.Input("seed", default=0, min=0,
+                             max=0xFFFFFFFFFFFFFFF, optional=True),
+                io.String.Input("subfolder", default="renders"),
+                io.String.Input("project_path", default=""),
+                Order.Input("order", optional=True),
+            ],
+            outputs=[
+                io.String.Output(display_name="files", is_output_list=True),
+                io.String.Output(display_name="prompt_shas",
+                                 is_output_list=True,
+                                 tooltip="The architect prompt's hash per "
+                                         "image — the handle feedback uses to "
+                                         "name which prompt it is about."),
+            ],
+            is_output_node=True,
+        )
+
+    @classmethod
+    def execute(cls, images=None, asset_names=None, categories=None,
+                system_prompts=None, client_prompts=None, reference_names=None,
+                seed=0, subfolder="renders", project_path="",
+                order=None) -> io.NodeOutput:
+        import datetime
+
+        from PIL import Image
+        from PIL.PngImagePlugin import PngInfo
+
+        from .provenance import append_records, build_record
+
+        one = SymbioticaCategoryPrompts._one
+        imgs = list(images or [])
+        if not imgs:
+            raise ValueError("nothing to save — wire the render's images in")
+        names = list(asset_names or [])
+        cats = list(categories or [])
+        sys_prompts = list(system_prompts or [])
+        briefs = list(client_prompts or [])
+        refs = list(reference_names or [])
+        project = SymbioticaCategoryPrompts._project(project_path, order)
+        ord_dict = one(order, {}) or {}
+
+        def at(seq, i, default=""):
+            # Index-aligned lists, but a shorter one is a wiring mistake worth
+            # surviving: a missing label must not lose the image.
+            return seq[i] if i < len(seq) else default
+
+        out_root = os.path.join(folder_paths.get_output_directory(),
+                                str(one(subfolder, "renders")).strip()
+                                or "renders")
+        os.makedirs(out_root, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        files, shas, records = [], [], []
+        for i, tensor in enumerate(imgs):
+            name = str(at(names, i, f"render-{i + 1}")).strip() or f"render-{i + 1}"
+            cat = str(at(cats, i))
+            prompt = str(at(sys_prompts, i))
+            rec = build_record(
+                project_path=project, asset_name=name, category=cat,
+                system_prompt=prompt, client_prompt=str(at(briefs, i)),
+                reference=str(at(refs, i)), seed=int(one(seed, 0) or 0),
+                feature=str(ord_dict.get("feature", "")),
+                month=str(ord_dict.get("month", "")))
+            fname = f"{slugify(name) or 'render'}-{stamp}-{i + 1:02d}.png"
+            rec["image"] = fname
+            meta = PngInfo()
+            # In the PNG as well as the log: an image that travels out of the
+            # project keeps its own provenance, and a log lost to a sync
+            # conflict does not orphan every render before it.
+            meta.add_text("symbiotica_provenance", json.dumps(rec))
+            arr = tensor[0] if hasattr(tensor, "ndim") and tensor.ndim == 4 \
+                else tensor
+            img = Image.fromarray(
+                (arr.cpu().numpy() * 255).clip(0, 255).astype(np.uint8))
+            img.save(os.path.join(out_root, fname), pnginfo=meta)
+            files.append(fname)
+            shas.append(rec["prompt_sha"])
+            records.append(rec)
+        if project:
+            append_records(project, records, timestamp=stamp)
+        return io.NodeOutput(files, shas)
+
+
+class SymbioticaPromptBook(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaPromptBook",
+            display_name="Symbiotica Prompt Book",
+            category="symbiotica/pipeline",
+            description="Read and edit the architect prompts without leaving "
+                        "the graph. The shared game rules in "
+                        "<project>/prompts/_rules/ apply to every asset type — "
+                        "edit lighting once and all types pick it up on the "
+                        "next queue. The per-type blocks below hold only what "
+                        "differs. Editing here needs no restart: the Category "
+                        "Prompts node re-reads the book when a file changes.",
+            inputs=[
+                io.String.Input("project_path", default="",
+                                tooltip="Client project folder holding the "
+                                        "prompt book. Filled in from the order "
+                                        "when one is wired."),
+                Order.Input("order", optional=True),
+            ],
+            outputs=[
+                io.String.Output(display_name="project",
+                                 tooltip="The project whose book this panel is "
+                                         "editing — wire into Category Prompts "
+                                         "so both read the same one."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, project_path="", order=None) -> io.NodeOutput:
+        project = SymbioticaCategoryPrompts._project([project_path], [order])
+        if not project:
+            raise ValueError(
+                "no project folder to read the prompt book from — wire an "
+                "order, or set project_path")
+        return io.NodeOutput(project)
 
 
 class SymbioticaDatasetReference(io.ComfyNode):
@@ -2393,6 +2570,8 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaAutoPacker,
     SymbioticaCategoryPrompts,
     SymbioticaOrderAssets,
+    SymbioticaPromptBook,
+    SymbioticaSaveRender,
     SymbioticaDatasetReference,
     SymbioticaTemplateLibrary,
     SymbioticaEventSpecs,
