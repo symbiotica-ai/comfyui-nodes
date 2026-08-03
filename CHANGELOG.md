@@ -43,6 +43,22 @@ changed.
   Every failure raises, carrying Gemini's own explanation when there is one,
   because a refusal is explained in the text channel and nowhere else — and in
   a sandbox nobody is watching, the raise is the only artifact a human reads.
+  That principle is applied to every path, not only the expected ones: a
+  refusal names the reason it stopped for as well as the model's words, a
+  reply that is not a Gemini reply at all says what arrived instead of
+  reporting a model refusal, an image that will not decode says so, and a
+  gateway failure names the studio whose render it was. Credentials are
+  scrubbed from all of them, and refused outright when they carry characters
+  an HTTP header cannot hold — otherwise the transport library quotes the
+  whole header value back in an exception that no scrubber ever sees.
+
+  Misconfigurations that would otherwise be silent are refused: a gateway URL
+  that is not `https`, and `ORDER_STUDIO` set with no gateway URL at all. The
+  second is the important one — the sandbox launcher sets that variable
+  whether or not the secret populated, so its presence without a URL means the
+  box was meant to route through the gateway and cannot. Left alone it would
+  either fail asking for a key it cannot hold, or succeed on a stray personal
+  key with the spend outside the gateway and nobody the wiser.
 
 ## 2026.8.1
 
