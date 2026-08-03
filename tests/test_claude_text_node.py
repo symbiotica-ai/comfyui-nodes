@@ -193,12 +193,18 @@ def test_without_a_gateway_the_call_goes_to_anthropic_on_the_nodes_key(
 def test_the_request_is_given_a_connect_deadline_of_its_own(node_module,
                                                             monkeypatch):
     """A single number applies to the read only in effect — a black-holed host
-    stalls the whole read budget before anyone learns the egress is broken."""
+    stalls the whole read budget before anyone learns the egress is broken.
+
+    The read floor is not a taste. Nothing arrives until the answer is complete
+    on a non-streamed call, so this bounds the whole generation, and this pack's
+    other Claude client gives the same provider 500s at a smaller token budget.
+    Anything under that would cut off a generation that succeeded and was
+    billed, and report it to a headless operator as a transport failure."""
     sent, _ = run_execute(node_module, monkeypatch,
                           FakeResponse(payload=ANSWERED), env=dict(GATEWAY_ENV))
     connect, read = sent["timeout"]
     assert connect <= 30
-    assert read >= 120
+    assert read >= 500
 
 
 def test_a_failed_call_names_the_studio_and_hides_the_token(node_module,

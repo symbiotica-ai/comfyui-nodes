@@ -20,6 +20,11 @@ old names routes nothing through the gateway. The Modal secret is renamed
 `symbiotica-comfy-aigateway` to match; a secret named `…-gemini` holding
 Anthropic credentials was the naming problem that prompted this.
 
+A box still carrying the old names now **raises** rather than falling back. On
+an order sandbox that was already the behaviour, since `ORDER_STUDIO` with no
+gateway base is an error — but a canvas box has neither, and would have gone on
+calling Google directly on a personal key with nobody the wiser.
+
 ### Features
 
 - **Claude in the canvas and in headless order sandboxes.** A prompt and up to
