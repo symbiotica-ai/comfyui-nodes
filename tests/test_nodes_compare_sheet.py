@@ -153,3 +153,17 @@ def test_fewer_masks_than_images_leaves_the_rest_opaque(nodes_mod):
     px = out[0]
     assert [round(float(v) * 255) for v in px[2][2]] == [128, 128, 128]
     assert [round(float(v) * 255) for v in px[2][66]] == [0, 0, 0]
+
+
+def test_a_four_channel_row_keeps_its_alpha_without_any_mask(nodes_mod):
+    """A background remover hands back RGBA; converting it to RGB drops exactly
+    what it was run to produce."""
+    import torch
+    sprite = torch.zeros(1, 64, 64, 4)
+    sprite[:, 20:44, 20:44, 1] = 0.8
+    sprite[:, 20:44, 20:44, 3] = 1.0
+    out = nodes_mod.SymbioticaCompareSheet.execute(
+        references=[sprite], results=[sprite], cell_size=[64], spacing=[0],
+        background=["#808080"]).args[0][0]
+    assert [round(float(v) * 255) for v in out[2][2]] == [128, 128, 128]
+    assert round(float(out[30][30][1]) * 255) > 150

@@ -139,3 +139,43 @@ def test_takes_every_cell_at_once(nodes_mod):
         "cells", "cell_boxes", "background", "canvas_size", "masks",
         "mask_is_transparency"]
     assert [o.display_name for o in schema.outputs] == ["sheet"]
+
+
+def rgba(shade, alpha, size=482):
+    """What a background remover hands back: four channels, alpha included."""
+    t = torch.zeros((1, size, size, 4), dtype=torch.float32)
+    t[..., :3] = shade
+    t[..., 3] = alpha
+    return t
+
+
+def test_a_four_channel_sprite_keeps_its_alpha_without_any_mask(nodes_mod):
+    """WAS's Rembg returns RGBA. Converting that to RGB discards the very thing
+    it was run to produce, and the sprite lands on the black hiding under its
+    transparency."""
+    sprite = rgba(0.0, 0.0)                       # fully transparent, over black
+    sprite[:, 100:380, 100:380, 1] = 0.8          # green art
+    sprite[:, 100:380, 100:380, 3] = 1.0          # opaque only there
+    out = nodes_mod.SymbioticaReconstructCells.execute(
+        cells=[sprite], cell_boxes=[FOOD], background=["#808080"],
+        canvas_size=[0]).args[0][0]
+    assert round(float(out[40][512][0]) * 255) == 128, "background, not black"
+    assert round(float(out[260][512][1]) * 255) > 150, "art kept"
+
+
+def test_a_three_channel_sprite_is_unaffected(nodes_mod):
+    out = nodes_mod.SymbioticaReconstructCells.execute(
+        cells=[solid(0.3)], cell_boxes=[FOOD], background=["#808080"],
+        canvas_size=[0]).args[0][0]
+    assert round(float(out[260][512][0]) * 255) == round(0.3 * 255)
+
+
+def test_an_explicit_mask_still_overrides_a_carried_alpha(nodes_mod):
+    """Wiring a mask stays meaningful — it wins over whatever alpha rode along."""
+    sprite = rgba(0.0, 1.0)                       # fully opaque black
+    mask = torch.ones(1, 482, 482)                # LoadImage polarity: all clear
+    out = nodes_mod.SymbioticaReconstructCells.execute(
+        cells=[sprite], cell_boxes=[FOOD], background=["#808080"],
+        canvas_size=[0], masks=[mask],
+        mask_is_transparency=[True]).args[0][0]
+    assert round(float(out[260][512][0]) * 255) == 128, "mask won"

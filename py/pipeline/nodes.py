@@ -128,7 +128,14 @@ def _tensor_to_pil_mask(frame):
 
 
 def _tensor_to_pil(frame):
-    """One HxWxC frame — NOT a batch — as an RGB image.
+    """One HxWxC frame — NOT a batch — as a PIL image, KEEPING a fourth channel
+    as alpha where the frame carries one.
+
+    ComfyUI's IMAGE is conventionally three channels, but a background remover
+    hands back four, and converting straight to RGB there discards the very
+    thing it was run to produce: the sprite lands on whatever was hiding under
+    its transparency, which for this art is black. Anything else — one channel,
+    three, or an odd count — becomes RGB as before.
 
     Clamped before scaling: a frame that came through an upscaler can carry
     values a shade outside 0..1, and uint8 wraps rather than clips, so an
@@ -136,8 +143,9 @@ def _tensor_to_pil(frame):
     """
     from PIL import Image
     arr = frame.detach().cpu().clamp(0.0, 1.0).numpy()
-    return Image.fromarray((arr * 255.0).round().astype(np.uint8)).convert(
-        "RGB")
+    out = Image.fromarray((arr * 255.0).round().astype(np.uint8))
+    keep_alpha = arr.ndim == 3 and arr.shape[-1] == 4
+    return out if keep_alpha and out.mode == "RGBA" else out.convert("RGB")
 
 
 class SymbioticaOrderRead(io.ComfyNode):
