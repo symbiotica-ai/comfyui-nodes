@@ -684,14 +684,23 @@ def test_a_rejected_gateway_token_is_not_confused_with_a_missing_studio_key():
     assert "no key" not in message.lower()
 
 
-def test_a_code_nobody_has_seen_yet_is_passed_through_untouched():
-    """The failure mode of code-matching: an unrecognised code quietly becomes
-    a generic sentence that says less than the response did."""
+def test_a_code_nobody_has_seen_yet_earns_no_remedy_at_all():
+    """The failure mode of code-matching is not losing the body — it is
+    inventing a diagnosis for a code nobody has read yet. A generic sentence
+    reads as recognition and sends the operator looking for the wrong thing,
+    while the response's own words were the only real information present."""
     body = ('{"error":[{"code":9999,"message":"something new"}],'
             '"internalCode":9999}')
+    assert gemini_image.gateway_remedy(body) == ""
     message = gemini_image.http_error(400, body, studio=STUDIO, alias=STUDIO)
     assert "something new" in message
-    assert "9999" in message
+    # Nothing between the colon and the body: no sentence was manufactured.
+    assert message.split(f"{STUDIO}]:")[1].lstrip().startswith("{")
+
+
+def test_a_body_carrying_no_code_at_all_earns_no_remedy_either():
+    assert gemini_image.gateway_remedy('{"message":"plain"}') == ""
+    assert gemini_image.gateway_remedy("not json at all") == ""
 
 
 def test_a_body_that_is_not_json_still_reaches_the_operator():
