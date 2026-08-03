@@ -117,6 +117,19 @@ def _pil_to_tensor(img) -> torch.Tensor:
     return torch.from_numpy(arr)[None, ...]
 
 
+def _tensor_to_pil(frame):
+    """One HxWxC frame — NOT a batch — as an RGB image.
+
+    Clamped before scaling: a frame that came through an upscaler can carry
+    values a shade outside 0..1, and uint8 wraps rather than clips, so an
+    overshoot of 1.004 would land as a black pixel in the middle of white art.
+    """
+    from PIL import Image
+    arr = frame.detach().cpu().clamp(0.0, 1.0).numpy()
+    return Image.fromarray((arr * 255.0).round().astype(np.uint8)).convert(
+        "RGB")
+
+
 class SymbioticaOrderRead(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1302,6 +1315,86 @@ class SymbioticaDatasetReference(io.ComfyNode):
                 per_type[key] = json.dumps(boxes_for_category(project, key))
             boxes.append(per_type[key])
         return io.NodeOutput(images, names, boxes)
+
+
+class SymbioticaCompareSheet(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaCompareSheet",
+            display_name="Symbiotica Compare Sheet",
+            category="symbiotica/pipeline",
+            description="Lays a row of references over a row of results as one "
+                        "image, so an asset and the art it was drawn from are "
+                        "read side by side instead of clicked between. Takes "
+                        "whole batches, unlike a two-image stitch: wire Asset "
+                        "Refs into the top row and Slice Cells into the "
+                        "bottom, and each result lands under the reference it "
+                        "belongs to.",
+            # Both rows at once: laying them out needs every image together, and
+            # mapped per image this would emit one sheet per cell.
+            is_input_list=True,
+            inputs=[
+                io.Image.Input("references",
+                               tooltip="The top row — the client's reference "
+                                       "art, e.g. Asset Refs' `images`."),
+                io.Image.Input("results",
+                               tooltip="The bottom row — what was made from "
+                                       "it, e.g. Slice Cells' `cells`."),
+                io.Int.Input("cell_size", default=0, min=0, max=4096,
+                             tooltip="Square each image is fitted into, or 0 "
+                                     "to take the largest edge among them so "
+                                     "nothing is enlarged into softness."),
+                io.Int.Input("spacing", default=16, min=0, max=512,
+                             tooltip="Gutter between cells, and the sheet's "
+                                     "own border."),
+                io.String.Input("background", default=DEFAULT_BACKGROUND,
+                                tooltip="What the gutters and any empty cell "
+                                        "are filled with."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="sheet",
+                                tooltip="One image: references on top, results "
+                                        "beneath, aligned by column."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, references=None, results=None, cell_size=0, spacing=16,
+                background=DEFAULT_BACKGROUND) -> io.NodeOutput:
+        from .asset_refs import parse_hex
+        from .compare_sheet import auto_cell, compose_rows
+        one = SymbioticaCategoryPrompts._one
+
+        def as_images(batch):
+            """Every frame in the wire, whatever shape it arrived in. A list
+            input carries one tensor per upstream execution, and each of those
+            may itself hold a batch — flattening both is what lets this take a
+            fanned-out lane and a plain batch on the same socket."""
+            out = []
+            for tensor in (batch or []):
+                if tensor is None:
+                    continue
+                for frame in tensor:
+                    out.append(_tensor_to_pil(frame))
+            return out
+
+        top = as_images(references)
+        bottom = as_images(results)
+        if not top and not bottom:
+            raise ValueError("wire images into 'references' and 'results' — "
+                             "both rows are empty")
+
+        cell = int(one(cell_size, 0) or 0)
+        if cell <= 0:
+            cell = auto_cell([(im.width, im.height) for im in top + bottom])
+        # A short row keeps its holes: the result belongs UNDER the reference it
+        # came from, and closing the row up would pair each with the wrong one.
+        columns = max(len(top), len(bottom))
+        rows = [row + [None] * (columns - len(row)) for row in (top, bottom)]
+        sheet = compose_rows(rows, cell, max(0, int(one(spacing, 16) or 0)),
+                             parse_hex(one(background, DEFAULT_BACKGROUND)))
+        return io.NodeOutput(_pil_to_tensor(sheet))
 
 
 _REF_SIZES = ["native", "512", "1024"]
@@ -2889,6 +2982,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaDatasetReference,
     SymbioticaSliceCells,
     SymbioticaAssetRefs,
+    SymbioticaCompareSheet,
     SymbioticaTemplateLibrary,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
