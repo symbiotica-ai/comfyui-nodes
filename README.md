@@ -43,7 +43,7 @@ Wrappers around Wavespeed's hosted endpoints.
   and whatever the model said about it; when it declines, that sentence is the
   error.
 
-  Where `GEMINI_GATEWAY_URL` is set the call routes through Cloudflare AI
+  Where `SYMBIOTICA_AIG_BASE` is set the call routes through Cloudflare AI
   Gateway on that studio's own stored key, tagged so its spend can be grouped
   per studio — which is how order renders run headless and how their cost
   reaches the cockpit. Anywhere else it calls Google directly on a key from the
@@ -231,11 +231,11 @@ consulted:
 
 | Variable | Content |
 |---|---|
-| `GEMINI_GATEWAY_URL` | Cloudflare AI Gateway base through the provider slug, e.g. `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/google-ai-studio`. Must be `https` — the token is a bearer credential for the studio's whole spend. |
-| `GEMINI_GATEWAY_TOKEN` | AI Gateway token, sent as `cf-aig-authorization`. Not a Google key — the Google key is stored in the gateway as BYOK and injected there. |
-| `ORDER_STUDIO` | The studio slug. Selects that studio's own stored Google key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
+| `SYMBIOTICA_AIG_BASE` | Cloudflare AI Gateway base, **without** a provider slug, e.g. `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>`. Each node appends its own provider. Must be `https` — the token is a bearer credential for the studio's whole spend. |
+| `SYMBIOTICA_AIG_TOKEN` | AI Gateway token, sent as `cf-aig-authorization`. Not a provider key — provider keys are stored in the gateway as BYOK and injected there. |
+| `ORDER_STUDIO` | The studio slug. Selects that studio's own stored provider key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
 
-Setting the URL without the token is an error, not a fall back: a call that
+Setting the base without the token is an error, not a fall back: a call that
 succeeds on somebody's personal key while its spend leaves the gateway is a
 failure nobody can detect afterwards.
 

@@ -205,8 +205,8 @@ def run_execute(node_module, monkeypatch, response, env=None, **kwargs):
 
 
 GATEWAY_ENV = {
-    "GEMINI_GATEWAY_URL": "https://gateway.example.invalid/v1/a/b/google-ai-studio",
-    "GEMINI_GATEWAY_TOKEN": "cf-token-not-a-real-one",
+    "SYMBIOTICA_AIG_BASE": "https://gateway.example.invalid/v1/a/b",
+    "SYMBIOTICA_AIG_TOKEN": "cf-token-not-a-real-one",
     "ORDER_STUDIO": "example-studio",
 }
 
@@ -249,7 +249,7 @@ def test_a_failed_gateway_call_names_the_studio_and_hides_the_token(
     """The wiring that hands the scrubber its secrets lives here and nowhere
     else. Proved at the pure layer, it is still only a property of a function
     this node is never shown to call correctly."""
-    token = GATEWAY_ENV["GEMINI_GATEWAY_TOKEN"]
+    token = GATEWAY_ENV["SYMBIOTICA_AIG_TOKEN"]
     with pytest.raises(RuntimeError) as caught:
         run_execute(node_module, monkeypatch,
                     FakeResponse(403, f'{{"error":"bad token {token}"}}'),
@@ -265,7 +265,7 @@ def test_a_token_stored_with_a_trailing_newline_is_still_scrubbed(
     """The wire carries the stripped token; scrubbing the raw env value finds
     nothing to replace. A trailing newline is the commonest artifact there is
     in a secret store, and the code strips precisely because it expects one."""
-    env = dict(GATEWAY_ENV, GEMINI_GATEWAY_TOKEN="cf-token-not-a-real-one\n")
+    env = dict(GATEWAY_ENV, SYMBIOTICA_AIG_TOKEN="cf-token-not-a-real-one\n")
     with pytest.raises(RuntimeError) as caught:
         run_execute(node_module, monkeypatch,
                     FakeResponse(401, '{"error":"bad cf-token-not-a-real-one"}'),
@@ -334,7 +334,7 @@ def test_a_transport_failure_does_not_leak_the_token_either(node_module,
                                                             monkeypatch):
     """Some transport errors quote the request, and the scrubber has to cover
     this path for the same reason it covers the others."""
-    token = GATEWAY_ENV["GEMINI_GATEWAY_TOKEN"]
+    token = GATEWAY_ENV["SYMBIOTICA_AIG_TOKEN"]
 
     def leaky(*a, **k):
         raise node_module.requests.exceptions.ConnectionError(

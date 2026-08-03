@@ -7,12 +7,13 @@ import requests
 from PIL import Image
 
 from .pipeline import gemini_image as core
+from .pipeline import ai_gateway
 
 
 class SymbioticaGeminiImage:
     """Generate an image with Google's Gemini image models.
 
-    On a box carrying GEMINI_GATEWAY_URL the call goes through Cloudflare AI
+    On a box carrying SYMBIOTICA_AIG_BASE the call goes through Cloudflare AI
     Gateway on the studio's own key, which is how order renders work headless
     and how their spend reaches the cockpit. Anywhere else it goes straight to
     Google on a key from the node, the Settings UI or the environment."""
@@ -102,15 +103,16 @@ class SymbioticaGeminiImage:
         # the headers that were actually sent rather than back out of the
         # environment.
         def failure(status, text):
-            return RuntimeError(core.http_error(
-                status, text, secrets=core.header_secrets(transport.headers),
+            return RuntimeError(ai_gateway.http_error(
+                status, text, secrets=ai_gateway.header_secrets(transport.headers),
                 studio=transport.studio,
-                alias=transport.headers.get("cf-aig-byok-alias")))
+                alias=transport.headers.get("cf-aig-byok-alias"),
+                service="Gemini"))
 
         try:
             response = requests.post(
                 transport.url, json=body, headers=transport.headers,
-                timeout=(core.CONNECT_TIMEOUT_S, core.REQUEST_TIMEOUT_S))
+                timeout=(ai_gateway.CONNECT_TIMEOUT_S, core.REQUEST_TIMEOUT_S))
         except requests.RequestException as exc:
             # No response ever existed, so nothing downstream can add the
             # context. A bare ConnectTimeout in a sandbox log cannot be told

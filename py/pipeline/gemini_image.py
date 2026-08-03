@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import base64
 import io
-import json
-from typing import Callable, NamedTuple
+from typing import Callable
 
 from PIL import Image
 
+from . import ai_gateway
+
+# Cloudflare's slug for Google AI Studio, the last path segment of the gateway
+# endpoint. It lives here rather than in the shared base so that adding a
+# provider costs no environment variable and no secret edit.
+PROVIDER = "google-ai-studio"
 # Google's own path, and the suffix for both arms: AI Gateway's provider
 # endpoint appends the upstream provider's path verbatim after the slug, so the
 # gateway base plus this reaches the same place the direct call does.
@@ -16,17 +21,8 @@ GENERATE_CONTENT_PATH = "/v1beta/models/{model}:generateContent"
 GOOGLE_API_BASE = "https://generativelanguage.googleapis.com"
 # 1K renders run tens of seconds; a 4K upscale runs several minutes.
 REQUEST_TIMEOUT_S = 300
-# Separate, because a single number would spend the whole read budget waiting
-# on a connection that will never open — a black-holed egress would hold a
-# customer's order for five minutes before saying anything.
-CONNECT_TIMEOUT_S = 10
 # Google's own limit, and the stock node's wording for it.
 MAX_REFERENCE_IMAGES = 14
-# Enough of a failure body to diagnose from without pasting a whole HTML page.
-MAX_ERROR_BODY_CHARS = 500
-# Shorter than any real gateway token or Google key. Below this a "secret" is
-# a substring of ordinary words rather than something worth hiding.
-MIN_SCRUBBABLE_SECRET = 8
 
 # Verbatim from ComfyUI's own Gemini image nodes. It forces image-first
 # behaviour, which is what keeps a conversational prompt from coming back as a
@@ -56,144 +52,30 @@ def generate_content_path(model: str) -> str:
     return GENERATE_CONTENT_PATH.format(model=model)
 
 
-class Transport(NamedTuple):
-    """Where one call goes, what proves it may go there, and whose key pays.
-
-    `studio` is None on the direct arm, where the question does not arise."""
-    url: str
-    headers: dict
-    studio: str | None
+# How a Google key is presented when no gateway is configured. The header name
+# and what a rejection calls the key are both Google's business, so they live
+# here rather than in the transport every provider shares.
+DIRECT_ARM = ai_gateway.DirectArm(
+    GOOGLE_API_BASE, "The Gemini API key",
+    lambda key: {"x-goog-api-key": key})
 
 
 def resolve_transport(environ, model: str,
-                      interactive_key: Callable[[], str]) -> Transport:
-    """The gateway when one is configured, Google directly otherwise.
-
-    `interactive_key` is a callable rather than a value so the direct arm's
-    key ladder — which reads a settings file and the environment — is never
-    walked on a call that will not use it. It is also what makes the precedence
-    testable without standing up that ladder.
-
-    A configured gateway wins over any personal key, and a gateway URL without
-    its token raises. The alternative, quietly spending a personal key on a box
-    that was set up to route through the gateway, is the failure nobody can
-    detect afterwards: the render succeeds and only the spend goes missing.
-
-    Every gateway-arm decision lives here so that the whole of it can be
-    exercised without importing ComfyUI."""
-    gateway = (environ.get("GEMINI_GATEWAY_URL") or "").strip().rstrip("/")
-    # Read once: normalised in one place, so the guard below and the arm that
-    # bills cannot come to disagree about what counts as a studio.
-    studio = (environ.get("ORDER_STUDIO") or "").strip()
-    if not gateway and studio:
-        # The launcher sets ORDER_STUDIO whether or not the secret populated,
-        # so its presence without a URL is a broken sandbox rather than a
-        # canvas box. Left to fall through, this either fails citing a
-        # Settings UI that does not exist here, or succeeds on a stray
-        # personal key and takes the spend out of the gateway in silence.
-        raise ValueError(
-            "ORDER_STUDIO is set but GEMINI_GATEWAY_URL is empty, so this "
-            "looks like an order sandbox whose symbiotica-comfy-gemini secret "
-            "did not populate. Rendering here would either fail asking for a "
-            "key this box cannot hold, or quietly bill one that is not the "
-            "studio's."
-        )
-    if gateway:
-        if not gateway.startswith("https://"):
-            raise ValueError(
-                f"GEMINI_GATEWAY_URL must be https, got {gateway!r}. The "
-                f"gateway token is a bearer credential for this studio's "
-                f"whole spend and would cross the wire in the clear."
-            )
-        token = (environ.get("GEMINI_GATEWAY_TOKEN") or "").strip()
-        if not token:
-            raise ValueError(
-                "GEMINI_GATEWAY_URL is set but GEMINI_GATEWAY_TOKEN is empty. "
-                "Both come from the symbiotica-comfy-gemini secret; a call "
-                "cannot fall back to a personal Google key here, because the "
-                "spend for this box belongs in the gateway."
-            )
-        token = usable_as_header(token, "GEMINI_GATEWAY_TOKEN", quote_it=False)
-        if not studio:
-            # No fall back to the gateway's default alias. That would bill a
-            # shared key while the metadata tag named a studio, and the two
-            # would disagree in a way only a reconciliation of the Google bill
-            # against gateway analytics could ever surface.
-            raise ValueError(
-                "ORDER_STUDIO is empty, so there is no studio whose Google key "
-                "should pay for this render. The order sandbox sets it "
-                "alongside the gateway secret; a render here would either be "
-                "charged to another studio or attributed to none."
-            )
-        # Quoted, unlike the token: a studio slug is not a secret, and seeing
-        # the value is most of the diagnosis.
-        studio = usable_as_header(studio, "ORDER_STUDIO", quote_it=True)
-        # No x-goog-api-key: with BYOK the gateway holds the Google key and
-        # injects it upstream. There is no Google key on this box to send.
-        return Transport(gateway + generate_content_path(model), {
-            "cf-aig-authorization": f"Bearer {token}",
-            # Which stored key pays. Passthrough-only: on Cloudflare's Unified
-            # Billing endpoints this header is ignored and `default` pays.
-            "cf-aig-byok-alias": studio,
-            # What analytics can group by. The alias cannot serve this — no
-            # AiGateway dataset exposes a dimension for it — so spend sent
-            # without this tag is spend that cannot be attributed to anyone.
-            "cf-aig-metadata": studio_tag(studio),
-            "Content-Type": "application/json",
-        }, studio)
-    return Transport(GOOGLE_API_BASE + generate_content_path(model), {
-        "x-goog-api-key": usable_as_header(
-            interactive_key(), "The Gemini API key", quote_it=False),
-        "Content-Type": "application/json",
-    }, None)
+                      interactive_key: Callable[[], str]):
+    """This node's call, routed by the rules every provider shares."""
+    return ai_gateway.resolve_transport(
+        environ, PROVIDER, generate_content_path(model), interactive_key,
+        DIRECT_ARM)
 
 
-# Cloudflare AI Gateway internal codes, observed against the real gateway
-# rather than guessed. Both arrive as HTTP 400 in the same error envelope and
-# call for opposite responses from opposite people, so the status alone sends
-# somebody at the wrong system.
-GATEWAY_REMEDIES = {
-    2040: ("this studio has no key stored in the gateway — add one under the "
-           "studio's slug as its BYOK alias"),
-    2009: ("the gateway rejected our own credential — check "
-           "GEMINI_GATEWAY_TOKEN in the symbiotica-comfy-gemini secret"),
-}
 
 
-def gateway_remedy(body: str) -> str:
-    """What to do about a refusal whose internal code we recognise, or "".
-
-    Only ever added to the body, never substituted for it. A code nobody has
-    seen yet would otherwise become a generic sentence that says less than the
-    response already did, and the first unrecognised code is exactly the case
-    where the raw text is worth most."""
-    try:
-        code = json.loads(body).get("internalCode")
-    except (ValueError, TypeError, AttributeError):
-        return ""
-    return GATEWAY_REMEDIES.get(code, "")
 
 
-def header_secrets(headers) -> list:
-    """The credential values these headers actually carry.
 
-    Read back off the headers rather than re-read from the environment: the
-    wire carries the token after `.strip()`, so scrubbing the raw variable
-    finds nothing to replace when the secret store kept a trailing newline —
-    and a trailing newline is both the commonest artifact in a secret store
-    and the exact reason the strip is there. The two would disagree only in
-    the case each of them exists to handle."""
-    secrets = []
-    authorization = headers.get("cf-aig-authorization")
-    if authorization:
-        # Both forms: a gateway may quote back the whole header or just the
-        # token it could not verify.
-        secrets.append(authorization)
-        secrets.append(authorization.split(" ", 1)[-1])
-    key = headers.get("x-goog-api-key")
-    if key:
-        secrets.append(key)
-    return secrets
+
+
+
 
 
 def require_prompt(prompt: str) -> str:
@@ -209,41 +91,8 @@ def require_prompt(prompt: str) -> str:
     return prompt
 
 
-def usable_as_header(value: str, source: str, quote_it: bool) -> str:
-    """`value`, once it is something an HTTP header can actually carry.
-
-    requests rejects control characters itself, but its exception quotes the
-    whole header value — so a credential with an interior newline, which is
-    what a mangled multi-line paste into a secret store produces, ends up in
-    the toast and the log by a path that never reaches the scrubber. Refusing
-    here keeps the diagnosis and loses the value: `quote_it` is False for
-    anything secret, so the message names the variable and not its contents."""
-    # isprintable() is already False for CR, LF and TAB, so it does the whole
-    # job of the control-character check. It is not enough on its own: plenty
-    # of printable characters have no latin-1 encoding, and those reach the
-    # transport and raise UnicodeEncodeError from inside http.client, naming
-    # neither the variable nor the value.
-    unusable = not value.isprintable()
-    if not unusable:
-        try:
-            value.encode("latin-1")
-        except UnicodeEncodeError:
-            unusable = True
-    if unusable:
-        shown = f": {value!r}" if quote_it else ""
-        raise ValueError(
-            f"{source} contains characters an HTTP header cannot carry{shown}. "
-            f"Check the secret for a stray newline or a truncated paste.")
-    return value
 
 
-def studio_tag(studio: str) -> str:
-    """The `cf-aig-metadata` value for one studio's render.
-
-    `surface` separates order renders from any later caller sharing the studio
-    key. Kept to two entries deliberately: Cloudflare stores only the first
-    five and silently drops the rest, so this is not an open bag."""
-    return json.dumps({"studio": studio, "surface": "order"})
 
 
 def image_parts(pil_images) -> list:
@@ -268,49 +117,6 @@ def image_parts(pil_images) -> list:
     return parts
 
 
-def http_error(status, body: str, secrets=(), studio=None,
-               alias=None) -> str:
-    """What to say when the call came back a failure.
-
-    `status` is an HTTP status code, or a short phrase when there was never a
-    response to have one — a call that failed in transport gets the same
-    account as one the gateway refused.
-
-    A gateway failure names the studio and the alias unconditionally, rather
-    than only when the response looks like an unprovisioned key. The gateway's
-    answer to an alias it holds no key for is undocumented, so recognising that
-    case would mean matching a signature nobody has observed — and a wrong
-    guess stays green in tests while failing to name the studio in the headless
-    log where the name is the whole diagnosis.
-
-    `secrets` are scrubbed from the body because a gateway rejecting a token
-    may quote it back, and this message goes on to a toast, a server log and
-    whatever screenshot ends up in a bug report."""
-    # Scrubbed before the cut, not after: truncating first leaves whatever of
-    # a credential fell inside the window, and half a token in a bug report is
-    # still half a token.
-    text = body or ""
-    for secret in secrets:
-        # An unset credential is "", and replacing that seeds the marker
-        # between every character of the body. A very short one is worse than
-        # useless: it occurs inside ordinary words, so scrubbing it shreds the
-        # diagnostic — "Connec[redacted]Timeou[redacted]" from a token of "t" —
-        # while protecting nothing, because a value that short is not a
-        # credential anybody could use.
-        if secret and len(secret) >= MIN_SCRUBBABLE_SECRET:
-            text = text.replace(secret, "[redacted]")
-    text = text[:MAX_ERROR_BODY_CHARS]
-    # Each named only when known. "key alias None" reads as an alias literally
-    # called None, which is a more alarming bug than the one that happened.
-    known = [f"studio {studio}"] if studio else []
-    if alias:
-        known.append(f"key alias {alias}")
-    whose = f" [{', '.join(known)}]" if known else ""
-    # The remedy leads, because it is the sentence an operator acts on; the
-    # body follows, because it is the one that survives a code we do not know.
-    remedy = gateway_remedy(body or "")
-    said = f" {remedy}." if remedy else ""
-    return f"Gemini request failed ({status}){whose}:{said} {text}"
 
 
 def decode_inline_image(inline: dict):
