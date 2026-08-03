@@ -69,6 +69,18 @@ def test_with_no_gateway_the_call_goes_straight_to_google_on_a_resolved_key():
     assert asked == [1]
 
 
+def test_a_gateway_url_written_with_a_trailing_slash_still_joins_cleanly():
+    """The base is hand-entered into a Modal secret, where a trailing slash is
+    the most ordinary typo there is — and `//v1beta` is a 404 whose message
+    says nothing about a slash."""
+    transport = gemini_image.resolve_transport(
+        {"GEMINI_GATEWAY_URL": GATEWAY + "/", "GEMINI_GATEWAY_TOKEN": TOKEN},
+        MODEL, never_asked)
+    assert transport.url == (
+        "https://gateway.example.invalid/v1/acct/gw/google-ai-studio"
+        "/v1beta/models/gemini-3.1-flash-image:generateContent")
+
+
 def test_a_blank_gateway_url_is_no_gateway_at_all():
     """An env var set to "" is how a secret that failed to populate arrives.
     Treating it as configured raises about a missing token and never explains
