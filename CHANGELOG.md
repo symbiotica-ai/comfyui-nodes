@@ -6,7 +6,7 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
-## Unreleased
+## 2026.8.4
 
 **Node change.** One node is added, `Claude (Symbiotica)`. Nothing existing is
 removed or renamed, and no other node's inputs, outputs or id changed, so saved
