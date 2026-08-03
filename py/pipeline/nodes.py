@@ -1267,6 +1267,65 @@ class SymbioticaDatasetReference(io.ComfyNode):
         return io.NodeOutput(images, names, boxes)
 
 
+class SymbioticaAssetRefs(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaAssetRefs",
+            display_name="Symbiotica Asset Refs",
+            category="symbiotica/pipeline",
+            description="The client's own reference art for ONE asset — what "
+                        "they sent for this thing, not the dataset's house "
+                        "style. Wire Order Assets' `asset_names` in and each "
+                        "asset yields its references in order; for a type "
+                        "packed in stages that is prep, ready, serving, so the "
+                        "same index that picks a cell out of Slice Cells picks "
+                        "the reference that belongs to it.",
+            inputs=[
+                Order.Input("order"),
+                io.String.Input("asset_name", force_input=True,
+                                tooltip="The Order Assets node's "
+                                        "`asset_names` output."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="images", is_output_list=True,
+                                tooltip="One image per reference the client "
+                                        "sent for this asset, in the order the "
+                                        "order sheet pairs them."),
+                io.String.Output(display_name="ref_names", is_output_list=True,
+                                 tooltip="Filename of each reference, so a "
+                                         "wrong pick is traceable to its file."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, order=None, asset_name="") -> io.NodeOutput:
+        from .asset_refs import pairing_note, reference_files
+        from .sheet_cells import boxes_for_category
+        if not isinstance(order, dict) or "assets" not in order:
+            raise ValueError("wire an Order Specs into 'order'")
+        paths, names = reference_files(order, asset_name)
+
+        from PIL import Image
+        images = []
+        for path in paths:
+            with Image.open(path) as im:
+                images.append(_pil_to_tensor(im.convert("RGB")))
+
+        # Say whether these line up with the sheet's cells rather than assume
+        # it: same count means index i is role i, a different count means an
+        # index picks unrelated things on each side, and both look identical
+        # once the images are on the wire.
+        asset = next((a for a in order["assets"]
+                      if str(a.get("assetName", "")).strip()
+                      == str(asset_name).strip()), {})
+        cells = boxes_for_category(
+            str(order.get("project_path", "") or "").strip(),
+            str(asset.get("category", "") or "").strip())
+        note = pairing_note(order, asset_name, names, cells)
+        return io.NodeOutput(images, names, ui=ui.PreviewText(note))
+
+
 def _resize_square(cell, size):
     """One cell resized to `size`x`size`, by the same resampler the rest of the
     graph uses.
@@ -2700,6 +2759,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaSaveRender,
     SymbioticaDatasetReference,
     SymbioticaSliceCells,
+    SymbioticaAssetRefs,
     SymbioticaTemplateLibrary,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,

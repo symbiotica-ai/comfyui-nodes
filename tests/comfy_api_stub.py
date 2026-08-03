@@ -44,8 +44,12 @@ class ComfyNode:
 
 
 class NodeOutput:
-    def __init__(self, *args):
+    def __init__(self, *args, ui=None):
         self.args = args
+        # What the node draws on its own body, which ComfyUI carries alongside
+        # the wire values rather than in them — a node can say something on the
+        # canvas without that showing up as an output.
+        self.ui = ui
 
 
 class _IONamespace(types.SimpleNamespace):
@@ -71,7 +75,10 @@ def build_modules():
         Hidden=types.SimpleNamespace(unique_id="unique_id"))
     latest = types.ModuleType("comfy_api.latest")
     latest.io = io_ns
-    latest.ui = types.SimpleNamespace()
+    # Keeps the text the node meant to show, so a test can assert on what lands
+    # on the canvas rather than only on the wire.
+    latest.ui = types.SimpleNamespace(
+        PreviewText=lambda value, **kw: types.SimpleNamespace(value=value))
     pkg = types.ModuleType("comfy_api")
     pkg.latest = latest
     return pkg, latest
