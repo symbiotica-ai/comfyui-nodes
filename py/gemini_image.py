@@ -94,10 +94,15 @@ class SymbioticaGeminiImage:
         if response.status_code != 200:
             # The credentials are scrubbed because a gateway rejecting a token
             # quotes it back, and this message goes on to a toast and a log.
+            # The studio rides along on every gateway failure, whatever the
+            # cause: in an order sandbox this message is the only thing that
+            # says which studio's render it was.
             raise RuntimeError(core.http_error(
                 response.status_code, response.text,
                 secrets=[os.environ.get("GEMINI_GATEWAY_TOKEN"),
-                         transport.headers.get("x-goog-api-key")]))
+                         transport.headers.get("x-goog-api-key")],
+                studio=transport.studio,
+                alias=transport.headers.get("cf-aig-byok-alias")))
 
         rendered, text = core.parse_response(response.json())
         return (to_tensor(rendered), text)

@@ -2,6 +2,7 @@
 # ABOUTME: response parsing — with no ComfyUI, no torch and no HTTP anywhere.
 import base64
 import io
+import json
 
 import pytest
 from PIL import Image
@@ -12,6 +13,14 @@ from pipeline import gemini_image
 GATEWAY = "https://gateway.example.invalid/v1/acct/gw/google-ai-studio"
 TOKEN = "cf-token-not-a-real-one"
 MODEL = "gemini-3.1-flash-image"
+STUDIO = "example-studio"
+
+
+def gateway_env(**overrides):
+    env = {"GEMINI_GATEWAY_URL": GATEWAY, "GEMINI_GATEWAY_TOKEN": TOKEN,
+           "ORDER_STUDIO": STUDIO}
+    env.update(overrides)
+    return {k: v for k, v in env.items() if v is not None}
 
 
 def never_asked():
@@ -26,9 +35,9 @@ def test_the_request_path_is_googles_own_generatecontent_path():
 
 
 def test_a_configured_gateway_takes_the_call_without_asking_for_a_personal_key():
-    env = {"GEMINI_GATEWAY_URL": GATEWAY, "GEMINI_GATEWAY_TOKEN": TOKEN,
-           "GEMINI_API_KEY": "a-personal-key-that-must-not-win"}
-    transport = gemini_image.resolve_transport(env, MODEL, never_asked)
+    transport = gemini_image.resolve_transport(
+        gateway_env(GEMINI_API_KEY="a-personal-key-that-must-not-win"),
+        MODEL, never_asked)
     assert transport.url == (
         "https://gateway.example.invalid/v1/acct/gw/google-ai-studio"
         "/v1beta/models/gemini-3.1-flash-image:generateContent")
@@ -37,8 +46,8 @@ def test_a_configured_gateway_takes_the_call_without_asking_for_a_personal_key()
 def test_the_gateway_arm_proves_itself_to_cloudflare_and_sends_no_google_key():
     """With BYOK the gateway injects the Google key server-side. A provider key
     riding along would be a personal key spending on a studio call."""
-    env = {"GEMINI_GATEWAY_URL": GATEWAY, "GEMINI_GATEWAY_TOKEN": TOKEN}
-    headers = gemini_image.resolve_transport(env, MODEL, never_asked).headers
+    headers = gemini_image.resolve_transport(
+        gateway_env(), MODEL, never_asked).headers
     assert headers["cf-aig-authorization"] == f"Bearer {TOKEN}"
     assert "x-goog-api-key" not in headers
     assert headers["Content-Type"] == "application/json"
@@ -47,10 +56,79 @@ def test_the_gateway_arm_proves_itself_to_cloudflare_and_sends_no_google_key():
 def test_a_gateway_url_without_its_token_refuses_rather_than_billing_elsewhere():
     """Falling back to a personal key here is a billing bypass wearing an
     error's clothes: the call succeeds and the spend leaves the gateway."""
-    env = {"GEMINI_GATEWAY_URL": GATEWAY,
-           "GEMINI_API_KEY": "a-personal-key-that-must-not-rescue-this"}
+    env = gateway_env(GEMINI_GATEWAY_TOKEN=None,
+                      GEMINI_API_KEY="a-personal-key-that-must-not-rescue-this")
     with pytest.raises(ValueError, match="GEMINI_GATEWAY_TOKEN"):
         gemini_image.resolve_transport(env, MODEL, never_asked)
+
+
+def test_the_studios_own_key_is_named_as_the_one_that_pays():
+    """Each studio's Google key is stored in the gateway under its slug. The
+    alias is what selects it; without the header the shared default key pays
+    for somebody else's render."""
+    headers = gemini_image.resolve_transport(
+        gateway_env(), MODEL, never_asked).headers
+    assert headers["cf-aig-byok-alias"] == STUDIO
+
+
+def test_the_call_is_tagged_with_the_studio_that_analytics_can_group_by():
+    """The alias decides who is billed and is invisible to analytics — no
+    AiGateway dataset carries a dimension for it. Only custom metadata is
+    groupable, so the tag is what makes the spend attributable at all."""
+    headers = gemini_image.resolve_transport(
+        gateway_env(), MODEL, never_asked).headers
+    # Parsed, not substring-matched: a malformed body still contains the slug.
+    tag = json.loads(headers["cf-aig-metadata"])
+    assert tag["studio"] == STUDIO
+
+
+def test_the_tag_carries_the_studio_and_the_surface_and_nothing_else():
+    """Exact equality rather than a cap: the design builds two entries, so
+    "at most five" passes against every implementation anyone would write."""
+    tag = json.loads(gemini_image.resolve_transport(
+        gateway_env(), MODEL, never_asked).headers["cf-aig-metadata"])
+    assert set(tag) == {"studio", "surface"}
+    assert tag["surface"] == "order"
+
+
+def test_the_transport_reports_which_studio_it_resolved_to():
+    gateway = gemini_image.resolve_transport(gateway_env(), MODEL, never_asked)
+    assert gateway.studio == STUDIO
+    direct = gemini_image.resolve_transport({}, MODEL, lambda: "google-key")
+    assert direct.studio is None
+
+
+def test_a_gateway_render_with_no_studio_fails_instead_of_charging_the_default():
+    """Falling back to the default alias would bill a shared key while the
+    metadata tag claimed a studio — the two sources would disagree, and only
+    reconciling the Google bill against gateway analytics would reveal it."""
+    with pytest.raises(ValueError, match="ORDER_STUDIO"):
+        gemini_image.resolve_transport(
+            gateway_env(ORDER_STUDIO=None), MODEL, never_asked)
+    with pytest.raises(ValueError, match="ORDER_STUDIO"):
+        gemini_image.resolve_transport(
+            gateway_env(ORDER_STUDIO="   "), MODEL, never_asked)
+
+
+def test_the_studio_is_never_quietly_replaced_by_the_default_alias():
+    """The one substitution that must never happen silently, asserted against
+    the value rather than only against the raise."""
+    try:
+        gemini_image.resolve_transport(
+            gateway_env(ORDER_STUDIO=None), MODEL, never_asked)
+    except ValueError as exc:
+        assert "default" not in str(exc).split("ORDER_STUDIO")[0].lower()
+    else:
+        pytest.fail("a gateway render without a studio was allowed to proceed")
+
+
+def test_the_direct_arm_carries_no_studio_headers_at_all():
+    """Google has no idea what a studio is; the headers mean something only to
+    Cloudflare, and ORDER_STUDIO being set does not make this a studio call."""
+    headers = gemini_image.resolve_transport(
+        {"ORDER_STUDIO": STUDIO}, MODEL, lambda: "google-key").headers
+    assert "cf-aig-byok-alias" not in headers
+    assert "cf-aig-metadata" not in headers
 
 
 def test_with_no_gateway_the_call_goes_straight_to_google_on_a_resolved_key():
@@ -74,8 +152,7 @@ def test_a_gateway_url_written_with_a_trailing_slash_still_joins_cleanly():
     the most ordinary typo there is — and `//v1beta` is a 404 whose message
     says nothing about a slash."""
     transport = gemini_image.resolve_transport(
-        {"GEMINI_GATEWAY_URL": GATEWAY + "/", "GEMINI_GATEWAY_TOKEN": TOKEN},
-        MODEL, never_asked)
+        gateway_env(GEMINI_GATEWAY_URL=GATEWAY + "/"), MODEL, never_asked)
     assert transport.url == (
         "https://gateway.example.invalid/v1/acct/gw/google-ai-studio"
         "/v1beta/models/gemini-3.1-flash-image:generateContent")
@@ -311,3 +388,27 @@ def test_redaction_of_nothing_does_not_redact_everything():
     marker between every character of the body."""
     message = gemini_image.http_error(429, "slow down", secrets=["", None])
     assert "slow down" in message
+
+
+def test_any_gateway_failure_names_the_studio_and_the_key_it_asked_for():
+    """Unconditional rather than recognised from a response signature. The
+    gateway's answer to an alias with no stored key is undocumented, so a node
+    that pattern-matched it would stay green here and fail to name the studio
+    in the one place it matters — a headless log nobody is watching."""
+    message = gemini_image.http_error(403, '{"error":"forbidden"}',
+                                      studio=STUDIO, alias=STUDIO)
+    assert STUDIO in message
+    assert "403" in message
+
+
+def test_the_alias_is_reported_even_when_it_is_not_the_studios_own_name():
+    """Reporting the studio alone would leave a mismatch between the two
+    invisible, and a mismatch is exactly the bug this header can have."""
+    message = gemini_image.http_error(401, "nope", studio="studio-a",
+                                      alias="studio-b")
+    assert "studio-a" in message and "studio-b" in message
+
+
+def test_a_direct_arm_failure_does_not_invent_a_studio():
+    message = gemini_image.http_error(400, "bad request")
+    assert "studio" not in message.lower()
