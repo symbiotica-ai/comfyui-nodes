@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 
 from PIL import Image
 
@@ -56,9 +57,9 @@ MAX_IMAGES = 20
 # Cloudflare does not store a log larger than 10 MB, and AI Gateway analytics
 # reads the log — so a request past that ceiling is spend that reaches no
 # cockpit row, which is the whole reason this node routes through the gateway.
-# The margin is deliberate: the JSON envelope, the prompt and the system prompt
-# all ride along with the images. In practice this binds long before MAX_IMAGES
-# does — roughly two high-resolution images, or eight standard-tier ones.
+# The margin under 10 MB is for what JSON encoding adds on top of the bytes we
+# count. In practice this binds long before MAX_IMAGES does — roughly two
+# high-resolution images, or eight standard-tier ones.
 MAX_REQUEST_BYTES = 8_000_000
 
 
@@ -151,6 +152,20 @@ def request_body(prompt: str, image_blocks: list, model: str, max_tokens: int,
         # Its own top-level key. Anthropic has no system role, and a message
         # claiming one is a 400.
         body["system"] = system_prompt
+    # Again, on the whole request rather than the images alone. `prompt` and
+    # `system_prompt` are unbounded multiline widgets riding in the same log,
+    # and a pasted style guide or JSON schema — exactly what a structured-
+    # extraction step invites — can carry a batch that passed image_blocks
+    # over the ceiling on its own.
+    size = len(json.dumps(body))
+    if size > MAX_REQUEST_BYTES:
+        raise ValueError(
+            f"The whole request encodes to {size} bytes, over the "
+            f"{MAX_REQUEST_BYTES} this node sends — the images fit, so it is "
+            f"the prompt or the system prompt that does not. Cloudflare stores "
+            f"no log above 10 MB and AI Gateway analytics reads the log, so a "
+            f"request this size would run without its spend ever being "
+            f"attributed to the studio.")
     return body
 
 
@@ -235,10 +250,17 @@ def parse_response(payload) -> str:
     return answer
 
 
-# 32768 output tokens of thinking-plus-answer take minutes on the larger
-# models, and the gateway's own timeout is time-to-first-byte rather than
-# total duration, so it will not cut a slow answer short on our behalf.
-REQUEST_TIMEOUT_S = 300
+# Bounds the whole generation, not an idle socket. Nothing arrives until the
+# answer is complete on a non-streamed call, so requests' read timeout is
+# inter-byte only in name — and the gateway's own timeout is time-to-first-byte,
+# which means it will not cut a slow answer short on our behalf either. This
+# number is the only thing that will. It has to cover the widget's own ceiling
+# of 64000 tokens with thinking sharing the budget, so it is longer than the
+# 500s `llm_api.call_claude_api` gives the same provider at a smaller one, and
+# much longer than the image node's 300s, where the output is a single picture.
+# Too short is the worse error: a generation that finished and was billed comes
+# back to a headless operator as a transport failure.
+REQUEST_TIMEOUT_S = 600
 
 # How an Anthropic key is presented when no gateway is configured. The header
 # name and what a rejection calls the key are both Anthropic's business, so

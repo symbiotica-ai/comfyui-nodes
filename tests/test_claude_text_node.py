@@ -292,3 +292,68 @@ def test_a_non_200_carrying_valid_json_is_still_a_failure(node_module,
     assert "must be greater than 0" in message
     assert "not a Messages shape" not in message
     assert "/v1/messages" not in message
+
+
+def test_every_widget_reaches_the_request_body(node_module, monkeypatch):
+    """The one seam nothing else covers. request_body and image_blocks are
+    proved at the pure layer, but the CALL that maps seven widgets onto them
+    lives only here — a node hard-coding the prompt, ignoring the model box and
+    sending max_tokens=1 would ship on a green suite without this."""
+    sent, _ = run_execute(node_module, monkeypatch,
+                          FakeResponse(payload=ANSWERED), env=dict(GATEWAY_ENV),
+                          prompt="what colour is the door",
+                          model="claude-haiku-4-5-20251001", max_tokens=8192,
+                          system_prompt="answer in one word")
+    body = sent["body"]
+    assert body["model"] == "claude-haiku-4-5-20251001"
+    assert body["max_tokens"] == 8192
+    assert body["system"] == "answer in one word"
+    assert body["messages"][0]["content"][-1] == {
+        "type": "text", "text": "what colour is the door"}
+
+
+def test_an_empty_system_prompt_is_left_out_of_the_body_entirely(node_module,
+                                                                 monkeypatch):
+    """The widget defaults to empty, so this is the ordinary call. Anthropic
+    has no system role and an empty `system` key is a 400."""
+    sent, _ = run_execute(node_module, monkeypatch,
+                          FakeResponse(payload=ANSWERED), env=dict(GATEWAY_ENV))
+    assert "system" not in sent["body"]
+
+
+def test_a_reference_batch_reaches_the_wire_as_labelled_png_blocks(node_module,
+                                                                   monkeypatch):
+    """Proves to_pil -> image_blocks -> labelled end to end. ComfyUI hands this
+    node a float batch in [0,1]; every step between that and a base64 PNG lives
+    only in execute()."""
+    import base64
+    import numpy as np
+    batch = np.zeros((2, 8, 8, 3), dtype=np.float32)
+    batch[1] = 1.0
+    sent, _ = run_execute(node_module, monkeypatch,
+                          FakeResponse(payload=ANSWERED), env=dict(GATEWAY_ENV),
+                          images=batch)
+    blocks = sent["body"]["messages"][0]["content"]
+    assert [b.get("text") for b in blocks if b["type"] == "text"] == [
+        "Image 1:", "Image 2:", "describe this"]
+    images = [b for b in blocks if b["type"] == "image"]
+    assert len(images) == 2
+    assert base64.b64decode(images[0]["source"]["data"])[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_a_float_batch_above_one_is_clipped_rather_than_wrapping_round(
+        node_module, monkeypatch):
+    """A node upstream can hand on values above 1.0. Cast without clipping,
+    260.0 becomes 4 and a white reference arrives almost black."""
+    import base64
+    import io
+    import numpy as np
+    from PIL import Image as PILImage
+    sent, _ = run_execute(node_module, monkeypatch,
+                          FakeResponse(payload=ANSWERED), env=dict(GATEWAY_ENV),
+                          images=np.full((1, 8, 8, 3), 1.02, dtype=np.float32))
+    block = [b for b in sent["body"]["messages"][0]["content"]
+             if b["type"] == "image"][0]
+    sent_image = PILImage.open(io.BytesIO(
+        base64.b64decode(block["source"]["data"])))
+    assert sent_image.getpixel((0, 0)) == (255, 255, 255)

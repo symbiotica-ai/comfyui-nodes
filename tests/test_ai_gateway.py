@@ -496,3 +496,36 @@ def test_a_failure_names_whose_call_it_was():
 
 def test_an_unnamed_service_is_left_unnamed_rather_than_guessed():
     assert ai_gateway.http_error(500, "boom").startswith("Request failed (500)")
+
+
+def test_a_box_still_carrying_the_retired_names_refuses_rather_than_paying():
+    """The migration window. An order sandbox on the old names has
+    ORDER_STUDIO set and is caught by the guard below, but a CANVAS box has no
+    studio — so without this it falls to the direct arm and quietly bills a
+    personal key, which the code's own comment calls the failure nobody can
+    detect afterwards."""
+    for stale in ({"GEMINI_GATEWAY_URL": "https://gateway.example.invalid/x"},
+                  {"GEMINI_GATEWAY_TOKEN": TOKEN},
+                  {"GEMINI_GATEWAY_URL": "https://gateway.example.invalid/x",
+                   "GEMINI_GATEWAY_TOKEN": TOKEN}):
+        with pytest.raises(ValueError) as caught:
+            resolve(dict(stale), lambda: "a-personal-key-that-must-not-pay")
+        # Names the variable to rename. A generic "no key" would send the
+        # reader at the Settings UI rather than at the Modal secret.
+        assert "SYMBIOTICA_AIG_BASE" in str(caught.value)
+        assert any(name in str(caught.value) for name in stale)
+
+
+def test_the_guard_does_not_fire_on_a_box_that_simply_has_no_gateway():
+    """Canvas boxes carry none of these. The migration guard must cost the
+    ordinary interactive user nothing."""
+    assert resolve({}, lambda: "k").url.startswith(
+        "https://generativelanguage.googleapis.com")
+
+
+def test_a_retired_name_left_empty_is_not_treated_as_set():
+    """An unset variable arrives as "" from a secret that failed to populate,
+    and blocking on that would strand a box that had already migrated."""
+    assert resolve({"GEMINI_GATEWAY_URL": "  ", "GEMINI_GATEWAY_TOKEN": ""},
+                   lambda: "k").url.startswith(
+        "https://generativelanguage.googleapis.com")

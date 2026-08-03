@@ -61,6 +61,25 @@ def resolve_transport(environ, provider: str, path: str,
     Every gateway-arm decision lives here so that the whole of it can be
     exercised without importing ComfyUI."""
     base = (environ.get("SYMBIOTICA_AIG_BASE") or "").strip().rstrip("/")
+    if not base:
+        # A box still carrying the per-provider variables is a box whose secret
+        # was never updated. On an order sandbox ORDER_STUDIO is set and the
+        # guard below catches it — but a canvas box has no studio, so it would
+        # fall to the direct arm and quietly pay a personal key, which is the
+        # one failure nobody detects afterwards. Named rather than inferred:
+        # this says which variable to rename, where a generic missing-key error
+        # sends the reader looking at the wrong system.
+        retired = sorted(name for name in ("GEMINI_GATEWAY_URL",
+                                           "GEMINI_GATEWAY_TOKEN")
+                         if (environ.get(name) or "").strip())
+        if retired:
+            raise ValueError(
+                f"{' and '.join(retired)} is set but SYMBIOTICA_AIG_BASE is "
+                f"not. Those names are retired: the base no longer carries the "
+                f"provider slug, and one token now covers every provider. "
+                f"Until this box is given SYMBIOTICA_AIG_BASE and "
+                f"SYMBIOTICA_AIG_TOKEN from the symbiotica-comfy-aigateway "
+                f"secret, nothing here routes through the gateway.")
     # Read once: normalised in one place, so the guard below and the arm that
     # bills cannot come to disagree about what counts as a studio.
     studio = (environ.get("ORDER_STUDIO") or "").strip()

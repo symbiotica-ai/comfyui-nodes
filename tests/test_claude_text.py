@@ -138,10 +138,15 @@ def test_the_refusal_names_the_size_that_did_not_fit():
     with pytest.raises(ValueError) as caught:
         claude_text.image_blocks([noise(2576, 2576, seed=i) for i in range(3)],
                                  "claude-opus-5")
-    # The real figure, not a rounded one: it is what says "drop one" or "drop
-    # five". Matched loosely because the exact byte count is PNG's business.
-    assert any(len(word.strip(",.")) >= 7 and word.strip(",.").isdigit()
-               for word in str(caught.value).split())
+    # The MEASURED figure, not merely the ceiling. The ceiling renders as its
+    # own seven-digit token, so "any long number appears" is satisfied by the
+    # limit alone and says nothing about whether the size was reported at all.
+    digits = {int(word.strip(",.")) for word in str(caught.value).split()
+              if word.strip(",.").isdigit()}
+    ceiling = claude_text.MAX_REQUEST_BYTES
+    assert ceiling in digits
+    over = {d for d in digits if d > ceiling}
+    assert over, "the ceiling was named but the size that broke it was not"
 
 
 def test_an_over_budget_batch_is_refused_rather_than_quietly_shortened():
@@ -406,3 +411,25 @@ def test_a_truncated_answer_is_told_apart_from_one_that_never_arrived():
                                          stop_reason="max_tokens"))
     assert "Raise max_tokens" in str(caught.value)
     assert "returned no text" not in str(caught.value)
+
+
+def test_a_prompt_large_enough_to_drop_the_log_is_refused_on_its_own():
+    """The images alone can fit and the request still not be logged. `prompt`
+    and `system_prompt` are unbounded multiline widgets in the same payload,
+    and a pasted style guide or JSON schema is exactly what a structured-
+    extraction step invites."""
+    with pytest.raises(ValueError) as caught:
+        body(system_prompt="x" * (claude_text.MAX_REQUEST_BYTES + 1))
+    assert "system prompt" in str(caught.value)
+
+
+def test_the_whole_request_is_measured_not_just_the_images():
+    """Images under budget plus a prompt under budget can exceed it together,
+    which a check on either half alone never sees."""
+    half = "y" * (claude_text.MAX_REQUEST_BYTES // 2 + 1000)
+    with pytest.raises(ValueError):
+        body(prompt=half, system_prompt=half)
+
+
+def test_an_ordinary_request_is_not_caught_by_that_check():
+    assert body(prompt="describe this", system_prompt="be brief")["system"]

@@ -483,3 +483,43 @@ def test_a_non_image_attachment_is_not_decoded_as_one():
                                   "data": "e30="}}))
 
 
+
+
+def test_this_nodes_call_carries_googles_slug_and_googles_path():
+    """The slug moved out of the operator-supplied URL and into this module,
+    where the transport tests cannot see it — they run against their own
+    provider literal. Written out in full rather than rebuilt from the module's
+    own pieces: a join that drops the slug still matches a recomputed value."""
+    transport = gemini_image.resolve_transport(
+        {"SYMBIOTICA_AIG_BASE": "https://gateway.example.invalid/v1/acct/gw",
+         "SYMBIOTICA_AIG_TOKEN": "cf-token-not-a-real-one",
+         "ORDER_STUDIO": "example-studio"},
+        "gemini-3.1-flash-image", never_consulted)
+    assert transport.url == (
+        "https://gateway.example.invalid/v1/acct/gw/google-ai-studio"
+        "/v1beta/models/gemini-3.1-flash-image:generateContent")
+
+
+def test_without_a_gateway_this_node_still_calls_google_on_googles_header():
+    """The direct base and the header name that presents the key both live in
+    this module now. Sending Google's key under Anthropic's header name would
+    be invisible to the shared scrubber, which knows both."""
+    transport = gemini_image.resolve_transport(
+        {}, "gemini-3.1-flash-image", lambda: "a-google-key")
+    assert transport.url == ("https://generativelanguage.googleapis.com"
+                             "/v1beta/models/gemini-3.1-flash-image"
+                             ":generateContent")
+    assert transport.headers["x-goog-api-key"] == "a-google-key"
+    assert "x-api-key" not in transport.headers
+
+
+def test_a_google_key_that_cannot_be_a_header_is_refused_as_googles():
+    """The label a rejection uses is this module's, and it is what tells the
+    reader which of two providers' keys to go and look at."""
+    with pytest.raises(ValueError, match="Gemini"):
+        gemini_image.resolve_transport(
+            {}, "gemini-3.1-flash-image", lambda: "key\nwith-newline")
+
+
+def never_consulted():
+    raise AssertionError("the interactive key ladder was consulted")
