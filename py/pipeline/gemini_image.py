@@ -336,12 +336,24 @@ def parse_response(payload):
 
     images, texts, refusals, explained = [], [], [], []
     for candidate in candidates:
+        # Same guard the payload carries, one level down: a reply whose
+        # candidates are not objects is a wrong-endpoint symptom, and letting
+        # it reach .get() names neither Gemini nor the URL.
+        if not isinstance(candidate, dict):
+            raise ValueError(
+                f"Gemini returned a candidate that is a "
+                f"{type(candidate).__name__} rather than an object. Check the "
+                f"endpoint this node is pointed at.")
         finish = (candidate.get("finishReason") or "").upper()
         # Where a refusal actually explains itself. A declined generation
         # comes back 200 with no parts at all — no text, no thought, an empty
         # `content` — so this field is the only account of it in the reply,
         # and substituting our own sentence for it discards the whole thing.
-        explanation = (candidate.get("finishMessage") or "").strip()
+        #
+        # str() rather than .strip() on the raw value: only the string form
+        # has been observed, and a shape change upstream must not raise from
+        # inside the diagnostic and lose the reason along with it.
+        explanation = str(candidate.get("finishMessage") or "").strip()
         if explanation and explanation not in explained:
             explained.append(explanation)
         # Every reason but STOP is kept, not only the one worth skipping the

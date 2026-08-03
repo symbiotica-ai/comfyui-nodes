@@ -489,6 +489,25 @@ def test_our_own_advice_does_not_displace_googles():
     assert said.count("rephras") == 1
 
 
+def test_a_finish_message_that_is_not_a_sentence_does_not_crash_the_report():
+    """Only the string form has been observed. A shape change upstream turning
+    it into a number or an object would otherwise raise AttributeError from
+    inside a diagnostic, losing the reason as well as the explanation."""
+    for odd in (123, {"detail": "x"}, ["x"], True):
+        with pytest.raises(ValueError, match="IMAGE_OTHER"):
+            gemini_image.parse_response({"candidates": [
+                {"content": {}, "finishReason": "IMAGE_OTHER",
+                 "finishMessage": odd}]})
+
+
+def test_a_candidate_that_is_not_an_object_is_reported_not_crashed_on():
+    """Same guard the payload itself already has, one level down: a reply
+    whose candidates are strings is a wrong-endpoint symptom, and
+    "'str' object has no attribute 'get'" names neither Gemini nor the URL."""
+    with pytest.raises(ValueError, match="candidate"):
+        gemini_image.parse_response({"candidates": ["not an object"]})
+
+
 def test_a_refusal_for_any_reason_says_which_reason():
     """Gemini stops for SAFETY, RECITATION and others, not only for prohibited
     imagery. Reporting only the one reason we special-cased means the model
