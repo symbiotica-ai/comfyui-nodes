@@ -642,6 +642,65 @@ def test_a_direct_arm_failure_does_not_invent_a_studio():
     assert "studio" not in message.lower()
 
 
+# The shape Cloudflare AI Gateway actually returns for an alias it holds no
+# key for, captured against the real gateway rather than imagined. The slugs
+# are substituted: the real body enumerates the live studio roster, and that
+# does not belong in a committed fixture. Everything structural is verbatim.
+UNKNOWN_ALIAS_BODY = (
+    '{"success":false,"result":[],"messages":[],"error":[{"code":2040,'
+    '"message":"Provider \'google-ai-studio\' has no BYOK credential named '
+    '\'example-studio\'. Configured aliases: \'other-studio\'"}],'
+    '"name":"AiGatewayError","httpCode":400,"internalCode":2040,'
+    '"message":"Provider \'google-ai-studio\' has no BYOK credential named '
+    '\'example-studio\'. Configured aliases: \'other-studio\'"}')
+
+UNAUTHORIZED_BODY = (
+    '{"success":false,"error":[{"code":2009,"message":"Unauthorized"}],'
+    '"name":"AiGatewayError","httpCode":400,"internalCode":2009,'
+    '"message":"Unauthorized"}')
+
+
+def test_an_unprovisioned_studio_is_told_to_provision_that_studio():
+    """Observed, not invented: the gateway refuses an unknown alias with a 400
+    rather than falling back to the shared key. The remedy is to add a key for
+    this studio, and nothing in the raw body says that in those words."""
+    message = gemini_image.http_error(400, UNKNOWN_ALIAS_BODY,
+                                      studio=STUDIO, alias=STUDIO)
+    assert "no key" in message.lower() or "not provisioned" in message.lower()
+    assert STUDIO in message
+    # The body survives alongside it: the remedy is a reading of the response,
+    # not a replacement for it.
+    assert "2040" in message
+
+
+def test_a_rejected_gateway_token_is_not_confused_with_a_missing_studio_key():
+    """Same status, same error envelope, opposite remedy — one is "provision
+    this studio", the other is "our own secret is wrong". Telling an operator
+    to add a studio key when the token is what broke sends them at the wrong
+    system entirely."""
+    message = gemini_image.http_error(400, UNAUTHORIZED_BODY,
+                                      studio=STUDIO, alias=STUDIO)
+    assert "GEMINI_GATEWAY_TOKEN" in message
+    assert "no key" not in message.lower()
+
+
+def test_a_code_nobody_has_seen_yet_is_passed_through_untouched():
+    """The failure mode of code-matching: an unrecognised code quietly becomes
+    a generic sentence that says less than the response did."""
+    body = ('{"error":[{"code":9999,"message":"something new"}],'
+            '"internalCode":9999}')
+    message = gemini_image.http_error(400, body, studio=STUDIO, alias=STUDIO)
+    assert "something new" in message
+    assert "9999" in message
+
+
+def test_a_body_that_is_not_json_still_reaches_the_operator():
+    """Gateways answer with HTML when they are unhappy enough."""
+    message = gemini_image.http_error(502, "<html>Bad Gateway</html>",
+                                      studio=STUDIO, alias=STUDIO)
+    assert "Bad Gateway" in message
+
+
 def test_a_missing_alias_is_left_out_rather_than_printed_as_none():
     """"key alias None" reads as an alias literally named None, which is a
     different and much more alarming bug than the one that happened."""

@@ -138,6 +138,32 @@ def resolve_transport(environ, model: str,
     }, None)
 
 
+# Cloudflare AI Gateway internal codes, observed against the real gateway
+# rather than guessed. Both arrive as HTTP 400 in the same error envelope and
+# call for opposite responses from opposite people, so the status alone sends
+# somebody at the wrong system.
+GATEWAY_REMEDIES = {
+    2040: ("this studio has no key stored in the gateway — add one under the "
+           "studio's slug as its BYOK alias"),
+    2009: ("the gateway rejected our own credential — check "
+           "GEMINI_GATEWAY_TOKEN in the symbiotica-comfy-gemini secret"),
+}
+
+
+def gateway_remedy(body: str) -> str:
+    """What to do about a refusal whose internal code we recognise, or "".
+
+    Only ever added to the body, never substituted for it. A code nobody has
+    seen yet would otherwise become a generic sentence that says less than the
+    response already did, and the first unrecognised code is exactly the case
+    where the raw text is worth most."""
+    try:
+        code = json.loads(body).get("internalCode")
+    except (ValueError, TypeError, AttributeError):
+        return ""
+    return GATEWAY_REMEDIES.get(code, "")
+
+
 def header_secrets(headers) -> list:
     """The credential values these headers actually carry.
 
@@ -251,7 +277,11 @@ def http_error(status: int, body: str, secrets=(), studio=None,
     if alias:
         known.append(f"key alias {alias}")
     whose = f" [{', '.join(known)}]" if known else ""
-    return f"Gemini request failed ({status}){whose}: {text}"
+    # The remedy leads, because it is the sentence an operator acts on; the
+    # body follows, because it is the one that survives a code we do not know.
+    remedy = gateway_remedy(body or "")
+    said = f" {remedy}." if remedy else ""
+    return f"Gemini request failed ({status}){whose}:{said} {text}"
 
 
 def decode_inline_image(inline: dict):
