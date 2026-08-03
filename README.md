@@ -204,7 +204,7 @@ Two ways, checked in this order (after any per-node `api_key` widget):
 | `WAVESPEED_API_KEY` | Wavespeed (image + video) |
 | `ELEVENLABS_API_KEY` | ElevenLabs (sound effects) |
 | `SUBMAGIC_API_KEY` | Submagic (captions) |
-| `GOOGLE_API_KEY` | Google Speech-to-Text |
+| `GOOGLE_API_KEY` | Google Speech-to-Text, and the Gemini image node's second choice after `GEMINI_API_KEY` |
 
 Per-node `api_key` widget overrides the env var.
 

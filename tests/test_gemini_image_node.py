@@ -308,6 +308,47 @@ def test_a_two_hundred_that_is_not_json_is_reported_with_its_body(node_module,
     assert "example-studio" in message
 
 
+def test_a_call_that_never_reached_the_gateway_still_names_the_studio(
+        node_module, monkeypatch):
+    """A black-holed egress, a DNS failure or a TLS error raises before any
+    response exists, so the failure formatter never ran and the exception
+    named neither the studio nor the arm. In a sandbox log a bare
+    ConnectTimeout is indistinguishable between "the gateway is down" and
+    "this box has no egress"."""
+    def refuse_to_connect(*a, **k):
+        raise node_module.requests.exceptions.ConnectTimeout(
+            "HTTPSConnectionPool(host='gateway.example.invalid'): timed out")
+
+    monkeypatch.setattr(node_module.requests, "post", refuse_to_connect)
+    monkeypatch.setattr(node_module.os, "environ", dict(GATEWAY_ENV))
+    with pytest.raises(RuntimeError) as caught:
+        node_module.SymbioticaGeminiImage().execute(
+            prompt="a knight", model="gemini-3.1-flash-image", seed=0,
+            aspect_ratio="auto", resolution="2K")
+    message = str(caught.value)
+    assert "example-studio" in message
+    assert "ConnectTimeout" in message
+
+
+def test_a_transport_failure_does_not_leak_the_token_either(node_module,
+                                                            monkeypatch):
+    """Some transport errors quote the request, and the scrubber has to cover
+    this path for the same reason it covers the others."""
+    token = GATEWAY_ENV["GEMINI_GATEWAY_TOKEN"]
+
+    def leaky(*a, **k):
+        raise node_module.requests.exceptions.ConnectionError(
+            f"failed sending header Bearer {token}")
+
+    monkeypatch.setattr(node_module.requests, "post", leaky)
+    monkeypatch.setattr(node_module.os, "environ", dict(GATEWAY_ENV))
+    with pytest.raises(RuntimeError) as caught:
+        node_module.SymbioticaGeminiImage().execute(
+            prompt="a knight", model="gemini-3.1-flash-image", seed=0,
+            aspect_ratio="auto", resolution="2K")
+    assert token not in str(caught.value)
+
+
 def test_an_empty_prompt_is_refused_before_the_key_ladder_is_walked(
         node_module, monkeypatch):
     """Otherwise a headless run costs two round-trips: the operator is told to

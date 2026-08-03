@@ -65,9 +65,11 @@ class SymbioticaGeminiImage:
                 "api_key": ("STRING", {
                     "default": "",
                     "tooltip": "Google AI Studio key for direct calls; empty "
-                               "falls back to the Symbiotica.GEMINI_API_KEY "
-                               "setting or the GEMINI_API_KEY env var. "
-                               "Ignored where the studio gateway is configured."
+                               "falls back to Symbiotica.GEMINI_API_KEY or "
+                               "Symbiotica.GOOGLE_API_KEY in Settings, then "
+                               "the GEMINI_API_KEY or GOOGLE_API_KEY env "
+                               "vars, in that order. Ignored where the studio "
+                               "gateway is configured."
                 }),
             },
         }
@@ -91,22 +93,31 @@ class SymbioticaGeminiImage:
         body = core.request_body(prompt, core.image_parts(to_pil(images)),
                                  aspect_ratio, resolution, system_prompt)
 
-        response = requests.post(
-            transport.url, json=body, headers=transport.headers,
-            timeout=(core.CONNECT_TIMEOUT_S, core.REQUEST_TIMEOUT_S))
-
         # Anything that is not a rendered image goes through one formatter, so
         # that a failure carries the same account whether the gateway refused
-        # it or answered with something that was never a Gemini reply at all.
-        # The studio rides along on every gateway failure whatever the cause:
-        # in an order sandbox this message is the only thing that says whose
-        # render it was, and the credentials come off the headers that were
-        # actually sent rather than back out of the environment.
+        # it, never answered, or answered with something that was never a
+        # Gemini reply at all. The studio rides along on every gateway failure
+        # whatever the cause: in an order sandbox this message is the only
+        # thing that says whose render it was, and the credentials come off
+        # the headers that were actually sent rather than back out of the
+        # environment.
         def failure(status, text):
             return RuntimeError(core.http_error(
                 status, text, secrets=core.header_secrets(transport.headers),
                 studio=transport.studio,
                 alias=transport.headers.get("cf-aig-byok-alias")))
+
+        try:
+            response = requests.post(
+                transport.url, json=body, headers=transport.headers,
+                timeout=(core.CONNECT_TIMEOUT_S, core.REQUEST_TIMEOUT_S))
+        except requests.RequestException as exc:
+            # No response ever existed, so nothing downstream can add the
+            # context. A bare ConnectTimeout in a sandbox log cannot be told
+            # apart from "the gateway is down" and "this box has no egress",
+            # and some transport errors quote the request headers back.
+            raise failure("no response",
+                          f"{type(exc).__name__}: {exc}") from exc
 
         if response.status_code != 200:
             raise failure(response.status_code, response.text)

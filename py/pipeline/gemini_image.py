@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import io
 import json
 from typing import Callable, NamedTuple
@@ -25,6 +24,9 @@ CONNECT_TIMEOUT_S = 10
 MAX_REFERENCE_IMAGES = 14
 # Enough of a failure body to diagnose from without pasting a whole HTML page.
 MAX_ERROR_BODY_CHARS = 500
+# Shorter than any real gateway token or Google key. Below this a "secret" is
+# a substring of ordinary words rather than something worth hiding.
+MIN_SCRUBBABLE_SECRET = 8
 
 # Verbatim from ComfyUI's own Gemini image nodes. It forces image-first
 # behaviour, which is what keeps a conversational prompt from coming back as a
@@ -37,6 +39,12 @@ GEMINI_IMAGE_SYS_PROMPT = (
     "you must creatively invent a concrete visual scenario that depicts the concept.\n"
     "Prioritize generating the visual representation above any text, formatting, or conversational requests."
 )
+
+# Any of these appearing at the top level means a generateContent endpoint
+# answered, however little it had to say. Their absence is what distinguishes
+# a wrong URL from an empty reply.
+GENERATE_CONTENT_KEYS = {"candidates", "promptFeedback", "usageMetadata",
+                         "modelVersion", "responseId"}
 
 MODELS = ["gemini-3.1-flash-image", "gemini-3.1-flash-lite-image"]
 ASPECT_RATIOS = ["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4",
@@ -74,7 +82,10 @@ def resolve_transport(environ, model: str,
     Every gateway-arm decision lives here so that the whole of it can be
     exercised without importing ComfyUI."""
     gateway = (environ.get("GEMINI_GATEWAY_URL") or "").strip().rstrip("/")
-    if not gateway and (environ.get("ORDER_STUDIO") or "").strip():
+    # Read once: normalised in one place, so the guard below and the arm that
+    # bills cannot come to disagree about what counts as a studio.
+    studio = (environ.get("ORDER_STUDIO") or "").strip()
+    if not gateway and studio:
         # The launcher sets ORDER_STUDIO whether or not the secret populated,
         # so its presence without a URL is a broken sandbox rather than a
         # canvas box. Left to fall through, this either fails citing a
@@ -103,7 +114,6 @@ def resolve_transport(environ, model: str,
                 "spend for this box belongs in the gateway."
             )
         token = usable_as_header(token, "GEMINI_GATEWAY_TOKEN", quote_it=False)
-        studio = (environ.get("ORDER_STUDIO") or "").strip()
         if not studio:
             # No fall back to the gateway's default alias. That would bill a
             # shared key while the metadata tag named a studio, and the two
@@ -208,7 +218,18 @@ def usable_as_header(value: str, source: str, quote_it: bool) -> str:
     the toast and the log by a path that never reaches the scrubber. Refusing
     here keeps the diagnosis and loses the value: `quote_it` is False for
     anything secret, so the message names the variable and not its contents."""
-    if any(c in value for c in "\r\n\t") or not value.isprintable():
+    # isprintable() is already False for CR, LF and TAB, so it does the whole
+    # job of the control-character check. It is not enough on its own: plenty
+    # of printable characters have no latin-1 encoding, and those reach the
+    # transport and raise UnicodeEncodeError from inside http.client, naming
+    # neither the variable nor the value.
+    unusable = not value.isprintable()
+    if not unusable:
+        try:
+            value.encode("latin-1")
+        except UnicodeEncodeError:
+            unusable = True
+    if unusable:
         shown = f": {value!r}" if quote_it else ""
         raise ValueError(
             f"{source} contains characters an HTTP header cannot carry{shown}. "
@@ -247,9 +268,13 @@ def image_parts(pil_images) -> list:
     return parts
 
 
-def http_error(status: int, body: str, secrets=(), studio=None,
+def http_error(status, body: str, secrets=(), studio=None,
                alias=None) -> str:
     """What to say when the call came back a failure.
+
+    `status` is an HTTP status code, or a short phrase when there was never a
+    response to have one — a call that failed in transport gets the same
+    account as one the gateway refused.
 
     A gateway failure names the studio and the alias unconditionally, rather
     than only when the response looks like an unprovisioned key. The gateway's
@@ -267,8 +292,12 @@ def http_error(status: int, body: str, secrets=(), studio=None,
     text = body or ""
     for secret in secrets:
         # An unset credential is "", and replacing that seeds the marker
-        # between every character of the body.
-        if secret:
+        # between every character of the body. A very short one is worse than
+        # useless: it occurs inside ordinary words, so scrubbing it shreds the
+        # diagnostic — "Connec[redacted]Timeou[redacted]" from a token of "t" —
+        # while protecting nothing, because a value that short is not a
+        # credential anybody could use.
+        if secret and len(secret) >= MIN_SCRUBBABLE_SECRET:
             text = text.replace(secret, "[redacted]")
     text = text[:MAX_ERROR_BODY_CHARS]
     # Each named only when known. "key alias None" reads as an alias literally
@@ -294,7 +323,9 @@ def decode_inline_image(inline: dict):
     investigation entirely."""
     try:
         return Image.open(io.BytesIO(base64.b64decode(inline["data"])))
-    except (KeyError, ValueError, TypeError, OSError, binascii.Error) as exc:
+    # binascii.Error is a ValueError, so listing it separately would only
+    # imply base64 failures are something ValueError does not already cover.
+    except (KeyError, ValueError, TypeError, OSError) as exc:
         raise ValueError(
             f"Gemini returned an image part that could not be decoded "
             f"({type(exc).__name__}: {exc})") from exc
@@ -328,7 +359,12 @@ def parse_response(payload):
             detail = feedback.get("blockReasonMessage")
             raise ValueError(f"Gemini blocked the request. Reason: {reason}"
                              + (f" ({detail})" if detail else ""))
-        if "promptFeedback" not in payload:
+        # Any one of the shape's own keys proves the right endpoint answered,
+        # including `candidates` itself. Keying on promptFeedback alone told
+        # an operator with a legitimately empty reply to go and check a URL
+        # that was correct, in a sentence that named `candidates` as evidence
+        # the reply was not a generateContent shape.
+        if not GENERATE_CONTENT_KEYS & set(payload):
             raise ValueError(
                 f"Gemini returned no candidates, and the reply carries "
                 f"{sorted(payload)[:8]} rather than a generateContent shape. "
@@ -345,7 +381,9 @@ def parse_response(payload):
                 f"Gemini returned a candidate that is a "
                 f"{type(candidate).__name__} rather than an object. Check the "
                 f"endpoint this node is pointed at.")
-        finish = (candidate.get("finishReason") or "").upper()
+        # Coerced for the same reason finishMessage is: a response value must
+        # not raise from inside the code reporting the failure.
+        finish = str(candidate.get("finishReason") or "").upper()
         # Where a refusal actually explains itself. A declined generation
         # comes back 200 with no parts at all — no text, no thought, an empty
         # `content` — so this field is the only account of it in the reply,
@@ -417,10 +455,12 @@ def request_body(prompt: str, inline_images: list, aspect_ratio: str,
     """One native Gemini generateContent call. `inline_images` are the parts
     `image_parts` built, and they follow the prompt in input order.
 
-    Text is asked for alongside the image because it is the diagnostic channel:
-    when Gemini declines, it says why there, and in a headless sandbox that
-    sentence is the only account anyone gets. `auto` is Google's absence of
-    aspectRatio rather than a value it accepts, so it is omitted."""
+    Text is asked for alongside the image because the model's commentary is
+    worth having and costs nothing — not because a refusal arrives there. A
+    refusal carries no parts at all and explains itself in `finishMessage`, so
+    asking for IMAGE only would lose the commentary and change nothing about
+    diagnosing a decline. `auto` is Google's absence of aspectRatio rather
+    than a value it accepts, so it is omitted."""
     require_prompt(prompt)
     image_config = {"imageSize": resolution}
     if aspect_ratio != "auto":

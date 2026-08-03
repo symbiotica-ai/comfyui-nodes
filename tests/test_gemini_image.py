@@ -437,6 +437,40 @@ def test_an_empty_response_with_no_reason_given_says_so():
         gemini_image.parse_response({"candidates": []})
 
 
+def test_a_genuinely_empty_reply_is_not_blamed_on_the_endpoint():
+    """A reply carrying `candidates` IS the generateContent shape, so telling
+    the operator to check the URL both contradicts itself and sends them to
+    inspect something that is correct."""
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response({"candidates": []})
+    assert "endpoint" not in str(caught.value).lower()
+
+    # Any of the shape's own keys is enough to prove the endpoint answered.
+    for shape in ({"usageMetadata": {}}, {"modelVersion": "x"},
+                  {"promptFeedback": {}}):
+        with pytest.raises(ValueError) as caught:
+            gemini_image.parse_response(shape)
+        assert "endpoint" not in str(caught.value).lower()
+
+
+def test_a_finish_reason_that_is_not_a_string_does_not_crash_the_report():
+    """The last response value in the loop that could still raise from inside
+    the diagnostic, taking the explanation down with the reason."""
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response({"candidates": [
+            {"content": {}, "finishReason": 3, "finishMessage": "explained"}]})
+    assert "explained" in str(caught.value)
+
+
+def test_a_studio_slug_that_cannot_cross_the_wire_is_refused():
+    """isprintable() passes plenty of characters http.client cannot encode.
+    A UnicodeEncodeError from inside the transport names neither the variable
+    nor the value."""
+    with pytest.raises(ValueError, match="ORDER_STUDIO"):
+        gemini_image.resolve_transport(
+            gateway_env(ORDER_STUDIO="studio-中文"), MODEL, never_asked)
+
+
 def test_a_prohibited_image_is_reported_as_that_and_not_as_an_empty_render():
     with pytest.raises(ValueError, match="IMAGE_PROHIBITED_CONTENT"):
         gemini_image.parse_response(
@@ -721,6 +755,25 @@ def test_a_credential_straddling_the_cut_does_not_leak_its_first_half():
         message = gemini_image.http_error(401, body, secrets=[TOKEN])
         assert TOKEN[:overlap] not in message, (
             f"{overlap} leading characters of the credential survived")
+
+
+def test_a_value_too_short_to_be_a_credential_does_not_shred_the_message():
+    """A truncated or misconfigured token of a character or two appears inside
+    ordinary words, so scrubbing it replaces half the message and protects
+    nothing — the value is not a usable credential either way. Observed as
+    "Connec[redacted]Timeou[redacted]" from a token of "t"."""
+    message = gemini_image.http_error(
+        500, "ConnectTimeout: HTTPSConnectionPool timed out", secrets=["t"])
+    assert "ConnectTimeout" in message
+    assert "[redacted]" not in message
+
+
+def test_a_credential_of_real_length_is_still_scrubbed():
+    long_enough = "abcdefghij" * 4
+    message = gemini_image.http_error(500, f"rejected {long_enough}",
+                                      secrets=[long_enough])
+    assert long_enough not in message
+    assert "[redacted]" in message
 
 
 def test_redaction_of_nothing_does_not_redact_everything():
