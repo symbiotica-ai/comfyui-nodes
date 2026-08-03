@@ -1267,6 +1267,30 @@ class SymbioticaDatasetReference(io.ComfyNode):
         return io.NodeOutput(images, names, boxes)
 
 
+def _resize_square(cell, size):
+    """One cell resized to `size`x`size`, by the same resampler the rest of the
+    graph uses.
+
+    Lanczos via ComfyUI's own `common_upscale`, so a cell coming out of here
+    matches an Upscale Image node set to lanczos exactly — and matches the
+    packer, which resamples its sprites with PIL LANCZOS too. Going through
+    Comfy also means no clamping is needed: that path is 8-bit via PIL, so the
+    ringing bicubic produces at hard edges cannot leave the 0..1 range.
+
+    Falls back to bicubic when `comfy` is absent, which is only ever the test
+    harness — antialiased and clamped there, since nothing else would catch the
+    overshoot.
+    """
+    try:
+        from comfy.utils import common_upscale
+    except ImportError:
+        return torch.nn.functional.interpolate(
+            cell.movedim(-1, 1), size=(size, size), mode="bicubic",
+            antialias=True, align_corners=False).movedim(1, -1).clamp(0.0, 1.0)
+    return common_upscale(cell.movedim(-1, 1), size, size,
+                          "lanczos", "disabled").movedim(1, -1)
+
+
 class SymbioticaSliceCells(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1296,7 +1320,9 @@ class SymbioticaSliceCells(io.ComfyNode):
                                      "lands slightly off."),
                 io.Int.Input("output_size", default=0, min=0, max=8192,
                              tooltip="Resize each cell to this square, or 0 to "
-                                     "keep it at its cut size."),
+                                     "keep it at its cut size. Lanczos, the "
+                                     "same resampler an Upscale Image node "
+                                     "uses."),
             ],
             outputs=[
                 io.Image.Output(display_name="cells", is_output_list=True,
@@ -1337,13 +1363,7 @@ class SymbioticaSliceCells(io.ComfyNode):
         for role, left, top, right, bottom in regions:
             cell = image[:, top:bottom, left:right, :]
             if size:
-                # Channels-first for interpolate, and back again. Antialiased so
-                # a cell shrunk to a working size does not alias the crisp
-                # game-art edges this pack exists to produce.
-                cell = torch.nn.functional.interpolate(
-                    cell.movedim(-1, 1), size=(size, size),
-                    mode="bicubic", antialias=True,
-                    align_corners=False).movedim(1, -1).clamp(0.0, 1.0)
+                cell = _resize_square(cell, size)
             cells.append(cell)
             roles.append(role)
         return io.NodeOutput(cells, roles)
