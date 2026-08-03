@@ -1193,6 +1193,18 @@ class SymbioticaDatasetReference(io.ComfyNode):
                                  tooltip="Filename of the reference drawn for "
                                          "asset i, so a good draw can be "
                                          "traced back to its file."),
+                # Appended: links address an output by slot index, so a new
+                # slot in the middle would re-point every saved workflow.
+                io.String.Output(display_name="cell_boxes",
+                                 is_output_list=True,
+                                 tooltip="Where each asset sits inside this "
+                                         "type's packed sheet, as JSON — wire "
+                                         "into Slice Cells to cut a generated "
+                                         "sheet back into one image per role. "
+                                         "Comes from the same dataset folder "
+                                         "the reference was drawn from, so it "
+                                         "describes the grid the render was "
+                                         "asked to reproduce."),
             ],
         )
 
@@ -1240,7 +1252,101 @@ class SymbioticaDatasetReference(io.ComfyNode):
         for p in paths:
             with Image.open(p) as im:
                 images.append(_pil_to_tensor(im.convert("RGB")))
-        return io.NodeOutput(images, names)
+        # Per ASSET, not per type: the boxes ride the same index as the images
+        # so a lane that fans out over assets can cut each render without
+        # re-deriving which type it came from. Cheap to repeat — the lookup is
+        # memoised per type below, and the payload is a few hundred bytes.
+        from .sheet_cells import boxes_for_category
+        per_type = {}
+        boxes = []
+        for cat in cats:
+            key = str(cat).strip()
+            if key not in per_type:
+                per_type[key] = json.dumps(boxes_for_category(project, key))
+            boxes.append(per_type[key])
+        return io.NodeOutput(images, names, boxes)
+
+
+class SymbioticaSliceCells(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaSliceCells",
+            display_name="Symbiotica Slice Cells",
+            category="symbiotica/pipeline",
+            description="Cuts a generated sheet back into one image per asset, "
+                        "on the grid the dataset was packed to. Wire the Dataset "
+                        "Reference node's `cell_boxes` in and every asset type "
+                        "cuts itself — a food sheet gives prep/ready/serving, a "
+                        "chair sheet gives its four rotations — with no crop "
+                        "coordinates to type and nothing to rewire when the run "
+                        "changes type. `roles` names each cell, so an edit can "
+                        "address 'serving' rather than 'the third one'.",
+            inputs=[
+                io.Image.Input("image",
+                               tooltip="The generated sheet to cut."),
+                io.String.Input("cell_boxes", force_input=True,
+                                tooltip="The Dataset Reference node's "
+                                        "`cell_boxes` output."),
+                io.Int.Input("inset", default=1, min=0, max=256,
+                             tooltip="Pixels to shrink every cell by. The boxes "
+                                     "are the grid the render was ASKED to hit, "
+                                     "so a pixel or two of slack keeps the "
+                                     "background out of a cell when the render "
+                                     "lands slightly off."),
+                io.Int.Input("output_size", default=0, min=0, max=8192,
+                             tooltip="Resize each cell to this square, or 0 to "
+                                     "keep it at its cut size."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="cells", is_output_list=True,
+                                tooltip="One image per cell, in reading order."),
+                io.String.Output(display_name="roles", is_output_list=True,
+                                 tooltip="What each cell holds — 'prep', "
+                                         "'serving', a rotation — index-aligned "
+                                         "with `cells`."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, image=None, cell_boxes="", inset=1,
+                output_size=0) -> io.NodeOutput:
+        from .sheet_cells import crop_regions
+        if image is None or not len(image):
+            raise ValueError("wire the generated sheet into 'image'")
+        try:
+            boxes = json.loads(str(cell_boxes or "").strip() or "[]")
+        except ValueError:
+            boxes = None
+        if not isinstance(boxes, list) or not boxes:
+            raise ValueError(
+                "no cell boxes — wire the Dataset Reference node's "
+                "`cell_boxes` output into this node. An empty list also means "
+                "the asset type has no packing rule recorded for it yet.")
+
+        height, width = int(image.shape[1]), int(image.shape[2])
+        regions = crop_regions(boxes, width, height, inset)
+        if not regions:
+            raise ValueError(
+                f"none of the {len(boxes)} cells fall inside this "
+                f"{width}x{height} image — it is not the sheet these boxes "
+                f"describe")
+
+        size = max(0, int(output_size or 0))
+        cells, roles = [], []
+        for role, left, top, right, bottom in regions:
+            cell = image[:, top:bottom, left:right, :]
+            if size:
+                # Channels-first for interpolate, and back again. Antialiased so
+                # a cell shrunk to a working size does not alias the crisp
+                # game-art edges this pack exists to produce.
+                cell = torch.nn.functional.interpolate(
+                    cell.movedim(-1, 1), size=(size, size),
+                    mode="bicubic", antialias=True,
+                    align_corners=False).movedim(1, -1).clamp(0.0, 1.0)
+            cells.append(cell)
+            roles.append(role)
+        return io.NodeOutput(cells, roles)
 
 
 class SymbioticaTemplateLibrary(io.ComfyNode):
@@ -2573,6 +2679,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaPromptBook,
     SymbioticaSaveRender,
     SymbioticaDatasetReference,
+    SymbioticaSliceCells,
     SymbioticaTemplateLibrary,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
