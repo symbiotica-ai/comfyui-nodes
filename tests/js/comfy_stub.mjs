@@ -54,6 +54,7 @@ function element() {
             cs.forEach((c) => { c.parent = this; });
         },
         setAttribute() {},
+        get parentElement() { return this.parent; },
         remove() {
             if (this.parent) {
                 this.parent.children = this.parent.children.filter((c) => c !== this);
@@ -76,9 +77,12 @@ globalThis.requestAnimationFrame = (cb) => cb();
 export const api = {
     apiURL: (route) => `/api${route}`,
     addEventListener() {},
-    async fetchApi(route) {
+    async fetchApi(route, init) {
         calls.push(route);
-        const r = responder(route, calls.length);
+        // `init` is passed through so a test can assert what a POST actually
+        // sent — without it a save handler could write the wrong file, or the
+        // wrong text, and every assertion here would still pass.
+        const r = responder(route, calls.length, init);
         const delay = typeof latencyMs === "function" ? latencyMs(route) : latencyMs;
         if (delay) await new Promise((res) => setTimeout(res, delay));
         return {
@@ -118,6 +122,10 @@ function makeNode(comfyClass, widgets) {
             return w;
         },
         addDOMWidget(name, type, elem, options) {
+            // ComfyUI puts the element inside a wrapper div it sizes from the
+            // node width; code that keeps the panel inside the node has to
+            // reach that wrapper, so the stub has to have one too.
+            element().appendChild(elem);
             const w = { name, type, element: elem, options };
             this.widgets.push(w);
             return w;
@@ -125,6 +133,14 @@ function makeNode(comfyClass, widgets) {
         // LiteGraph marks the canvas dirty, which schedules a repaint.
         setDirtyCanvas() { repaints.count++; },
         setSize() {}, computeSize: () => [200, 100],
+        // LiteGraph's own signature: connect(outputSlot, targetNode, inputSlot).
+        // Recorded rather than simulated — tests assert WHICH slot was picked.
+        connect(slot, target, input) {
+            this.connected = { slot, target, input };
+            const inp = target.inputs?.[input];
+            if (inp) inp.link = nextLink++;
+            return true;
+        },
     };
     nodes.set(node.id, node);
     return node;

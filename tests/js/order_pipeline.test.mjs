@@ -406,3 +406,33 @@ test("a wired project_path never clobbers the picked feature", async () => {
     assert.equal(feature, "Mini 1",
                  "a wired-path resolution clobbered the render-feeding feature");
 });
+
+test("narrowing the packer pulls the assets panel in with it", async () => {
+    // ComfyUI's own layout follows a widening at once but lags a shrink, so a
+    // narrowed node kept a wide panel and the asset rows hung off its right
+    // edge. The panel must not depend on that pass ever running.
+    reset();
+    setLatency(1);
+    setResponder(always({ ok: true, status: 200,
+                          body: { events: [ONE_EVENT], refsRoot: "/refs" } }));
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
+    const packer = await create("SymbioticaAutoPacker",
+        { category: "All", overrides: "{}" });
+    link(specs, packer, "order");
+    specs.onNodeCreated();
+    packer.onNodeCreated();
+    for (let f = 0; f < 20; f++) await tick();
+
+    const wrap = panelOf(packer).parentElement;
+    assert.ok(wrap, "the panel must sit inside a wrapper, as it does in ComfyUI");
+
+    packer.size[0] = 600;
+    packer.onResize?.([600, packer.size[1]]);
+    assert.equal(wrap.style.width, "580px", "wide node, wide panel");
+
+    packer.size[0] = 325;
+    packer.onResize?.([325, packer.size[1]]);
+    assert.equal(wrap.style.width, "305px",
+                 "narrow node must pull the panel in, not leave it at 580");
+});

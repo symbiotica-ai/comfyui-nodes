@@ -456,3 +456,17 @@ def test_autopack_distribute_by_folder_stacks_categories(tmp_path):
                          padding=0, border=0)
     assert len(out) == 1
     assert len(out[0]["regions"]) == 2
+
+
+def test_packed_categories_names_each_type_once():
+    from pipeline.autopack import packed_categories
+    packed = [{"category": "Decoration"}, {"category": "Decoration"},
+              {"category": "Food - 3 stages"}, {"category": "Decoration"}]
+    # first-appearance order, no repeats — a type that paginates is one type
+    assert packed_categories(packed) == ["Decoration", "Food - 3 stages"]
+
+
+def test_packed_categories_drops_blanks():
+    from pipeline.autopack import packed_categories
+    assert packed_categories([{"category": ""}, {}, {"category": "  "},
+                              {"category": " Decoration "}]) == ["Decoration"]

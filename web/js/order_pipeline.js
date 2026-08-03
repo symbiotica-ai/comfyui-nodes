@@ -129,7 +129,7 @@ function applySettingsToNode(packer, s) {
 // String literal, a chain of them). The combos and the thumbnail route's root
 // registration both need the actual path string, which the widget alone can't
 // give once the socket is wired.
-function resolveProjectPath(node) {
+export function resolveProjectPath(node) {
     const v = widgetOf(node, "project_path")?.value?.trim?.();
     if (v) return v;
     return inputString(node, "project_path", new Set());
@@ -143,7 +143,7 @@ function projectPathTyped(node) {
     return !!widgetOf(node, "project_path")?.value?.trim?.();
 }
 
-function inputString(node, inputName, seen) {
+export function inputString(node, inputName, seen) {
     const input = node?.inputs?.find((i) => i.name === inputName);
     if (!input || input.link == null) return "";
     const link = app.graph.links[input.link];
@@ -472,12 +472,33 @@ function assetsPanel(node) {
         const h = list.scrollHeight;
         return [width, Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX)];
     };
+    // ComfyUI sizes the DOM wrapper from the node width on its own layout pass,
+    // and that pass follows a WIDENING immediately but lags a SHRINK — it only
+    // catches up when something else re-lays-out the node. Narrow a packer whose
+    // panel has rows and nothing does, so the wrapper keeps the old width and the
+    // rows visibly hang off the right edge of the node. Pin it ourselves instead
+    // of waiting: the inset is a constant 20px at every width (320->300,
+    // 325->305, 520->500, 600->580).
+    const PANEL_INSET = 20;
+    const syncPanelWidth = () => {
+        const wrap = container.parentElement;
+        if (!wrap) return;
+        const want = Math.max(0, node.size[0] - PANEL_INSET);
+        if (parseFloat(wrap.style.width) !== want) wrap.style.width = `${want}px`;
+    };
     // Re-fit the node to the new content after each render (scrollHeight is only
     // valid once the rows are in the DOM).
     const refit = () => requestAnimationFrame(() => {
         node.setSize?.([node.size[0], node.computeSize()[1]]);
+        syncPanelWidth();
         node.setDirtyCanvas?.(true, true);
     });
+    // The dragged-edge case: onResize is the one signal that fires for a shrink.
+    const prevResize = node.onResize;
+    node.onResize = function () {
+        prevResize?.apply(this, arguments);
+        syncPanelWidth();
+    };
     node.size[0] = Math.max(node.size[0], 320);
 
     const save = () => {
@@ -1375,6 +1396,21 @@ registerSymbioticaExtension(app, {
             };
         }
 
+        if (nodeData.name === "SymbioticaOrderAssets") {
+            const orig = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                orig?.apply(this, arguments);
+                // "All" + the wired event's own types, so the pick can only be
+                // a type this event actually has — the same combo the Auto
+                // Packer gets, from the same source.
+                comboify(this, "category", () => eventCategoriesFor(this));
+                // Schema default is "" (unset). A fresh node should still SHOW
+                // "All"; onConfigure restores a saved pick over this.
+                const w = widgetOf(this, "category");
+                if (w && !w.value) w.value = "All";
+            };
+        }
+
         if (nodeData.name === "SymbioticaAutoPacker") {
             const orig = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
@@ -1415,6 +1451,16 @@ registerSymbioticaExtension(app, {
                     } catch { ovW.value = "{}"; }
                 }
                 queueMicrotask(() => this._symRenderAssets?.());
+            };
+        }
+
+        if (nodeData.name === "SymbioticaCategoryPrompts") {
+            const orig = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                orig?.apply(this, arguments);
+                // Deferred: at onNodeCreated the node is not on the graph yet,
+                // so the packer lookup would run against a graph without it.
+                queueMicrotask(() => wireCategoryPrompts(this));
             };
         }
 
@@ -1547,6 +1593,39 @@ async function postJson(route, body) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? res.statusText);
     return data;
+}
+
+// Connect an Auto Packer's PER-SHEET asset types to a Category Prompts node,
+// and fill in its project folder. Done by the extension rather than by hand
+// because the packer's two category outputs are adjacent STRING lists and
+// picking the wrong one does not fail: ComfyUI repeats a short list's last
+// entry (execution.py slice_dict), so a deduped list would render every sheet
+// after the first few with someone else's architect prompt, silently.
+//
+// The slot is looked up BY NAME. Hard-coding its index would rot the first time
+// an output is added to the packer.
+function wireCategoryPrompts(node) {
+    if (!node || node.inputs?.find((i) => i.name === "sheet_categories")?.link
+        != null) return;
+    const packers = (app.graph?._nodes ?? [])
+        .filter((n) => n.comfyClass === "SymbioticaAutoPacker");
+    // Two packers and no way to tell which one is meant: leave it alone rather
+    // than guess wrong and have it look connected.
+    if (packers.length !== 1) return;
+    const packer = packers[0];
+    const slot = (packer.outputs ?? [])
+        .findIndex((o) => (o.name ?? o.label) === "sheet_categories");
+    const input = node.inputs?.findIndex((i) => i.name === "sheet_categories");
+    if (slot < 0 || input == null || input < 0) return;
+    packer.connect?.(slot, node, input);
+    // Resolve the packer's own project source the same way the rest of the
+    // order lane does — it follows a Local/Modal switch and reroutes, and
+    // refuses to guess when a branch is ambiguous.
+    const pw = widgetOf(node, "project_path");
+    if (pw && !String(pw.value ?? "").trim()) {
+        const resolved = inputString(packer, "order", new Set());
+        if (resolved) pw.value = resolved;
+    }
 }
 
 function widgetOf(node, name) {

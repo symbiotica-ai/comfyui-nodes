@@ -15,6 +15,8 @@ from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
 from .paths import parse_roots, resolve_within
+from .prompt_store import (PromptPathError, list_book, read_block,
+                           write_block)
 from .pack_library import (
     KINDS,
     delete_pack_template_dirs,
@@ -596,3 +598,46 @@ async def pack_template_delete(request):
                       str(body.get("month") or ""))
     removed = delete_pack_template_dirs(dirs, name)
     return web.json_response({"ok": True, "removed": removed})
+
+
+@PromptServer.instance.routes.get("/symbiotica/prompt-book")
+async def prompt_book(request):
+    """The project's editable blocks: shared rules first, then type blocks.
+
+    Same project expansion as the template routes — the node sends whatever its
+    project_path resolves to, which on Modal is the volume-relative
+    studios/<slug>/… form and points at no book at all unexpanded.
+    """
+    project = _expand_project(request.query.get("project", ""))
+    if not project:
+        return web.json_response({"error": "project required"}, status=400)
+    return web.json_response({"ok": True, **list_book(project)})
+
+
+@PromptServer.instance.routes.get("/symbiotica/prompt-read")
+async def prompt_read(request):
+    project = _expand_project(request.query.get("project", ""))
+    try:
+        text = read_block(project, request.query.get("name", ""))
+    except PromptPathError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response({"ok": True, "text": text})
+
+
+@PromptServer.instance.routes.post("/symbiotica/prompt-write")
+async def prompt_write(request):
+    """Save one block. A .bak of what it replaced sits beside it — an editor
+    that can silently lose a tuned 6k-character rule is not one to trust."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    project = _expand_project(str(body.get("project") or ""))
+    try:
+        saved = write_block(project, str(body.get("name") or ""),
+                            body.get("text"))
+    except PromptPathError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except OSError as exc:
+        return web.json_response({"error": f"cannot save: {exc}"}, status=500)
+    return web.json_response({"ok": True, **saved})

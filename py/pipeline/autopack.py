@@ -183,6 +183,19 @@ def _combined_sheets(assets, refs_root, sheet_w, sheet_h, settings, scales,
     return out
 
 
+def packed_categories(packed):
+    """The asset types this pack covers, each named ONCE, in the order they
+    first appear. Deliberately NOT one entry per sheet: a category that
+    paginates into ten sheets is still one type, and repeating it ten times
+    makes the list useless as a label. Blank categories are left out."""
+    out = []
+    for p in packed:
+        cat = (p.get("category") or "").strip()
+        if cat and cat not in out:
+            out.append(cat)
+    return out
+
+
 def _no_sheets_reason(assets, category, combined_sheet, split_variants):
     """Why nothing was drawn, named as the switch the user can flip.
 
@@ -207,8 +220,10 @@ def _no_sheets_reason(assets, category, combined_sheet, split_variants):
                "rotation '-' (stages), which is never split — "
                "turn combined_sheet on")
     else:
-        why = (f"every group rendered empty — check the reference files still "
-               f"exist under the refs folder (types seen: {cats})")
+        # Defensive: every emitter ran and drew no region. Name no cause — a
+        # ref file missing from disk does NOT land here (it packs as a blank
+        # cell), so guessing at one would send the reader down the wrong path.
+        why = f"every group rendered empty (types seen: {cats})"
     return (f"no assets to pack for category {category!r} — "
             f"nothing to draw: {why}")
 
