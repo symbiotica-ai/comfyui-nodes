@@ -482,3 +482,17 @@ def test_a_header_the_call_needs_beyond_the_gateways_own_rides_both_arms():
         "anthropic-version"] == "2023-06-01"
     assert resolve({}, lambda: "k", extra_headers=version)[1][
         "anthropic-version"] == "2023-06-01"
+
+
+def test_a_failure_names_whose_call_it_was():
+    """Two providers share this formatter now. "Request failed (500)" in a
+    headless log leaves the reader to guess which of them it was, and the
+    guess is between the node that draws and the node that writes."""
+    assert ai_gateway.http_error(500, "boom", service="Gemini").startswith(
+        "Gemini request failed (500)")
+    assert ai_gateway.http_error(500, "boom", service="Claude").startswith(
+        "Claude request failed (500)")
+
+
+def test_an_unnamed_service_is_left_unnamed_rather_than_guessed():
+    assert ai_gateway.http_error(500, "boom").startswith("Request failed (500)")
