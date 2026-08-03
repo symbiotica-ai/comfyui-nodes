@@ -6,6 +6,42 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.2
+
+**Node change.** Five nodes are added: `Symbiotica Order Assets`, `Symbiotica
+Category Prompts`, `Symbiotica Prompt Book`, `Symbiotica Dataset Reference` and
+`Symbiotica Save Render`. `Symbiotica Auto Packer` gains a `categories` output,
+appended after `sheet_categories`, so every existing wire keeps its slot and
+saved workflows are unaffected. No node is removed or renamed, and no existing
+input or output changed position or meaning. Under calendar versioning the
+major is the year, so nothing in the version number signals this — hence the
+note.
+
+### Added
+- **A whole feature renders in one pass, per asset and per category.** The
+  eight duplicated render groups collapse into one lane: `Order Assets` emits
+  one item per asset, index-aligned across names, categories and save paths,
+  and ComfyUI's own list fan-out runs the lane once per item. `Save Render`
+  files each result under month/feature/category/asset. `Dataset Reference`
+  picks a reference per category, seeded per `(seed, category)` so adding a
+  type does not reshuffle a pick you already approved.
+- **Architect prompts compose from shared game rules.** A project's
+  `prompts/_rules/*.md` are read in filename order and prepended to the
+  category's own `prompts/<Category>.md`, which stays last because the tail of
+  a prompt carries the most weight. A project with no `_rules/` folder behaves
+  exactly as before.
+- **The prompt book is editable in the graph.** `Prompt Book` reads and writes
+  those blocks from the canvas, and every render records which blocks composed
+  its prompt — per block, not one hash of the whole thing, so a change to
+  lighting is distinguishable from a change to negatives.
+
+### Fixed
+- **The auto-packer named a cause it could not know.** When every group
+  rendered empty it blamed missing reference files; a missing ref actually
+  packs as a blank cell and never reaches that branch. It now reports the
+  types it saw and leaves the cause unstated rather than sending you after the
+  wrong one.
+
 ## 2026.8.1
 
 **Node change.** `Symbiotica Auto Packer` gains a fourth output,
