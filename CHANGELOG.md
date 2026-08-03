@@ -6,11 +6,11 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
-## Unreleased
+## 2026.8.3
 
 **Node change.** One node is added, `Gemini Image (Symbiotica)`. Nothing
 existing is removed or renamed, and no other node's inputs, outputs or id
-changed.
+changed, so saved workflows are unaffected.
 
 ### Added
 - **Gemini image generation that works in a headless render.** ComfyUI's own
@@ -63,6 +63,12 @@ changed.
   box was meant to route through the gateway and cannot. Left alone it would
   either fail asking for a key it cannot hold, or succeed on a stray personal
   key with the spend outside the gateway and nobody the wiser.
+
+### Docs
+- **The README lists the five nodes `2026.8.2` shipped.** `Order Assets`,
+  `Save Render`, `Dataset Reference`, `Category Prompts` and `Prompt Book`
+  landed without an entry, so the pack's documentation did not match its
+  contents.
 
 ## 2026.8.2
 
