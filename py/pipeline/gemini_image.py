@@ -310,8 +310,9 @@ def parse_response(payload):
     Raises rather than returning an empty list: a graph handed zero images
     fails somewhere downstream, with the response long out of view. In an order
     sandbox the raise is the only artifact a human ever reads, so it carries
-    Gemini's own words whenever there are any — a refusal is explained in the
-    text channel and nowhere else."""
+    Gemini's own words wherever the reply put them. There are three places, and
+    a refusal uses the last: text parts, `promptFeedback.blockReason`, and
+    `finishMessage` on a candidate that came back with no parts at all."""
     # A wrong endpoint answers 200 with a different envelope entirely, and
     # "no candidates" reads as the model having refused — so the operator
     # retries the prompt while the URL is what is wrong.
@@ -374,10 +375,14 @@ def parse_response(payload):
             # This drops thought TEXT too, which ComfyUI's own nodes keep. The
             # text output is a diagnostic that can reach a client or a stored
             # run, and reasoning prose would bury a one-line refusal in it.
-            # That rests on refusals arriving as ordinary text parts, which is
-            # how they arrive today but is not a documented guarantee: if one
-            # ever came back flagged `thought`, this line would eat the only
-            # account of why the render failed.
+            # Nothing is lost by that: a refusal carries no parts whatsoever —
+            # neither text nor thought — and explains itself in
+            # `finishMessage`, which this filter never sees.
+            #
+            # `thought` is checked by VALUE, not by presence. A genuine render
+            # arrives carrying `thoughtSignature` with no `thought` key at
+            # all, so a filter asking whether a part looks thought-ish would
+            # discard the image and report that Gemini produced nothing.
             if part.get("thought") is True:
                 continue
             inline = part.get("inlineData")

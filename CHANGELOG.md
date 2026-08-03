@@ -40,10 +40,14 @@ changed.
   which would bill one studio while the tag claimed another. Every gateway
   failure names the studio and the alias it asked for, whatever went wrong.
 
-  Every failure raises, carrying Gemini's own explanation when there is one,
-  because a refusal is explained in the text channel and nowhere else — and in
-  a sandbox nobody is watching, the raise is the only artifact a human reads.
-  That principle is applied to every path, not only the expected ones: a
+  Every failure raises, carrying Gemini's own explanation whenever the reply
+  contains one — in a sandbox nobody is watching, the raise is the only
+  artifact a human reads, so a generic sentence in place of a specific one is
+  the difference between a fixable order and a mystery. A declined generation
+  is the case that matters: it comes back as a success, with no image, no
+  text, and its whole account of itself in a `finishMessage` field. That is
+  what the error reports, rather than this pack's own guess at what went
+  wrong. That principle is applied to every path, not only the expected ones: a
   refusal names the reason it stopped for as well as the model's words, a
   reply that is not a Gemini reply at all says what arrived instead of
   reporting a model refusal, an image that will not decode says so, and a
