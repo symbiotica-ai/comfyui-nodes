@@ -192,6 +192,14 @@ def parse_response(payload: dict):
             # Thinking-capable models emit interim sketches flagged this way.
             # v1 has no thought_image output, but an unfiltered sketch does not
             # vanish — it becomes an ordinary image, and possibly the first one.
+            #
+            # This drops thought TEXT too, which ComfyUI's own nodes keep. The
+            # text output is a diagnostic that can reach a client or a stored
+            # run, and reasoning prose would bury a one-line refusal in it.
+            # That rests on refusals arriving as ordinary text parts, which is
+            # how they arrive today but is not a documented guarantee: if one
+            # ever came back flagged `thought`, this line would eat the only
+            # account of why the render failed.
             if part.get("thought") is True:
                 continue
             inline = part.get("inlineData")
