@@ -6,6 +6,86 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## Unreleased
+
+**Node change.** One node is added, `Claude (Symbiotica)`. Nothing existing is
+removed or renamed, and no other node's inputs, outputs or id changed, so saved
+workflows are unaffected.
+
+**Deployment change, and it is not backward compatible.** The two gateway
+environment variables are renamed and their meaning narrows:
+`GEMINI_GATEWAY_URL` → `SYMBIOTICA_AIG_BASE` (now **without** the provider
+slug), `GEMINI_GATEWAY_TOKEN` → `SYMBIOTICA_AIG_TOKEN`. A box still setting the
+old names routes nothing through the gateway. The Modal secret is renamed
+`symbiotica-comfy-aigateway` to match; a secret named `…-gemini` holding
+Anthropic credentials was the naming problem that prompted this.
+
+### Features
+
+- **Claude in the canvas and in headless order sandboxes.** A prompt and up to
+  20 reference images go in; Claude's answer comes out as a `STRING`. Claude
+  draws nothing — this is a prompt author, a caption or critique step, or a
+  structured-extraction step feeding an image node. ComfyUI's own Anthropic node
+  bills Comfy credits through `api.comfy.org` and needs a key configured by hand
+  in the Settings UI; an order sandbox has neither the credits nor a human.
+
+- **One gateway contract for every provider.** The gateway token proved to be a
+  single provider-agnostic value, and the base URL differed between providers
+  only in its last path segment — so `<PROVIDER>_GATEWAY_URL` plus `_TOKEN` was
+  spending two environment variables per provider to encode one and a half
+  facts. Each node now owns its slug as a constant, and a third provider costs
+  no variable and no secret edit.
+
+### Fixes
+
+- **A refusal, a truncated answer, a context overflow and an empty reply are
+  four errors, not one.** Each names its own fix, because they prescribe
+  opposite things: raising the token budget fixes the second and makes the third
+  worse. ComfyUI's own node returns the literal string
+  `Empty response from Claude model.` for the last of them, which flows
+  downstream looking like an answer.
+
+- **A refusal is recognised before the reply is read for content**, because a
+  refusal can arrive with partial text attached — read content-first, that text
+  is handed back as though it were the answer.
+
+- **A reply that is not a Claude reply says what arrived**, rather than being
+  reported as a model refusal and sending someone to rewrite a prompt when the
+  endpoint is what is wrong.
+
+### Security
+
+- **Anthropic keys are scrubbed from failure messages** alongside Google ones,
+  and no Anthropic key is sent on the gateway arm at all. That second point is
+  stronger than hygiene: Cloudflare documents that a key sent alongside BYOK
+  causes the request to fail, so a key riding along would break every studio
+  call rather than merely leaking.
+
+- **A gateway failure now recognises a third case.** A provider with no stored
+  BYOK key at all is the one that does not look like a failure: Cloudflare's
+  documented credential precedence is a key on the request, then a stored key by
+  alias, then Cloudflare's own credentials billed to the account balance. With
+  nothing stored the alias is never consulted, and the call is served on
+  Cloudflare's own rail attributed to no studio. It surfaces as an error only
+  while that balance is empty.
+
+### Other
+
+- **Reference images are capped by encoded size, not just by count.** Cloudflare
+  stores no gateway log above 10 MB and AI Gateway analytics reads the log — so
+  a request past that ceiling is spend that never reaches the cockpit, which is
+  the entire reason these nodes route through the gateway. A batch over 8 MB is
+  refused rather than trimmed: an answer drawn from three of eight references is
+  a wrong answer that looks right.
+
+- **Images are resized to each model's own ceiling** — 2576px on Opus 5,
+  Sonnet 5, Fable 5 and Opus 4.8/4.7, 1568px elsewhere. Above it the pixels are
+  discarded upstream, having already been charged against the log budget.
+
+- No `temperature`, `top_p`, `top_k` or thinking widget. Those parameters are
+  removed on Opus 5, Fable 5 and Opus 4.8/4.7 and return 400 there, so a dial
+  for them would break the default model.
+
 ## 2026.8.3
 
 **Node change.** One node is added, `Gemini Image (Symbiotica)`. Nothing
