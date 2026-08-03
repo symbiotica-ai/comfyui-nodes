@@ -376,6 +376,30 @@ def test_several_text_parts_are_joined_into_one_account():
     assert text == "first\nsecond"
 
 
+def test_the_render_comes_back_as_the_jpeg_the_api_actually_sends():
+    """The API answers image/jpeg, not the PNG we send it. Accepting only PNG
+    would reject every real render."""
+    buf = io.BytesIO()
+    swatch(GREEN_PIXEL).save(buf, format="JPEG")
+    images, _ = gemini_image.parse_response(reply(
+        {"inlineData": {"mimeType": "image/jpeg",
+                        "data": base64.b64encode(buf.getvalue()).decode()}}))
+    assert len(images) == 1
+    assert images[0].convert("RGB").getpixel((0, 0))[1] > 200
+
+
+def test_a_thought_signature_on_the_real_render_does_not_get_it_filtered():
+    """The genuine image part carries `thoughtSignature` and no `thought` at
+    all. A filter asking "does this part have anything thought-ish on it"
+    instead of "is thought true" would throw away the render itself and
+    report that Gemini produced nothing."""
+    part = returned_image(GREEN_PIXEL)
+    part["thoughtSignature"] = "an-opaque-token-from-the-model"
+    images, _ = gemini_image.parse_response(reply(part))
+    assert len(images) == 1
+    assert images[0].convert("RGB").getpixel((0, 0)) == GREEN_PIXEL
+
+
 def test_a_thinking_sketch_never_ships_as_the_render():
     """Thinking-capable models emit interim images flagged `thought`. Dropping
     the thought_image OUTPUT does not drop this filter: without it the sketch
@@ -418,6 +442,51 @@ def test_a_prohibited_image_is_reported_as_that_and_not_as_an_empty_render():
         gemini_image.parse_response(
             reply(returned_image(GREEN_PIXEL),
                   finish_reason="IMAGE_PROHIBITED_CONTENT"))
+
+
+# What a refused generation actually looks like, captured against the real
+# gateway. Note `content` is {} with no `parts` key at all, there is no
+# promptFeedback, and the entire explanation lives in `finishMessage`.
+REFUSED_REPLY = {
+    "candidates": [{
+        "content": {},
+        "finishReason": "IMAGE_OTHER",
+        "index": 0,
+        "finishMessage": (
+            "Unable to show the generated image. The model could not generate "
+            "the image based on the prompt provided. You will not be charged "
+            "for this request. Try rephrasing the prompt."),
+    }],
+    "modelVersion": "gemini-3.1-flash-image",
+}
+
+
+def test_a_real_refusal_hands_back_googles_own_explanation():
+    """The diagnostic is in finishMessage, and nothing else in the reply says
+    anything: no parts, no promptFeedback, no text. Substituting our own
+    sentence discards the only account of the failure that exists."""
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response(REFUSED_REPLY)
+    said = str(caught.value)
+    assert "IMAGE_OTHER" in said
+    assert "could not generate the image based on the prompt" in said
+
+
+def test_a_refusal_carrying_no_parts_key_at_all_does_not_crash():
+    """`content` is `{}` on this path — not an empty parts array, absent."""
+    with pytest.raises(ValueError, match="IMAGE_OTHER"):
+        gemini_image.parse_response(REFUSED_REPLY)
+
+
+def test_our_own_advice_does_not_displace_googles():
+    """Ours is generic by construction. Theirs names the model and the
+    request, and today happens to agree with ours by coincidence."""
+    said = ""
+    try:
+        gemini_image.parse_response(REFUSED_REPLY)
+    except ValueError as exc:
+        said = str(exc)
+    assert said.count("rephras") == 1
 
 
 def test_a_refusal_for_any_reason_says_which_reason():

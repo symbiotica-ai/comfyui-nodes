@@ -334,9 +334,16 @@ def parse_response(payload):
                 f"Check the endpoint this node is pointed at.")
         raise ValueError("Gemini returned no candidates.")
 
-    images, texts, refusals = [], [], []
+    images, texts, refusals, explained = [], [], [], []
     for candidate in candidates:
         finish = (candidate.get("finishReason") or "").upper()
+        # Where a refusal actually explains itself. A declined generation
+        # comes back 200 with no parts at all — no text, no thought, an empty
+        # `content` — so this field is the only account of it in the reply,
+        # and substituting our own sentence for it discards the whole thing.
+        explanation = (candidate.get("finishMessage") or "").strip()
+        if explanation and explanation not in explained:
+            explained.append(explanation)
         # Every reason but STOP is kept, not only the one worth skipping the
         # candidate for. Gemini also stops for SAFETY, RECITATION and others,
         # and reporting only the special case means the model said exactly why
@@ -375,9 +382,14 @@ def parse_response(payload):
         said = "Gemini did not generate an image."
         if refusals:
             said += f" Reason: {', '.join(refusals)}."
+        for explanation in explained:
+            said += f" {explanation}"
         if text:
             said += f" Model response: {text}"
-        if not refusals and not text:
+        # Only when the reply offered nothing at all. Ours is generic by
+        # construction; Google's names the model and the request, so adding
+        # ours alongside theirs would say the same thing twice and worse.
+        if not refusals and not text and not explained:
             said += " Try rephrasing the prompt."
         raise ValueError(said)
     return images, text
