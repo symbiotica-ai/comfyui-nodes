@@ -7,6 +7,8 @@ import io
 
 from PIL import Image
 
+from . import ai_gateway
+
 # Cloudflare's slug for Anthropic, the last path segment of the gateway
 # endpoint, and Anthropic's own path appended after it verbatim.
 PROVIDER = "anthropic"
@@ -229,3 +231,27 @@ def parse_response(payload) -> str:
             f"nodes; this one raises, because a placeholder reaching a client "
             f"looks like an answer.")
     return answer
+
+
+# 32768 output tokens of thinking-plus-answer take minutes on the larger
+# models, and the gateway's own timeout is time-to-first-byte rather than
+# total duration, so it will not cut a slow answer short on our behalf.
+REQUEST_TIMEOUT_S = 300
+
+# How an Anthropic key is presented when no gateway is configured. The header
+# name and what a rejection calls the key are both Anthropic's business, so
+# they live here rather than in the transport every provider shares.
+DIRECT_ARM = ai_gateway.DirectArm(
+    ANTHROPIC_API_BASE, "The Anthropic API key",
+    lambda key: {"x-api-key": key})
+
+
+def resolve_transport(environ, interactive_key):
+    """This node's call, routed by the rules every provider shares.
+
+    anthropic-version rides both arms. ComfyUI's own Claude node omits it
+    because the comfy.org proxy adds it server-side; through the gateway
+    nothing does, and Anthropic rejects a request without it."""
+    return ai_gateway.resolve_transport(
+        environ, PROVIDER, MESSAGES_PATH, interactive_key, DIRECT_ARM,
+        {"anthropic-version": ANTHROPIC_VERSION})
