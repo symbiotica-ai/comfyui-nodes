@@ -82,16 +82,18 @@ def test_dataset_reference_declares_whole_list_input(nodes_mod):
     # the draw per TYPE — every asset would get its own random reference.
     schema = nodes_mod.SymbioticaDatasetReference.define_schema()
     assert schema.is_input_list is True
+    # cell_boxes is APPENDED — links address an output by slot index, so a new
+    # slot anywhere but the end re-points every saved workflow.
     assert [o.display_name for o in schema.outputs] == [
-        "images", "reference_names"]
+        "images", "reference_names", "cell_boxes"]
 
 
 def test_dataset_reference_gives_one_image_per_asset(nodes_mod, tmp_path):
     proj = _project(tmp_path, **{"Decoration": 4, "Food - 3 stages": 4})
     cats = ["Decoration"] * 3 + ["Food - 3 stages"] * 3
-    images, names = nodes_mod.SymbioticaDatasetReference.execute(
+    images, names, boxes = nodes_mod.SymbioticaDatasetReference.execute(
         categories=cats, seed=[7], project_path=[str(proj)]).args
-    assert len(images) == 6 and len(names) == 6
+    assert len(images) == 6 and len(names) == 6 and len(boxes) == 6
     assert len(set(names[:3])) == 1, "one reference shared by all decorations"
     assert len(set(names[3:])) == 1, "one reference shared by all food"
     assert names[0] != names[3]
@@ -99,7 +101,7 @@ def test_dataset_reference_gives_one_image_per_asset(nodes_mod, tmp_path):
 
 def test_dataset_reference_reads_the_project_from_the_order(nodes_mod, tmp_path):
     proj = _project(tmp_path, **{"Decoration": 2})
-    _images, names = nodes_mod.SymbioticaDatasetReference.execute(
+    _images, names, _boxes = nodes_mod.SymbioticaDatasetReference.execute(
         categories=["Decoration"], seed=[1], project_path=[""],
         order=[{"project_path": str(proj)}]).args
     assert names[0].startswith("Decoration-")

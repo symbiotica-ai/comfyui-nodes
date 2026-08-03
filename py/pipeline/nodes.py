@@ -33,6 +33,7 @@ from .regional_prompt import (
 from .skeleton import build_client_prompts, build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
 from .order_sheet import slugify
+from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import (assets_by_category, dataset_dir,
                            pick_reference_per_category, save_paths)
 from .project_layout import project_root_of
@@ -1193,6 +1194,18 @@ class SymbioticaDatasetReference(io.ComfyNode):
                                  tooltip="Filename of the reference drawn for "
                                          "asset i, so a good draw can be "
                                          "traced back to its file."),
+                # Appended: links address an output by slot index, so a new
+                # slot in the middle would re-point every saved workflow.
+                io.String.Output(display_name="cell_boxes",
+                                 is_output_list=True,
+                                 tooltip="Where each asset sits inside this "
+                                         "type's packed sheet, as JSON — wire "
+                                         "into Slice Cells to cut a generated "
+                                         "sheet back into one image per role. "
+                                         "Comes from the same dataset folder "
+                                         "the reference was drawn from, so it "
+                                         "describes the grid the render was "
+                                         "asked to reproduce."),
             ],
         )
 
@@ -1240,7 +1253,242 @@ class SymbioticaDatasetReference(io.ComfyNode):
         for p in paths:
             with Image.open(p) as im:
                 images.append(_pil_to_tensor(im.convert("RGB")))
-        return io.NodeOutput(images, names)
+        # Per ASSET, not per type: the boxes ride the same index as the images
+        # so a lane that fans out over assets can cut each render without
+        # re-deriving which type it came from. Cheap to repeat — the lookup is
+        # memoised per type below, and the payload is a few hundred bytes.
+        from .sheet_cells import boxes_for_category
+        per_type = {}
+        boxes = []
+        for cat in cats:
+            key = str(cat).strip()
+            if key not in per_type:
+                per_type[key] = json.dumps(boxes_for_category(project, key))
+            boxes.append(per_type[key])
+        return io.NodeOutput(images, names, boxes)
+
+
+_REF_SIZES = ["native", "512", "1024"]
+
+
+class SymbioticaAssetRefs(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaAssetRefs",
+            display_name="Symbiotica Asset Refs",
+            category="symbiotica/pipeline",
+            description="The client's own reference art for ONE asset — what "
+                        "they sent for this thing, not the dataset's house "
+                        "style. Wire Order Assets' `asset_names` in and each "
+                        "asset yields its references in order; for a type "
+                        "packed in stages that is prep, ready, serving, so the "
+                        "same index that picks a cell out of Slice Cells picks "
+                        "the reference that belongs to it.",
+            inputs=[
+                Order.Input("order"),
+                io.String.Input("asset_name", force_input=True,
+                                tooltip="The Order Assets node's "
+                                        "`asset_names` output."),
+                io.String.Input("background", default=DEFAULT_BACKGROUND,
+                                tooltip="What a reference with transparency "
+                                        "sits on. Grey by default, matching "
+                                        "the packed sheets, so the reference "
+                                        "and the cell beside it share a "
+                                        "backdrop. Set it to your "
+                                        "generations' background to compare "
+                                        "them like for like."),
+                io.Boolean.Input("keep_transparency", default=False,
+                                 tooltip="Leave the background alone and hand "
+                                         "the alpha out as `masks` instead. "
+                                         "Off composites onto the colour "
+                                         "above — which is what you want "
+                                         "feeding an image model, since these "
+                                         "files hide real pixels under their "
+                                         "transparent areas."),
+                io.Combo.Input("output_size", options=_REF_SIZES,
+                               default="native",
+                               tooltip="Send a smaller reference when the "
+                                       "detail is not worth the tokens. "
+                                       "Lanczos, the same resample Slice "
+                                       "Cells uses, so a reference and the "
+                                       "cell it pairs with are treated "
+                                       "identically."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="images", is_output_list=True,
+                                tooltip="One image per reference the client "
+                                        "sent for this asset, in the order the "
+                                        "order sheet pairs them."),
+                io.String.Output(display_name="ref_names", is_output_list=True,
+                                 tooltip="Filename of each reference, so a "
+                                         "wrong pick is traceable to its file."),
+                # Appended: links address an output by slot index.
+                io.Mask.Output(display_name="masks", is_output_list=True,
+                               tooltip="Each reference's alpha, opaque where "
+                                       "the art is. Emitted whether or not "
+                                       "transparency is kept, so a reference "
+                                       "can always be composited onto "
+                                       "something else downstream."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, order=None, asset_name="",
+                background=DEFAULT_BACKGROUND, keep_transparency=False,
+                output_size="native") -> io.NodeOutput:
+        from .asset_refs import (alpha_of, flatten, pairing_note,
+                                 reference_files)
+        from .sheet_cells import boxes_for_category
+        if not isinstance(order, dict) or "assets" not in order:
+            raise ValueError("wire an Order Specs into 'order'")
+        paths, names = reference_files(order, asset_name)
+
+        from PIL import Image
+        size = 0 if str(output_size) == "native" else int(output_size)
+        images, masks = [], []
+        for path in paths:
+            with Image.open(path) as im:
+                alpha = alpha_of(im)
+                if keep_transparency:
+                    # The pixels as authored. Only meaningful WITH the mask —
+                    # on its own this is the glowing version, because these
+                    # files keep live pixels under their transparent areas.
+                    flat = im.convert("RGB")
+                else:
+                    # Composited, never just converted: dropping alpha lights up
+                    # every soft edge and uncovers the hidden backdrop.
+                    flat = flatten(im, background)
+                if size:
+                    # Resampled here rather than on the tensor so the mask can
+                    # travel with its image: ComfyUI's lanczos collapses a
+                    # one-channel tensor to three dimensions, and it is PIL
+                    # LANCZOS underneath anyway — the same resample Slice Cells
+                    # applies to the cell this reference pairs with.
+                    flat = flat.resize((size, size), Image.LANCZOS)
+                    if alpha is not None:
+                        alpha = alpha.resize((size, size), Image.LANCZOS)
+                images.append(_pil_to_tensor(flat))
+                if alpha is None:
+                    masks.append(torch.ones(1, flat.height, flat.width))
+                else:
+                    masks.append(torch.from_numpy(
+                        np.asarray(alpha, dtype=np.float32) / 255.0)[None, ...])
+
+        # Say whether these line up with the sheet's cells rather than assume
+        # it: same count means index i is role i, a different count means an
+        # index picks unrelated things on each side, and both look identical
+        # once the images are on the wire.
+        asset = next((a for a in order["assets"]
+                      if str(a.get("assetName", "")).strip()
+                      == str(asset_name).strip()), {})
+        cells = boxes_for_category(
+            str(order.get("project_path", "") or "").strip(),
+            str(asset.get("category", "") or "").strip())
+        note = pairing_note(order, asset_name, names, cells)
+        return io.NodeOutput(images, names, masks, ui=ui.PreviewText(note))
+
+
+def _resize_square(cell, size):
+    """One cell resized to `size`x`size`, by the same resampler the rest of the
+    graph uses.
+
+    Lanczos via ComfyUI's own `common_upscale`, so a cell coming out of here
+    matches an Upscale Image node set to lanczos exactly — and matches the
+    packer, which resamples its sprites with PIL LANCZOS too. Going through
+    Comfy also means no clamping is needed: that path is 8-bit via PIL, so the
+    ringing bicubic produces at hard edges cannot leave the 0..1 range.
+
+    Falls back to bicubic when `comfy` is absent, which is only ever the test
+    harness — antialiased and clamped there, since nothing else would catch the
+    overshoot.
+    """
+    try:
+        from comfy.utils import common_upscale
+    except ImportError:
+        return torch.nn.functional.interpolate(
+            cell.movedim(-1, 1), size=(size, size), mode="bicubic",
+            antialias=True, align_corners=False).movedim(1, -1).clamp(0.0, 1.0)
+    return common_upscale(cell.movedim(-1, 1), size, size,
+                          "lanczos", "disabled").movedim(1, -1)
+
+
+class SymbioticaSliceCells(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaSliceCells",
+            display_name="Symbiotica Slice Cells",
+            category="symbiotica/pipeline",
+            description="Cuts a generated sheet back into one image per asset, "
+                        "on the grid the dataset was packed to. Wire the Dataset "
+                        "Reference node's `cell_boxes` in and every asset type "
+                        "cuts itself — a food sheet gives prep/ready/serving, a "
+                        "chair sheet gives its four rotations — with no crop "
+                        "coordinates to type and nothing to rewire when the run "
+                        "changes type. `roles` names each cell, so an edit can "
+                        "address 'serving' rather than 'the third one'.",
+            inputs=[
+                io.Image.Input("image",
+                               tooltip="The generated sheet to cut."),
+                io.String.Input("cell_boxes", force_input=True,
+                                tooltip="The Dataset Reference node's "
+                                        "`cell_boxes` output."),
+                io.Int.Input("inset", default=1, min=0, max=256,
+                             tooltip="Pixels to shrink every cell by. The boxes "
+                                     "are the grid the render was ASKED to hit, "
+                                     "so a pixel or two of slack keeps the "
+                                     "background out of a cell when the render "
+                                     "lands slightly off."),
+                io.Int.Input("output_size", default=0, min=0, max=8192,
+                             tooltip="Resize each cell to this square, or 0 to "
+                                     "keep it at its cut size. Lanczos, the "
+                                     "same resampler an Upscale Image node "
+                                     "uses."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="cells", is_output_list=True,
+                                tooltip="One image per cell, in reading order."),
+                io.String.Output(display_name="roles", is_output_list=True,
+                                 tooltip="What each cell holds — 'prep', "
+                                         "'serving', a rotation — index-aligned "
+                                         "with `cells`."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, image=None, cell_boxes="", inset=1,
+                output_size=0) -> io.NodeOutput:
+        from .sheet_cells import crop_regions
+        if image is None or not len(image):
+            raise ValueError("wire the generated sheet into 'image'")
+        try:
+            boxes = json.loads(str(cell_boxes or "").strip() or "[]")
+        except ValueError:
+            boxes = None
+        if not isinstance(boxes, list) or not boxes:
+            raise ValueError(
+                "no cell boxes — wire the Dataset Reference node's "
+                "`cell_boxes` output into this node. An empty list also means "
+                "the asset type has no packing rule recorded for it yet.")
+
+        height, width = int(image.shape[1]), int(image.shape[2])
+        regions = crop_regions(boxes, width, height, inset)
+        if not regions:
+            raise ValueError(
+                f"none of the {len(boxes)} cells fall inside this "
+                f"{width}x{height} image — it is not the sheet these boxes "
+                f"describe")
+
+        size = max(0, int(output_size or 0))
+        cells, roles = [], []
+        for role, left, top, right, bottom in regions:
+            cell = image[:, top:bottom, left:right, :]
+            if size:
+                cell = _resize_square(cell, size)
+            cells.append(cell)
+            roles.append(role)
+        return io.NodeOutput(cells, roles)
 
 
 class SymbioticaTemplateLibrary(io.ComfyNode):
@@ -2573,6 +2821,8 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaPromptBook,
     SymbioticaSaveRender,
     SymbioticaDatasetReference,
+    SymbioticaSliceCells,
+    SymbioticaAssetRefs,
     SymbioticaTemplateLibrary,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,
