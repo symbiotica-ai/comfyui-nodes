@@ -199,14 +199,25 @@ def decode_inline_image(inline: dict):
             f"({type(exc).__name__}: {exc})") from exc
 
 
-def parse_response(payload: dict):
+def parse_response(payload):
     """The images Gemini drew and what it said about them, `(images, text)`.
+
+    `payload` is whatever the response body decoded to, not necessarily a
+    generateContent object: a misconfigured endpoint answers 200 with its own
+    envelope, and a type annotation promising otherwise would only hide that.
 
     Raises rather than returning an empty list: a graph handed zero images
     fails somewhere downstream, with the response long out of view. In an order
     sandbox the raise is the only artifact a human ever reads, so it carries
     Gemini's own words whenever there are any — a refusal is explained in the
     text channel and nowhere else."""
+    # A wrong endpoint answers 200 with a different envelope entirely, and
+    # "no candidates" reads as the model having refused — so the operator
+    # retries the prompt while the URL is what is wrong.
+    if not isinstance(payload, dict):
+        raise ValueError(f"Gemini returned a {type(payload).__name__} rather "
+                         f"than a generateContent object. Check the endpoint "
+                         f"this node is pointed at.")
     candidates = payload.get("candidates") or []
     if not candidates:
         feedback = payload.get("promptFeedback") or {}
@@ -215,6 +226,11 @@ def parse_response(payload: dict):
             detail = feedback.get("blockReasonMessage")
             raise ValueError(f"Gemini blocked the request. Reason: {reason}"
                              + (f" ({detail})" if detail else ""))
+        if "promptFeedback" not in payload:
+            raise ValueError(
+                f"Gemini returned no candidates, and the reply carries "
+                f"{sorted(payload)[:8]} rather than a generateContent shape. "
+                f"Check the endpoint this node is pointed at.")
         raise ValueError("Gemini returned no candidates.")
 
     images, texts, refusals = [], [], []
@@ -226,8 +242,10 @@ def parse_response(payload: dict):
         # while the operator read generic advice.
         if finish and finish != "STOP" and finish not in refusals:
             refusals.append(finish)
-        if finish == "IMAGE_PROHIBITED_CONTENT":
-            continue
+        # A prohibited candidate's IMAGES are the thing being refused; its
+        # WORDS are the half an operator can act on. Skipping the whole
+        # candidate threw both away together.
+        prohibited = finish == "IMAGE_PROHIBITED_CONTENT"
         for part in (candidate.get("content") or {}).get("parts") or []:
             # Thinking-capable models emit interim sketches flagged this way.
             # v1 has no thought_image output, but an unfiltered sketch does not
@@ -244,7 +262,8 @@ def parse_response(payload: dict):
                 continue
             inline = part.get("inlineData")
             if inline and str(inline.get("mimeType", "")).startswith("image/"):
-                images.append(decode_inline_image(inline))
+                if not prohibited:
+                    images.append(decode_inline_image(inline))
             elif part.get("text"):
                 texts.append(part["text"])
     text = "\n".join(texts).strip()

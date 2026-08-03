@@ -408,6 +408,59 @@ def test_a_finished_candidate_is_not_reported_as_a_refusal():
     assert "STOP" not in str(caught.value)
 
 
+def test_a_blocked_candidate_still_yields_its_own_explanation():
+    """The block reason names the rule; the model's sentence names what broke
+    it. Skipping the candidate to avoid its images threw away its words too,
+    which is the half an operator can actually act on."""
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response(reply(
+            {"text": "I cannot depict this trademarked character."},
+            returned_image(GREEN_PIXEL),
+            finish_reason="IMAGE_PROHIBITED_CONTENT"))
+    assert "IMAGE_PROHIBITED_CONTENT" in str(caught.value)
+    assert "trademarked character" in str(caught.value)
+
+
+def test_a_blocked_candidates_images_are_still_never_returned():
+    """Its words are wanted; its pixels are the thing that was prohibited."""
+    with pytest.raises(ValueError):
+        gemini_image.parse_response(reply(
+            returned_image(GREEN_PIXEL),
+            finish_reason="IMAGE_PROHIBITED_CONTENT"))
+
+
+def test_a_reason_and_the_models_words_are_both_reported():
+    """Each is half the account. A version that dropped the text whenever a
+    reason existed would read as complete and would not be."""
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response(reply(
+            {"text": "that character is trademarked"},
+            finish_reason="SAFETY"))
+    assert "SAFETY" in str(caught.value)
+    assert "trademarked" in str(caught.value)
+
+
+def test_a_candidate_that_carries_no_content_at_all_is_survivable():
+    """This is the shape the wire actually uses for a safety stop: a
+    finishReason and no content key whatsoever."""
+    with pytest.raises(ValueError, match="IMAGE_SAFETY"):
+        gemini_image.parse_response({"candidates": [
+            {"finishReason": "IMAGE_SAFETY"}]})
+
+
+def test_a_reply_that_is_not_a_generatecontent_shape_says_so():
+    """A wrong endpoint answers 200 with a different envelope. "no candidates"
+    reads as the model refusing, so an operator retries the prompt instead of
+    looking at the URL."""
+    with pytest.raises(ValueError, match="success.*result|result.*success"):
+        gemini_image.parse_response({"success": True, "result": {}})
+
+
+def test_a_reply_that_is_not_even_an_object_says_that_rather_than_crashing():
+    with pytest.raises(ValueError, match="list"):
+        gemini_image.parse_response([{"candidates": []}])
+
+
 def test_a_refusal_carries_the_models_own_explanation_of_it():
     """Gemini declines in prose. That sentence is the whole diagnosis, and in a
     headless sandbox it is the only one anybody ever sees."""
