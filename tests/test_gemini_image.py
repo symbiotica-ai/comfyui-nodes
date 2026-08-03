@@ -129,15 +129,16 @@ def test_an_ordinary_slug_is_not_caught_by_that_check():
 
 
 def test_the_studio_is_never_quietly_replaced_by_the_default_alias():
-    """The one substitution that must never happen silently, asserted against
-    the value rather than only against the raise."""
-    try:
-        gemini_image.resolve_transport(
+    """No transport comes back at all, so there is no header that could carry
+    `default`. Asserted by catching anything that is not the raise: a version
+    that returned a transport here would have to have chosen some alias, and
+    the only one available is the shared key this must never reach."""
+    with pytest.raises(ValueError) as caught:
+        transport = gemini_image.resolve_transport(
             gateway_env(ORDER_STUDIO=None), MODEL, never_asked)
-    except ValueError as exc:
-        assert "default" not in str(exc).split("ORDER_STUDIO")[0].lower()
-    else:
-        pytest.fail("a gateway render without a studio was allowed to proceed")
+        pytest.fail(f"a studio-less gateway render proceeded with alias "
+                    f"{transport.headers.get('cf-aig-byok-alias')!r}")
+    assert "default" not in str(caught.value).lower()
 
 
 def test_the_direct_arm_carries_no_studio_headers_at_all():
