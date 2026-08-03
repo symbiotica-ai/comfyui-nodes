@@ -6,6 +6,35 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## Unreleased
+
+**Node change.** One node is added, `Gemini Image (Symbiotica)`. Nothing
+existing is removed or renamed, and no other node's inputs, outputs or id
+changed.
+
+### Added
+- **Gemini image generation that works in a headless render.** ComfyUI's own
+  Gemini image nodes bill Comfy credits through `api.comfy.org` and need a key
+  configured by hand in the Settings UI. An order sandbox has neither a human
+  nor a persisted settings file, so those nodes cannot run there at all.
+
+  This one sends the same native `generateContent` request to Cloudflare AI
+  Gateway instead, on the studio's key stored there as BYOK, which also puts
+  every call in the analytics the cockpit's spend view already reads. A prompt
+  and up to 14 reference images go in; the render and the model's own words
+  come out.
+
+  Where `GEMINI_GATEWAY_URL` is set the gateway takes the call and a personal
+  key never overrides it. Where it is not, the node calls Google directly on a
+  key from the widget, the Settings UI or `GEMINI_API_KEY` — the same ladder
+  every other provider node uses. A gateway URL set without its token raises
+  rather than reaching for a personal key: that call would succeed, and only
+  its spend would go missing.
+
+  Every failure raises, carrying Gemini's own explanation when there is one,
+  because a refusal is explained in the text channel and nowhere else — and in
+  a sandbox nobody is watching, the raise is the only artifact a human reads.
+
 ## 2026.8.1
 
 **Node change.** `Symbiotica Auto Packer` gains a fourth output,

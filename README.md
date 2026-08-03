@@ -37,6 +37,19 @@ Wrappers around Wavespeed's hosted endpoints.
 - **Wan 2.5** — text-to-image, image edit
 - **Runway** — upscale
 
+### Image generation (Google Gemini)
+- **Gemini Image (Symbiotica)** — a prompt and up to 14 reference images become
+  a render, at 1K/2K/4K and any of the standard aspect ratios. Returns the image
+  and whatever the model said about it; when it declines, that sentence is the
+  error.
+
+  Where `GEMINI_GATEWAY_URL` is set the call routes through Cloudflare AI
+  Gateway on the studio's key, which is how order renders run headless and how
+  their spend reaches the cockpit. Anywhere else it calls Google directly on a
+  key from the node, the Settings UI or the environment. A gateway that is
+  configured always wins, and a gateway URL without its token is an error rather
+  than a quiet fall back to a personal key.
+
 ### Video generation (Wavespeed)
 - **Sora 2** — text-to-video, image-to-video, Pro variants
 - **Veo 3.1** — text-to-video, image-to-video, reference-to-video, fast variants
@@ -193,6 +206,19 @@ Two ways, checked in this order (after any per-node `api_key` widget):
 | `GOOGLE_API_KEY` | Google Speech-to-Text |
 
 Per-node `api_key` widget overrides the env var.
+
+**The Gemini image node is the exception.** On a box that carries these two,
+every one of its calls goes through the gateway and no personal key is
+consulted:
+
+| Variable | Content |
+|---|---|
+| `GEMINI_GATEWAY_URL` | Cloudflare AI Gateway base through the provider slug, e.g. `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/google-ai-studio` |
+| `GEMINI_GATEWAY_TOKEN` | AI Gateway token, sent as `cf-aig-authorization`. Not a Google key — the Google key is stored in the gateway as BYOK and injected there. |
+
+Setting the URL without the token is an error, not a fall back: a call that
+succeeds on somebody's personal key while its spend leaves the gateway is a
+failure nobody can detect afterwards.
 
 ### Asset folders
 
