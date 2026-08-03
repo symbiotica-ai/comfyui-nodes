@@ -37,6 +37,40 @@ Wrappers around Wavespeed's hosted endpoints.
 - **Wan 2.5** — text-to-image, image edit
 - **Runway** — upscale
 
+### Text (Anthropic Claude)
+- **Claude (Symbiotica)** — a prompt and up to 20 reference images become an
+  answer. Claude draws nothing; this belongs in a graph as a prompt author, a
+  caption or critique step, or a structured-extraction step feeding an image
+  node.
+
+  Routed the same way as the Gemini node below, on the same two variables. Every
+  outcome that is not a complete answer raises rather than returning a string:
+  a refusal, an answer cut off at `max_tokens`, inputs too large for the context
+  window, and an empty reply are four different errors with four different
+  fixes. ComfyUI's own Claude node returns the literal text
+  `Empty response from Claude model.` for the last of those, which reaches a
+  client looking like an answer.
+
+  Large references are brought down to the model's own ceiling first — 2576px on
+  Opus 5, Sonnet 5, Fable 5 and Opus 4.8/4.7, 1568px elsewhere. A batch that
+  encodes to more than 8 MB is refused rather than trimmed: Cloudflare stores no
+  gateway log above 10 MB, and a call whose log is dropped is spend that never
+  reaches the cockpit.
+
+### Image generation (Google Gemini)
+- **Gemini Image (Symbiotica)** — a prompt and up to 14 reference images become
+  a render, at 1K/2K/4K and any of the standard aspect ratios. Returns the image
+  and whatever the model said about it; when it declines, that sentence is the
+  error.
+
+  Where `SYMBIOTICA_AIG_BASE` is set the call routes through Cloudflare AI
+  Gateway on that studio's own stored key, tagged so its spend can be grouped
+  per studio — which is how order renders run headless and how their cost
+  reaches the cockpit. Anywhere else it calls Google directly on a key from the
+  node, the Settings UI or the environment. A gateway that is configured always
+  wins, and a gateway URL missing either its token or its studio is an error
+  rather than a quiet fall back to a personal or shared key.
+
 ### Video generation (Wavespeed)
 - **Sora 2** — text-to-video, image-to-video, Pro variants
 - **Veo 3.1** — text-to-video, image-to-video, reference-to-video, fast variants
@@ -117,6 +151,23 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   caps how many come back. A file that will not decode is skipped, but a
   missing folder — or one where nothing decodes — raises rather than handing
   the graph zero references in silence.
+- **Symbiotica Order Assets** — emits one item per asset in a feature, with
+  names, categories and save paths index-aligned, so ComfyUI's own list
+  fan-out runs a single render lane once per asset instead of eight duplicated
+  groups.
+- **Symbiotica Save Render** — files each result under
+  month/feature/category/asset.
+- **Symbiotica Dataset Reference** — picks a reference per category, seeded per
+  `(seed, category)` so adding a type does not reshuffle a pick already
+  approved.
+- **Symbiotica Category Prompts** — composes a category's architect prompt from
+  the project's shared `prompts/_rules/*.md` (filename order) followed by
+  `prompts/<Category>.md`, which stays last because the tail of a prompt
+  carries the most weight.
+- **Symbiotica Prompt Book** — reads and writes those prompt blocks from the
+  canvas; every render records which blocks composed its prompt, per block
+  rather than one hash of the whole, so a lighting change is distinguishable
+  from a negatives change.
 
 The web extension adds an events browser on Order Read and populates the
 feature/group dropdowns after the first queue. On a fully cached run the
@@ -183,16 +234,53 @@ Two ways, checked in this order (after any per-node `api_key` widget):
 
 | Variable | Provider |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude |
+| `ANTHROPIC_API_KEY` | Claude, including the Claude node's direct arm |
 | `OPENAI_API_KEY` | GPT |
 | `GEMINI_API_KEY` | Gemini |
 | `XAI_API_KEY` | Grok |
 | `WAVESPEED_API_KEY` | Wavespeed (image + video) |
 | `ELEVENLABS_API_KEY` | ElevenLabs (sound effects) |
 | `SUBMAGIC_API_KEY` | Submagic (captions) |
-| `GOOGLE_API_KEY` | Google Speech-to-Text |
+| `GOOGLE_API_KEY` | Google Speech-to-Text, and the Gemini image node's second choice after `GEMINI_API_KEY` |
 
 Per-node `api_key` widget overrides the env var.
+
+**The Gemini and Claude nodes are the exception.** On a box that carries
+these two, every one of their calls goes through the gateway and no personal
+key is consulted:
+
+| Variable | Content |
+|---|---|
+| `SYMBIOTICA_AIG_BASE` | Cloudflare AI Gateway base, **without** a provider slug, e.g. `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>`. Each node appends its own provider. Must be `https` — the token is a bearer credential for the studio's whole spend. |
+| `SYMBIOTICA_AIG_TOKEN` | AI Gateway token, sent as `cf-aig-authorization`. Not a provider key — provider keys are stored in the gateway as BYOK and injected there. |
+| `ORDER_STUDIO` | The studio slug. Selects that studio's own stored provider key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
+
+Setting the base without the token is an error, not a fall back: a call that
+succeeds on somebody's personal key while its spend leaves the gateway is a
+failure nobody can detect afterwards.
+
+`ORDER_STUDIO` set with no gateway URL is an error too, and the most useful one:
+the sandbox launcher sets it whether or not the secret populated, so its
+presence without a URL means the secret is broken. Left to fall through, that
+box would either fail asking for a key it cannot hold, or succeed on a stray
+personal key and take the spend out of the gateway without anyone noticing.
+
+A gateway render with no `ORDER_STUDIO` is an error for the same reason. The
+alias picks which studio's key pays; the metadata tag is what the analytics can
+group by, because no AI Gateway dataset exposes the key alias as a dimension.
+Falling back to the shared `default` key would bill one studio while the tag
+named another, and nothing short of reconciling the Google bill against gateway
+analytics would ever show it. A studio's key must be provisioned in the gateway
+before that studio's first render, per provider — a studio with a Google key
+and no Anthropic one fails on the Claude node alone.
+
+A provider with **no** stored key at all is the case worth knowing about,
+because it does not look like a failure. Cloudflare's credential precedence is
+a key on the request, then a stored key by alias, then Cloudflare's own
+credentials billed to the account balance — so with nothing stored, the alias
+is never consulted and the call is served on Cloudflare's rail and attributed
+to nobody. It surfaces as `internalCode` 2021 only while that balance is
+empty; funded, the same call succeeds silently.
 
 ### Asset folders
 
