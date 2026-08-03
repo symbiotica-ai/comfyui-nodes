@@ -110,6 +110,24 @@ def test_a_gateway_render_with_no_studio_fails_instead_of_charging_the_default()
             gateway_env(ORDER_STUDIO="   "), MODEL, never_asked)
 
 
+def test_a_studio_slug_that_cannot_be_a_header_is_refused_by_name():
+    """The slug goes into a header value verbatim. A stray newline in the
+    sandbox env would otherwise surface as requests' own InvalidHeader, which
+    names neither ORDER_STUDIO nor the value it choked on."""
+    for bad in ("evil\r\nX-Injected: yes", "two\nlines", "tab\there"):
+        with pytest.raises(ValueError, match="ORDER_STUDIO"):
+            gemini_image.resolve_transport(
+                gateway_env(ORDER_STUDIO=bad), MODEL, never_asked)
+
+
+def test_an_ordinary_slug_is_not_caught_by_that_check():
+    """Studio slugs are lowercase words with hyphens; the guard must not
+    reject the shape every real studio uses."""
+    for good in ("example-studio", "studio2", "a-b-c-1"):
+        assert gemini_image.resolve_transport(
+            gateway_env(ORDER_STUDIO=good), MODEL, never_asked).studio == good
+
+
 def test_the_studio_is_never_quietly_replaced_by_the_default_alias():
     """The one substitution that must never happen silently, asserted against
     the value rather than only against the raise."""
@@ -332,6 +350,26 @@ def test_a_prohibited_image_is_reported_as_that_and_not_as_an_empty_render():
                   finish_reason="IMAGE_PROHIBITED_CONTENT"))
 
 
+def test_a_refusal_for_any_reason_says_which_reason():
+    """Gemini stops for SAFETY, RECITATION and others, not only for prohibited
+    imagery. Reporting only the one reason we special-cased means the model
+    said exactly why and the operator reads generic advice instead — in a
+    sandbox that sentence is the whole incident report."""
+    for reason in ("SAFETY", "RECITATION", "MAX_TOKENS"):
+        with pytest.raises(ValueError, match=reason):
+            gemini_image.parse_response(
+                reply(finish_reason=reason))
+
+
+def test_a_finished_candidate_is_not_reported_as_a_refusal():
+    """STOP is how a normal completion ends. Naming it in an error would put a
+    refusal reason on every empty response that was never refused."""
+    with pytest.raises(ValueError) as caught:
+        gemini_image.parse_response(reply({"text": "no picture"},
+                                          finish_reason="STOP"))
+    assert "STOP" not in str(caught.value)
+
+
 def test_a_refusal_carries_the_models_own_explanation_of_it():
     """Gemini declines in prose. That sentence is the whole diagnosis, and in a
     headless sandbox it is the only one anybody ever sees."""
@@ -353,6 +391,25 @@ def test_an_image_offered_only_as_a_link_is_not_mistaken_for_a_render():
         gemini_image.parse_response(
             reply({"fileData": {"mimeType": "image/png",
                                 "fileUri": "https://example.invalid/x.png"}}))
+
+
+def test_an_undecodable_image_is_reported_as_one_rather_than_as_binascii():
+    """A sandbox log holding only "Invalid base64-encoded string" names
+    neither Gemini nor the render. The operator cannot tell a mangled response
+    from a bug in this pack."""
+    for broken in ("!!!not base64!!!", base64.b64encode(b"hello").decode()):
+        with pytest.raises(ValueError, match="could not be decoded"):
+            gemini_image.parse_response(
+                reply({"inlineData": {"mimeType": "image/png",
+                                      "data": broken}}))
+
+
+def test_an_image_part_with_no_data_at_all_is_reported_the_same_way():
+    """`KeyError: 'data'` is what a shape change upstream looks like, and it
+    reads as this pack having a bug rather than the response having one."""
+    with pytest.raises(ValueError, match="could not be decoded"):
+        gemini_image.parse_response(
+            reply({"inlineData": {"mimeType": "image/png"}}))
 
 
 def test_a_non_image_attachment_is_not_decoded_as_one():
@@ -381,6 +438,17 @@ def test_a_credential_the_far_end_echoed_back_never_reaches_the_message():
         401, f'{{"error":"bad token Bearer {TOKEN}"}}', secrets=[TOKEN])
     assert TOKEN not in message
     assert "401" in message
+
+
+def test_a_credential_straddling_the_cut_does_not_leak_its_first_half():
+    """Truncating before scrubbing leaves whatever of the secret fell inside
+    the window. The guarantee has to be unconditional or it is not one."""
+    cut = gemini_image.MAX_ERROR_BODY_CHARS
+    for overlap in range(1, len(TOKEN)):
+        body = "x" * (cut - overlap) + TOKEN + "y" * 20
+        message = gemini_image.http_error(401, body, secrets=[TOKEN])
+        assert TOKEN[:overlap] not in message, (
+            f"{overlap} leading characters of the credential survived")
 
 
 def test_redaction_of_nothing_does_not_redact_everything():
@@ -412,3 +480,11 @@ def test_the_alias_is_reported_even_when_it_is_not_the_studios_own_name():
 def test_a_direct_arm_failure_does_not_invent_a_studio():
     message = gemini_image.http_error(400, "bad request")
     assert "studio" not in message.lower()
+
+
+def test_a_missing_alias_is_left_out_rather_than_printed_as_none():
+    """"key alias None" reads as an alias literally named None, which is a
+    different and much more alarming bug than the one that happened."""
+    message = gemini_image.http_error(500, "boom", studio="a-studio")
+    assert "None" not in message
+    assert "a-studio" in message

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import io
 import json
 from typing import Callable, NamedTuple
@@ -90,6 +91,15 @@ def resolve_transport(environ, model: str,
                 "alongside the gateway secret; a render here would either be "
                 "charged to another studio or attributed to none."
             )
+        # The slug becomes a header value. A stray newline from a hand-edited
+        # secret would otherwise surface as requests' own InvalidHeader, which
+        # names neither the variable nor the value that broke it.
+        if any(c in studio for c in "\r\n\t") or not studio.isprintable():
+            raise ValueError(
+                f"ORDER_STUDIO is not usable as a studio slug: {studio!r}. It "
+                f"becomes an HTTP header naming which studio's key pays, so "
+                f"it cannot contain control characters."
+            )
         # No x-goog-api-key: with BYOK the gateway holds the Google key and
         # injects it upstream. There is no Google key on this box to send.
         return Transport(gateway + generate_content_path(model), {
@@ -154,14 +164,39 @@ def http_error(status: int, body: str, secrets=(), studio=None,
     `secrets` are scrubbed from the body because a gateway rejecting a token
     may quote it back, and this message goes on to a toast, a server log and
     whatever screenshot ends up in a bug report."""
-    text = (body or "")[:MAX_ERROR_BODY_CHARS]
+    # Scrubbed before the cut, not after: truncating first leaves whatever of
+    # a credential fell inside the window, and half a token in a bug report is
+    # still half a token.
+    text = body or ""
     for secret in secrets:
         # An unset credential is "", and replacing that seeds the marker
         # between every character of the body.
         if secret:
             text = text.replace(secret, "[redacted]")
-    whose = f" [studio {studio}, key alias {alias}]" if studio or alias else ""
+    text = text[:MAX_ERROR_BODY_CHARS]
+    # Each named only when known. "key alias None" reads as an alias literally
+    # called None, which is a more alarming bug than the one that happened.
+    known = [f"studio {studio}"] if studio else []
+    if alias:
+        known.append(f"key alias {alias}")
+    whose = f" [{', '.join(known)}]" if known else ""
     return f"Gemini request failed ({status}){whose}: {text}"
+
+
+def decode_inline_image(inline: dict):
+    """One inlineData part as a PIL image.
+
+    Every way this can fail — an absent `data` key, base64 that will not
+    decode, bytes that are not an image — arrives as a library exception
+    naming neither Gemini nor the render. In a sandbox log that reads as a bug
+    in this pack rather than a mangled response, which is a different
+    investigation entirely."""
+    try:
+        return Image.open(io.BytesIO(base64.b64decode(inline["data"])))
+    except (KeyError, ValueError, TypeError, OSError, binascii.Error) as exc:
+        raise ValueError(
+            f"Gemini returned an image part that could not be decoded "
+            f"({type(exc).__name__}: {exc})") from exc
 
 
 def parse_response(payload: dict):
@@ -182,11 +217,16 @@ def parse_response(payload: dict):
                              + (f" ({detail})" if detail else ""))
         raise ValueError("Gemini returned no candidates.")
 
-    images, texts, blocked = [], [], []
+    images, texts, refusals = [], [], []
     for candidate in candidates:
         finish = (candidate.get("finishReason") or "").upper()
+        # Every reason but STOP is kept, not only the one worth skipping the
+        # candidate for. Gemini also stops for SAFETY, RECITATION and others,
+        # and reporting only the special case means the model said exactly why
+        # while the operator read generic advice.
+        if finish and finish != "STOP" and finish not in refusals:
+            refusals.append(finish)
         if finish == "IMAGE_PROHIBITED_CONTENT":
-            blocked.append(finish)
             continue
         for part in (candidate.get("content") or {}).get("parts") or []:
             # Thinking-capable models emit interim sketches flagged this way.
@@ -204,20 +244,22 @@ def parse_response(payload: dict):
                 continue
             inline = part.get("inlineData")
             if inline and str(inline.get("mimeType", "")).startswith("image/"):
-                images.append(Image.open(
-                    io.BytesIO(base64.b64decode(inline["data"]))))
+                images.append(decode_inline_image(inline))
             elif part.get("text"):
                 texts.append(part["text"])
     text = "\n".join(texts).strip()
     if not images:
-        if blocked:
-            raise ValueError(f"Gemini blocked the image. Reason: "
-                             f"{', '.join(blocked)}")
+        # Everything the response offered about why, in one sentence: the
+        # reasons it stopped for and its own words. Only when it offered
+        # neither is there nothing better to say than advice.
+        said = "Gemini did not generate an image."
+        if refusals:
+            said += f" Reason: {', '.join(refusals)}."
         if text:
-            raise ValueError(f"Gemini did not generate an image. "
-                             f"Model response: {text}")
-        raise ValueError("Gemini did not generate an image. Try rephrasing the "
-                         "prompt.")
+            said += f" Model response: {text}"
+        if not refusals and not text:
+            said += " Try rephrasing the prompt."
+        raise ValueError(said)
     return images, text
 
 

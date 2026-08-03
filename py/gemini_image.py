@@ -129,11 +129,21 @@ def to_tensor(pil_images):
 
     Converted to RGB because a batch must stack, and Gemini is free to answer
     with a palette or RGBA image that would not share a channel count with the
-    rest. Torch is imported here rather than at module scope: the pack's loader
-    swallows an import failure with only a printed traceback, so a node that
-    needs torch merely to register vanishes on any box without it."""
+    rest. Size it cannot fix — nothing promises two returned images agree — so
+    a mismatch is named here rather than left to numpy, whose complaint about
+    array shapes names neither Gemini nor the sizes it sent. Torch is imported
+    here rather than at module scope: the pack's loader swallows an import
+    failure with only a printed traceback, so a node that needs torch merely to
+    register vanishes on any box without it."""
     import torch
 
+    sizes = {im.size for im in pil_images}
+    if len(sizes) > 1:
+        raise ValueError(
+            f"Gemini returned {len(pil_images)} images of different sizes "
+            f"({', '.join(f'{w}x{h}' for w, h in sorted(sizes))}), which "
+            f"cannot be one batch. Pin `aspect_ratio` and `resolution` rather "
+            f"than leaving them to the model.")
     arrays = [np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
               for im in pil_images]
     return torch.from_numpy(np.stack(arrays))

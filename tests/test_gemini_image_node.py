@@ -152,6 +152,23 @@ def test_renders_of_mixed_channel_counts_still_stack_into_one_batch(node_module)
     assert [round(float(v), 2) for v in batch[0, 0, 0]] == [1.0, 0.0, 0.0]
 
 
+def test_renders_of_different_sizes_are_refused_by_name_not_by_numpy(node_module):
+    """Gemini can answer with more than one image and nothing promises they
+    agree on size. numpy's "all input arrays must have the same shape" names
+    neither Gemini nor the sizes, so the operator cannot tell it from a bug in
+    the tensor code."""
+    pytest.importorskip("torch")
+    with pytest.raises(ValueError, match="different sizes"):
+        node_module.to_tensor([Image.new("RGB", (4, 4)),
+                               Image.new("RGB", (8, 8))])
+
+
+def test_a_single_render_of_any_size_is_still_fine(node_module):
+    pytest.importorskip("torch")
+    assert tuple(node_module.to_tensor(
+        [Image.new("RGB", (7, 3))]).shape) == (1, 3, 7, 3)
+
+
 def test_torch_is_reached_for_only_when_a_render_actually_runs(node_module):
     """The fixture importing this module at all is the live half of the claim —
     CI installs neither torch nor ComfyUI. This pins the reason it works, so
