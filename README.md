@@ -44,11 +44,12 @@ Wrappers around Wavespeed's hosted endpoints.
   error.
 
   Where `GEMINI_GATEWAY_URL` is set the call routes through Cloudflare AI
-  Gateway on the studio's key, which is how order renders run headless and how
-  their spend reaches the cockpit. Anywhere else it calls Google directly on a
-  key from the node, the Settings UI or the environment. A gateway that is
-  configured always wins, and a gateway URL without its token is an error rather
-  than a quiet fall back to a personal key.
+  Gateway on that studio's own stored key, tagged so its spend can be grouped
+  per studio — which is how order renders run headless and how their cost
+  reaches the cockpit. Anywhere else it calls Google directly on a key from the
+  node, the Settings UI or the environment. A gateway that is configured always
+  wins, and a gateway URL missing either its token or its studio is an error
+  rather than a quiet fall back to a personal or shared key.
 
 ### Video generation (Wavespeed)
 - **Sora 2** — text-to-video, image-to-video, Pro variants
@@ -215,10 +216,19 @@ consulted:
 |---|---|
 | `GEMINI_GATEWAY_URL` | Cloudflare AI Gateway base through the provider slug, e.g. `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/google-ai-studio` |
 | `GEMINI_GATEWAY_TOKEN` | AI Gateway token, sent as `cf-aig-authorization`. Not a Google key — the Google key is stored in the gateway as BYOK and injected there. |
+| `ORDER_STUDIO` | The studio slug. Selects that studio's own stored Google key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
 
 Setting the URL without the token is an error, not a fall back: a call that
 succeeds on somebody's personal key while its spend leaves the gateway is a
 failure nobody can detect afterwards.
+
+A gateway render with no `ORDER_STUDIO` is an error for the same reason. The
+alias picks which studio's key pays; the metadata tag is what the analytics can
+group by, because no AI Gateway dataset exposes the key alias as a dimension.
+Falling back to the shared `default` key would bill one studio while the tag
+named another, and nothing short of reconciling the Google bill against gateway
+analytics would ever show it. A studio's key must be provisioned in the gateway
+before that studio's first render.
 
 ### Asset folders
 

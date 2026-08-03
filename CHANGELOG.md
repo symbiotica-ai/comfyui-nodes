@@ -31,6 +31,15 @@ changed.
   rather than reaching for a personal key: that call would succeed, and only
   its spend would go missing.
 
+  Each gateway call names the studio twice, from `ORDER_STUDIO`: once to select
+  that studio's own stored Google key, and once as a tag the analytics can
+  group by. Both are needed and they carry different things — the key alias
+  decides who is billed, and no AI Gateway dataset exposes it as a dimension,
+  so spend sent without the tag cannot be attributed to anyone. A gateway
+  render with no studio raises rather than falling back to the shared key,
+  which would bill one studio while the tag claimed another. Every gateway
+  failure names the studio and the alias it asked for, whatever went wrong.
+
   Every failure raises, carrying Gemini's own explanation when there is one,
   because a refusal is explained in the text channel and nowhere else — and in
   a sandbox nobody is watching, the raise is the only artifact a human reads.
