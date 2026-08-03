@@ -137,7 +137,7 @@ def test_takes_every_cell_at_once(nodes_mod):
     assert schema.is_input_list is True
     assert [i.id for i in schema.inputs] == [
         "cells", "cell_boxes", "background", "canvas_size", "masks",
-        "mask_is_transparency"]
+        "mask_is_transparency", "padding_color"]
     assert [o.display_name for o in schema.outputs] == ["sheet"]
 
 
@@ -179,3 +179,38 @@ def test_an_explicit_mask_still_overrides_a_carried_alpha(nodes_mod):
         canvas_size=[0], masks=[mask],
         mask_is_transparency=[True]).args[0][0]
     assert round(float(out[260][512][0]) * 255) == 128, "mask won"
+
+
+def test_the_gutters_take_the_padding_colour_and_the_cells_the_background(
+        nodes_mod):
+    """The packed sheets are grey cells on a black matte — that black ring
+    around every cell is what the LoRA was trained on, so a rebuild that filled
+    the whole canvas with one colour would not match it."""
+    out = nodes_mod.SymbioticaReconstructCells.execute(
+        cells=[solid(0.3)], cell_boxes=[FOOD], background=["#808080"],
+        canvas_size=[0], padding_color=["#000000"]).args[0][0]
+    assert round(float(out[2][2][0]) * 255) == 0, "gutter is the matte"
+    assert round(float(out[763][260][0]) * 255) == 128, "empty cell is grey"
+    assert round(float(out[260][512][0]) * 255) == round(0.3 * 255), "sprite"
+
+
+def test_an_empty_cell_is_background_not_matte(nodes_mod):
+    out = nodes_mod.SymbioticaReconstructCells.execute(
+        cells=[solid(0.3)], cell_boxes=[FOOD], background=["#808080"],
+        canvas_size=[0], padding_color=["#000000"]).args[0][0]
+    # Second and third cells got no sprite; they must still read as cells.
+    assert round(float(out[763][260][0]) * 255) == 128
+    assert round(float(out[763][763][0]) * 255) == 128
+
+
+def test_matching_the_two_colours_gives_no_outline(nodes_mod):
+    out = nodes_mod.SymbioticaReconstructCells.execute(
+        cells=[solid(0.3)], cell_boxes=[FOOD], background=["#808080"],
+        canvas_size=[0], padding_color=["#808080"]).args[0][0]
+    assert round(float(out[2][2][0]) * 255) == 128
+
+
+def test_padding_colour_is_appended(nodes_mod):
+    # ComfyUI restores widgets_values positionally.
+    schema = nodes_mod.SymbioticaReconstructCells.define_schema()
+    assert [i.id for i in schema.inputs][-1] == "padding_color"

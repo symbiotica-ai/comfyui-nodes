@@ -1379,6 +1379,16 @@ class SymbioticaReconstructCells(io.ComfyNode):
                                          "mask is 1 where the picture is "
                                          "see-through. OFF for a straight "
                                          "alpha channel, where 1 is the art."),
+                # Appended: links address an input by slot index.
+                io.String.Input("padding_color", default="#000000",
+                                tooltip="What sits OUTSIDE the cells — the "
+                                        "gutters and the border. The packer "
+                                        "floods the sheet with this and then "
+                                        "punches each cell back to the "
+                                        "background above, which is what draws "
+                                        "the black outline around every cell. "
+                                        "Set it to the same colour as the "
+                                        "background for no outline at all."),
             ],
             outputs=[
                 io.Image.Output(display_name="sheet",
@@ -1389,8 +1399,8 @@ class SymbioticaReconstructCells(io.ComfyNode):
 
     @classmethod
     def execute(cls, cells=None, cell_boxes="", background=DEFAULT_BACKGROUND,
-                canvas_size=0, masks=None,
-                mask_is_transparency=True) -> io.NodeOutput:
+                canvas_size=0, masks=None, mask_is_transparency=True,
+                padding_color="#000000") -> io.NodeOutput:
         from PIL import Image
 
         from .asset_refs import parse_hex
@@ -1419,8 +1429,18 @@ class SymbioticaReconstructCells(io.ComfyNode):
         if width <= 0 or height <= 0:
             raise ValueError("these boxes describe no sheet — set canvas_size")
 
+        # Flooded with the matte, then each cell punched back to the
+        # background — the packer's own order, and the reason every cell comes
+        # out ringed in the gutter colour. Painting the cells first and the
+        # gutters after would leave no outline at all.
+        cell_colour = parse_hex(one(background, DEFAULT_BACKGROUND))
         sheet = Image.new("RGB", (width, height),
-                          parse_hex(one(background, DEFAULT_BACKGROUND)))
+                          parse_hex(one(padding_color, "#000000")))
+        for box in boxes:
+            sheet.paste(cell_colour,
+                        (int(box.get("x", 0)), int(box.get("y", 0)),
+                         int(box.get("x", 0)) + int(box.get("w", 0)),
+                         int(box.get("y", 0)) + int(box.get("h", 0))))
         # Zipped, so a run with fewer sprites than cells leaves the rest as
         # background rather than shifting every later sprite into the wrong
         # cell — the same alignment rule the cut side keeps.
@@ -1483,8 +1503,8 @@ class SymbioticaCompareSheet(io.ComfyNode):
                              tooltip="Gutter between cells, and the sheet's "
                                      "own border."),
                 io.String.Input("background", default=DEFAULT_BACKGROUND,
-                                tooltip="What the gutters and any empty cell "
-                                        "are filled with."),
+                                tooltip="What sits behind each sprite, and what "
+                                        "fills a cell with no sprite in it."),
                 # Appended: links address an input by slot index.
                 io.Mask.Input("reference_masks", optional=True,
                               tooltip="Transparency for the top row. A loader "
@@ -1504,6 +1524,13 @@ class SymbioticaCompareSheet(io.ComfyNode):
                                          "Asset Refs `masks` hands out. Wrong "
                                          "way round and every sprite is cut "
                                          "out instead of its background."),
+                io.String.Input("padding_color", default="#000000",
+                                tooltip="What sits OUTSIDE the cells — the "
+                                        "gutters and the border — so the sheet "
+                                        "reads like the packed ones, every "
+                                        "cell ringed in the matte. Set it to "
+                                        "the same colour as the background for "
+                                        "a plain sheet with no outlines."),
             ],
             outputs=[
                 io.Image.Output(display_name="sheet",
@@ -1515,7 +1542,8 @@ class SymbioticaCompareSheet(io.ComfyNode):
     @classmethod
     def execute(cls, references=None, results=None, cell_size=0, spacing=16,
                 background=DEFAULT_BACKGROUND, reference_masks=None,
-                result_masks=None, mask_is_transparency=True) -> io.NodeOutput:
+                result_masks=None, mask_is_transparency=True,
+                padding_color="#000000") -> io.NodeOutput:
         from .asset_refs import parse_hex
         from .compare_sheet import auto_cell, compose_rows, with_alpha
         one = SymbioticaCategoryPrompts._one
@@ -1563,7 +1591,8 @@ class SymbioticaCompareSheet(io.ComfyNode):
         columns = max(len(top), len(bottom))
         rows = [row + [None] * (columns - len(row)) for row in (top, bottom)]
         sheet = compose_rows(rows, cell, max(0, int(one(spacing, 16) or 0)),
-                             parse_hex(one(background, DEFAULT_BACKGROUND)))
+                             parse_hex(one(background, DEFAULT_BACKGROUND)),
+                             parse_hex(one(padding_color, "#000000")))
         return io.NodeOutput(_pil_to_tensor(sheet))
 
 

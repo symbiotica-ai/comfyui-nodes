@@ -93,7 +93,8 @@ def test_takes_both_rows_whole(nodes_mod):
     # wrong widget.
     assert [i.id for i in schema.inputs] == [
         "references", "results", "cell_size", "spacing", "background",
-        "reference_masks", "result_masks", "mask_is_transparency"]
+        "reference_masks", "result_masks", "mask_is_transparency",
+        "padding_color"]
     assert [o.display_name for o in schema.outputs] == ["sheet"]
 
 
@@ -167,3 +168,20 @@ def test_a_four_channel_row_keeps_its_alpha_without_any_mask(nodes_mod):
         background=["#808080"]).args[0][0]
     assert [round(float(v) * 255) for v in out[2][2]] == [128, 128, 128]
     assert round(float(out[30][30][1]) * 255) > 150
+
+
+def test_padding_colour_rings_every_cell(nodes_mod):
+    import torch
+    sprite = torch.full((1, 64, 64, 3), 0.5)
+    out = nodes_mod.SymbioticaCompareSheet.execute(
+        references=[sprite], results=[sprite], cell_size=[64], spacing=[8],
+        background=["#808080"], padding_color=["#000000"]).args[0][0]
+    assert [round(float(v) * 255) for v in out[2][2]] == [0, 0, 0], "gutter"
+    assert [round(float(v) * 255) for v in out[40][40]] == [128, 128, 128]
+
+
+def test_padding_colour_is_appended(nodes_mod):
+    # ComfyUI restores widgets_values positionally; mask_is_transparency was
+    # already in saved graphs, so this had to go after it.
+    schema = nodes_mod.SymbioticaCompareSheet.define_schema()
+    assert [i.id for i in schema.inputs][-1] == "padding_color"

@@ -74,7 +74,7 @@ def with_alpha(image, mask, mask_is_transparency=True):
     return out
 
 
-def compose_rows(rows, cell, spacing, background):
+def compose_rows(rows, cell, spacing, background, padding_color=None):
     """Rows of PIL images laid out as a grid, returned as one RGB image.
 
     A short row keeps its empty cells rather than closing up: column alignment
@@ -87,7 +87,16 @@ def compose_rows(rows, cell, spacing, background):
     if not columns or not rows:
         raise ValueError("nothing to lay out — both rows are empty")
     width, height = grid_size(columns, len(rows), cell, spacing)
-    sheet = Image.new("RGB", (width, height), background)
+    # Flooded with the matte, then every cell punched back to the background —
+    # the packer's own order, and what draws the outline around each cell. One
+    # colour for both keeps the old single-colour behaviour exactly.
+    sheet = Image.new("RGB", (width, height),
+                      background if padding_color is None else padding_color)
+    if padding_color is not None and padding_color != background:
+        for row_index in range(len(rows)):
+            for column in range(columns):
+                x, y = cell_origin(column, row_index, cell, spacing)
+                sheet.paste(background, (x, y, x + cell, y + cell))
     for row_index, row in enumerate(rows):
         for column, image in enumerate(row):
             if image is None:

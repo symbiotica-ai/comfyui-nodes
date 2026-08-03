@@ -186,3 +186,33 @@ def test_an_rgba_image_composites_without_any_mask():
                          background=(128, 128, 128))
     assert sheet.getpixel((15, 15)) == (128, 128, 128)
     assert sheet.getpixel((60, 60)) == (0, 200, 0)
+
+
+# --- two colours -------------------------------------------------------------
+# The packed sheets are grey cells on a black matte. A comparison read beside
+# them should carry the same outline, so the cell colour and the gutter colour
+# are separate.
+
+def test_gutters_take_the_padding_colour_and_cells_the_background():
+    rows = [[_img(100, 100, (255, 0, 0))]]
+    sheet = compose_rows(rows, cell=100, spacing=10, background=(128, 128, 128),
+                         padding_color=(0, 0, 0))
+    assert sheet.getpixel((2, 2)) == (0, 0, 0), "gutter is the matte"
+    assert sheet.getpixel((50, 50)) == (255, 0, 0), "the art itself"
+
+
+def test_an_empty_cell_reads_as_a_cell_not_as_matte():
+    rows = [[_img(100, 100, (255, 0, 0)), None]]
+    sheet = compose_rows(rows, cell=100, spacing=10, background=(128, 128, 128),
+                         padding_color=(0, 0, 0))
+    assert sheet.getpixel((170, 50)) == (128, 128, 128)
+
+
+def test_one_colour_behaves_exactly_as_before():
+    """Omitting the padding colour must not change a single pixel of the old
+    single-colour sheet."""
+    rows = [[_img(100, 100, (255, 0, 0))]]
+    before = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8))
+    after = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8),
+                         padding_color=(8, 8, 8))
+    assert before.tobytes() == after.tobytes()
