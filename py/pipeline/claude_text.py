@@ -28,6 +28,92 @@ MODELS = ["claude-opus-5", "claude-sonnet-5", "claude-fable-5",
           "claude-opus-4-6", "claude-opus-4-5-20251101",
           "claude-haiku-4-5-20251001", "claude-sonnet-4-5-20250929"]
 
+# What the canvas shows against what the API is sent, in ComfyUI's own order
+# and wording so the same model reads the same on either node. Opus 4.5 is
+# ours alone — core does not carry it, and dropping it to match would cost a
+# model rather than gain compatibility.
+MODEL_LABELS = {
+    "Opus 5": "claude-opus-5",
+    "Opus 4.8": "claude-opus-4-8",
+    "Fable 5": "claude-fable-5",
+    "Sonnet 5": "claude-sonnet-5",
+    "Opus 4.7": "claude-opus-4-7",
+    "Opus 4.6": "claude-opus-4-6",
+    "Opus 4.5": "claude-opus-4-5-20251101",
+    "Sonnet 4.6": "claude-sonnet-4-6",
+    "Sonnet 4.5": "claude-sonnet-4-5-20250929",
+    "Haiku 4.5": "claude-haiku-4-5-20251001",
+}
+
+# Thinking is not one feature with one switch — it is four behaviours, and
+# which one applies is a property of the model. That is why these are sets
+# rather than a flag: a single flat model list can only omit the whole subject,
+# which is exactly what this node did until the inputs became per-model.
+THINKING_UNSUPPORTED = {"Haiku 4.5"}
+# Anthropic sizes the budget itself from the effort hint.
+ADAPTIVE_THINKING = {"Opus 4.8", "Sonnet 5", "Opus 4.7", "Opus 4.6",
+                     "Sonnet 4.6"}
+# Reason unconditionally: no `thinking` key at all, and "off" is not offered.
+ALWAYS_THINKING = {"Opus 5", "Fable 5"}
+# Wants "off" said out loud. Saying it to Fable 5 is a 400, hence a set.
+EXPLICIT_THINKING_OFF = {"Sonnet 5"}
+# temperature is removed on these and returns 400.
+NO_TEMPERATURE = {"Opus 5", "Opus 4.8", "Fable 5", "Sonnet 5"}
+
+REASONING_EFFORTS = ["off", "low", "medium", "high"]
+# The older explicit-budget API, in tokens. Sized to sit under the default
+# max_tokens of 32768 with room for an answer.
+REASONING_BUDGET = {"low": 2048, "medium": 8192, "high": 16384}
+# What the reply is always left, however little max_tokens allows.
+MIN_ANSWER_TOKENS = 1024
+
+
+def thinking_enabled(label: str, effort: str) -> bool:
+    """Whether this model will reason for this effort.
+
+    The always-thinking models ignore the effort entirely for this question:
+    they reason whatever it says, which is why "off" is not among their
+    choices."""
+    if label in ALWAYS_THINKING:
+        return True
+    return effort not in ("off", None) and label not in THINKING_UNSUPPORTED
+
+
+def thinking_config(label: str, effort: str, max_tokens: int):
+    """`(thinking, output_config)` for one model and effort, either possibly
+    None, matching ComfyUI's own node exactly.
+
+    Four cases, and the ordering between them matters: always-thinking is
+    checked before adaptive because Opus 5 is neither, and the explicit-off
+    case is last because it only applies where thinking is not enabled."""
+    if label in ALWAYS_THINKING:
+        return None, {"effort": effort}
+    if thinking_enabled(label, effort):
+        if label in ADAPTIVE_THINKING:
+            return {"type": "adaptive"}, {"effort": effort}
+        # Budget mode. Clamped so the reply keeps room: a budget equal to
+        # max_tokens spends the whole allowance reasoning and returns nothing,
+        # which reads as the model having refused.
+        budget = min(REASONING_BUDGET[effort],
+                     max(MIN_ANSWER_TOKENS, max_tokens - MIN_ANSWER_TOKENS))
+        return {"type": "enabled", "budget_tokens": budget}, None
+    if label in EXPLICIT_THINKING_OFF:
+        return {"type": "disabled"}, None
+    return None, None
+
+
+def temperature_for(label: str, effort: str, temperature):
+    """The temperature to send, or None where the model will not take one.
+
+    Anthropic rejects a temperature alongside thinking, and Opus 4.7 rejects
+    one outright. Returning None rather than raising because a stale graph
+    carrying a temperature into a model that stopped accepting it should still
+    render — the setting is dropped, not the request."""
+    if (label in NO_TEMPERATURE or label == "Opus 4.7"
+            or thinking_enabled(label, effort)):
+        return None
+    return temperature
+
 # Anthropic's high-resolution tier: these accept a 2576px long edge, and
 # everything else caps at 1568 and downscales server-side. The default is the
 # smaller one, so an id nobody has taught this about costs bytes rather than
@@ -130,14 +216,19 @@ def require_prompt(prompt: str) -> str:
 
 
 def request_body(prompt: str, image_blocks: list, model: str, max_tokens: int,
-                 system_prompt: str) -> dict:
+                 system_prompt: str, thinking: dict | None = None,
+                 output_config: dict | None = None,
+                 temperature=None) -> dict:
     """One Messages-API request.
 
-    No sampling parameters and no `thinking` key. temperature, top_p and top_k
-    are removed on Opus 5, Fable 5 and Opus 4.8/4.7 and return 400 there; and
-    thinking is on by default when the parameter is omitted, while sending
-    `{"type": "disabled"}` is itself a 400 on Fable 5. Omission is the only
-    setting that works across the whole model list."""
+    `thinking`, `output_config` and `temperature` are what the model will
+    actually accept, which is a per-model question — `thinking_config` and
+    `temperature_for` answer it, and each may legitimately be None. This node
+    once omitted all three unconditionally, because temperature is removed on
+    Opus 5, Fable 5 and Opus 4.8/4.7, and `{"type": "disabled"}` is itself a
+    400 on Fable 5, so omission was the only setting that worked across ONE
+    flat model list. Per-model inputs are what retired that constraint; none of
+    those facts changed."""
     blocks = list(labelled(image_blocks))
     blocks.append({"type": "text", "text": prompt})
     body = {
@@ -152,6 +243,14 @@ def request_body(prompt: str, image_blocks: list, model: str, max_tokens: int,
         # Its own top-level key. Anthropic has no system role, and a message
         # claiming one is a 400.
         body["system"] = system_prompt
+    # Each omitted rather than sent as null: the API reads an explicit null as
+    # a value and rejects it on the models that removed the field.
+    if thinking is not None:
+        body["thinking"] = thinking
+    if output_config is not None:
+        body["output_config"] = output_config
+    if temperature is not None:
+        body["temperature"] = temperature
     # Again, on the whole request rather than the images alone. `prompt` and
     # `system_prompt` are unbounded multiline widgets riding in the same log,
     # and a pasted style guide or JSON schema — exactly what a structured-

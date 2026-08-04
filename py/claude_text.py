@@ -5,12 +5,57 @@ import os
 import numpy as np
 import requests
 from PIL import Image
+from comfy_api.latest import io
 
 from .pipeline import claude_text as core
 from .pipeline import ai_gateway
 
 
-class SymbioticaClaude:
+def _model_inputs(label):
+    """The inputs one model choice carries.
+
+    Temperature and reasoning_effort are absent on the models that reject
+    them, rather than present and ignored. A widget a model 400s on is worse
+    than no widget: it reads as a setting that did nothing."""
+    inputs = [
+        io.Int.Input("max_tokens", default=32768, min=4096, max=64000,
+                     advanced=True,
+                     tooltip="A budget, not a target. On the models that think "
+                             "by default this caps the reasoning and the "
+                             "answer together, so a small value cuts the "
+                             "answer off — which this node raises on rather "
+                             "than handing back a fragment."),
+    ]
+    if label not in core.NO_TEMPERATURE:
+        inputs.append(io.Float.Input(
+            "temperature", default=1.0, min=0.0, max=1.0, step=0.01,
+            advanced=True,
+            tooltip="Lower is more repeatable. Dropped whenever reasoning is "
+                    "on, which Anthropic requires."))
+    if label in core.ALWAYS_THINKING:
+        inputs.append(io.Combo.Input(
+            "reasoning_effort",
+            options=[e for e in core.REASONING_EFFORTS if e != "off"],
+            default="high", advanced=True,
+            tooltip="This model always reasons, so there is no 'off'."))
+    elif label not in core.THINKING_UNSUPPORTED:
+        inputs.append(io.Combo.Input(
+            "reasoning_effort", options=core.REASONING_EFFORTS, default="off",
+            advanced=True,
+            tooltip="Extended thinking effort. 'off' disables reasoning."))
+    inputs.append(io.Autogrow.Input(
+        "images",
+        template=io.Autogrow.TemplateNames(
+            io.Image.Input("image"),
+            names=[f"image_{i}" for i in range(1, core.MAX_IMAGES + 1)],
+            min=0),
+        tooltip=f"Reference images, in slot order. Each slot may itself carry "
+                f"a batch; {core.MAX_IMAGES} images total is Anthropic's "
+                f"ceiling, and the request size ceiling usually binds first."))
+    return inputs
+
+
+class SymbioticaClaude(io.ComfyNode):
     """Answer a prompt with Claude, optionally looking at images.
 
     On a box carrying SYMBIOTICA_AIG_BASE the call goes through Cloudflare AI
@@ -23,84 +68,78 @@ class SymbioticaClaude:
     node."""
 
     @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "prompt": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "tooltip": "What to ask. Reference images are described by "
-                               "this prompt, not replaced by it."
-                }),
-                "model": (core.MODELS, {
-                    "default": core.MODELS[0],
-                    "tooltip": "Haiku is the cheap lever for bulk captioning"
-                }),
-                "max_tokens": ("INT", {
-                    "default": 32768,
-                    "min": 4096,
-                    "max": 64000,
-                    "tooltip": "A budget, not a target. On the models that "
-                               "think by default this caps the reasoning and "
-                               "the answer together, so a small value cuts the "
-                               "answer off — which this node raises on rather "
-                               "than handing back a fragment."
-                }),
-                "seed": ("INT", {
-                    "default": 0,
-                    "min": 0,
-                    "max": 0xFFFFFFFFFFFFFFFF,
-                    "control_after_generate": True,
-                    "tooltip": "Not sent to Anthropic — Claude takes no seed. "
-                               "It exists so re-queueing re-runs this node "
-                               "instead of serving ComfyUI's cached output."
-                }),
-            },
-            "optional": {
-                "images": ("IMAGE", {
-                    "tooltip": f"Up to {core.MAX_IMAGES} reference images, sent "
-                               f"in batch order. Large renders are brought down "
-                               f"to the model's own ceiling first, and a batch "
-                               f"too large to be logged is refused rather than "
-                               f"trimmed."
-                }),
-                "system_prompt": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "tooltip": "Standing instructions, sent as Anthropic's own "
-                               "`system` field. Empty means none is sent."
-                }),
-                "api_key": ("STRING", {
-                    "default": "",
-                    "tooltip": "Anthropic key for direct calls; empty falls "
-                               "back to Symbiotica.ANTHROPIC_API_KEY or "
-                               "Symbiotica.CLAUDE_API_KEY in Settings, then "
-                               "the ANTHROPIC_API_KEY or CLAUDE_API_KEY env "
-                               "vars, in that order. Ignored where the studio "
-                               "gateway is configured."
-                }),
-            },
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaClaude",
+            display_name="Claude (Symbiotica)",
+            category="symbiotica/text",
+            description="Answer a prompt with Claude, billed to the studio's "
+                        "own key through Cloudflare AI Gateway rather than to "
+                        "a ComfyUI account.",
+            inputs=[
+                io.String.Input("prompt", multiline=True, default="",
+                                tooltip="What to ask. Reference images are "
+                                        "described by this prompt, not "
+                                        "replaced by it."),
+                io.DynamicCombo.Input(
+                    "model",
+                    options=[io.DynamicCombo.Option(label, _model_inputs(label))
+                             for label in core.MODEL_LABELS],
+                    tooltip="Haiku is the cheap lever for bulk captioning."),
+                io.Int.Input("seed", default=0, min=0,
+                             max=0xFFFFFFFFFFFFFFFF,
+                             control_after_generate=True,
+                             tooltip="Not sent to Anthropic — Claude takes no "
+                                     "seed. It exists so re-queueing re-runs "
+                                     "this node instead of serving ComfyUI's "
+                                     "cached output."),
+                io.String.Input("system_prompt", multiline=True, default="",
+                                optional=True, advanced=True,
+                                tooltip="Standing instructions, sent as "
+                                        "Anthropic's own top-level system "
+                                        "field rather than as a message."),
+                io.String.Input("api_key", default="", optional=True,
+                                advanced=True,
+                                tooltip="Anthropic key for direct calls; empty "
+                                        "falls back to "
+                                        "Symbiotica.ANTHROPIC_API_KEY or "
+                                        "Symbiotica.CLAUDE_API_KEY in "
+                                        "Settings, then the ANTHROPIC_API_KEY "
+                                        "or CLAUDE_API_KEY env vars, in that "
+                                        "order. Ignored where the studio "
+                                        "gateway is configured."),
+            ],
+            outputs=[io.String.Output(display_name="text")],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("text",)
-    CATEGORY = "symbiotica/text"
-    FUNCTION = "execute"
-
-    def execute(self, prompt, model, max_tokens, seed, images=None,
-                system_prompt="", api_key=""):
+    @classmethod
+    def execute(cls, prompt, model, seed, system_prompt="",
+                api_key="") -> io.NodeOutput:
         def interactive_key():
             from ._settings import resolve_provider_key
             return resolve_provider_key(
                 api_key, ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"], "Claude")
 
+        # Everything gated on the model rides inside the combo's value rather
+        # than arriving as keywords, and a model that rejects a setting has no
+        # input for it — so each is read with the default the API would apply.
+        label = model["model"]
+        model_id = core.MODEL_LABELS.get(label, label)
+        max_tokens = model.get("max_tokens", 32768)
+        effort = model.get("reasoning_effort", "off")
+        thinking, output_config = core.thinking_config(
+            label, effort, max_tokens)
+        temperature = core.temperature_for(
+            label, effort, model.get("temperature"))
+
         # First, because everything below it is wasted otherwise: the ladder
         # can reach a file on disk and the encoding runs once per reference.
         core.require_prompt(prompt)
         transport = core.resolve_transport(os.environ, interactive_key)
-        body = core.request_body(prompt, core.image_blocks(to_pil(images),
-                                                           model),
-                                 model, max_tokens, system_prompt)
+        body = core.request_body(
+            prompt, core.image_blocks(to_pil(model.get("images")), model_id),
+            model_id, max_tokens, system_prompt, thinking=thinking,
+            output_config=output_config, temperature=temperature)
 
         # Anything that is not an answer goes through one formatter, so that a
         # failure carries the same account whether the gateway refused it,
@@ -140,7 +179,7 @@ class SymbioticaClaude:
             raise failure(response.status_code,
                           f"reply was not JSON: {response.text}") from None
 
-        return (core.parse_response(payload),)
+        return io.NodeOutput(core.parse_response(payload))
 
 
 def to_pil(images):

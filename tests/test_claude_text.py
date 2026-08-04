@@ -433,3 +433,52 @@ def test_the_whole_request_is_measured_not_just_the_images():
 
 def test_an_ordinary_request_is_not_caught_by_that_check():
     assert body(prompt="describe this", system_prompt="be brief")["system"]
+
+
+def thinking(label, effort="off", max_tokens=32768):
+    return claude_text.thinking_config(label, effort, max_tokens)
+
+
+def test_the_always_thinking_models_take_an_effort_and_no_thinking_key():
+    """Opus 5 and Fable 5 reason unconditionally. Sending them a `thinking`
+    block at all is a 400, and `off` is not one of their choices — which is why
+    their effort list omits it rather than mapping it to something."""
+    assert thinking("Opus 5", "high") == (None, {"effort": "high"})
+    assert thinking("Fable 5", "low") == (None, {"effort": "low"})
+
+
+def test_the_adaptive_models_let_anthropic_size_the_budget():
+    """Opus 4.7 and later take a hint, not a number: the type is `adaptive` and
+    the effort rides in output_config. Sending a budget there is the older API
+    these models moved off."""
+    assert thinking("Sonnet 5", "medium") == (
+        {"type": "adaptive"}, {"effort": "medium"})
+    assert thinking("Opus 4.6", "high") == (
+        {"type": "adaptive"}, {"effort": "high"})
+
+
+def test_the_budget_model_gets_a_token_count_and_room_to_answer():
+    """Sonnet 4.5 is on the explicit-budget API. The budget must leave space
+    for the reply, so it is clamped against max_tokens rather than trusted."""
+    assert thinking("Sonnet 4.5", "high") == (
+        {"type": "enabled", "budget_tokens": 16384}, None)
+    # 5000 - 1024 = 3976, below high's 16384, so the clamp is what binds.
+    assert thinking("Sonnet 4.5", "high", max_tokens=5000) == (
+        {"type": "enabled", "budget_tokens": 3976}, None)
+    # Never below 1024, however little max_tokens leaves.
+    assert thinking("Sonnet 4.5", "low", max_tokens=1200) == (
+        {"type": "enabled", "budget_tokens": 1024}, None)
+
+
+def test_the_model_that_cannot_think_is_sent_nothing_about_thinking():
+    """Haiku 4.5 has no reasoning at all, so an effort arriving from a stale
+    graph is ignored rather than turned into a key that 400s."""
+    assert thinking("Haiku 4.5", "high") == (None, None)
+
+
+def test_only_sonnet_5_is_told_thinking_is_off_out_loud():
+    """Most models take omission as off. Sonnet 5 wants it said, and saying it
+    to Fable 5 is a 400 — which is why this is a set of one and not a default."""
+    assert thinking("Sonnet 5", "off") == ({"type": "disabled"}, None)
+    assert thinking("Opus 4.6", "off") == (None, None)
+    assert thinking("Sonnet 4.5", "off") == (None, None)

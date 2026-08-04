@@ -43,6 +43,12 @@ Wrappers around Wavespeed's hosted endpoints.
   caption or critique step, or a structured-extraction step feeding an image
   node.
 
+  Models are picked by name, and each one carries only the settings it actually
+  accepts: `reasoning_effort` where the model can think, `temperature` where it
+  is not removed, and `max_tokens` throughout. Opus 5 and Fable 5 reason
+  unconditionally and so are offered no `off`; Haiku 4.5 has no reasoning input
+  at all. Reference images fill `image_1` onwards as you wire them.
+
   Routed the same way as the Gemini node below, on the same two variables. Every
   outcome that is not a complete answer raises rather than returning a string:
   a refusal, an answer cut off at `max_tokens`, inputs too large for the context
@@ -59,9 +65,13 @@ Wrappers around Wavespeed's hosted endpoints.
 
 ### Image generation (Google Gemini)
 - **Gemini Image (Symbiotica)** — a prompt and up to 14 reference images become
-  a render, at 1K/2K/4K and any of the standard aspect ratios. Returns the image
-  and whatever the model said about it; when it declines, that sentence is the
-  error.
+  a render, at 1K/2K/4K and any of fifteen aspect ratios. Returns the image,
+  whatever the model said about it, and the interim sketch when thinking is set
+  to HIGH; when it declines, that sentence is the error.
+
+  Picking Nano Banana 2 Lite offers 1K alone, because that is all it renders.
+  `thinking_level`, `temperature` and `top_p` are exposed at ComfyUI's own
+  defaults, and reference images fill `image_1` onwards as you wire them.
 
   Where `SYMBIOTICA_AIG_BASE` is set the call routes through Cloudflare AI
   Gateway on that studio's own stored key, tagged so its spend can be grouped
