@@ -3325,13 +3325,6 @@ class SymbioticaPick(io.ComfyNode):
                                         "— tags them, and the node opens on "
                                         "that tag."),
                 io.String.Input("category", default="", optional=True),
-                io.String.Input("role", default="", optional=True,
-                                tooltip="Slice Cells' `roles` output. Lays the "
-                                        "grid out one row per stage — every "
-                                        "prep together, every ready, every "
-                                        "serving — so a stage is compared "
-                                        "against its own alternatives instead "
-                                        "of against the other stages."),
                 Order.Input("order", optional=True,
                             tooltip="Optional: tags candidates with the "
                                     "order's feature and month too."),
@@ -3339,6 +3332,13 @@ class SymbioticaPick(io.ComfyNode):
                 # filter live on the node so they are saved with the workflow.
                 io.String.Input("selection", default="", optional=True),
                 io.String.Input("view", default="", optional=True),
+                io.String.Input("role", default="", optional=True,
+                                tooltip="Slice Cells' `roles` output. Lays the "
+                                        "grid out one row per stage — every "
+                                        "prep together, every ready, every "
+                                        "serving — so all three show at once "
+                                        "and a stage is compared against its "
+                                        "own alternatives."),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),

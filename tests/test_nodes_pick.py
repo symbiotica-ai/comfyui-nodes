@@ -72,6 +72,20 @@ class TestSchema:
     def test_it_is_registered(self, nodes_mod):
         assert nodes_mod.SymbioticaPick in nodes_mod.PIPELINE_NODE_CLASSES
 
+    def test_the_widget_order_is_append_only(self, nodes_mod):
+        """ComfyUI serialises widget values POSITIONALLY as `widgets_values`,
+        so inserting a widget before an existing one shifts every value after
+        it in every saved workflow. That is not cosmetic: adding `role` in the
+        middle put the user's ticked-id JSON into `role` and his filter into
+        `selection`, on a graph he had already saved. A new widget goes on the
+        end. Changing this list means breaking someone's workflow.
+        """
+        schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
+        wires = {"images", "order"}
+        widgets = [i.id for i in schema.inputs if i.id not in wires]
+        assert widgets == ["collect", "asset", "category", "selection",
+                           "view", "role"]
+
 
 class TestCollecting:
     def test_every_frame_becomes_a_candidate(self, nodes_mod, tmp_path):
