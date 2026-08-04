@@ -7,9 +7,11 @@ from PIL import Image
 
 from pipeline.pick_buffer import (BUFFER_ROOT, INDEX_NAME, add_image,
                                   buffer_dir, clear,
-                                  drop, group_key, groups, image_id,
-                                  import_folder,
-                                  list_entries, read_index, roles, safe_node_id,
+                                  drop, folder_signature, group_key, groups,
+                                  image_id, import_folder, import_if_changed,
+                                  keep_picks, list_entries,
+                                  name_matches_prefix,
+                                  read_index, roles, safe_node_id,
                                   selected_paths, tag_from_path,
                                   write_index)
 
@@ -480,6 +482,111 @@ class TestThePassAPickerIsPinnedTo:
         d = str(tmp_path / "buf")
         add_image(d, solid(), tag={"asset": "cake", "phase": "export"})
         assert list_entries(d)[0]["group"] == "cake"
+
+
+class TestReadingComfyUIsOwnSaveLayout:
+    """A Save Image node given `…/Food/Spookies` writes
+    `Food/Spookies_00001_.png` — the last segment of a filename prefix names
+    the FILE. A picker deriving `…/Food/Spookies` as a folder found nothing."""
+
+    def make(self, folder, names, colour=10):
+        os.makedirs(folder, exist_ok=True)
+        for i, name in enumerate(names):
+            Image.new("RGB", (6, 6), (colour + i, 0, 0)).save(
+                os.path.join(folder, name))
+
+    def test_only_the_named_assets_files_are_read(self, tmp_path):
+        src = str(tmp_path / "outputs" / "Oct" / "Ev" / "Food")
+        self.make(src, ("Spookies_00001_.png", "Spookies_00002_.png",
+                        "Ghosts_00001_.png"))
+        d = str(tmp_path / "buf")
+        assert import_folder(d, src, name_prefix="Spookies")["added"] == 2
+
+    def test_a_longer_asset_name_is_not_claimed_by_a_shorter_one(self):
+        assert name_matches_prefix("Spookies_00001_.png", "Spookies") is True
+        assert name_matches_prefix("Spookies.png", "Spookies") is True
+        assert name_matches_prefix("Spookies Deluxe_00001_.png",
+                                   "Spookies") is False
+
+    def test_the_prefix_read_does_not_descend(self, tmp_path):
+        """The category folder holds every asset of that category, so
+        recursing would drag in every other asset's subfolders — which is the
+        mess the prefix exists to avoid."""
+        src = str(tmp_path / "outputs" / "Oct" / "Ev" / "Food")
+        self.make(src, ("Spookies_00001_.png",))
+        self.make(os.path.join(src, "Ghosts"), ("a.png",), colour=90)
+        d = str(tmp_path / "buf")
+        assert import_folder(d, src, name_prefix="Spookies")["added"] == 1
+
+    def test_the_signature_ignores_other_assets_renders(self, tmp_path):
+        """Or every render of any asset in the category would say this one
+        changed, and re-read it for nothing."""
+        src = str(tmp_path / "outputs" / "Oct" / "Ev" / "Food")
+        self.make(src, ("Spookies_00001_.png",))
+        before = folder_signature(src, "Spookies")
+        self.make(src, ("Ghosts_00001_.png",), colour=90)
+        assert folder_signature(src, "Spookies") == before
+
+    def test_the_same_folder_read_both_ways_is_not_one_mark(self, tmp_path):
+        """A picker reads its asset's folder AND its prefixed files. Keying the
+        mark by folder alone would tell the second read nothing had changed."""
+        src = str(tmp_path / "outputs" / "Oct" / "Ev" / "Food")
+        self.make(src, ("Spookies_00001_.png", "Ghosts_00001_.png"))
+        d = str(tmp_path / "buf")
+        assert import_if_changed(d, src)["added"] == 2
+        assert import_if_changed(d, src, name_prefix="Spookies") is not None
+
+
+class TestKeepingWhatWasGood:
+    """"images picked should land in …/Spookies/Base so we only keep what was
+    good in these folders" — the buffer is scratch, so approval that lives only
+    there is not a delivery."""
+
+    def imported(self, tmp_path, name="Spookies_00007_.png"):
+        src = str(tmp_path / "outputs" / "Oct" / "Ev" / "Food")
+        os.makedirs(src, exist_ok=True)
+        Image.new("RGB", (6, 6), (11, 0, 0)).save(os.path.join(src, name))
+        d = str(tmp_path / "buf")
+        import_folder(d, src, name_prefix="Spookies")
+        return list_entries(d)
+
+    def test_a_pick_keeps_the_name_it_was_rendered_under(self, tmp_path):
+        dest = str(tmp_path / "outputs" / "Oct" / "Ev" / "Food" / "Spookies"
+                   / "Base")
+        written = keep_picks(self.imported(tmp_path), dest)
+        assert [os.path.basename(p) for p in written] == ["Spookies_00007_.png"]
+        assert os.path.isfile(os.path.join(dest, "Spookies_00007_.png"))
+
+    def test_an_image_that_never_had_a_name_still_gets_one(self, tmp_path):
+        """Straight off the wire there is no filename to keep, and a bare pixel
+        hash in a delivery folder is not something anyone can match by eye."""
+        d = str(tmp_path / "buf")
+        add_image(d, solid(), tag={"asset": "Spookies"})
+        written = keep_picks(list_entries(d), str(tmp_path / "keep"))
+        assert os.path.basename(written[0]).startswith("Spookies_")
+
+    def test_keeping_twice_writes_once(self, tmp_path):
+        """Every queue emits the same ticks; rewriting them each time would
+        churn the delivery folder and its sync."""
+        entries = self.imported(tmp_path)
+        dest = str(tmp_path / "keep")
+        assert len(keep_picks(entries, dest)) == 1
+        assert keep_picks(entries, dest) == []
+
+    def test_the_rejects_are_left_where_they_are(self, tmp_path):
+        """Copied, never moved: deleting what was not picked is a different
+        decision, and not one a node makes on its own."""
+        entries = self.imported(tmp_path)
+        keep_picks(entries, str(tmp_path / "keep"))
+        assert os.path.isfile(str(tmp_path / "outputs" / "Oct" / "Ev" / "Food"
+                                  / "Spookies_00007_.png"))
+
+    def test_an_unwritable_destination_does_not_raise(self, tmp_path):
+        """The picks are still on the wire, which is what the run is for."""
+        entries = self.imported(tmp_path)
+        blocker = tmp_path / "afile"
+        blocker.write_text("not a directory")
+        assert keep_picks(entries, str(blocker / "Base")) == []
 
 
 class TestBothSpellingsOfTheOutputDirectory:

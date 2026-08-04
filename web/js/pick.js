@@ -207,6 +207,9 @@ function pickPanel(node) {
         }
     }
     node._symReloadPick = load;
+    // A run has something to say that the buffer alone cannot show — where the
+    // approved images were filed. Set from the execution message below.
+    node._symPickNote = (text) => { notice = String(text || ""); render(); };
 
     async function remove(ids) {
         try {
@@ -448,12 +451,13 @@ function pickPanel(node) {
             return;
         }
         if (!images.length) {
+            // `get_new` used to gate this and said so here. It gates nothing
+            // now — the node takes what is wired to it and reads the asset's
+            // own renders either way — so a message about switching it on sent
+            // people to a hidden widget that would not have helped.
             list.appendChild(emptyState(
-                widgetOf(node, "get_new")?.value === false
-                    ? "get_new is off, so nothing is asked for — turn it on "
-                      + "and queue this node to make some"
-                    : "queue this node — it takes in what is wired to it and "
-                      + "reads this asset's own render folder"));
+                "queue this node — it takes in what is wired to it and "
+                + "reads this asset's own renders"));
             refit();
             return;
         }
@@ -588,5 +592,12 @@ api.addEventListener("symbiotica.pick", (event) => {
         ?? app.graph?.getNodeById?.(detail.node_id);
     if (!node) return;
     if (typeof detail.current === "string") node._symPickCurrent = detail.current;
+    // Approved images are copied out to the delivery folder, which is not
+    // somewhere the node can show — so it says where they went rather than
+    // leaving it to be discovered in a file browser.
+    if (detail.kept) {
+        node._symPickNote?.(`kept ${detail.kept} in ${detail.kept_in || "the "
+            + "asset's folder"}`);
+    }
     node._symReloadPick?.();
 });

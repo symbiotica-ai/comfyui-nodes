@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, fire, link, reset, setResponder, tick } from "./comfy_stub.mjs";
+import { app, create, emit, fire, link, reset, setResponder,
+         tick } from "./comfy_stub.mjs";
 import "../../web/js/pick.js";
 
 globalThis.window.confirm = () => true;
@@ -331,10 +332,36 @@ test("Read folder with no folder explains that it is not needed", async () => {
     assert.match(text, /leave `folder` empty/);
 });
 
-test("an empty buffer with get_new off says that is why", async () => {
+test("a run that kept picks says where they went", async () => {
+    // The approved images are copied out to the delivery folder, which is not
+    // somewhere the node can show — so a run that filed some says so rather
+    // than leaving it to be found in a file browser.
+    const node = await panelNode([], [CAKE_A]);
+    emit("symbiotica.pick", {
+        node_id: String(node.id), added: 0, count: 1, groups: [], current: "",
+        kept: 2, kept_in: "October/Mini 1 — Ghostly Goodies/Food/Spookies/Base",
+    });
+    await tick();
+    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
+    assert.match(text, /kept 2 in October\/Mini 1/);
+});
+
+test("a run that kept nothing says nothing", async () => {
+    const node = await panelNode([], [CAKE_A]);
+    emit("symbiotica.pick", { node_id: String(node.id), count: 1, kept: 0 });
+    await tick();
+    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
+    assert.doesNotMatch(text, /kept/);
+});
+
+test("an empty buffer says what to do, not which switch to flip", async () => {
+    // It used to blame `get_new`, which gates nothing any more — the node
+    // takes what is wired to it and reads the asset's renders either way. That
+    // message sent people to a hidden widget that would not have helped.
     const node = await panelNode([], [], { get_new: false });
     const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /get_new is off/);
+    assert.match(text, /queue this node/);
+    assert.doesNotMatch(text, /get_new/);
 });
 
 const EXPORTED = { ...CAKE_A, id: "e1", thumb: "/out/e1_thumb.png", phase: "export" };

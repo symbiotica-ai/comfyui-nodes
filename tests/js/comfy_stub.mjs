@@ -74,9 +74,22 @@ globalThis.window = { addEventListener() {}, devicePixelRatio: 1 };
 globalThis.requestAnimationFrame = (cb) => cb();
 
 // --- api ---------------------------------------------------------------------
+// A module registers its execution-message listeners once, at import time, so
+// these are deliberately NOT cleared by reset() — dropping them would silently
+// disarm every test that runs after the first.
+const apiListeners = new Map();
+
+/** Deliver a ComfyUI execution message, as the server's websocket would. */
+export function emit(type, detail) {
+    for (const fn of apiListeners.get(type) ?? []) fn({ detail });
+}
+
 export const api = {
     apiURL: (route) => `/api${route}`,
-    addEventListener() {},
+    addEventListener(type, fn) {
+        if (!apiListeners.has(type)) apiListeners.set(type, []);
+        apiListeners.get(type).push(fn);
+    },
     async fetchApi(route, init) {
         calls.push(route);
         // `init` is passed through so a test can assert what a POST actually

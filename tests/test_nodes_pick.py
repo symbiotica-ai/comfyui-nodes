@@ -258,22 +258,26 @@ class TestLookingAtAPickMustNotPayForIt:
         images = next(i for i in schema.inputs if i.id == "images")
         assert images.lazy is True
 
-    def test_a_generator_wire_is_never_asked_for(self, nodes_mod):
-        """The whole point: an input that is not requested is never computed,
-        so the generator never runs. This node causes no renders at all."""
+    def test_an_unevaluated_wire_is_asked_for_whatever_feeds_it(self, nodes_mod):
+        """Refusing every source but another picker was an over-correction:
+        "fantastic mate, now no new image can come in". What a picker is wired
+        to is a save or preview node, which ComfyUI runs on every queue anyway
+        — asking for its output costs nothing that was not already spent."""
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
             unique_id="7",
             prompt={"7": {"inputs": {"images": ["9", 0]}},
-                    "9": {"class_type": "GeminiNanoBanana2V2"}}, dynprompt=None)
-        assert nodes_mod.SymbioticaPick.check_lazy_status(images=None) == []
+                    "9": {"class_type": "SaveImage"}}, dynprompt=None)
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=None) == ["images"]
 
     def test_an_already_resolved_wire_is_not_asked_for_again(self, nodes_mod):
         assert nodes_mod.SymbioticaPick.check_lazy_status(
             images=[frames(0.1)], get_new=[True]) == []
 
-    def test_a_generators_images_are_never_recorded(self, nodes_mod, tmp_path):
-        run(nodes_mod, images=[frames(0.1)], source="GeminiNanoBanana2V2")
-        assert buffer_of(nodes_mod, tmp_path) == []
+    def test_images_off_a_save_node_are_recorded(self, nodes_mod, tmp_path):
+        """His actual lane: Slice Cells → Save Image → picker."""
+        run(nodes_mod, images=[frames(0.1)], source="SaveImage")
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1
 
     def test_not_collecting_still_sends_the_picks_on(self, nodes_mod, tmp_path):
         run(nodes_mod, images=[frames(0.5)], get_new=[True])
@@ -349,9 +353,13 @@ class TestAskingForTheWireOnlyWhenThereIsOne:
             unique_id="7", prompt=None, dynprompt=_Boom())
         assert nodes_mod.SymbioticaPick.check_lazy_status(images=(None,)) == []
 
-    def test_a_generator_behind_the_wire_is_never_asked(self, nodes_mod):
+    def test_a_generator_behind_the_wire_is_asked_too(self, nodes_mod):
+        """Not because renders are free, but because refusing them is not what
+        made them stop: `SymbioticaAssetRefs` fingerprinting a folder that a
+        picker's thumbnails were written into was, and that is fixed."""
         self._wire(nodes_mod, ["9", 0], source="GeminiNanoBanana2V2")
-        assert nodes_mod.SymbioticaPick.check_lazy_status(images=(None,)) == []
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,)) == ["images"]
 
     def test_an_unevaluated_wire_records_nothing_rather_than_a_blank(self, nodes_mod,
                                                                      tmp_path):
@@ -583,12 +591,144 @@ class TestSeeingWhatWasAlreadyMade:
             order=[{"month": "Oct", "feature": "Mini 1"}])
         assert len(buffer_of(nodes_mod, tmp_path)) == 2
 
-    def test_a_generator_wire_adds_nothing_even_so(self, nodes_mod, tmp_path):
+    def test_the_folder_and_the_wire_both_land(self, nodes_mod, tmp_path):
         self.renders(tmp_path, "Oct/Mini 1/Food/Spookies")
         run(nodes_mod, source="GeminiNanoBanana2V2", images=[frames(0.5)],
             asset=["Spookies"], category=["Food"],
             order=[{"month": "Oct", "feature": "Mini 1"}])
-        # The folder's one image, and nothing from the wire.
+        # The folder's one image AND the wire's one image.
+        assert len(buffer_of(nodes_mod, tmp_path)) == 2
+
+    def test_renders_saved_under_a_filename_prefix_are_found(self, nodes_mod,
+                                                              tmp_path):
+        """The layout ComfyUI actually writes. A Save Image node given
+        `Oct/Mini 1/Food/Spookies` files `Food/Spookies_00001_.png` — the last
+        segment names the FILE, not a folder — so the folder a picker derives
+        for its asset does not exist. Reading only that folder is what showed
+        "no candidates yet" while 17 renders sat one level up."""
+        self.renders(tmp_path, "Oct/Mini 1/Food",
+                     ("Spookies_00001_.png", "Spookies_00002_.png"))
+        run(nodes_mod, asset=["Spookies"], category=["Food"],
+            order=[{"month": "Oct", "feature": "Mini 1"}])
+        entries = buffer_of(nodes_mod, tmp_path)
+        assert len(entries) == 2
+        # Tagged as this asset even though no folder said so, or the panel
+        # would file them under the category and the picker would show none.
+        assert {e["asset"] for e in entries} == {"Spookies"}
+
+    def test_another_assets_files_in_the_same_folder_are_left_alone(
+            self, nodes_mod, tmp_path):
+        self.renders(tmp_path, "Oct/Mini 1/Food",
+                     ("Spookies_00001_.png", "Ghostly Jelly Cake_00001_.png",
+                      "Spookies Deluxe_00001_.png"))
+        run(nodes_mod, asset=["Spookies"], category=["Food"],
+            order=[{"month": "Oct", "feature": "Mini 1"}])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1
+
+    def test_a_prefix_read_is_tagged_with_what_the_node_is_wired_to(
+            self, nodes_mod, tmp_path):
+        """Found live. Reading by prefix means the file sits one level up, so
+        the path names the CATEGORY where it used to name the asset — and a
+        candidate whose group does not match the one on screen is filed
+        invisibly and never leaves the node. The node states what it knows."""
+        self.renders(tmp_path, "elsewhere", ("Spookies_00001_.png",))
+        run(nodes_mod, folder=[str(tmp_path / "output" / "elsewhere"
+                                   / "Spookies")],
+            asset=["Spookies"], category=["Food"],
+            order=[{"month": "Oct", "feature": "Mini 1"}])
+        entry = buffer_of(nodes_mod, tmp_path)[0]
+        # Browsing somewhere else, so only the name is claimed from the path.
+        assert entry["asset"] == "Spookies"
+
+    def test_its_own_assets_prefixed_renders_carry_the_wired_context(
+            self, nodes_mod, tmp_path):
+        self.renders(tmp_path, "Oct/Mini 1/Food", ("Spookies_00001_.png",))
+        out = run(nodes_mod, asset=["Spookies"], category=["Food"],
+                  order=[{"month": "Oct", "feature": "Mini 1"}])
+        entry = buffer_of(nodes_mod, tmp_path)[0]
+        assert (entry["asset"], entry["category"], entry["feature"],
+                entry["month"]) == ("Spookies", "Food", "Mini 1", "Oct")
+        # And therefore it is emitted, rather than filtered out as belonging
+        # to some other group than the one being worked on.
+        assert len(run(nodes_mod, asset=["Spookies"], category=["Food"],
+                       order=[{"month": "Oct", "feature": "Mini 1"}],
+                       selection=[json.dumps([entry["id"]])]).args[0]) == 1
+        assert out.args[0] == []
+
+    def test_a_typed_folder_falls_back_to_the_prefix_too(self, nodes_mod,
+                                                          tmp_path):
+        """Pasting the save node's own prefix into `folder` is the natural
+        thing to try, and it named nothing that exists."""
+        self.renders(tmp_path, "Oct/Mini 1/Food", ("Spookies_00001_.png",))
+        run(nodes_mod, folder=["Oct/Mini 1/Food/Spookies"])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1
+
+    def test_both_layouts_are_read_at_once(self, nodes_mod, tmp_path):
+        """Once picks are kept under `…/Spookies/Base`, that folder EXISTS —
+        and reading it instead of the prefixed files would stop every new
+        render from arriving. Both, always."""
+        self.renders(tmp_path, "Oct/Mini 1/Food", ("Spookies_00001_.png",))
+        self.renders(tmp_path, "Oct/Mini 1/Food/Spookies", ("older.png",),
+                     colour=90)
+        run(nodes_mod, asset=["Spookies"], category=["Food"],
+            order=[{"month": "Oct", "feature": "Mini 1"}])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 2
+
+
+class TestPicksAreKeptWhereTheWorkLives:
+    """"images picked should land in 'October/Mini 1 — Ghostly Goodies/Food -
+    3 stages/Spookies/Base' so we only keep what was good in these folders"."""
+
+    def collected(self, nodes_mod, tmp_path, phase=None, **kw):
+        common = {"asset": ["Spookies"], "category": ["Food"],
+                  "order": [{"month": "Oct", "feature": "Mini 1"}]}
+        if phase:
+            common["phase"] = [phase]
+        run(nodes_mod, images=[frames(0.4)], **common, **kw)
+        ident = buffer_of(nodes_mod, tmp_path)[0]["id"]
+        return common, ident
+
+    def kept_in(self, tmp_path, *parts):
+        return tmp_path / "output" / "Oct" / "Mini 1" / "Food" / "Spookies" \
+            / os.path.join(*parts)
+
+    def test_a_tick_is_copied_into_the_assets_own_folder(self, nodes_mod,
+                                                          tmp_path):
+        common, ident = self.collected(nodes_mod, tmp_path)
+        run(nodes_mod, **common, selection=[json.dumps([ident])])
+        assert len(list(self.kept_in(tmp_path, "Base").iterdir())) == 1
+
+    def test_the_pass_names_the_folder(self, nodes_mod, tmp_path):
+        common, ident = self.collected(nodes_mod, tmp_path, phase="export")
+        run(nodes_mod, **common, selection=[json.dumps([ident])])
+        assert self.kept_in(tmp_path, "Export").is_dir()
+
+    def test_nothing_ticked_writes_nothing(self, nodes_mod, tmp_path):
+        """Every collecting run before the images have been looked at, which
+        must not leave an empty delivery folder behind."""
+        common, _ = self.collected(nodes_mod, tmp_path)
+        run(nodes_mod, **common, selection=[json.dumps([])])
+        assert not self.kept_in(tmp_path, "Base").exists()
+
+    def test_a_folder_to_read_is_not_a_folder_to_write_to(self, nodes_mod,
+                                                           tmp_path):
+        """`folder` names something to look at — pointing a picker at last
+        month's work must not file this month's picks into it."""
+        browsed = tmp_path / "output" / "elsewhere"
+        browsed.mkdir(parents=True)
+        common, ident = self.collected(nodes_mod, tmp_path)
+        run(nodes_mod, **common, folder=[str(browsed)],
+            selection=[json.dumps([ident])])
+        assert list(browsed.iterdir()) == []
+        assert self.kept_in(tmp_path, "Base").is_dir()
+
+    def test_what_was_kept_does_not_come_back_as_a_new_candidate(
+            self, nodes_mod, tmp_path):
+        """The kept copy makes `…/Spookies` a real folder, which the next run
+        reads. Identity is the pixels, so it is the image already held."""
+        common, ident = self.collected(nodes_mod, tmp_path)
+        run(nodes_mod, **common, selection=[json.dumps([ident])])
+        run(nodes_mod, **common, selection=[json.dumps([ident])])
         assert len(buffer_of(nodes_mod, tmp_path)) == 1
 
 
@@ -611,11 +751,6 @@ class TestAChainOfPickersCostsNothing:
         assert nodes_mod.SymbioticaPick.check_lazy_status(
             images=(None,), get_new=[False]) == ["images"]
 
-    def test_a_generator_upstream_is_still_refused(self, nodes_mod):
-        self.wire(nodes_mod, "GeminiNanoBanana2V2")
-        assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), get_new=[False]) == []
-
     def test_an_unknowable_source_is_still_refused(self, nodes_mod):
         """Guessing wrong costs a render, so silence means no."""
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(unique_id="7")
@@ -631,10 +766,13 @@ class TestAChainOfPickersCostsNothing:
                                          get_new=[False])
         assert len(buffer_of(nodes_mod, tmp_path)) == 2
 
-    def test_a_generators_images_are_still_thrown_away_with_fetching_off(
+    def test_a_declined_wire_files_nothing_rather_than_a_blank(
             self, nodes_mod, tmp_path):
+        """An unrequested lazy input arrives as `(None,)`, which is a value as
+        far as list handling is concerned — filing it would put a candidate
+        made of nothing in the buffer."""
         self.wire(nodes_mod, "GeminiNanoBanana2V2")
-        nodes_mod.SymbioticaPick.execute(images=[frames(0.3)], get_new=[False])
+        nodes_mod.SymbioticaPick.execute(images=(None,), get_new=[False])
         assert buffer_of(nodes_mod, tmp_path) == []
 
 

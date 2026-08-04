@@ -122,7 +122,8 @@ def group_key(entry: dict) -> str:
     return label or "untagged"
 
 
-def add_image(dir_path: str, img, *, tag=None, at: str = "") -> dict | None:
+def add_image(dir_path: str, img, *, tag=None, at: str = "",
+              src: str = "") -> dict | None:
     """File one candidate, or None when it is already in the buffer.
 
     Alpha is kept: a background-removed candidate whose transparency was
@@ -130,6 +131,12 @@ def add_image(dir_path: str, img, *, tag=None, at: str = "") -> dict | None:
     the node flattened too. The thumbnail is written beside the full image
     because the grid draws every candidate at once — serving 4K PNGs to fill a
     strip of 54px tiles makes the node feel broken on a slow link.
+
+    `src` is the name the file already had where it was imported from. The
+    buffer names its copies by pixel hash, which is unreadable, so an approved
+    candidate that goes back out to the delivery folder can keep the name the
+    render was filed under — `Spookies_00007_.png` — instead of arriving as
+    `230f24e123090a3f.png`.
     """
     os.makedirs(dir_path, exist_ok=True)
     ident = image_id(img)
@@ -147,6 +154,7 @@ def add_image(dir_path: str, img, *, tag=None, at: str = "") -> dict | None:
 
     entry = {"id": ident, "file": name, "thumb": thumb_name,
              "w": img.width, "h": img.height, "at": str(at or ""),
+             **({"src": os.path.basename(str(src))} if src else {}),
              **tag_of(**(tag or {}))}
     entries.append(entry)
     write_index(dir_path, entries)
@@ -290,18 +298,33 @@ def tag_from_path(folder: str, rel: str = "", anchors=OUTPUTS_ANCHORS) -> dict:
         deepest = sub[-1] if sub else (parts[-1] if parts else "")
         return {"asset": deepest} if deepest else {}
     chain = parts[at + 1:] + sub
-    return {key: value for key, value in zip(_PATH_KEYS, chain)}
+    tag = {key: value for key, value in zip(_PATH_KEYS, chain)}
+    # The pass is a controlled vocabulary — base / edit / export — while the
+    # folder it is read from is written for people to look at, and the folder
+    # approved picks are filed in is `Base`. Case-folding here is what keeps
+    # `…/Spookies/Base/x.png` reading as the same pass a picker is pinned to.
+    if tag.get("phase"):
+        tag["phase"] = tag["phase"].lower()
+    return tag
 
 
 def import_folder(dir_path: str, folder: str, *, tag=None, at: str = "",
                   limit: int = IMPORT_LIMIT, derive: bool = True,
-                  only_phase: str = "") -> dict:
+                  only_phase: str = "", name_prefix: str = "") -> dict:
     """File every image under `folder` as a candidate.
 
     This is how a picker sees work that already exists: the buffer is per node,
     so a picker added after the fact starts empty even though the renders are
     on disk. Re-running the generator to populate it costs a render for
     something that has already been rendered.
+
+    `name_prefix` reads ComfyUI's own save layout instead of a folder per
+    asset. A Save Image node given `…/Food - 3 stages/Spookies` writes
+    `Food - 3 stages/Spookies_00001_.png` — the last segment is the FILE's
+    prefix, not a directory — so the folder a picker derives for its asset does
+    not exist, and reading it found nothing while the renders sat one level up
+    among every other asset of that category. With a prefix set, the parent is
+    read one level deep and only the files belonging to this asset are taken.
 
     Images already in the buffer are skipped by their pixel hash, so importing
     the same folder twice is not the same as importing it once and doubling it.
@@ -315,7 +338,7 @@ def import_folder(dir_path: str, folder: str, *, tag=None, at: str = "",
     # widget would erase a label the folder structure already stated.
     explicit = {k: str(v).strip() for k, v in (tag or {}).items()
                 if str(v or "").strip()}
-    found = _images_under(folder)
+    found = _images_under(folder, name_prefix)
     truncated = max(0, len(found) - limit)
     added, skipped, failed, filtered = 0, 0, 0, 0
     for rel in found[:limit]:
@@ -337,7 +360,7 @@ def import_folder(dir_path: str, folder: str, *, tag=None, at: str = "",
         try:
             with Image.open(path) as img:
                 img.load()
-                entry = add_image(dir_path, img, tag=merged, at=at)
+                entry = add_image(dir_path, img, tag=merged, at=at, src=rel)
         except (OSError, UnidentifiedImageError, ValueError):
             failed += 1
             continue
@@ -349,13 +372,34 @@ def import_folder(dir_path: str, folder: str, *, tag=None, at: str = "",
             "filtered": filtered, "found": len(found), "truncated": truncated}
 
 
-def _images_under(folder: str) -> list[str]:
+def name_matches_prefix(name: str, prefix: str) -> bool:
+    """Whether a file was written under `prefix` by a Save Image node.
+
+    ComfyUI appends `_00001_` to the prefix, so an underscore has to follow it
+    rather than merely the prefix matching: `Spookies` must not claim
+    `Spookies Deluxe_00001_.png`, a different asset filed in the same category
+    folder. Only the underscore counts, because a space or a dash is an
+    ordinary character in an asset name — "Black Cat Lollipop" — while the
+    underscore before the counter is ComfyUI's own convention.
+    """
+    stem = os.path.splitext(name)[0]
+    if stem == prefix:
+        return True
+    return stem.startswith(prefix + "_")
+
+
+def _images_under(folder: str, name_prefix: str = "") -> list[str]:
     """Sorted /-separated rel paths of the images under `folder`.
 
     Recursive, because renders are normally filed one directory per asset and
     pointing at the parent is the natural thing to do. Dot-directories and the
     buffer's own thumbnails are skipped — importing a thumbnail would file a
     320px copy as a candidate in its own right.
+
+    With a `name_prefix` it is the other layout — many assets' files side by
+    side in one category folder — so only that folder's own files are read, by
+    name. Recursing there would pull in every OTHER asset's subfolders, which
+    is exactly the mess the prefix exists to avoid.
     """
     exts = {".png", ".jpg", ".jpeg", ".webp"}
     out: list[str] = []
@@ -363,44 +407,89 @@ def _images_under(folder: str) -> list[str]:
         # The buffers live under the output directory, so importing that
         # directory would re-file every picker's own copies as fresh
         # candidates of a new picker — one click to duplicate the lot.
-        dirnames[:] = [d for d in dirnames
-                       if not d.startswith(".") and d != BUFFER_ROOT]
+        dirnames[:] = [] if name_prefix else [
+            d for d in dirnames if not d.startswith(".") and d != BUFFER_ROOT]
         for name in filenames:
             if name.startswith(".") or name.endswith(THUMB_SUFFIX):
                 continue
             if os.path.splitext(name)[1].lower() not in exts:
+                continue
+            if name_prefix and not name_matches_prefix(name, name_prefix):
                 continue
             rel = os.path.relpath(os.path.join(dirpath, name), folder)
             out.append(rel.replace(os.sep, "/"))
     return sorted(out)
 
 
+def keep_picks(entries, dest_dir: str) -> list[str]:
+    """Copy the approved candidates into the folder the good work is kept in.
+
+    "images picked should land in …/Spookies/Base so we only keep what was good
+    in these folders". The buffer is scratch — per node, cleared by a button,
+    named by pixel hash — so approval that lives only there is not a delivery.
+    This writes the ticked images into the asset's own tree under the pass that
+    approved them, keeping the name the render was filed under so the copy can
+    still be matched to the original by eye.
+
+    Copied, never moved: the rejects stay where they are. Deleting the work
+    that was not picked is a different decision, and not one a node should make
+    on its own. An existing file of the same name is left alone rather than
+    rewritten, so re-queueing a picker whose ticks have not changed writes
+    nothing at all.
+    """
+    written: list[str] = []
+    if not dest_dir:
+        return written
+    for entry in entries or ():
+        source = str(entry.get("path", ""))
+        if not source or not os.path.isfile(source):
+            continue
+        # The buffer's copy is always a PNG, whatever the original was, so the
+        # extension comes from what is actually being copied — a PNG saved as
+        # `.webp` is a file nothing downstream can open.
+        stem = os.path.splitext(os.path.basename(
+            str(entry.get("src", "")).strip()))[0]
+        if not stem:
+            asset = str(entry.get("asset", "")).strip()
+            ident = str(entry.get("id", "") or "pick")
+            stem = f"{asset}_{ident}" if asset else ident
+        target = os.path.join(dest_dir, stem + os.path.splitext(source)[1])
+        if os.path.exists(target):
+            continue
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+            shutil.copy2(source, target)
+        except OSError:
+            # A delivery folder that cannot be written must not fail the graph:
+            # the picks are still on the wire, which is what the run is for.
+            continue
+        written.append(target)
+    return written
+
+
 IMPORT_MARKS = "_imports.json"
 
 
-def folder_signature(folder: str) -> str:
+def folder_signature(folder: str, name_prefix: str = "") -> str:
     """A cheap fingerprint of a folder's images: how many, and the newest mtime.
 
     Stat only — no image is opened. This is what makes an automatic import
     affordable on every run: re-reading a folder of four hundred renders means
     four hundred PIL opens and thumbnails, while deciding NOT to re-read it
     costs one walk of directory entries.
+
+    Counted over exactly the files `import_folder` would read, prefix included:
+    signing the whole category folder would say "changed" every time any other
+    asset rendered, and re-read this one for nothing.
     """
-    exts = {".png", ".jpg", ".jpeg", ".webp"}
     count, newest = 0, 0.0
-    for dirpath, dirnames, filenames in os.walk(folder):
-        dirnames[:] = [d for d in dirnames
-                       if not d.startswith(".") and d != BUFFER_ROOT]
-        for name in filenames:
-            if name.startswith(".") or name.endswith(THUMB_SUFFIX):
-                continue
-            if os.path.splitext(name)[1].lower() not in exts:
-                continue
-            count += 1
-            try:
-                newest = max(newest, os.stat(os.path.join(dirpath, name)).st_mtime)
-            except OSError:
-                pass
+    for rel in _images_under(folder, name_prefix):
+        count += 1
+        try:
+            newest = max(newest, os.stat(
+                os.path.join(folder, rel.replace("/", os.sep))).st_mtime)
+        except OSError:
+            pass
     return f"{count}:{newest:.0f}"
 
 
@@ -426,12 +515,17 @@ def import_if_changed(dir_path: str, folder: str, **kwargs) -> dict | None:
     """
     if not folder or not os.path.isdir(folder):
         return None
-    signature = folder_signature(folder)
+    prefix = str(kwargs.get("name_prefix", "") or "")
+    # One folder can be read two ways — as a tree, and for one asset's files by
+    # name — so the mark is keyed by both, or the second read would be told
+    # nothing had changed since the first.
+    key = f"{folder}::{prefix}" if prefix else folder
+    signature = folder_signature(folder, prefix)
     marks = read_marks(dir_path)
-    if marks.get(folder) == signature:
+    if marks.get(key) == signature:
         return None
     result = import_folder(dir_path, folder, **kwargs)
-    marks[folder] = signature
+    marks[key] = signature
     os.makedirs(dir_path, exist_ok=True)
     tmp = _marks_path(dir_path) + ".tmp"
     try:

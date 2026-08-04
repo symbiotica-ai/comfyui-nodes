@@ -3472,10 +3472,16 @@ class SymbioticaPick(io.ComfyNode):
                         "node body, so three separate runs of the same "
                         "generator stack up as three candidates instead of "
                         "overwriting each other. Only the ticked ones leave "
-                        "the node. Turn `get_new` off once the picks are made "
-                        "and the wire above is never evaluated at all, so "
-                        "queueing the edit stage cannot re-fire a paid render "
-                        "— the node serves the approved images from disk. "
+                        "the node — and they are also copied into this "
+                        "asset's own folder under the pass that approved them "
+                        "(`…/<asset>/Base`), so what was good is kept where "
+                        "the work is delivered from rather than only in a "
+                        "scratch buffer. The asset's renders are read off disk "
+                        "on every run whichever way they were saved — a folder "
+                        "per asset, or a Save Image prefix filing "
+                        "`<asset>_00001_.png` into the category folder — so "
+                        "work that already exists never has to be generated "
+                        "again to be chosen from. "
                         "Chain one after another: the picks of one become the "
                         "candidates of the next. Wire "
                         "the asset and category being worked on and the "
@@ -3488,18 +3494,17 @@ class SymbioticaPick(io.ComfyNode):
             is_input_list=True,
             inputs=[
                 io.Image.Input("images", optional=True, lazy=True,
-                               tooltip="Candidates to add to the buffer. Only "
-                                       "read when `collect` is on — with it "
-                                       "off this wire is never evaluated, so "
-                                       "nothing upstream runs."),
+                               tooltip="Candidates to add to the buffer — "
+                                       "wire the save or preview node the "
+                                       "renders come out of, or another "
+                                       "picker. Unwired is fine too: the "
+                                       "asset's folder is read either way."),
                 # Kept only so the widget positions of graphs saved before
                 # this node stopped fetching still line up; it does nothing.
                 # The web extension hides it.
                 io.Boolean.Input("get_new", default=False,
-                                 tooltip="Unused. This node never causes a "
-                                         "render: it reads what is already on "
-                                         "disk, and takes images from another "
-                                         "Pick. Kept so older saved workflows "
+                                 tooltip="Unused, and hidden on the canvas. "
+                                         "Kept only so older saved workflows "
                                          "keep their widget positions."),
                 io.String.Input("asset", default="", optional=True,
                                 tooltip="The asset these candidates belong to "
@@ -3546,7 +3551,10 @@ class SymbioticaPick(io.ComfyNode):
                                        "grid next to a full render. Also the "
                                        "fifth folder level — "
                                        "`…/<recipe>/export` — so a folder read "
-                                       "sorts itself."),
+                                       "sorts itself, and the folder the "
+                                       "approved picks are kept in "
+                                       "(`…/<recipe>/Export`). Unset means "
+                                       "`Base`."),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
@@ -3592,23 +3600,6 @@ class SymbioticaPick(io.ComfyNode):
         return None
 
     @classmethod
-    def _images_source_class(cls):
-        """The class_type of whatever feeds `images`, or "" when unknowable.
-
-        Whether asking for the wire costs anything depends entirely on what is
-        at the other end of it: a generator renders, another picker hands over
-        images it already has.
-        """
-        node = cls._prompt_node()
-        if not isinstance(node, dict):
-            return ""
-        link = (node.get("inputs") or {}).get("images")
-        if not isinstance(link, list) or not link:
-            return ""
-        source = cls._prompt_node(str(link[0]))
-        return str((source or {}).get("class_type", "")) if source else ""
-
-    @classmethod
     def _prompt_node(cls, node_id=None):
         """One node out of the prompt, by id, from whichever hidden carries it."""
         hidden = getattr(cls, "hidden", None)
@@ -3644,15 +3635,21 @@ class SymbioticaPick(io.ComfyNode):
         BEFORE it. Declining `images` here means the generator is never asked,
         because a lazy input that is not requested is never computed.
         """
-        if cls._images_wired() is False:
+        # Not merely "not False": an unknowable wire is refused too, because
+        # asking for an input that has no link fails the whole graph.
+        if cls._images_wired() is not True:
             return []
-        # This node NEVER causes a render. Asking for a wire is what makes
-        # whatever is behind it run, so the only wire ever asked for is one
-        # coming from another picker — that costs nothing, because it hands
-        # over images it already holds. Everything a generator made is read
-        # off disk instead, from the folder it was saved to.
-        if cls._images_source_class() != "SymbioticaPick":
-            return []
+        # Everything wired is asked for, which is what makes newly generated
+        # images arrive at all. Refusing everything but another picker was an
+        # over-correction — it left "no new image can come in".
+        #
+        # It is also not what was costing renders. What a picker is wired to is
+        # a save or preview node, and those are output nodes: ComfyUI runs them
+        # on every queue whether or not this node asks. The re-rendering was
+        # `SymbioticaAssetRefs` fingerprinting a folder that a picker's own
+        # thumbnails were written into, which made the prompt itself change
+        # between runs (fixed), plus a `ShowText` sitting in the data path.
+        # Both are gone, and a cached lane costs nothing to pull.
         return ["images"] if _unevaluated(images) else []
 
     @classmethod
@@ -3664,7 +3661,7 @@ class SymbioticaPick(io.ComfyNode):
         from PIL import Image
 
         from .pick_buffer import (add_image, buffer_dir, group_key, groups,
-                                  import_if_changed, list_entries)
+                                  import_if_changed, keep_picks, list_entries)
 
         # Two hops, because a node executed outside a running ComfyUI has no
         # `hidden` at all: an absent id must land in the "unknown" buffer, not
@@ -3693,10 +3690,11 @@ class SymbioticaPick(io.ComfyNode):
         # the rest come from the folder structure, which is more specific than
         # a single value shared by the whole run.
         tag_defaults = {"phase": pass_name} if pass_name else {}
-        # Only ever from another picker; a generator's output is read from its
-        # folder, never pulled through the wire.
-        items = _as_list(images) \
-            if cls._images_source_class() == "SymbioticaPick" else []
+        # Whatever the wire delivered. A declined lazy input arrives as
+        # `(None,)`, which is a value as far as `_as_list` is concerned — so it
+        # is tested for explicitly, or a run that asked for nothing would file
+        # a candidate made of nothing.
+        items = [] if _unevaluated(images) else _as_list(images)
         assets = _as_list(asset)
         cats = _as_list(category)
         parts = _as_list(role)
@@ -3717,17 +3715,49 @@ class SymbioticaPick(io.ComfyNode):
         # changed since the last run, which is every run after the first.
         # An explicit folder wins; otherwise the one this asset's renders are
         # already filed in, which the node can name from its own wires.
-        wanted_folders = _pick_folders(_as_list(folder))
-        if not wanted_folders:
-            derived = _derived_pick_folder({
-                "month": month, "feature": feature,
-                "category": _at_or_first(cats, 0),
-                "asset": _at_or_first(assets, 0)})
-            wanted_folders = _pick_folders([derived]) if derived else []
-        for known in wanted_folders:
+        context = {"month": month, "feature": feature,
+                   "category": _at_or_first(cats, 0),
+                   "asset": _at_or_first(assets, 0)}
+        home = _pick_folders([_derived_pick_folder(context)])
+        home = home[0] if home else ""
+        # Both save layouts, because both are real. Save Image treats the last
+        # segment of a filename prefix as the FILE's name, so pointing it at
+        # `…/Food - 3 stages/Spookies` files `Food - 3 stages/Spookies_00001_.png`
+        # and the folder a picker derives for its asset never exists. Reading
+        # only the folder is what left this node empty while 73 renders of the
+        # asset sat one level up.
+        #
+        # The derived folder is read BOTH ways always: approved picks are kept
+        # under `…/Spookies/Base`, which makes that folder exist, and switching
+        # to it would then hide every new render. A typed folder falls back to
+        # the prefix only when it is not a directory — pasting the save node's
+        # prefix in is the natural thing to try, and it used to find nothing.
+        reads = []
+        for path in _pick_folders(_as_list(folder)) or ([home] if home else []):
+            own_asset = path == home
+            if os.path.isdir(path):
+                reads.append((path, "", {}))
+                if not own_asset:
+                    continue
+            parent, own = os.path.dirname(path), os.path.basename(path)
+            if own and os.path.isdir(parent):
+                # A prefix read is one asset's files out of a folder shared
+                # with every other asset of its category, so the path can no
+                # longer say which asset — or, one level shallower than before,
+                # which category. Reading its own folder, the node states what
+                # it is already wired to: the tag has to come out matching the
+                # group the panel is showing, or the candidate is filed
+                # invisibly and never leaves the node. Browsing somewhere else,
+                # only the name is claimed — the wired asset is not what is in
+                # that folder.
+                reads.append((parent, own, dict(context) if own_asset
+                              else {"asset": own}))
+        for known, prefix, stated in reads:
             try:
-                import_if_changed(dir_path, known, tag=tag_defaults,
-                                  at=stamp, only_phase=pass_name)
+                import_if_changed(dir_path, known,
+                                  tag=dict(tag_defaults, **stated),
+                                  at=stamp, only_phase=pass_name,
+                                  name_prefix=prefix)
             except OSError:
                 # A folder that cannot be read must not fail the graph; the
                 # candidates already collected are still worth showing.
@@ -3741,14 +3771,6 @@ class SymbioticaPick(io.ComfyNode):
         current = group_key({"feature": feature, "month": month,
                              "asset": _at_or_first(assets, 0),
                              "category": _at_or_first(cats, 0)})
-        # Tell the canvas to redraw: the node's thumbnails are the whole point,
-        # and the buffer just changed underneath the panel already on screen.
-        _push("symbiotica.pick", {
-            "node_id": str(node_id), "added": added, "count": len(entries),
-            "groups": groups(entries),
-            "current": current if current != "untagged" else "",
-        })
-
         # Only what is ticked AND on screen. Ticks survive a switch to another
         # asset, so a picker that has been used for two assets holds ticks for
         # both — and emitting the invisible ones means three ticked thumbnails
@@ -3759,13 +3781,39 @@ class SymbioticaPick(io.ComfyNode):
         for entry in entries:
             if entry.get("id") not in wanted:
                 continue
-            if pass_name and str(entry.get("phase", "")) != pass_name:
+            if pass_name and str(entry.get("phase", "")).lower() != pass_name:
                 continue
             if current and current != "untagged" \
                     and str(entry.get("group", "")) != current:
                 continue
-            in_view.append(entry["path"])
-        paths = in_view
+            in_view.append(entry)
+        paths = [entry["path"] for entry in in_view]
+
+        # What was good, kept where the work lives: `…/<asset>/<Pass>`. The
+        # buffer is scratch — per node, and one button empties it — so an
+        # approval recorded only there is not a delivery. Only ever under the
+        # asset's own folder, never under a folder typed into `folder`: that
+        # one names something to READ, and writing to it would file this
+        # asset's picks into whatever tree was being browsed.
+        kept = []
+        keep_dir = os.path.join(home, (pass_name or "base").title()) \
+            if home else ""
+        if keep_dir and in_view:
+            kept = keep_picks(in_view, keep_dir)
+
+        # Tell the canvas to redraw: the node's thumbnails are the whole point,
+        # and the buffer just changed underneath the panel already on screen.
+        # `kept` travels with it so the delivery is visible on the node rather
+        # than being something to go and check in a file browser.
+        _push("symbiotica.pick", {
+            "node_id": str(node_id), "added": added, "count": len(entries),
+            "groups": groups(entries),
+            "current": current if current != "untagged" else "",
+            "kept": len(kept),
+            "kept_in": os.path.relpath(
+                keep_dir, folder_paths.get_output_directory()).replace(
+                    os.sep, "/") if kept else "",
+        })
         # Nothing ticked is a legitimate state, not a failure: it is what every
         # collecting run looks like before the images have been looked at. An
         # empty list simply runs nothing downstream, where raising here would
