@@ -552,3 +552,20 @@ def test_the_environment_chooses_the_surface(monkeypatch):
     transport = resolve(gateway_env(SYMBIOTICA_AIG_SURFACE="canvas"))
     assert json.loads(transport.headers["cf-aig-metadata"]) == {
         "studio": STUDIO, "surface": "canvas"}
+
+
+def test_a_hostile_surface_cannot_break_the_metadata_header():
+    """`studio` is put through usable_as_header; `surface` is not, because it
+    arrives from the environment and lands inside a JSON string rather than
+    beside one. What keeps that safe is json.dumps escaping: a newline becomes
+    a literal backslash-n and anything non-ASCII becomes \\uXXXX, so the header
+    stays one printable latin-1 line whatever the variable holds.
+
+    Pinned because the safety is a DEFAULT, not a decision anyone made here.
+    `ensure_ascii=False` on that dump would put raw bytes into a header, and
+    requests raises on those with the whole header value in the message."""
+    for hostile in ("a\nb", "x\ry", "café", "中文", "a b\tc"):
+        tag = ai_gateway.studio_tag(STUDIO, hostile)
+        assert tag.isprintable(), f"{hostile!r} left a control character"
+        tag.encode("latin-1")
+        assert json.loads(tag)["surface"] == hostile

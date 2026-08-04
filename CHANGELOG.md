@@ -6,6 +6,30 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.8
+
+**No node change.** No node is added, removed or renamed, and no input or output
+changed position or meaning. A saved workflow needs nothing.
+
+### Added
+
+- **A sandbox can say what kind of run it is.** Calls through Cloudflare AI
+  Gateway carry a metadata tag that analytics groups by, and the run type in
+  that tag was fixed at `order`, because only order sandboxes routed through
+  the gateway. That is about to stop being true: a canvas wired to the gateway
+  would have its renders counted as orders, under a label that reads correctly,
+  which is the kind of wrong number nobody thinks to question.
+
+  `SYMBIOTICA_AIG_SURFACE` now names the run. It sits beside
+  `SYMBIOTICA_AIG_BASE` and `ORDER_STUDIO`, set by whoever creates the sandbox,
+  and it is optional: unset or blank still reports `order`. Every sandbox that
+  exists today sets nothing and reports exactly what it reported before,
+  because changing that would relabel the history their spend is compared
+  against.
+
+  It has to reach a sandbox before that sandbox starts routing new traffic.
+  Spend already tagged cannot be relabelled afterwards.
+
 ## 2026.8.7
 
 **Node change, and this one breaks saved workflows.** `Gemini Image
