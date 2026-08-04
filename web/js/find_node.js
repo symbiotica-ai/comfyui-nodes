@@ -177,9 +177,13 @@ registerSymbioticaExtension(app, {
         icon: "pi pi-search",
         function: openBox,
     }],
-    // A bare letter, in the frontend's own idiom for canvas commands (`.` fits
-    // the view, `p` pins). It cannot fire while you are typing: the keybinding
-    // service ignores unmodified keys when the focus is in an input. Rebind or
-    // clear it in Settings → Keybindings.
-    keybindings: [{ commandId: COMMAND_ID, combo: { key: "f" } }],
+    // Not a bare letter. The core defaults leave most of the alphabet free, but
+    // installed packs take them without anyone being able to see it from here —
+    // `f` is KJNodes' `fillConnectSelected`, and the frontend refuses the whole
+    // binding with "Keybinding on f already exists on …". A modified combo is
+    // out of that contested space. Rebind or clear it in Settings → Keybindings.
+    keybindings: [{
+        commandId: COMMAND_ID,
+        combo: { key: "0", ctrl: true, alt: false, shift: true },
+    }],
 });

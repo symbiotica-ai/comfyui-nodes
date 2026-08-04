@@ -115,13 +115,14 @@ Wrappers around Wavespeed's hosted endpoints.
   emitting the same `(prompts, names, count)` contract as `NS Prompt List`
 
 ### Canvas
-- **Find node by ID** — press `f`, type the number on the node's ID badge, press
-  Enter: the canvas centres on that node with it selected, at the zoom you were
-  already at. A number that matches nothing says so and leaves the box open.
-  It searches the graph you are looking at, so inside a subgraph it finds that
-  subgraph's ids. Rebind or clear the key in **Settings → Keybindings → Find
-  node by ID**. This is a canvas command, not a node — there is nothing to add
-  to a workflow.
+- **Find node by ID** — press `Ctrl+Shift+0`, type the number on the node's ID
+  badge, press Enter: the canvas centres on that node with it selected, at the
+  zoom you were already at. A number that matches nothing says so and leaves the
+  box open. It searches the graph you are looking at, so inside a subgraph it
+  finds that subgraph's ids. Rebind or clear the key in **Settings →
+  Keybindings → Find node by ID**; a bare letter is a bad idea there, since
+  other packs claim them (`f` is already KJNodes'). This is a canvas command,
+  not a node — there is nothing to add to a workflow.
 
 ## Order pipeline (Symbiotica Hub port)
 

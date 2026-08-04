@@ -52,7 +52,7 @@ async function node(comfyClass, title) {
     return n;
 }
 
-test("registers a command and a bare-f keybinding for it", () => {
+test("registers a command and a modified keybinding for it", () => {
     const command = spec().commands[0];
     assert.equal(command.id, "Symbiotica.FindNodeById");
     assert.equal(command.label, "Find node by ID");
@@ -60,9 +60,10 @@ test("registers a command and a bare-f keybinding for it", () => {
 
     const binding = spec().keybindings[0];
     assert.equal(binding.commandId, command.id);
-    // Bare, so Settings -> Keybindings shows it unmodified and the frontend's
-    // own guard keeps it from firing while you are typing in a field.
-    assert.deepEqual(binding.combo, { key: "f" });
+    // Modified on purpose. A bare letter collides with an installed pack —
+    // `f` is KJNodes' fillConnectSelected — and the frontend then refuses the
+    // binding outright rather than taking the loser's place.
+    assert.deepEqual(binding.combo, { key: "0", ctrl: true, alt: false, shift: true });
 });
 
 test("lookup says which of the four things it is", async () => {
