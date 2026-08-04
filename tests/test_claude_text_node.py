@@ -8,6 +8,8 @@ import types
 
 import pytest
 
+import comfy_api_stub
+
 PY_DIR = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "py")
 
@@ -22,6 +24,9 @@ def node_module(monkeypatch):
     that loud — and it must be loaded as a package member, because the module
     reaches its pure half through a relative import that a flat load cannot
     resolve."""
+    comfy_pkg, comfy_latest = comfy_api_stub.build_modules()
+    monkeypatch.setitem(sys.modules, "comfy_api", comfy_pkg)
+    monkeypatch.setitem(sys.modules, "comfy_api.latest", comfy_latest)
     pkg = types.ModuleType("symbiotica_claude_under_test")
     pkg.__path__ = [PY_DIR]
     monkeypatch.setitem(sys.modules, "symbiotica_claude_under_test", pkg)
@@ -48,57 +53,84 @@ def test_the_display_name_tells_it_apart_from_comfyuis_own_claude_node(node_modu
 
 
 def test_the_node_sits_with_the_packs_other_text_work(node_module):
-    assert node_module.SymbioticaClaude.CATEGORY == "symbiotica/text"
+    schema = node_module.SymbioticaClaude.define_schema()
+    assert schema.category == "symbiotica/text"
+    assert schema.node_id == "SymbioticaClaude"
 
 
 def test_it_returns_one_named_string(node_module):
-    cls = node_module.SymbioticaClaude
-    assert cls.RETURN_TYPES == ("STRING",)
-    assert cls.RETURN_NAMES == ("text",)
+    schema = node_module.SymbioticaClaude.define_schema()
+    assert [o.display_name for o in schema.outputs] == ["text"]
 
 
-def schema(node_module):
-    spec = node_module.SymbioticaClaude.INPUT_TYPES()
-    return spec["required"], spec["optional"]
+def inputs_of(node_module, label="Opus 5"):
+    """The schema's top-level inputs keyed by name, plus the inputs the given
+    model's option carries, under `model.<name>` — the dotted names ComfyUI
+    shows on the canvas."""
+    schema = node_module.SymbioticaClaude.define_schema()
+    found = {i.id: i for i in schema.inputs}
+    option = next(o for o in found["model"].options if o.label == label)
+    for inner in option.inputs:
+        found[f"model.{inner.id}"] = inner
+    return found
 
 
 def test_the_schema_offers_what_the_node_needs_and_what_it_allows(node_module):
-    required, optional = schema(node_module)
-    assert set(required) == {"prompt", "model", "max_tokens", "seed"}
-    assert set(optional) == {"images", "system_prompt", "api_key"}
+    """max_tokens moved inside the combo, which is where core keeps it — so
+    what ComfyUI passes changed shape, not just contents."""
+    assert set(inputs_of(node_module)) == {
+        "prompt", "model", "seed", "system_prompt", "api_key",
+        "model.max_tokens", "model.reasoning_effort", "model.images"}
 
 
 def test_the_token_budget_defaults_high_enough_for_a_thinking_model(node_module):
     """On Opus 5 and Sonnet 5 thinking is on by default and shares this budget
     with the answer, so a small default truncates real answers — which the
     parser then correctly raises on, having been given a fragment."""
-    budget = schema(node_module)[0]["max_tokens"][1]
-    assert budget["default"] == 32768
-    assert budget["min"] >= 4096
-    assert budget["max"] == 64000
+    budget = inputs_of(node_module)["model.max_tokens"]
+    assert budget.default == 32768
+    assert budget.min >= 4096
+    assert budget.max == 64000
 
 
 def test_the_model_list_is_the_one_the_pure_module_offers(node_module):
     """Two lists would drift, and the drift shows up as a 404 from Anthropic
     naming a model the node itself put in the box."""
-    assert schema(node_module)[0]["model"][0] is node_module.core.MODELS
+    schema = node_module.SymbioticaClaude.define_schema()
+    model_input = next(i for i in schema.inputs if i.id == "model")
+    assert [o.label for o in model_input.options] == list(
+        node_module.core.MODEL_LABELS)
+    assert (set(node_module.core.MODEL_LABELS.values())
+            == set(node_module.core.MODELS))
 
 
 def test_the_seed_exists_only_to_defeat_comfyuis_cache(node_module):
     """Anthropic takes no seed. Without this widget a re-queue serves the
     cached output and the node looks broken."""
-    seed = schema(node_module)[0]["seed"][1]
-    assert seed["control_after_generate"] is True
-    assert "not sent" in seed["tooltip"].lower()
+    seed = inputs_of(node_module)["seed"]
+    assert seed.control_after_generate is True
+    assert "not sent" in seed.tooltip.lower()
 
 
-def test_no_sampling_widget_is_offered_at_all(node_module):
-    """temperature, top_p and top_k are removed on Opus 5 / Fable 5 / Opus 4.8
-    / 4.7 and 400 there. A widget for them would be a dial that breaks the
-    default model."""
-    required, optional = schema(node_module)
+def test_a_model_that_rejects_a_setting_is_not_offered_it(node_module):
+    """temperature is removed on Opus 5 / Fable 5 / Opus 4.8 / Sonnet 5 and
+    400s there, and Haiku has no reasoning at all. Offering the widget anyway
+    would be a dial that breaks the model — which is why these are absent
+    rather than present and ignored."""
     for absent in ("temperature", "top_p", "top_k", "thinking", "stream"):
-        assert absent not in required and absent not in optional
+        assert f"model.{absent}" not in inputs_of(node_module, "Opus 5")
+    assert "model.reasoning_effort" not in inputs_of(node_module, "Haiku 4.5")
+    # And where the model does take it, it is there.
+    assert "model.temperature" in inputs_of(node_module, "Sonnet 4.5")
+
+
+def test_the_always_thinking_models_are_not_offered_an_off_switch(node_module):
+    """Opus 5 reasons whatever the widget says, so an `off` in its list would
+    be a setting that silently does nothing."""
+    effort = inputs_of(node_module, "Opus 5")["model.reasoning_effort"]
+    assert "off" not in effort.options
+    assert inputs_of(node_module, "Sonnet 4.5")[
+        "model.reasoning_effort"].options[0] == "off"
 
 
 class FakeResponse:
@@ -139,21 +171,38 @@ def run_execute(node_module, monkeypatch, response, env=None, **kwargs):
 
     monkeypatch.setattr(node_module.requests, "post", fake_post)
     monkeypatch.setattr(node_module.os, "environ", env or {})
-    node = node_module.SymbioticaClaude()
-    call = dict(prompt="describe this", model="claude-opus-5", seed=0,
-                max_tokens=32768, api_key="an-anthropic-key")
+    call = dict(prompt="describe this", seed=0, api_key="an-anthropic-key")
+    # The per-model inputs arrive inside the combo's value rather than as
+    # keywords of their own, so a caller still names them flatly and they are
+    # folded in here — otherwise every test would have to know the shape.
+    chosen = chosen_model()
+    for key in list(kwargs):
+        if key in chosen or key in ("temperature", "reasoning_effort"):
+            chosen[key] = kwargs.pop(key)
+    call["model"] = chosen
     call.update(kwargs)
-    return sent, node.execute(**call)
+    return sent, node_module.SymbioticaClaude.execute(**call)
+
+
+def chosen_model(**overrides):
+    """The value ComfyUI hands the `model` input: the label plus the inputs
+    that option carries. Opus 5 always reasons and takes no temperature, so
+    its option has neither `off` nor a temperature widget."""
+    value = dict(model="Opus 5", max_tokens=32768, reasoning_effort="high",
+                 images={})
+    value.update(overrides)
+    return value
 
 
 def test_an_answer_reaches_the_gateway_and_comes_back_as_text(node_module,
                                                               monkeypatch):
-    sent, (text,) = run_execute(node_module, monkeypatch,
+    sent, output = run_execute(node_module, monkeypatch,
                                 FakeResponse(payload=ANSWERED),
                                 env=dict(GATEWAY_ENV))
     assert sent["url"] == ("https://gateway.example.invalid/v1/a/b"
                            "/anthropic/v1/messages")
     assert sent["headers"]["cf-aig-byok-alias"] == "example-studio"
+    text, = output.args
     assert text == "a red door"
 
 
@@ -258,9 +307,9 @@ def test_a_call_that_never_reached_the_gateway_still_names_the_studio(
     monkeypatch.setattr(node_module.requests, "post", explode)
     monkeypatch.setattr(node_module.os, "environ", dict(GATEWAY_ENV))
     with pytest.raises(RuntimeError) as caught:
-        node_module.SymbioticaClaude().execute(
-            prompt="describe this", model="claude-opus-5", seed=0,
-            max_tokens=1024)
+        node_module.SymbioticaClaude.execute(
+            prompt="describe this", seed=0,
+            model=chosen_model(max_tokens=4096))
     assert "example-studio" in str(caught.value)
     assert "ConnectTimeout" in str(caught.value)
 
@@ -275,8 +324,8 @@ def test_the_prompt_is_checked_before_the_key_ladder_is_walked(node_module,
     monkeypatch.setattr(node_module.requests, "post", never)
     monkeypatch.setattr(node_module.os, "environ", {})
     with pytest.raises(ValueError, match="prompt is required"):
-        node_module.SymbioticaClaude().execute(
-            prompt="   ", model="claude-opus-5", seed=0, max_tokens=1024)
+        node_module.SymbioticaClaude.execute(
+            prompt="   ", seed=0, model=chosen_model(max_tokens=4096))
 
 
 def test_a_non_200_carrying_valid_json_is_still_a_failure(node_module,
