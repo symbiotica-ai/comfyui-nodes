@@ -63,8 +63,13 @@ function goTo(node) {
     return true;
 }
 
+// The box while it is open, so a second press of the key can reach its input
+// without going back through the document to look for it.
+let box = null;
+
 function closeBox() {
-    document.getElementById(OVERLAY_ID)?.remove();
+    box?.layer?.remove?.();
+    box = null;
 }
 
 function openBox() {
@@ -72,14 +77,15 @@ function openBox() {
 
     // Already open: a second press should put the cursor back in the box with
     // the old number selected, so retyping is one keystroke — not stack a
-    // second overlay on the first.
-    const open = document.getElementById(OVERLAY_ID);
-    if (open) {
-        const input = open.querySelector("input");
-        input?.focus();
-        input?.select();
+    // second overlay on the first. `parentElement` is the check rather than
+    // `box` itself, because anything that clears the page out from under us
+    // leaves the reference pointing at an element nobody can see.
+    if (box?.layer?.parentElement) {
+        box.input.focus?.();
+        box.input.select?.();
         return;
     }
+    closeBox();
 
     // A full-screen layer so a click anywhere outside the box closes it. It
     // paints nothing: the graph stays visible and untinted, because the box is
@@ -88,13 +94,13 @@ function openBox() {
         "position:fixed;inset:0;z-index:10000;background:transparent;");
     layer.id = OVERLAY_ID;
 
-    const box = el("div",
+    const panel = el("div",
         "position:absolute;left:50%;top:18%;transform:translateX(-50%);"
         + `width:300px;box-sizing:border-box;padding:10px;background:${HUB.surface2};`
         + `border:1px solid ${HUB.hairlineStrong};border-radius:${HUB.radius.lg};`
         + "box-shadow:0 12px 32px rgba(0,0,0,.5);");
     // Clicks inside are not "outside".
-    box.addEventListener("pointerdown", (e) => e.stopPropagation());
+    panel.addEventListener("pointerdown", (e) => e.stopPropagation());
 
     const input = el("input",
         `width:100%;box-sizing:border-box;padding:7px 10px;background:${HUB.surface1};`
@@ -133,7 +139,7 @@ function openBox() {
         // number would make you reopen it and retype the part you got right.
         if (result.state !== "found" || !goTo(result.node)) {
             render();
-            input.select();
+            input.select?.();
             return;
         }
         closeBox();
@@ -155,11 +161,12 @@ function openBox() {
 
     layer.addEventListener("pointerdown", () => closeBox());
 
-    box.append(input, hint);
-    layer.appendChild(box);
+    panel.append(input, hint);
+    layer.appendChild(panel);
     document.body.appendChild(layer);
+    box = { layer, input, hint };
     render();
-    input.focus();
+    input.focus?.();
 }
 
 registerSymbioticaExtension(app, {
