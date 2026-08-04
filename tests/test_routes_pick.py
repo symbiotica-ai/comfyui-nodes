@@ -102,6 +102,39 @@ class TestListing:
         assert len(_run(env.routes.pick_list(_Req(node_id="2")))["body"]["images"]) == 2
 
 
+class TestServingTheThumbnails:
+    """Found live: the node drew a grid of broken images while reporting the
+    right count. `is_allowed` consults only the folders an execution
+    registered — never `declared_roots()` — so listing candidates without
+    registering their buffer hands back paths whose every thumbnail 403s."""
+
+    def test_listing_makes_that_buffer_servable(self, env):
+        _, made = seed(env, "7", [10])
+        body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
+        assert env.routes.is_allowed(body["images"][0]["thumb"])
+        assert env.routes.is_allowed(body["images"][0]["path"])
+
+    def test_listing_one_node_does_not_open_another_nodes_buffer(self, env):
+        seed(env, "1", [10])
+        _, other = seed(env, "2", [20])
+        _run(env.routes.pick_list(_Req(node_id="1")))
+        from pipeline.pick_buffer import buffer_dir
+        path = os.path.join(buffer_dir(str(env.out), "2"), other[0]["file"])
+        assert env.routes.is_allowed(path) is None
+
+    def test_listing_does_not_open_the_rest_of_the_output_directory(self, env):
+        """Registering the buffer must not register its parent: the output
+        directory holds every render this install has ever written."""
+        seed(env, "7", [10])
+        _run(env.routes.pick_list(_Req(node_id="7")))
+        loose = env.out / "someone-elses-render.png"
+        Image.new("RGB", (4, 4)).save(loose)
+        assert env.routes.is_allowed(str(loose)) is None
+
+    def test_an_empty_buffer_registers_nothing(self, env):
+        assert _run(env.routes.pick_list(_Req(node_id="404")))["body"]["ok"] is True
+
+
 class TestTheBufferIsAddressedByNodeId:
     def test_a_traversing_node_id_cannot_reach_out_of_the_output_directory(self, env):
         """The caller names a node, never a path — the id is reduced to a bare

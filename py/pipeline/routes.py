@@ -697,6 +697,15 @@ async def pick_list(request):
     dir_path = _pick_dir(request.query.get("node_id", ""))
     if not dir_path:
         return web.json_response({"ok": True, "images": [], "groups": []})
+    # Make this one buffer servable. `is_allowed` consults only the folders an
+    # execution registered, never `declared_roots()`, so listing candidates
+    # without this hands back paths whose every thumbnail then 403s — the node
+    # draws a grid of broken images while reporting the right count.
+    # Narrower than the output directory it sits under (already a declared
+    # root), and the path is derived from the node id here rather than sent by
+    # the caller, so registering it grants nothing that was not already
+    # entitled: `register_root_within` refuses anything outside a declared root.
+    register_root_within(dir_path)
     entries = list_entries(dir_path)
     return web.json_response({
         "ok": True,
