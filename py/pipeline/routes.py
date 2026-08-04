@@ -30,6 +30,13 @@ from .pack_library import (
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 _roots: set[str] = set()
+# A strict subset of `_roots`: the folders that hold SOURCE artwork — a month's
+# client references, a sprite catalog. Every root is servable; only these are
+# things a node's output can go stale against, and a change-check must watch
+# nothing else. The pipeline writes into plenty of servable folders (a picker's
+# thumbnail buffer, a template save destination), and watching those made every
+# write look like a new reference. See `reference_roots`.
+_refs_roots: set[str] = set()
 _projects: set[str] = set()
 _lock = threading.Lock()
 
@@ -44,6 +51,17 @@ def register_root(path: str) -> None:
     if os.path.isdir(real):
         with _lock:
             _roots.add(real)
+
+
+def register_refs_root(path: str) -> None:
+    """Serve this folder AND watch it: it holds reference artwork a node reads.
+    Only for folders whose contents are input to the graph — never a folder the
+    graph writes into."""
+    real = os.path.realpath(path)
+    if os.path.isdir(real):
+        with _lock:
+            _roots.add(real)
+            _refs_roots.add(real)
 
 
 def _operator_roots() -> list[str]:
@@ -92,11 +110,21 @@ def executed_projects() -> list[str]:
 
 
 def executed_roots() -> list[str]:
-    """The folders graph executions have registered, same purpose and same
-    caveat as `executed_projects` — a reference folder reaches the graph on a
-    wire, so a change-check cannot see it either."""
+    """Every folder this process has made servable — registered by a node's
+    execution or by a browse route. Access, not provenance: see
+    `reference_roots` for the ones a change-check may watch."""
     with _lock:
         return sorted(_roots)
+
+
+def reference_roots() -> list[str]:
+    """The registered folders that hold reference artwork, same purpose and
+    same caveat as `executed_projects` — a reference folder reaches the graph on
+    a wire, so a change-check cannot see it either.
+
+    Sorted so a hash built from this is stable across calls."""
+    with _lock:
+        return sorted(_refs_roots)
 
 
 def register_root_within(path: str) -> bool:

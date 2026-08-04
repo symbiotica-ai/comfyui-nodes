@@ -72,6 +72,20 @@ def _push(event: str, payload: dict) -> None:
 
 
 def _register_refs_root(path: str) -> None:
+    """A folder of reference artwork the graph READS — servable, and watched by
+    the change-checks below."""
+    try:
+        from .routes import register_refs_root
+        register_refs_root(path)
+    except Exception:
+        pass
+
+
+def _register_served_root(path: str) -> None:
+    """A folder the canvas must be able to fetch thumbnails from, which the
+    graph also WRITES into — a template save destination, a picker's buffer.
+    Servable only: a change-check that watched these would fire on the graph's
+    own output and re-bill every descendant (see SymbioticaAssetRefs)."""
     try:
         from .routes import register_root
         register_root(path)
@@ -89,11 +103,14 @@ def _executed_projects() -> list[str]:
         return []
 
 
-def _executed_roots() -> list[str]:
-    """Folders a graph execution registered, an order's references among them."""
+def _reference_roots() -> list[str]:
+    """Folders of reference artwork a graph execution registered — an order's
+    client references and the sprite catalog. NOT every servable folder: the
+    picker buffers and template save folders under ComfyUI's output directory
+    are servable too, and the graph writes into them on every render."""
     try:
-        from .routes import executed_roots
-        return executed_roots()
+        from .routes import reference_roots
+        return reference_roots()
     except Exception:
         return []
 
@@ -846,7 +863,9 @@ class SymbioticaAutoPacker(io.ComfyNode):
             _push("symbiotica.pack_template_saved",
                   {"error": f"could not save template: {err}"})
             return
-        _register_refs_root(base)
+        # Where the save LANDED, so the canvas can fetch its sheet thumbnails.
+        # Served, not watched: the packer writes here.
+        _register_served_root(base)
         _push("symbiotica.pack_template_saved",
               {"name": result["name"], "key": qualified_name(kind, result["name"]),
                "kind": kind, "month": month, "dir": result["dir"],
@@ -1797,11 +1816,18 @@ class SymbioticaAssetRefs(io.ComfyNode):
         # of the old picture is served forever. Hash the reference folders
         # executions have registered instead, by name and size and mtime: a
         # replaced file moves the hash even though its path did not change.
+        #
+        # REFERENCE folders only. This once walked every servable folder, which
+        # includes the ones the graph writes into — so saving a render or
+        # ticking a thumbnail in a Pick node moved this hash, re-ran the
+        # reference load, and with it the LLM reading the reference and the
+        # image model reading the LLM. A new paid image per queue press, on a
+        # seed that never changed.
         one = SymbioticaCategoryPrompts._one
         h = hashlib.sha256(f"{one(background, '')}:"
                            f"{one(keep_transparency, False)}:"
                            f"{one(output_size, 'native')}".encode())
-        for root in _executed_roots():
+        for root in _reference_roots():
             h.update(root.encode())
             try:
                 for name in sorted(os.listdir(root)):
@@ -2055,7 +2081,8 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
         from .pack_library import (collect_checked, load_pack_template_dirs)
         dirs = cls._dirs(project_path, kind, month)
         for d in dirs:
-            _register_refs_root(d)
+            # Template pools — browsed and saved into, so served only.
+            _register_served_root(d)
         # (1) The recipe bundle for the single 'use'-selected template. Missing
         # or unselected → a NEUTRAL bundle, never a raise: this node may sit
         # beside a live Order Specs (the order wins), and it also drives the
