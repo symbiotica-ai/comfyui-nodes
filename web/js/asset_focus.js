@@ -49,6 +49,18 @@ function orderSource(node) {
     return null;
 }
 
+// Asking the source to parse, once, when it has nothing yet. A saved workflow
+// restores Order Specs' month and feature widgets without parsing anything, so
+// the node looks configured while holding no events at all — which is exactly
+// the state a freshly reopened graph is in.
+function askSource(node, source) {
+    if (node._symAskedOrder || !source?._symRefreshOrder) return;
+    node._symAskedOrder = true;
+    Promise.resolve(source._symRefreshOrder())
+        .then(() => node._symRenderFocus?.())
+        .catch(() => {});
+}
+
 function publishedAssets(node) {
     const source = orderSource(node);
     if (!source) return null;
@@ -61,7 +73,10 @@ function publishedAssets(node) {
         event = source._symPickedEvent ?? null;
     }
     const assets = event?.assets ?? null;
-    if (!Array.isArray(assets)) return null;
+    if (!Array.isArray(assets) || !assets.length) {
+        askSource(node, source);
+        return null;
+    }
     return assets
         .filter((a) => String(a.assetName ?? "").trim())
         .map((a) => ({ name: a.assetName, category: a.category ?? "" }));
@@ -187,6 +202,9 @@ registerSymbioticaExtension(app, {
                                                             link, ioSlot) {
             onConnectionsChange?.apply(this, arguments);
             if (ioSlot?.name === "order") {
+                // A different source is a different question, so it may be
+                // asked again.
+                this._symAskedOrder = false;
                 queueMicrotask(() => this._symRenderFocus?.());
             }
         };

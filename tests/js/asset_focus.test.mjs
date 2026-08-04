@@ -184,3 +184,50 @@ test("an ambiguous hop is not guessed at", async () => {
     const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
     assert.match(text, /no assets from the wired order yet/);
 });
+
+test("a source holding no events yet is asked to parse, once", async () => {
+    // A saved workflow restores Order Specs' month and feature without parsing
+    // anything, so the node looks configured while holding no events at all.
+    reset();
+    let asked = 0;
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [];
+    specs._symRefreshOrder = async () => {
+        asked += 1;
+        specs._symEvents = [{ feature: "Mini 3", assets: [
+            { assetName: "Frankencrisps", category: "Food - 3 stages" }] }];
+    };
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 10; i++) await tick();
+    assert.equal(asked, 1);
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["Frankencrisps"]);
+    // Re-rendering must not ask again — the render is called on every repaint.
+    node._symRenderFocus();
+    node._symRenderFocus();
+    for (let i = 0; i < 10; i++) await tick();
+    assert.equal(asked, 1);
+});
+
+test("re-wiring the order lets it ask the new source", async () => {
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [];
+    let asked = 0;
+    specs._symRefreshOrder = async () => { asked += 1; };
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 10; i++) await tick();
+    node.onConnectionsChange?.call(node, 1, 0, true, null, { name: "order" });
+    for (let i = 0; i < 10; i++) await tick();
+    assert.equal(asked, 2);
+});

@@ -165,6 +165,9 @@ export async function create(comfyClass, widgets = {}) {
     const node = makeNode(comfyClass, widgets);
     node.onNodeCreated = proto.onNodeCreated;
     node.onConfigure = proto.onConfigure;
+    // ComfyUI calls this on every wire change; without it a test that rewires
+    // is driving nothing and passes for the wrong reason.
+    node.onConnectionsChange = proto.onConnectionsChange;
     return node;
 }
 

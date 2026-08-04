@@ -324,6 +324,11 @@ function publishOrder(node, result, events, refsRoot) {
 
 function wireOrderSpecs(node) {
     node._symEvents = [];
+    // Parsing on demand, the way `_symRefreshMonths` exposes the month parse.
+    // A panel downstream that needs the event list has no other way to ask for
+    // it: the Auto Packer reaches `refreshOrderSpecs` because it lives in this
+    // module, and nothing outside it does.
+    node._symRefreshOrder = (opts) => refreshOrderSpecs(node, opts);
     wireMonthPicker(node); // month combo, refreshed on project_path change
     comboify(node, "feature", () => (node._symEvents ?? []).map(eventLabel));
     // "Read folder" — resolve project_path (even a wired Local/Modal switch),
