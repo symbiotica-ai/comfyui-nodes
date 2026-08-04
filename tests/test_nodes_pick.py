@@ -83,7 +83,7 @@ class TestSchema:
         schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
         wires = {"images", "order"}
         widgets = [i.id for i in schema.inputs if i.id not in wires]
-        assert widgets == ["collect", "asset", "category", "selection",
+        assert widgets == ["get_new", "asset", "category", "selection",
                            "view", "role", "folder", "phase"]
 
 
@@ -250,30 +250,30 @@ class TestLookingAtAPickMustNotPayForIt:
 
     def test_collecting_asks_for_the_wire(self, nodes_mod):
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=None, collect=[True]) == ["images"]
+            images=None, get_new=[True]) == ["images"]
 
     def test_not_collecting_never_asks_for_the_wire(self, nodes_mod):
         """The whole point: an input that is not requested is never computed,
         so nothing upstream runs."""
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=None, collect=[False]) == []
+            images=None, get_new=[False]) == []
 
     def test_an_already_resolved_wire_is_not_asked_for_again(self, nodes_mod):
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=[frames(0.1)], collect=[True]) == []
+            images=[frames(0.1)], get_new=[True]) == []
 
     def test_not_collecting_records_nothing(self, nodes_mod, tmp_path):
-        run(nodes_mod, images=[frames(0.1)], collect=[False])
+        run(nodes_mod, images=[frames(0.1)], get_new=[False])
         assert buffer_of(nodes_mod, tmp_path) == []
 
     def test_not_collecting_still_sends_the_picks_on(self, nodes_mod, tmp_path):
-        run(nodes_mod, images=[frames(0.5)], collect=[True])
+        run(nodes_mod, images=[frames(0.5)], get_new=[True])
         ident = buffer_of(nodes_mod, tmp_path)[0]["id"]
-        out = run(nodes_mod, images=None, collect=[False],
+        out = run(nodes_mod, images=None, get_new=[False],
                   selection=[json.dumps([ident])])
         assert len(out.args[0]) == 1
 
-    def test_collect_defaults_to_on(self, nodes_mod, tmp_path):
+    def test_get_new_defaults_to_on(self, nodes_mod, tmp_path):
         run(nodes_mod, images=[frames(0.1)])
         assert len(buffer_of(nodes_mod, tmp_path)) == 1
 
@@ -302,14 +302,14 @@ class TestAskingForTheWireOnlyWhenThereIsOne:
     def test_a_connected_but_unevaluated_wire_is_requested(self, nodes_mod):
         self._wire(nodes_mod, ["9", 0])
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), collect=[True]) == ["images"]
+            images=(None,), get_new=[True]) == ["images"]
 
     def test_an_unconnected_wire_is_never_requested(self, nodes_mod):
         """A picker sitting on the canvas before anything is wired to it is an
         ordinary state, not a reason to fail the graph."""
         self._wire(nodes_mod, None)
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), collect=[True]) == []
+            images=(None,), get_new=[True]) == []
 
     def test_dynprompt_answers_when_the_raw_prompt_is_absent(self, nodes_mod):
         class _Dyn:
@@ -319,7 +319,7 @@ class TestAskingForTheWireOnlyWhenThereIsOne:
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
             unique_id="7", prompt=None, dynprompt=_Dyn())
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), collect=[True]) == ["images"]
+            images=(None,), get_new=[True]) == ["images"]
 
     def test_an_unanswerable_lookup_still_asks_rather_than_collecting_nothing(
             self, nodes_mod):
@@ -327,7 +327,7 @@ class TestAskingForTheWireOnlyWhenThereIsOne:
         like a working run that produced nothing."""
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(unique_id=None)
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), collect=[True]) == ["images"]
+            images=(None,), get_new=[True]) == ["images"]
 
     def test_a_broken_prompt_lookup_does_not_escape(self, nodes_mod):
         class _Boom:
@@ -337,16 +337,16 @@ class TestAskingForTheWireOnlyWhenThereIsOne:
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
             unique_id="7", prompt=None, dynprompt=_Boom())
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), collect=[True]) == ["images"]
+            images=(None,), get_new=[True]) == ["images"]
 
     def test_collecting_off_never_asks_even_with_a_wire(self, nodes_mod):
         self._wire(nodes_mod, ["9", 0])
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), collect=[False]) == []
+            images=(None,), get_new=[False]) == []
 
     def test_an_unevaluated_wire_records_nothing_rather_than_a_blank(self, nodes_mod,
                                                                      tmp_path):
-        run(nodes_mod, images=(None,), collect=[True])
+        run(nodes_mod, images=(None,), get_new=[True])
         assert buffer_of(nodes_mod, tmp_path) == []
 
 
@@ -355,7 +355,7 @@ class TestChainingTwoPickers:
                                                                 tmp_path):
         run(nodes_mod, node_id="1", images=[frames(0.2, 0.4, 0.6)])
         first = [e["id"] for e in buffer_of(nodes_mod, tmp_path, "1")]
-        passed = run(nodes_mod, node_id="1", images=None, collect=[False],
+        passed = run(nodes_mod, node_id="1", images=None, get_new=[False],
                      selection=[json.dumps([first[0], first[2]])]).args[0]
         run(nodes_mod, node_id="2", images=passed)
         second = buffer_of(nodes_mod, tmp_path, "2")
@@ -488,4 +488,97 @@ class TestTheFolderComesFromTheWireNotFromTyping:
 
     def test_no_folder_reads_nothing(self, nodes_mod, tmp_path):
         run(nodes_mod, folder=[""], images=[frames(0.5)])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1
+
+
+class TestTheFolderNeedsNoWiringAtAll:
+    """"what the f do I have to connect to folder mate?" — nothing. The node is
+    already wired to the asset, the category and the order, which is exactly
+    what `save_paths` builds the folder from."""
+
+    def renders(self, tmp_path, rel, names=("a.png",), colour=10):
+        from PIL import Image
+        folder = tmp_path / "output" / rel
+        folder.mkdir(parents=True, exist_ok=True)
+        for i, name in enumerate(names):
+            Image.new("RGB", (6, 6), (colour + i, 0, 0)).save(folder / name)
+        return folder
+
+    def test_the_asset_folder_is_read_with_no_folder_set(self, nodes_mod, tmp_path):
+        self.renders(tmp_path, "October/Mini 1/Food - 3 stages/Spookies",
+                     ("a.png", "b.png"))
+        run(nodes_mod, asset=["Spookies"], category=["Food - 3 stages"],
+            order=[{"month": "October", "feature": "Mini 1"}])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 2
+
+    def test_switching_asset_reads_the_new_asset_folder(self, nodes_mod, tmp_path):
+        self.renders(tmp_path, "October/Mini 1/Food/Spookies", colour=10)
+        self.renders(tmp_path, "October/Mini 1/Food/Popsicle", colour=200)
+        order = [{"month": "October", "feature": "Mini 1"}]
+        run(nodes_mod, asset=["Spookies"], category=["Food"], order=order)
+        run(nodes_mod, asset=["Popsicle"], category=["Food"], order=order)
+        assert {e["asset"] for e in buffer_of(nodes_mod, tmp_path)} == \
+            {"Spookies", "Popsicle"}
+
+    def test_an_explicit_folder_still_wins(self, nodes_mod, tmp_path):
+        self.renders(tmp_path, "October/Mini 1/Food/Spookies", colour=10)
+        self.renders(tmp_path, "somewhere/else", colour=200)
+        run(nodes_mod, asset=["Spookies"], category=["Food"],
+            order=[{"month": "October", "feature": "Mini 1"}],
+            folder=["somewhere/else"])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1
+
+    def test_a_pinned_pass_narrows_the_derived_folder_too(self, nodes_mod, tmp_path):
+        self.renders(tmp_path, "Oct/Ev/Food/Cake/base", colour=10)
+        self.renders(tmp_path, "Oct/Ev/Food/Cake/export", colour=200)
+        run(nodes_mod, asset=["Cake"], category=["Food"], phase=["export"],
+            order=[{"month": "Oct", "feature": "Ev"}])
+        entries = buffer_of(nodes_mod, tmp_path)
+        assert len(entries) == 1 and entries[0]["phase"] == "export"
+
+    def test_too_little_context_reads_nothing(self, nodes_mod, tmp_path):
+        """Reading a whole month because only the month is known would pull in
+        every asset of every event."""
+        self.renders(tmp_path, "October/Mini 1/Food/Spookies")
+        run(nodes_mod, order=[{"month": "October", "feature": "Mini 1"}])
+        assert buffer_of(nodes_mod, tmp_path) == []
+
+    def test_a_separator_in_a_name_does_not_deepen_the_tree(self, nodes_mod,
+                                                            tmp_path):
+        """It has to match the folder a save node actually wrote."""
+        self.renders(tmp_path, "Oct/Ev/Food/Sign Board")
+        run(nodes_mod, asset=["Sign / Board"], category=["Food"],
+            order=[{"month": "Oct", "feature": "Ev"}])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1
+
+
+class TestSeeingWhatWasAlreadyMade:
+    """"after refresh there is no way for me to see previous generation without
+    re-generating" — the asset's own render folder is read whether or not the
+    node is fetching, so looking costs nothing."""
+
+    def renders(self, tmp_path, rel, names=("a.png",), colour=10):
+        from PIL import Image
+        folder = tmp_path / "output" / rel
+        folder.mkdir(parents=True, exist_ok=True)
+        for i, name in enumerate(names):
+            Image.new("RGB", (6, 6), (colour + i, 0, 0)).save(folder / name)
+        return folder
+
+    def test_the_folder_is_read_even_with_get_new_off(self, nodes_mod, tmp_path):
+        """This is the whole point: queueing the picker with fetching off asks
+        nothing upstream, costs no render, and still surfaces every image
+        already made for this asset."""
+        self.renders(tmp_path, "Oct/Mini 1/Food/Spookies", ("a.png", "b.png"))
+        run(nodes_mod, get_new=[False], asset=["Spookies"], category=["Food"],
+            order=[{"month": "Oct", "feature": "Mini 1"}])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 2
+
+    def test_fetching_off_still_takes_nothing_off_the_wire(self, nodes_mod,
+                                                           tmp_path):
+        self.renders(tmp_path, "Oct/Mini 1/Food/Spookies")
+        run(nodes_mod, get_new=[False], images=[frames(0.5)],
+            asset=["Spookies"], category=["Food"],
+            order=[{"month": "Oct", "feature": "Mini 1"}])
+        # The folder's one image, and nothing from the wire.
         assert len(buffer_of(nodes_mod, tmp_path)) == 1

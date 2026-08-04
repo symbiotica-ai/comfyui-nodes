@@ -246,16 +246,16 @@ function pickPanel(node) {
             bar.appendChild(chip);
         }
 
-        // With collecting off the wire above is never evaluated, so a run adds
+        // With `get_new` off the wire above is never evaluated, so a run adds
         // nothing here. Say so on the node: silence looks identical to a
         // generator that failed.
-        if (widgetOf(node, "collect")?.value === false) {
+        if (widgetOf(node, "get_new")?.value === false) {
             const chip = el("div",
                 `flex:none;padding:1px 6px;border-radius:3px;font:10px ${HUB.font};`
                 + `background:${HUB.surface1};color:${HUB.inkTertiary};`
-                + `border:1px solid ${HUB.hairline};`, "not collecting");
-            chip.title = "collect is off — running this adds no candidates and "
-                + "nothing upstream is asked for";
+                + `border:1px solid ${HUB.hairline};`, "not fetching");
+            chip.title = "get_new is off — running this adds nothing and asks "
+                + "nothing upstream, so it costs no render";
             bar.appendChild(chip);
         }
 
@@ -433,8 +433,11 @@ function pickPanel(node) {
         }
         if (!images.length) {
             list.appendChild(emptyState(
-                "queue this node to collect candidates — every image wired in "
-                + "lands here"));
+                widgetOf(node, "get_new")?.value === false
+                    ? "get_new is off, so nothing is asked for — turn it on "
+                      + "and queue this node to make some"
+                    : "queue this node — it takes in what is wired to it and "
+                      + "reads this asset's own render folder"));
             refit();
             return;
         }
@@ -464,7 +467,12 @@ function pickPanel(node) {
         if (reading) return;
         const folder = widgetOf(node, "folder")?.value?.trim?.();
         if (!folder) {
-            error = "type a folder into the node's `folder` field first";
+            // Not an error: the node reads this asset's own folder while it
+            // executes, from the asset and category it is already wired to.
+            // The button is only for pointing at some OTHER folder.
+            notice = "leave `folder` empty and queue this node — it reads this "
+                + "asset's own folder. Set `folder` only to read a different one.";
+            error = "";
             render();
             return;
         }

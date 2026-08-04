@@ -3368,6 +3368,27 @@ def _pil_to_tensor_keep_alpha(img):
     return torch.from_numpy(arr)[None, ...]
 
 
+def _derived_pick_folder(tag):
+    """Where this asset's renders are already filed, from what the node knows.
+
+    `save_paths` builds `month/feature/category/asset` from the same values the
+    picker is already handed on its own wires, so asking for that path to be
+    typed in — or wired a second time — is asking for something already
+    present. Built through `order_assets._segment` so it matches the folder a
+    save node actually wrote, separator-for-separator.
+
+    Returns "" when there is nothing specific enough to point at: reading a
+    whole month because only the month is known would pull in every asset of
+    every event.
+    """
+    from .order_assets import _segment
+    parts = [_segment(tag.get(key, ""))
+             for key in ("month", "feature", "category", "asset")]
+    if not parts[-1] and not parts[-2]:
+        return ""
+    return "/".join(p for p in parts if p)
+
+
 def _pick_folders(values):
     """The distinct folders a Pick node was pointed at, resolved and de-duped.
 
@@ -3424,7 +3445,7 @@ class SymbioticaPick(io.ComfyNode):
                         "node body, so three separate runs of the same "
                         "generator stack up as three candidates instead of "
                         "overwriting each other. Only the ticked ones leave "
-                        "the node. Turn `collect` off once the picks are made "
+                        "the node. Turn `get_new` off once the picks are made "
                         "and the wire above is never evaluated at all, so "
                         "queueing the edit stage cannot re-fire a paid render "
                         "— the node serves the approved images from disk. "
@@ -3444,14 +3465,16 @@ class SymbioticaPick(io.ComfyNode):
                                        "read when `collect` is on — with it "
                                        "off this wire is never evaluated, so "
                                        "nothing upstream runs."),
-                io.Boolean.Input("collect", default=True,
-                                 tooltip="On: read `images` and add whatever "
-                                         "arrives to the buffer. Off: ignore "
-                                         "the wire entirely and just send the "
-                                         "ticked images on — the generator "
-                                         "above is never asked for anything, "
-                                         "so previewing or routing a pick "
-                                         "costs no render."),
+                io.Boolean.Input("get_new", default=True,
+                                 tooltip="ON: go and ask whatever is wired to "
+                                         "`images` for pictures and add them "
+                                         "here. If that is a generator, this "
+                                         "is what makes it render — and what "
+                                         "it costs. OFF: nothing upstream is "
+                                         "asked for anything at all; the node "
+                                         "just hands on the images you ticked, "
+                                         "free. Turn it on to make more, off "
+                                         "once you are choosing between them."),
                 io.String.Input("asset", default="", optional=True,
                                 tooltip="The asset these candidates belong to "
                                         "— tags them, and the node opens on "
@@ -3472,11 +3495,14 @@ class SymbioticaPick(io.ComfyNode):
                                         "and a stage is compared against its "
                                         "own alternatives."),
                 io.String.Input("folder", default="", optional=True,
-                                tooltip="Where this asset's renders are already "
-                                        "filed. Wire Order Assets' `save_paths` "
-                                        "in and it follows whichever asset is "
-                                        "selected — a relative path resolves "
-                                        "under ComfyUI's output directory. "
+                                tooltip="Usually leave this empty. The node "
+                                        "works out where this asset's renders "
+                                        "are already filed from the asset, "
+                                        "category and order it is already "
+                                        "wired to. Set it only to read some "
+                                        "other folder — a relative path "
+                                        "resolves under ComfyUI's output "
+                                        "directory. "
                                         "Everything under it is read in as "
                                         "candidates, so work that already "
                                         "exists does not have to be generated "
@@ -3540,7 +3566,7 @@ class SymbioticaPick(io.ComfyNode):
         return None
 
     @classmethod
-    def check_lazy_status(cls, images=None, collect=True, asset="",
+    def check_lazy_status(cls, images=None, get_new=True, asset="",
                           category="", role="", order=None, selection="",
                           view="", folder="", phase=""):
         """Whether the wire above this node is worth evaluating at all.
@@ -3553,14 +3579,14 @@ class SymbioticaPick(io.ComfyNode):
         because a lazy input that is not requested is never computed.
         """
         one = SymbioticaCategoryPrompts._one
-        if not bool(one(collect, True)):
+        if not bool(one(get_new, True)):
             return []
         if cls._images_wired() is False:
             return []
         return ["images"] if _unevaluated(images) else []
 
     @classmethod
-    def execute(cls, images=None, collect=True, asset="", category="",
+    def execute(cls, images=None, get_new=True, asset="", category="",
                 role="", order=None, selection="", view="", folder="",
                 phase="") -> io.NodeOutput:
         import datetime
@@ -3592,13 +3618,13 @@ class SymbioticaPick(io.ComfyNode):
         # one batch of variants of one asset — so a short list repeats its
         # first value rather than leaving the rest untagged.
         # Belt and braces with check_lazy_status: `images` is already None when
-        # collecting is off, but a stale value must never be able to file a
+        # `get_new` is off, but a stale value must never be able to file a
         # candidate the user did not ask to generate.
         # Only the pass is forced onto an imported image; asset, category and
         # the rest come from the folder structure, which is more specific than
         # a single value shared by the whole run.
         tag_defaults = {"phase": pass_name} if pass_name else {}
-        items = _as_list(images) if bool(one(collect, True)) else []
+        items = _as_list(images) if bool(one(get_new, True)) else []
         assets = _as_list(asset)
         cats = _as_list(category)
         parts = _as_list(role)
@@ -3617,7 +3643,16 @@ class SymbioticaPick(io.ComfyNode):
         # without a path typed by hand: `save_paths` names the folder and moves
         # with the selected asset. Skipped outright when the folder has not
         # changed since the last run, which is every run after the first.
-        for known in _pick_folders(_as_list(folder)):
+        # An explicit folder wins; otherwise the one this asset's renders are
+        # already filed in, which the node can name from its own wires.
+        wanted_folders = _pick_folders(_as_list(folder))
+        if not wanted_folders:
+            derived = _derived_pick_folder({
+                "month": month, "feature": feature,
+                "category": _at_or_first(cats, 0),
+                "asset": _at_or_first(assets, 0)})
+            wanted_folders = _pick_folders([derived]) if derived else []
+        for known in wanted_folders:
             try:
                 import_if_changed(dir_path, known, tag=tag_defaults,
                                   at=stamp, only_phase=pass_name)

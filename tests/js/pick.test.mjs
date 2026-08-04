@@ -102,7 +102,7 @@ test("one tile per candidate, drawn from the thumbnail", async () => {
 test("an empty buffer says how to fill it rather than showing nothing", async () => {
     const node = await panelNode([], []);
     const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /queue this node to collect candidates/);
+    assert.match(text, /queue this node/);
     assert.equal(tiles(node).length, 0);
 });
 
@@ -202,12 +202,12 @@ test("clear sends no ids, which the route reads as the whole buffer", async () =
     assert.deepEqual(ticksOf(node), []);
 });
 
-test("the node says so when it is not collecting", async () => {
+test("the node says so when it is not fetching", async () => {
     // A run that adds nothing looks exactly like a generator that failed.
-    const on = await panelNode([], [CAKE_A], { collect: true });
-    assert.equal(buttonsSaying(on, "not collecting").length, 0);
-    const off = await panelNode([], [CAKE_A], { collect: false });
-    assert.equal(buttonsSaying(off, "not collecting").length, 1);
+    const on = await panelNode([], [CAKE_A], { get_new: true });
+    assert.equal(buttonsSaying(on, "not fetching").length, 0);
+    const off = await panelNode([], [CAKE_A], { get_new: false });
+    assert.equal(buttonsSaying(off, "not fetching").length, 1);
 });
 
 test("the thumbnail size buttons change the tiles", async () => {
@@ -310,13 +310,21 @@ test("Read folder sends the tags that are typed, and omits the wired ones", asyn
     assert.ok(!("category" in body), "an empty widget must not overwrite the fallback");
 });
 
-test("Read folder with no folder says so instead of posting", async () => {
+test("Read folder with no folder explains that it is not needed", async () => {
+    // The node reads this asset's own folder while it executes; the button is
+    // only for pointing at some OTHER folder.
     const seen = [];
     const node = await panelNode(seen, [], { folder: "" });
     await node.widgets.find((w) => w.name === "📁 Read folder").callback();
     assert.equal(seen.filter((c) => c.route === "/symbiotica/pick-import").length, 0);
     const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /type a folder/);
+    assert.match(text, /leave `folder` empty/);
+});
+
+test("an empty buffer with get_new off says that is why", async () => {
+    const node = await panelNode([], [], { get_new: false });
+    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
+    assert.match(text, /get_new is off/);
 });
 
 const EXPORTED = { ...CAKE_A, id: "e1", thumb: "/out/e1_thumb.png", phase: "export" };
