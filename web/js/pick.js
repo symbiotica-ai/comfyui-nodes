@@ -116,6 +116,12 @@ function pickPanel(node) {
     // import is not reported in the red the failures use.
     let notice = "";
     let loading = false;
+    // A first load can land before the graph has finished configuring, when
+    // the node still carries a placeholder id and its buffer legitimately
+    // reads as empty. Retry a few times rather than sit on that answer
+    // forever — the node looks broken and the images are right there.
+    let loads = 0;
+    let loadedOk = false;
 
     // The group the node opens on when `view` is empty: whatever arrived last.
     // Derived from the buffer rather than by reading the wired asset/category
@@ -178,6 +184,7 @@ function pickPanel(node) {
 
     async function load() {
         loading = true;
+        loads += 1;
         render();
         try {
             const q = new URLSearchParams({ node_id: String(node.id) });
@@ -185,6 +192,7 @@ function pickPanel(node) {
             images = Array.isArray(data.images) ? data.images : [];
             groups = Array.isArray(data.groups) ? data.groups : [];
             error = "";
+            loadedOk = images.length > 0;
         } catch (e) {
             images = [];
             groups = [];
@@ -192,6 +200,10 @@ function pickPanel(node) {
         } finally {
             loading = false;
             render();
+        }
+        // Empty on an early load is usually a node id that was not final yet.
+        if (!loadedOk && !error && loads < 4) {
+            setTimeout(() => { if (!loadedOk) load(); }, 400 * loads);
         }
     }
     node._symReloadPick = load;
@@ -234,7 +246,7 @@ function pickPanel(node) {
                       images.length
                           ? `${visible} shown · ${tickedHere} ticked`
                           + (ticks.size > tickedHere ? ` (${ticks.size} total)` : "")
-                          : "no candidates yet"));
+                          : `no candidates yet (node ${node.id})`));
 
         const phase = phaseOf(node);
         if (phase) {
@@ -442,8 +454,26 @@ function pickPanel(node) {
             return;
         }
         if (!inPhase().length) {
-            list.appendChild(emptyState(
-                `${images.length} candidates here, none of them ${phaseOf(node)}`));
+            const wrap = el("div", "width:100%;box-sizing:border-box;");
+            wrap.appendChild(emptyState(
+                `${images.length} here, but none tagged "${phaseOf(node)}" — `
+                + "images collected before this picker was pinned to a pass "
+                + "carry no pass at all"));
+            const showAll = el("button",
+                ghostButtonCss + "padding:2px 8px;margin:4px auto;display:block;",
+                `show all ${images.length}`);
+            showAll.className = "sym-btn";
+            showAll.title = "Ignore the pass for now and show everything in "
+                + "this node's buffer";
+            showAll.addEventListener("pointerdown", (e) => e.stopPropagation());
+            showAll.addEventListener("click", () => {
+                const w = widgetOf(node, "phase");
+                if (w) w.value = "";
+                node.setDirtyCanvas?.(true, true);
+                render();
+            });
+            wrap.appendChild(showAll);
+            list.appendChild(wrap);
             refit();
             return;
         }

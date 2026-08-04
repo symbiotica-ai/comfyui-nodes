@@ -352,10 +352,16 @@ test("the pass is shown on the node body", async () => {
     assert.equal(buttonsSaying(node, "export").length, 1);
 });
 
-test("a buffer with nothing in this pass says so rather than looking empty", async () => {
+test("a buffer with nothing in this pass says so, and offers a way out", async () => {
+    // Images collected before the picker was pinned carry no pass at all, so
+    // this must not read as an empty buffer.
     const node = await panelNode([], [EDITED, CAKE_B], { phase: "export" });
     const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /none of them export/);
+    assert.match(text, /none tagged "export"/);
+    assert.equal(buttonsSaying(node, "show all 2").length, 1);
+    fire(buttonsSaying(node, "show all 2")[0], "click");
+    assert.equal(widgetOf(node, "phase").value, "");
+    assert.equal(tiles(node).length, 2);
 });
 
 test("Read folder tells the server which pass this picker is", async () => {
@@ -427,4 +433,47 @@ test("a pinned group still beats both", async () => {
     node._symReloadPick && await node._symReloadPick();
     for (let i = 0; i < 20; i++) await tick();
     assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s2_thumb.png")));
+});
+
+test("an empty first load is retried rather than left standing", async () => {
+    // A first load can land before the graph has finished configuring, when
+    // the node still carries a placeholder id and its buffer reads as empty.
+    reset();
+    let calls = 0;
+    setResponder((route) => {
+        if (route.startsWith("/symbiotica/pick-list")) {
+            calls += 1;
+            const images = calls > 1 ? [CAKE_A] : [];
+            return { ok: true, status: 200,
+                     body: { ok: true, images, groups: images.length
+                         ? [{ key: CAKE_A.group, count: 1 }] : [] } };
+        }
+        return { ok: false, status: 404, body: { error: "no route" } };
+    });
+    const node = await create("SymbioticaPick", { selection: "", view: "" });
+    await node.onNodeCreated?.call(node);
+    for (let i = 0; i < 40; i++) await tick();
+    await new Promise((r) => setTimeout(r, 600));
+    for (let i = 0; i < 20; i++) await tick();
+    assert.ok(calls > 1, "it should have asked again");
+    assert.equal(tiles(node).length, 1);
+});
+
+test("a load that keeps coming back empty stops asking", async () => {
+    // Retrying forever would hammer the server for a node whose buffer really
+    // is empty, which is every picker before its first run.
+    reset();
+    let calls = 0;
+    setResponder((route) => {
+        if (route.startsWith("/symbiotica/pick-list")) {
+            calls += 1;
+            return { ok: true, status: 200, body: { ok: true, images: [], groups: [] } };
+        }
+        return { ok: false, status: 404, body: { error: "no route" } };
+    });
+    const node = await create("SymbioticaPick", { selection: "", view: "" });
+    await node.onNodeCreated?.call(node);
+    await new Promise((r) => setTimeout(r, 2600));
+    for (let i = 0; i < 20; i++) await tick();
+    assert.ok(calls <= 4, `asked ${calls} times`);
 });
