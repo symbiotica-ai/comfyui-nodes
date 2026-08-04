@@ -51,6 +51,10 @@ ModelPresetWire = io.Custom("SYMBIOTICA_MODEL_PRESET")
 # Template Builder/Editor sheet bundle) — different shape, different producer.
 PackTemplateWire = io.Custom("SYMBIOTICA_PACK_TEMPLATE")
 
+# The passes a Pick node can be pinned to. Blank first so a node that has not
+# been assigned one keeps showing everything rather than silently nothing.
+_PICK_PHASES = ["", "base", "edit", "export"]
+
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
 _MODELS = [m["id"] for m in MODEL_PRESETS] + ["custom"]
@@ -3346,6 +3350,18 @@ class SymbioticaPick(io.ComfyNode):
                                         "added after the work was generated "
                                         "does not have to re-render it to have "
                                         "something to choose from."),
+                io.Combo.Input("phase", options=_PICK_PHASES, default="",
+                               optional=True,
+                               tooltip="Which pass of the pipeline this picker "
+                                       "is for. One Pick in the Base image "
+                                       "group, one in Edit, one in Export: "
+                                       "each tags what it takes in and shows "
+                                       "only its own pass, so a 128px cutout "
+                                       "with alpha is never sitting in the "
+                                       "grid next to a full render. Also the "
+                                       "fifth folder level — "
+                                       "`…/<recipe>/export` — so a folder read "
+                                       "sorts itself."),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
@@ -3393,7 +3409,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def check_lazy_status(cls, images=None, collect=True, asset="",
                           category="", role="", order=None, selection="",
-                          view="", folder=""):
+                          view="", folder="", phase=""):
         """Whether the wire above this node is worth evaluating at all.
 
         This is the difference between looking at a pick and paying for it.
@@ -3412,8 +3428,8 @@ class SymbioticaPick(io.ComfyNode):
 
     @classmethod
     def execute(cls, images=None, collect=True, asset="", category="",
-                role="", order=None, selection="", view="",
-                folder="") -> io.NodeOutput:
+                role="", order=None, selection="", view="", folder="",
+                phase="") -> io.NodeOutput:
         import datetime
 
         from PIL import Image
@@ -3433,6 +3449,7 @@ class SymbioticaPick(io.ComfyNode):
             ord_dict = {}
         feature = str(ord_dict.get("feature", ""))
         month = str(ord_dict.get("month", ""))
+        pass_name = str(one(phase, "") or "")
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # is_input_list hands every input in as a list, so a fanned-out lane
@@ -3452,6 +3469,7 @@ class SymbioticaPick(io.ComfyNode):
             tag = {"asset": _at_or_first(assets, index),
                    "category": _at_or_first(cats, index),
                    "role": _at_or_first(parts, index),
+                   "phase": pass_name,
                    "feature": feature, "month": month}
             for frame in _image_frames(item):
                 if add_image(dir_path, _tensor_to_pil(frame), tag=tag, at=stamp):

@@ -318,3 +318,43 @@ test("Read folder with no folder says so instead of posting", async () => {
     const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
     assert.match(text, /type a folder/);
 });
+
+const EXPORTED = { ...CAKE_A, id: "e1", thumb: "/out/e1_thumb.png", phase: "export" };
+const EDITED = { ...CAKE_A, id: "d1", thumb: "/out/d1_thumb.png", phase: "edit" };
+
+test("a picker pinned to a pass shows only that pass", async () => {
+    // A 128px cutout with alpha is not an alternative to a full render.
+    const node = await panelNode([], [EXPORTED, EDITED, CAKE_B],
+                                 { phase: "export" });
+    assert.equal(tiles(node).length, 1);
+    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/e1_thumb.png")));
+});
+
+test("an unpinned picker shows every pass", async () => {
+    const node = await panelNode([], [EXPORTED, EDITED, CAKE_B], { phase: "" });
+    const select = listOf(node).children[1].children[0];
+    select.value = "__all__";
+    fire(select, "change");
+    assert.equal(tiles(node).length, 3);
+});
+
+test("the pass is shown on the node body", async () => {
+    // Three pickers in three groups otherwise look identical.
+    const node = await panelNode([], [EXPORTED], { phase: "export" });
+    assert.equal(buttonsSaying(node, "export").length, 1);
+});
+
+test("a buffer with nothing in this pass says so rather than looking empty", async () => {
+    const node = await panelNode([], [EDITED, CAKE_B], { phase: "export" });
+    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
+    assert.match(text, /none of them export/);
+});
+
+test("Read folder tells the server which pass this picker is", async () => {
+    const seen = [];
+    const node = await panelNode(seen, [], { folder: "/out/x", phase: "export" });
+    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
+    for (let i = 0; i < 20; i++) await tick();
+    const body = JSON.parse(seen.find((c) => c.route === "/symbiotica/pick-import").init.body);
+    assert.equal(body.phase, "export");
+});

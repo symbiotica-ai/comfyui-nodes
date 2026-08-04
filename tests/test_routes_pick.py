@@ -243,3 +243,41 @@ class TestReadingAFolder:
         _run(env.routes.pick_import(_Req(body={"node_id": "7", "folder": str(src)})))
         entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
         assert env.routes.is_allowed(entry["thumb"])
+
+
+class TestAPinnedPickerReadsOnlyItsOwnPass:
+    def make(self, folder, names=("a.png",), colour=10):
+        os.makedirs(folder, exist_ok=True)
+        for i, name in enumerate(names):
+            Image.new("RGB", (6, 6), (colour + i, 0, 0)).save(
+                os.path.join(folder, name))
+
+    def tree(self, env):
+        base = env.out / "outputs" / "Oct" / "Mini 3" / "Food" / "Cake"
+        for i, phase in enumerate(("base", "edit", "export")):
+            self.make(str(base / phase), colour=10 + i * 60)
+        return base
+
+    def test_reading_a_recipe_folder_takes_only_the_pinned_pass(self, env):
+        base = self.tree(env)
+        res = _run(env.routes.pick_import(_Req(body={
+            "node_id": "7", "folder": str(base), "phase": "export"})))
+        assert (res["body"]["added"], res["body"]["filtered"]) == (1, 2)
+        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
+        assert entry["phase"] == "export"
+
+    def test_an_unpinned_picker_takes_every_pass(self, env):
+        base = self.tree(env)
+        res = _run(env.routes.pick_import(
+            _Req(body={"node_id": "7", "folder": str(base)})))
+        assert res["body"]["added"] == 3
+
+    def test_a_folder_with_no_pass_level_is_still_stamped(self, env):
+        """Reading `.../Cake` straight into the Export picker must land tagged,
+        or it would be invisible in the node that just read it."""
+        flat = env.out / "outputs" / "Oct" / "Mini 3" / "Food" / "Cake"
+        self.make(str(flat))
+        _run(env.routes.pick_import(_Req(body={
+            "node_id": "8", "folder": str(flat), "phase": "export"})))
+        entry = _run(env.routes.pick_list(_Req(node_id="8")))["body"]["images"][0]
+        assert entry["phase"] == "export"

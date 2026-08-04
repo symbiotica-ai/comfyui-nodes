@@ -84,7 +84,7 @@ class TestSchema:
         wires = {"images", "order"}
         widgets = [i.id for i in schema.inputs if i.id not in wires]
         assert widgets == ["collect", "asset", "category", "selection",
-                           "view", "role", "folder"]
+                           "view", "role", "folder", "phase"]
 
 
 class TestCollecting:
@@ -378,3 +378,34 @@ class TestTransparency:
                      selection=json.dumps([ident])).args[0]
         assert picked[0].shape == (1, 4, 4, 4)
         assert float(picked[0][..., 3].max()) == 0.0
+
+
+class TestOnePickerPerPass:
+    """One Pick in the Base image group, one in Edit, one in Export."""
+
+    def test_the_pass_is_a_selector_with_the_three_passes(self, nodes_mod):
+        schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
+        phase = next(i for i in schema.inputs if i.id == "phase")
+        assert phase.options == ["", "base", "edit", "export"]
+
+    def test_it_defaults_to_unpinned(self, nodes_mod):
+        """A node that has not been assigned a pass keeps showing everything
+        rather than silently nothing."""
+        schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
+        assert next(i for i in schema.inputs if i.id == "phase").default == ""
+
+    def test_what_a_pinned_picker_collects_is_stamped_with_its_pass(self, nodes_mod,
+                                                                    tmp_path):
+        run(nodes_mod, images=[frames(0.3)], asset=["cake"], phase=["export"])
+        assert buffer_of(nodes_mod, tmp_path)[0]["phase"] == "export"
+
+    def test_an_unpinned_picker_stamps_nothing(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=[frames(0.3)], asset=["cake"])
+        assert buffer_of(nodes_mod, tmp_path)[0]["phase"] == ""
+
+    def test_the_pass_does_not_change_the_group_label(self, nodes_mod, tmp_path):
+        """Each picker is pinned to one pass already, so repeating it in every
+        label is noise."""
+        run(nodes_mod, images=[frames(0.3)], asset=["cake"], category=["Food"],
+            phase=["edit"])
+        assert buffer_of(nodes_mod, tmp_path)[0]["group"] == "Food / cake"

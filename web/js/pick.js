@@ -98,18 +98,41 @@ function pickPanel(node) {
     // widgets, because those are normally WIRED — a wired input has no widget
     // value to read, and the tag recorded on the newest candidate is the same
     // context by construction.
-    const newestGroup = () => images.length ? images[images.length - 1].group : "";
+    const newestGroup = () => {
+        const pool = inPhase();
+        return pool.length ? pool[pool.length - 1].group : "";
+    };
+
+    function visibleGroups() {
+        const counted = [];
+        for (const im of inPhase()) {
+            const found = counted.find((g) => g.key === im.group);
+            if (found) found.count += 1;
+            else counted.push({ key: im.group, count: 1 });
+        }
+        return counted;
+    }
 
     function effectiveView() {
         const stored = readView(node);
         if (stored === ALL) return ALL;
-        if (stored && groups.some((g) => g.key === stored)) return stored;
+        if (stored && visibleGroups().some((g) => g.key === stored)) return stored;
         return newestGroup() || ALL;
     }
 
+    // The pass this picker is pinned to. Filtering here as well as at import
+    // matters for candidates collected before the pin was set.
+    const phaseOf = (n) => widgetOf(n, "phase")?.value?.trim?.() || "";
+
+    const inPhase = () => {
+        const phase = phaseOf(node);
+        return phase ? images.filter((i) => (i.phase || "") === phase) : images;
+    };
+
     const shown = () => {
         const view = effectiveView();
-        return view === ALL ? images : images.filter((i) => i.group === view);
+        const pool = inPhase();
+        return view === ALL ? pool : pool.filter((i) => i.group === view);
     };
 
     async function load() {
@@ -172,6 +195,16 @@ function pickPanel(node) {
                           + (ticks.size > tickedHere ? ` (${ticks.size} total)` : "")
                           : "no candidates yet"));
 
+        const phase = phaseOf(node);
+        if (phase) {
+            const chip = el("div",
+                `flex:none;padding:1px 6px;border-radius:3px;font:10px ${HUB.font};`
+                + `background:${HUB.surface1};color:${HUB.inkSubtle};`
+                + `border:1px solid ${HUB.hairline};`, phase);
+            chip.title = `this picker only takes in and shows ${phase} images`;
+            bar.appendChild(chip);
+        }
+
         // With collecting off the wire above is never evaluated, so a run adds
         // nothing here. Say so on the node: silence looks identical to a
         // generator that failed.
@@ -232,10 +265,11 @@ function pickPanel(node) {
         select.className = "sym-input";
         const view = effectiveView();
 
-        const optAll = el("option", "", `All (${images.length})`);
+        const pool = visibleGroups();
+        const optAll = el("option", "", `All (${inPhase().length})`);
         optAll.value = ALL;
         select.appendChild(optAll);
-        for (const g of groups) {
+        for (const g of pool) {
             const o = el("option", "", `${g.key} (${g.count})`);
             o.value = g.key;
             select.appendChild(o);
@@ -363,7 +397,13 @@ function pickPanel(node) {
             refit();
             return;
         }
-        if (groups.length > 1) list.appendChild(renderFilter());
+        if (!inPhase().length) {
+            list.appendChild(emptyState(
+                `${images.length} candidates here, none of them ${phaseOf(node)}`));
+            refit();
+            return;
+        }
+        if (visibleGroups().length > 1) list.appendChild(renderFilter());
         const visible = shown();
         if (!visible.length) {
             list.appendChild(emptyState("nothing recorded for this asset yet"));
@@ -392,6 +432,8 @@ function pickPanel(node) {
         node.setDirtyCanvas?.(true, true);
         try {
             const body = { node_id: String(node.id), folder };
+            const phase = phaseOf(node);
+            if (phase) body.phase = phase;
             // Only unwired values are readable from the canvas; a wired input
             // has no widget value, and the route falls back to the folder's
             // own name for the asset.

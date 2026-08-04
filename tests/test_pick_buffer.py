@@ -302,7 +302,7 @@ class TestImportingAFolderThatAlreadyExists:
         import_folder(d, src)
         second = import_folder(d, src)
         assert second == {"added": 0, "skipped": 2, "failed": 0,
-                          "found": 2, "truncated": 0}
+                          "filtered": 0, "found": 2, "truncated": 0}
         assert len(list_entries(d)) == 2
 
     def test_the_tag_is_applied_to_everything_imported(self, tmp_path):
@@ -430,3 +430,53 @@ class TestTheBuffersDoNotImportThemselves:
         add_image(str(out / BUFFER_ROOT / "483"), solid((9, 9, 9)))
         result = import_folder(str(tmp_path / "buf"), str(out))
         assert result["found"] == 1
+
+
+class TestThePassAPickerIsPinnedTo:
+    """Three pickers — one in the Base image group, one in Edit, one in Export.
+    A render and its exported cutout are different kinds of thing, not
+    alternatives to each other."""
+
+    def make(self, folder, names=("a.png",), colour=10):
+        os.makedirs(folder, exist_ok=True)
+        for i, name in enumerate(names):
+            Image.new("RGB", (6, 6), (colour + i, 0, 0)).save(
+                os.path.join(folder, name))
+
+    def test_the_fifth_level_is_the_pass(self):
+        tag = tag_from_path("/s/outputs/Oct/Mini 3/Food/Frankencrisps/export")
+        assert tag["asset"] == "Frankencrisps" and tag["phase"] == "export"
+
+    def test_levels_below_the_pass_are_still_ignored(self):
+        tag = tag_from_path("/s/outputs/Oct/Ev/Cat/Cake/export/v2/deeper")
+        assert tag["phase"] == "export"
+
+    def test_a_recorded_candidate_carries_its_pass(self, tmp_path):
+        d = str(tmp_path / "buf")
+        add_image(d, solid(), tag={"asset": "cake", "phase": "edit"})
+        assert list_entries(d)[0]["phase"] == "edit"
+
+    def test_a_pinned_picker_reads_only_its_own_pass(self, tmp_path):
+        """Filtering at import keeps two thirds of the images off its disk
+        instead of merely off its grid."""
+        base = tmp_path / "outputs" / "Oct" / "Mini 3" / "Food" / "Cake"
+        for i, phase in enumerate(("base", "edit", "export")):
+            self.make(str(base / phase), ("a.png",), colour=10 + i * 40)
+        d = str(tmp_path / "buf")
+        result = import_folder(d, str(base), only_phase="export")
+        assert (result["added"], result["filtered"], result["found"]) == (1, 2, 3)
+        assert list_entries(d)[0]["phase"] == "export"
+
+    def test_no_pin_reads_every_pass(self, tmp_path):
+        base = tmp_path / "outputs" / "Oct" / "Mini 3" / "Food" / "Cake"
+        for i, phase in enumerate(("base", "edit", "export")):
+            self.make(str(base / phase), ("a.png",), colour=10 + i * 40)
+        d = str(tmp_path / "buf")
+        assert import_folder(d, str(base))["added"] == 3
+
+    def test_the_pass_is_not_part_of_the_group_label(self, tmp_path):
+        """Each picker is pinned to one pass already, so repeating it in every
+        label is noise."""
+        d = str(tmp_path / "buf")
+        add_image(d, solid(), tag={"asset": "cake", "phase": "export"})
+        assert list_entries(d)[0]["group"] == "cake"

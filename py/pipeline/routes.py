@@ -712,7 +712,7 @@ async def pick_list(request):
         "images": [{
             "id": e.get("id", ""), "path": e.get("path", ""),
             "thumb": e.get("thumb_path", ""), "group": e.get("group", ""),
-            "role": e.get("role", ""),
+            "role": e.get("role", ""), "phase": e.get("phase", ""),
             "asset": e.get("asset", ""), "category": e.get("category", ""),
             "feature": e.get("feature", ""), "month": e.get("month", ""),
             "w": e.get("w", 0), "h": e.get("h", 0), "at": e.get("at", ""),
@@ -784,10 +784,16 @@ async def pick_import(request):
     tag = {"asset": str(body.get("asset") or "").strip(),
            "category": str(body.get("category") or "").strip(),
            "role": str(body.get("role") or "").strip()}
+    # A picker pinned to a pass reads only that pass, and stamps it on what it
+    # reads — so a folder that has no `export` level still lands correctly
+    # tagged in the Export picker.
+    only_phase = str(body.get("phase") or "").strip()
+    if only_phase:
+        tag["phase"] = only_phase
     stamp = str(body.get("at") or "")
     # Off the event loop: a few hundred PNGs get opened and thumbnailed here,
     # and the canvas still needs to talk to the server while that runs.
     result = await asyncio.to_thread(import_folder, dir_path, real,
-                                     tag=tag, at=stamp)
+                                     tag=tag, at=stamp, only_phase=only_phase)
     register_root_within(dir_path)
     return web.json_response({"ok": True, "folder": real, **result})

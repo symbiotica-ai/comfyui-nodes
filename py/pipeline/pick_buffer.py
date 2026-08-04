@@ -87,7 +87,7 @@ def image_id(img) -> str:
 
 
 def tag_of(asset: str = "", category: str = "", feature: str = "",
-           month: str = "", role: str = "") -> dict:
+           month: str = "", role: str = "", phase: str = "") -> dict:
     """The context one candidate was generated under, as recorded on it.
 
     `role` is deliberately not part of the group label: an asset's stages
@@ -100,6 +100,10 @@ def tag_of(asset: str = "", category: str = "", feature: str = "",
         "feature": str(feature or "").strip(),
         "month": str(month or "").strip(),
         "role": str(role or "").strip(),
+        # base / edit / export — which pass of the pipeline made this. A render
+        # and its exported cutout are not alternatives to each other, so a
+        # picker pinned to one pass must not offer the others.
+        "phase": str(phase or "").strip(),
     }
 
 
@@ -253,7 +257,7 @@ IMPORT_LIMIT = 400
 # already says what an image is — deriving the tag from it beats asking for the
 # same four facts to be typed again beside a folder that states them.
 OUTPUTS_ANCHOR = "outputs"
-_PATH_KEYS = ("month", "feature", "category", "asset")
+_PATH_KEYS = ("month", "feature", "category", "asset", "phase")
 
 
 def tag_from_path(folder: str, rel: str = "", anchor: str = OUTPUTS_ANCHOR) -> dict:
@@ -283,7 +287,8 @@ def tag_from_path(folder: str, rel: str = "", anchor: str = OUTPUTS_ANCHOR) -> d
 
 
 def import_folder(dir_path: str, folder: str, *, tag=None, at: str = "",
-                  limit: int = IMPORT_LIMIT, derive: bool = True) -> dict:
+                  limit: int = IMPORT_LIMIT, derive: bool = True,
+                  only_phase: str = "") -> dict:
     """File every image under `folder` as a candidate.
 
     This is how a picker sees work that already exists: the buffer is per node,
@@ -305,12 +310,23 @@ def import_folder(dir_path: str, folder: str, *, tag=None, at: str = "",
                 if str(v or "").strip()}
     found = _images_under(folder)
     truncated = max(0, len(found) - limit)
-    added, skipped, failed = 0, 0, 0
+    added, skipped, failed, filtered = 0, 0, 0, 0
     for rel in found[:limit]:
         path = os.path.join(folder, rel.replace("/", os.sep))
         # Per image, not per folder: pointing at a category reads each recipe
         # subfolder under it as its own asset in one go.
-        merged = {**(tag_from_path(folder, rel) if derive else {}), **explicit}
+        derived = tag_from_path(folder, rel) if derive else {}
+        # A picker pinned to one pass reads only that pass. The comparison is
+        # against what the PATH says, not against the merged tag: the pin is
+        # also what stamps an image whose folder has no pass level, and
+        # comparing after the stamp would make every image match itself.
+        # Filtering here rather than at display time keeps two thirds of the
+        # images off its disk instead of merely off its grid.
+        found_phase = str(derived.get("phase", ""))
+        if only_phase and found_phase and found_phase != only_phase:
+            filtered += 1
+            continue
+        merged = {**derived, **explicit}
         try:
             with Image.open(path) as img:
                 img.load()
@@ -323,7 +339,7 @@ def import_folder(dir_path: str, folder: str, *, tag=None, at: str = "",
         else:
             added += 1
     return {"added": added, "skipped": skipped, "failed": failed,
-            "found": len(found), "truncated": truncated}
+            "filtered": filtered, "found": len(found), "truncated": truncated}
 
 
 def _images_under(folder: str) -> list[str]:
