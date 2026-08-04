@@ -72,7 +72,13 @@ def build_modules():
         ComfyNode=ComfyNode, Schema=Schema, NodeOutput=NodeOutput,
         String=_IOType, Boolean=_IOType, Custom=lambda name: _IOType,
         # Named values a schema lists rather than a type it builds from.
-        Hidden=types.SimpleNamespace(unique_id="unique_id"))
+        # Every hidden a node may declare belongs here: a missing one raises
+        # from define_schema, which reads as the node being broken rather than
+        # as the stub being short.
+        Hidden=types.SimpleNamespace(
+            unique_id="unique_id", prompt="prompt", dynprompt="dynprompt",
+            extra_pnginfo="extra_pnginfo", auth_token_comfy_org="auth_token_comfy_org",
+            api_key_comfy_org="api_key_comfy_org"))
     latest = types.ModuleType("comfy_api.latest")
     latest.io = io_ns
     # Keeps the text the node meant to show, so a test can assert on what lands

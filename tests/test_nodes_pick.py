@@ -264,6 +264,78 @@ class TestLookingAtAPickMustNotPayForIt:
         assert len(buffer_of(nodes_mod, tmp_path)) == 1
 
 
+class TestAskingForTheWireOnlyWhenThereIsOne:
+    """Two live failures, one loud and one silent. Asking for an input with no
+    link fails the whole graph with NodeInputError. And under is_input_list an
+    unevaluated lazy input arrives as `(None,)`, so testing for `None` read it
+    as a real value, never requested the wire, and recorded nothing while the
+    run reported success."""
+
+    def test_an_unevaluated_input_list_input_is_a_tuple_of_none(self, nodes_mod):
+        assert nodes_mod._unevaluated((None,)) is True
+        assert nodes_mod._unevaluated([None, None]) is True
+        assert nodes_mod._unevaluated(None) is True
+
+    def test_a_real_value_is_not_mistaken_for_an_unevaluated_one(self, nodes_mod):
+        assert nodes_mod._unevaluated([frames(0.1)]) is False
+        assert nodes_mod._unevaluated([]) is False
+
+    def _wire(self, nodes_mod, images):
+        node = {"inputs": {} if images is None else {"images": images}}
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id="7", prompt={"7": node}, dynprompt=None)
+
+    def test_a_connected_but_unevaluated_wire_is_requested(self, nodes_mod):
+        self._wire(nodes_mod, ["9", 0])
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,), collect=[True]) == ["images"]
+
+    def test_an_unconnected_wire_is_never_requested(self, nodes_mod):
+        """A picker sitting on the canvas before anything is wired to it is an
+        ordinary state, not a reason to fail the graph."""
+        self._wire(nodes_mod, None)
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,), collect=[True]) == []
+
+    def test_dynprompt_answers_when_the_raw_prompt_is_absent(self, nodes_mod):
+        class _Dyn:
+            def get_node(self, node_id):
+                return {"inputs": {"images": ["9", 0]}} if node_id == "7" else None
+
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id="7", prompt=None, dynprompt=_Dyn())
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,), collect=[True]) == ["images"]
+
+    def test_an_unanswerable_lookup_still_asks_rather_than_collecting_nothing(
+            self, nodes_mod):
+        """Silently never collecting is the worse failure of the two: it looks
+        like a working run that produced nothing."""
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(unique_id=None)
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,), collect=[True]) == ["images"]
+
+    def test_a_broken_prompt_lookup_does_not_escape(self, nodes_mod):
+        class _Boom:
+            def get_node(self, node_id):
+                raise RuntimeError("no such node")
+
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id="7", prompt=None, dynprompt=_Boom())
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,), collect=[True]) == ["images"]
+
+    def test_collecting_off_never_asks_even_with_a_wire(self, nodes_mod):
+        self._wire(nodes_mod, ["9", 0])
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,), collect=[False]) == []
+
+    def test_an_unevaluated_wire_records_nothing_rather_than_a_blank(self, nodes_mod,
+                                                                     tmp_path):
+        run(nodes_mod, images=(None,), collect=[True])
+        assert buffer_of(nodes_mod, tmp_path) == []
+
+
 class TestChainingTwoPickers:
     def test_the_picks_of_one_become_the_candidates_of_the_next(self, nodes_mod,
                                                                 tmp_path):

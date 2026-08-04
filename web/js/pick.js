@@ -263,12 +263,40 @@ function pickPanel(node) {
 
     // --- the grid ------------------------------------------------------------
     function renderGrid(ticks) {
+        const list = shown();
+        // One row per stage when the candidates carry roles, so a prep is
+        // compared against the other preps rather than against a serving. Row
+        // order is arrival order — the order the sheet was cut in — because
+        // alphabetically "prep" would follow "ready".
+        const order = [];
+        for (const im of list) {
+            const role = im.role || "";
+            if (!order.includes(role)) order.push(role);
+        }
+        if (!order.some((r) => r)) return tileStrip(list, ticks);
+
+        const wrap = el("div", "padding:2px;");
+        for (const role of order) {
+            const row = el("div", "margin-bottom:5px;");
+            row.appendChild(el("div",
+                `color:${HUB.inkSubtle};font:10px ${HUB.font};`
+                + "text-transform:uppercase;letter-spacing:.06em;margin:0 0 2px 1px;",
+                role || "unlabelled"));
+            row.appendChild(tileStrip(list.filter((i) => (i.role || "") === role),
+                                      ticks));
+            wrap.appendChild(row);
+        }
+        return wrap;
+    }
+
+    function tileStrip(items, ticks) {
         const px = SIZES[thumbSize(node)];
         const grid = el("div", "display:flex;flex-wrap:wrap;gap:4px;padding:2px;");
-        for (const im of shown()) {
+        for (const im of items) {
             const on = ticks.has(im.id);
             const cell = el("div", `position:relative;width:${px}px;flex:none;cursor:pointer;`);
-            cell.title = `${im.group}${im.w ? ` · ${im.w}×${im.h}` : ""}`
+            cell.title = `${im.group}${im.role ? ` · ${im.role}` : ""}`
+                + `${im.w ? ` · ${im.w}×${im.h}` : ""}`
                 + `${im.at ? ` · ${im.at}` : ""}\nclick to tick · double-click opens full size`;
 
             const img = el("img",

@@ -7,7 +7,7 @@ from PIL import Image
 
 from pipeline.pick_buffer import (INDEX_NAME, add_image, buffer_dir, clear,
                                   drop, group_key, groups, image_id,
-                                  list_entries, read_index, safe_node_id,
+                                  list_entries, read_index, roles, safe_node_id,
                                   selected_paths, write_index)
 
 
@@ -234,3 +234,33 @@ class TestIndexRoundTrip:
         d.mkdir()
         (d / INDEX_NAME).write_text(json.dumps([{"id": "a"}, "junk", 7]))
         assert read_index(str(d)) == [{"id": "a"}]
+
+
+class TestStageRows:
+    """He works a food asset as prep / ready / serving and wants each stage on
+    its own row, compared against its own alternatives."""
+
+    def test_a_candidate_records_the_stage_it_is(self, tmp_path):
+        d = str(tmp_path / "buf")
+        add_image(d, solid(), tag={"asset": "cake", "role": "prep"})
+        assert list_entries(d)[0]["role"] == "prep"
+
+    def test_the_stage_is_not_part_of_the_group_label(self, tmp_path):
+        """Otherwise an asset's three stages become three groups that have to
+        be switched between, which is the opposite of comparing them."""
+        d = str(tmp_path / "buf")
+        add_image(d, solid((1, 1, 1)), tag={"asset": "cake", "role": "prep"})
+        add_image(d, solid((2, 2, 2)), tag={"asset": "cake", "role": "serving"})
+        assert {e["group"] for e in list_entries(d)} == {"cake"}
+
+    def test_rows_come_back_in_the_order_the_sheet_was_cut(self, tmp_path):
+        """Arrival order, not alphabetical — alphabetically prep follows ready."""
+        d = str(tmp_path / "buf")
+        for i, role in enumerate(("prep", "ready", "serving", "prep")):
+            add_image(d, solid((i + 1, i + 1, i + 1)), tag={"role": role})
+        assert roles(list_entries(d)) == ["prep", "ready", "serving"]
+
+    def test_untagged_candidates_report_one_empty_row(self, tmp_path):
+        d = str(tmp_path / "buf")
+        add_image(d, solid())
+        assert roles(list_entries(d)) == [""]

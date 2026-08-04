@@ -712,6 +712,7 @@ async def pick_list(request):
         "images": [{
             "id": e.get("id", ""), "path": e.get("path", ""),
             "thumb": e.get("thumb_path", ""), "group": e.get("group", ""),
+            "role": e.get("role", ""),
             "asset": e.get("asset", ""), "category": e.get("category", ""),
             "feature": e.get("feature", ""), "month": e.get("month", ""),
             "w": e.get("w", 0), "h": e.get("h", 0), "at": e.get("at", ""),

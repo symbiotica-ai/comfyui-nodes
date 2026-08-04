@@ -87,13 +87,19 @@ def image_id(img) -> str:
 
 
 def tag_of(asset: str = "", category: str = "", feature: str = "",
-           month: str = "") -> dict:
-    """The context one candidate was generated under, as recorded on it."""
+           month: str = "", role: str = "") -> dict:
+    """The context one candidate was generated under, as recorded on it.
+
+    `role` is deliberately not part of the group label: an asset's stages
+    belong together in one view, laid out as rows, not split into separate
+    groups that have to be switched between to compare them.
+    """
     return {
         "asset": str(asset or "").strip(),
         "category": str(category or "").strip(),
         "feature": str(feature or "").strip(),
         "month": str(month or "").strip(),
+        "role": str(role or "").strip(),
     }
 
 
@@ -181,6 +187,21 @@ def groups(entries: list[dict]) -> list[dict]:
             seen[key] = {"key": key, "count": 0}
             out.append(seen[key])
         seen[key]["count"] += 1
+    return out
+
+
+def roles(entries: list[dict]) -> list[str]:
+    """The distinct roles present, in first-seen order.
+
+    Arrival order is the pipeline's own order — a food sheet is cut prep,
+    ready, serving — so the rows read the way the stages run rather than
+    alphabetically, where "prep" would follow "ready".
+    """
+    out: list[str] = []
+    for entry in entries:
+        role = str(entry.get("role", "") or "")
+        if role not in out:
+            out.append(role)
     return out
 
 

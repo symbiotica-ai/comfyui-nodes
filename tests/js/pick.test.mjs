@@ -234,3 +234,43 @@ test("a workflow load re-reads the buffer once the node id is final", async () =
 test("the extension registered", () => {
     assert.ok(app.extensions.some((e) => e.name === "symbiotica.pick"));
 });
+
+const PREP = { ...CAKE_A, id: "p1", thumb: "/out/p1_thumb.png", role: "prep" };
+const READY = { ...CAKE_A, id: "r1", thumb: "/out/r1_thumb.png", role: "ready" };
+const SERVING = { ...CAKE_A, id: "s1", thumb: "/out/s1_thumb.png", role: "serving" };
+const PREP2 = { ...CAKE_A, id: "p2", thumb: "/out/p2_thumb.png", role: "prep" };
+
+const rowLabels = (node) =>
+    walk(listOf(node))
+        .filter((e) => ["PREP", "READY", "SERVING"].includes(String(e.textContent).toUpperCase()))
+        .map((e) => e.textContent);
+
+test("stages are laid out one row per stage, in the order the sheet was cut", async () => {
+    // A prep should be compared against the other preps, not against a serving.
+    const node = await panelNode([], [PREP, READY, SERVING, PREP2]);
+    assert.deepEqual(rowLabels(node), ["prep", "ready", "serving"]);
+    assert.equal(tiles(node).length, 4);
+});
+
+test("the two preps sit together in the first row", async () => {
+    const node = await panelNode([], [PREP, READY, SERVING, PREP2]);
+    // Each row is [label, strip]; the strip's children are the tiles.
+    const rows = walk(listOf(node))
+        .filter((e) => e.children.length === 2
+            && ["prep", "ready", "serving"].includes(e.children[0].textContent));
+    assert.deepEqual(rows.map((r) => r.children[0].textContent),
+                     ["prep", "ready", "serving"]);
+    assert.deepEqual(rows.map((r) => r.children[1].children.length), [2, 1, 1]);
+});
+
+test("candidates with no stage keep the flat grid", async () => {
+    const node = await panelNode([], [CAKE_A, CAKE_B]);
+    assert.deepEqual(rowLabels(node), []);
+    assert.equal(tiles(node).length, 2);
+});
+
+test("ticking still works inside a stage row", async () => {
+    const node = await panelNode([], [PREP, READY, SERVING]);
+    fire(tiles(node)[2], "click");
+    assert.deepEqual(ticksOf(node), ["s1"]);
+});

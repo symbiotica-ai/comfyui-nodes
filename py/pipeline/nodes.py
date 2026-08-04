@@ -3200,6 +3200,22 @@ def _image_frames(images):
     return [images]
 
 
+def _unevaluated(value):
+    """Whether a lazy input has not been resolved yet.
+
+    Under is_input_list ComfyUI hands an unevaluated lazy input in as `(None,)`
+    rather than `None` (comfy_api/latest/_io.py, check_lazy_status docstring).
+    Testing only for `None` reads that tuple as a real value, so the input is
+    never requested, the wire is never evaluated, and the node quietly records
+    nothing while the run reports success.
+    """
+    if value is None:
+        return True
+    if isinstance(value, (list, tuple)):
+        return len(value) > 0 and all(item is None for item in value)
+    return False
+
+
 def _as_list(value):
     """A per-item input as a list, whatever arrived.
 
@@ -3309,6 +3325,13 @@ class SymbioticaPick(io.ComfyNode):
                                         "— tags them, and the node opens on "
                                         "that tag."),
                 io.String.Input("category", default="", optional=True),
+                io.String.Input("role", default="", optional=True,
+                                tooltip="Slice Cells' `roles` output. Lays the "
+                                        "grid out one row per stage — every "
+                                        "prep together, every ready, every "
+                                        "serving — so a stage is compared "
+                                        "against its own alternatives instead "
+                                        "of against the other stages."),
                 Order.Input("order", optional=True,
                             tooltip="Optional: tags candidates with the "
                                     "order's feature and month too."),
@@ -3320,7 +3343,9 @@ class SymbioticaPick(io.ComfyNode):
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
             ],
-            hidden=[io.Hidden.unique_id],
+            # `prompt` and `dynprompt` are how check_lazy_status finds out
+            # whether `images` actually has a link before asking for it.
+            hidden=[io.Hidden.unique_id, io.Hidden.prompt, io.Hidden.dynprompt],
             # An output node so the buffer can be filled on its own: "Queue
             # Selected Output Node" on this node collects candidates without
             # anything downstream needing to exist yet.
@@ -3328,8 +3353,40 @@ class SymbioticaPick(io.ComfyNode):
         )
 
     @classmethod
+    def _images_wired(cls):
+        """True/False when the `images` input's link can be determined, else None.
+
+        Asking for an input that has no link is not a no-op: ComfyUI answers
+        with `NodeInputError: says it needs input images, but there is no input
+        to that node at all` and fails the whole graph. A picker sitting on the
+        canvas before anything is wired to it is an ordinary state, so the
+        question has to be answered before the input is requested. The value
+        alone cannot answer it — unconnected and unevaluated both arrive empty.
+        """
+        hidden = getattr(cls, "hidden", None)
+        node_id = str(getattr(hidden, "unique_id", "") or "")
+        if not node_id:
+            return None
+        for source in (getattr(hidden, "prompt", None),
+                       getattr(hidden, "dynprompt", None)):
+            node = None
+            try:
+                if isinstance(source, dict):
+                    node = source.get(node_id)
+                elif source is not None and hasattr(source, "get_node"):
+                    node = source.get_node(node_id)
+            except Exception:
+                node = None
+            if isinstance(node, dict):
+                # A wired input is stored as [origin_node_id, slot]; a widget
+                # value is a scalar, and an unconnected optional is absent.
+                return isinstance((node.get("inputs") or {}).get("images"), list)
+        return None
+
+    @classmethod
     def check_lazy_status(cls, images=None, collect=True, asset="",
-                          category="", order=None, selection="", view=""):
+                          category="", role="", order=None, selection="",
+                          view=""):
         """Whether the wire above this node is worth evaluating at all.
 
         This is the difference between looking at a pick and paying for it.
@@ -3342,11 +3399,13 @@ class SymbioticaPick(io.ComfyNode):
         one = SymbioticaCategoryPrompts._one
         if not bool(one(collect, True)):
             return []
-        return ["images"] if images is None else []
+        if cls._images_wired() is False:
+            return []
+        return ["images"] if _unevaluated(images) else []
 
     @classmethod
     def execute(cls, images=None, collect=True, asset="", category="",
-                order=None, selection="", view="") -> io.NodeOutput:
+                role="", order=None, selection="", view="") -> io.NodeOutput:
         import datetime
 
         from PIL import Image
@@ -3379,10 +3438,12 @@ class SymbioticaPick(io.ComfyNode):
         items = _as_list(images) if bool(one(collect, True)) else []
         assets = _as_list(asset)
         cats = _as_list(category)
+        parts = _as_list(role)
         added = 0
         for index, item in enumerate(items):
             tag = {"asset": _at_or_first(assets, index),
                    "category": _at_or_first(cats, index),
+                   "role": _at_or_first(parts, index),
                    "feature": feature, "month": month}
             for frame in _image_frames(item):
                 if add_image(dir_path, _tensor_to_pil(frame), tag=tag, at=stamp):
