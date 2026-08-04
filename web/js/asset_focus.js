@@ -208,14 +208,20 @@ function focusPanel(node) {
             "display:flex;align-items:center;gap:6px;width:100%;"
             + "box-sizing:border-box;overflow:hidden;"
             + `padding:2px 3px 4px;color:${HUB.inkSubtle};`);
-        head.append(el("span", "flex:1;min-width:0;",
-                       `${assets.length} asset${assets.length === 1 ? "" : "s"}`
-                       + `${narrowed() ? ` · ${narrowed()}` : ""}`));
+        // Say what the node will actually emit, not just what is listed.
+        head.append(el("span",
+            "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;"
+            + "white-space:nowrap;",
+            `${assets.length} asset${assets.length === 1 ? "" : "s"}`
+            + `${narrowed() ? ` · ${narrowed()}` : ""}`
+            + ` · runs ${pick ? "1" : assets.length}`));
         if (pick) {
             const clear = el("button", ghostButtonCss + "padding:1px 7px;flex:none;",
                              "all");
             clear.className = "sym-btn";
-            clear.title = "Go back to the first asset";
+            clear.title = assets.length === 1
+                ? "Emit the whole event instead of this one asset"
+                : `Emit all ${assets.length} assets instead of this one`;
             clear.addEventListener("pointerdown", (e) => e.stopPropagation());
             clear.addEventListener("click", () => choose(pick));
             head.appendChild(clear);

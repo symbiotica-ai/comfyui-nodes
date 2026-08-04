@@ -1068,9 +1068,10 @@ class SymbioticaAssetFocus(io.ComfyNode):
                         "three more, so working on a single asset meant an "
                         "index node per list, all held at the same position by "
                         "hand. The index is applied once, here, and nothing "
-                        "downstream has a list to index. Order Assets is still "
-                        "the node to use to render a whole event in one press; "
-                        "this is the one to use while iterating on one asset.",
+                        "downstream has a list to index. Choose nothing and it "
+                        "emits the whole event instead, so the same node "
+                        "covers both the one-asset iteration loop and a run "
+                        "over everything.",
             inputs=[
                 Order.Input("order"),
                 io.String.Input("category", default="",
@@ -1081,18 +1082,23 @@ class SymbioticaAssetFocus(io.ComfyNode):
                                         "it on the node; typed names work too. "
                                         "Empty means the first."),
             ],
+            # Lists, but normally of one. A single-element list behaves exactly
+            # like a scalar downstream — it runs once — so choosing an asset
+            # leaves nothing to index. Choosing none emits every asset instead,
+            # and downstream fans out over the whole event.
             outputs=[
-                io.String.Output(display_name="asset_name"),
-                io.String.Output(display_name="category"),
-                io.String.Output(display_name="client_prompt"),
-                io.String.Output(display_name="save_path",
+                io.String.Output(display_name="asset_name", is_output_list=True),
+                io.String.Output(display_name="category", is_output_list=True),
+                io.String.Output(display_name="client_prompt",
+                                 is_output_list=True),
+                io.String.Output(display_name="save_path", is_output_list=True,
                                  tooltip="month/feature/category/asset — the "
                                          "same value Order Assets emits, so a "
                                          "save node and a Pick node's folder "
                                          "both take it."),
-                io.Int.Output(display_name="index",
-                              tooltip="Where this asset sits in the run, for "
-                                      "anything still handed a list."),
+                io.Int.Output(display_name="index", is_output_list=True,
+                              tooltip="Where each asset sits in the run, for "
+                                      "anything that still wants a position."),
             ],
             hidden=[io.Hidden.unique_id],
             # An output node so it can be queued on its own. Without that there
@@ -1132,12 +1138,10 @@ class SymbioticaAssetFocus(io.ComfyNode):
         })
 
         wanted = str(asset or "").strip()
-        index = 0
+        chosen = list(enumerate(items))
         if wanted:
             names = [a["assetName"] for a in items]
-            if wanted in names:
-                index = names.index(wanted)
-            else:
+            if wanted not in names:
                 # Falling back silently would render the wrong asset under the
                 # wrong name and file it in the wrong folder. An event whose
                 # assets were renamed must say so.
@@ -1145,10 +1149,17 @@ class SymbioticaAssetFocus(io.ComfyNode):
                     f"no asset called {wanted!r} in "
                     f"{order.get('feature', '')!r} — it holds: "
                     f"{', '.join(names)}")
-        item = items[index]
-        return io.NodeOutput(item["assetName"], item["category"],
-                             item["prompt"], save_paths(order, [item])[0],
-                             index)
+            index = names.index(wanted)
+            chosen = [(index, items[index])]
+        # No choice means the whole event, which is what the panel's "all"
+        # says: a button that reads "all" and emits one asset is lying about
+        # what the node is going to do.
+        picked = [item for _, item in chosen]
+        return io.NodeOutput([i["assetName"] for i in picked],
+                             [i["category"] for i in picked],
+                             [i["prompt"] for i in picked],
+                             save_paths(order, picked),
+                             [index for index, _ in chosen])
 
 
 class SymbioticaSaveRender(io.ComfyNode):

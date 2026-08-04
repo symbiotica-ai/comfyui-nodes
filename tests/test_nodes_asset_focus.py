@@ -50,11 +50,13 @@ def run(nodes, **kw):
 class TestOneAssetsWholeRecord:
     def test_every_field_comes_out_on_its_own_wire(self, nodes_mod):
         """The point of the node: the index is applied once, here, so nothing
-        downstream has a list left to index."""
+        downstream has a list left to index. The outputs are lists of one,
+        which runs downstream exactly once — the same as a scalar."""
         out = run(nodes_mod, order=ORDER, asset="Frankenstein Pops")
-        assert out.args == ("Frankenstein Pops", "Food - 3 stages", "cake pops",
-                            "October/Mini 3 — Franken-Feast/Food - 3 stages/"
-                            "Frankenstein Pops", 1)
+        assert out.args == (["Frankenstein Pops"], ["Food - 3 stages"],
+                            ["cake pops"],
+                            ["October/Mini 3 — Franken-Feast/Food - 3 stages/"
+                             "Frankenstein Pops"], [1])
 
     def test_the_save_path_matches_what_order_assets_emits(self, nodes_mod):
         """A save node and a Pick node's folder both take this value, so the
@@ -64,21 +66,30 @@ class TestOneAssetsWholeRecord:
         expected = save_paths(ORDER, items)
         for index, item in enumerate(items):
             out = run(nodes_mod, order=ORDER, asset=item["assetName"])
-            assert out.args[3] == expected[index]
+            assert out.args[3] == [expected[index]]
 
-    def test_no_choice_means_the_first(self, nodes_mod):
-        assert run(nodes_mod, order=ORDER).args[0] == "Frankencrisps"
+    def test_no_choice_means_the_whole_event(self, nodes_mod):
+        """A button that reads "all" and emits one asset is lying about what
+        the node is going to do."""
+        out = run(nodes_mod, order=ORDER)
+        assert out.args[0] == ["Frankencrisps", "Frankenstein Pops", "Bunting"]
+        assert out.args[4] == [0, 1, 2]
+
+    def test_choosing_nothing_still_files_each_asset_under_its_own_path(
+            self, nodes_mod):
+        out = run(nodes_mod, order=ORDER)
+        assert out.args[3][2] == "October/Mini 3 — Franken-Feast/Decoration/Bunting"
 
     def test_a_category_narrows_what_can_be_chosen(self, nodes_mod):
         out = run(nodes_mod, order=ORDER, category="Decoration")
-        assert (out.args[0], out.args[1]) == ("Bunting", "Decoration")
+        assert (out.args[0], out.args[1]) == (["Bunting"], ["Decoration"])
 
     def test_the_index_is_within_the_narrowed_run(self, nodes_mod):
         """It addresses the list this node was choosing from, not the raw
         order — anything still handed a list gets that one."""
         out = run(nodes_mod, order=ORDER, category="Decoration",
                   asset="Bunting")
-        assert out.args[4] == 0
+        assert out.args[4] == [0]
 
 
 class TestRefusals:
@@ -108,11 +119,12 @@ class TestRefusals:
 
 
 class TestSchema:
-    def test_the_outputs_are_scalars_not_lists(self, nodes_mod):
-        """A list output would put the index nodes straight back."""
+    def test_every_output_is_a_list(self, nodes_mod):
+        """Lists, but normally of one. A single-element list runs downstream
+        exactly once, so choosing an asset still leaves nothing to index —
+        while choosing none can fan out over the whole event."""
         schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
-        assert not any(getattr(o, "is_output_list", False)
-                       for o in schema.outputs)
+        assert all(o.is_output_list for o in schema.outputs)
 
     def test_it_is_registered(self, nodes_mod):
         assert nodes_mod.SymbioticaAssetFocus in nodes_mod.PIPELINE_NODE_CLASSES

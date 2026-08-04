@@ -69,6 +69,14 @@ test("the chosen asset is the one drawn as selected", async () => {
                              ["Bunting", true]]);
 });
 
+test("the header says how many the node will emit", async () => {
+    // "all" emits every listed asset now, so the count has to be visible.
+    const none = await focusNode({ asset: "" });
+    assert.match(listOf(none).children[0].children[0].textContent, /runs 3/);
+    const one = await focusNode({ asset: "Bunting" });
+    assert.match(listOf(one).children[0].children[0].textContent, /runs 1/);
+});
+
 test("the category being narrowed to is shown", async () => {
     const node = await focusNode({ category: "Decoration" });
     assert.match(listOf(node).children[0].textContent
