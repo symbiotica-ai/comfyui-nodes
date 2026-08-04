@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, fire, reset, tick } from "./comfy_stub.mjs";
+import { app, create, fire, link, reset, tick } from "./comfy_stub.mjs";
 import "../../web/js/asset_focus.js";
 
 const ASSETS = [
@@ -69,13 +69,6 @@ test("the chosen asset is the one drawn as selected", async () => {
                              ["Bunting", true]]);
 });
 
-test("before a run it says how to fill the list", async () => {
-    // The order arrives on a wire the canvas cannot read.
-    const node = await focusNode({}, []);
-    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /queue this node once/);
-});
-
 test("the category being narrowed to is shown", async () => {
     const node = await focusNode({ category: "Decoration" });
     assert.match(listOf(node).children[0].textContent
@@ -85,4 +78,67 @@ test("the category being narrowed to is shown", async () => {
 
 test("the extension registered", () => {
     assert.ok(app.extensions.some((e) => e.name === "symbiotica.asset_focus"));
+});
+
+test("the assets appear from the wired source, with no run at all", async () => {
+    // Nothing downstream is wired when the node is first dropped, so waiting
+    // for a run means waiting forever.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3 — Franken-Feast" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Frankencrisps", category: "Food - 3 stages" },
+        { assetName: "Bunting", category: "Decoration" },
+        { assetName: "", category: "Decoration" },
+    ] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    // The nameless row is spreadsheet padding, not an asset.
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["Frankencrisps", "Bunting"]);
+});
+
+test("the category widget narrows the published list too", async () => {
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Frankencrisps", category: "Food - 3 stages" },
+        { assetName: "Bunting", category: "Decoration" },
+    ] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "Decoration", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent), ["Bunting"]);
+});
+
+test("with nothing wired it says what to wire", async () => {
+    const node = await focusNode({}, []);
+    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
+    assert.match(text, /wire an Order Specs/);
+});
+
+test("what a run reported wins over what was published", async () => {
+    // The run's list is what the node actually chose from, already narrowed.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Stale", category: "Food" }] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symFocusAssets = [{ name: "FromTheRun", category: "Food" }];
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["FromTheRun"]);
 });

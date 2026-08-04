@@ -116,3 +116,11 @@ class TestSchema:
 
     def test_it_is_registered(self, nodes_mod):
         assert nodes_mod.SymbioticaAssetFocus in nodes_mod.PIPELINE_NODE_CLASSES
+
+
+class TestItCanBeQueuedOnItsOwn:
+    def test_it_is_an_output_node(self, nodes_mod):
+        """Its list of choices only exists once it has run, and nothing is
+        wired downstream when it is first dropped — so without this there is no
+        way to run it at all."""
+        assert nodes_mod.SymbioticaAssetFocus.GET_SCHEMA().is_output_node is True

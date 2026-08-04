@@ -13,6 +13,39 @@ const PANEL_MAX = 460;
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
 
+function upstreamNode(node, inputName) {
+    const input = node?.inputs?.find((i) => i.name === inputName);
+    if (!input || input.link == null) return null;
+    const link = app.graph.links[input.link];
+    return link ? app.graph.getNodeById(link.origin_id) : null;
+}
+
+// The feature combo reads "Mini 3 — Franken-Feast" while the event is keyed on
+// "Mini 3"; order_pipeline.js splits the same way.
+const featureKey = (value) => String(value ?? "").split(" — ")[0].trim();
+
+// The assets the wired source has ALREADY published to the canvas, so the list
+// exists before anything is queued. Order Specs keeps its parsed events on the
+// node and a Reference Browser publishes its picks in the same shape, which is
+// how the Auto Packer's panel fills without a run either.
+function publishedAssets(node) {
+    const source = upstreamNode(node, "order");
+    if (!source) return null;
+    let event = null;
+    if (source.comfyClass === "SymbioticaOrderSpecs") {
+        const events = source._symEvents ?? [];
+        const want = featureKey(widgetOf(source, "feature")?.value);
+        event = events.find((e) => featureKey(e.feature) === want) || events[0] || null;
+    } else if (source.comfyClass === "SymbioticaReferenceBrowser") {
+        event = source._symPickedEvent ?? null;
+    }
+    const assets = event?.assets ?? null;
+    if (!Array.isArray(assets)) return null;
+    return assets
+        .filter((a) => String(a.assetName ?? "").trim())
+        .map((a) => ({ name: a.assetName, category: a.category ?? "" }));
+}
+
 function focusPanel(node) {
     injectHubStyles();
 
@@ -48,12 +81,22 @@ function focusPanel(node) {
 
     function render() {
         list.replaceChildren();
-        const assets = node._symFocusAssets ?? [];
+        // What a run reported wins — it is the list the node actually chose
+        // from, already narrowed by `category`. Otherwise fall back to what the
+        // wired source published, so the choices are there before any run.
+        const narrow = narrowed().toLowerCase();
+        const published = (publishedAssets(node) ?? []).filter(
+            (a) => !narrow || String(a.category ?? "").toLowerCase() === narrow);
+        const assets = node._symFocusAssets?.length
+            ? node._symFocusAssets : published;
         const pick = chosen();
 
         if (!assets.length) {
             list.appendChild(emptyState(
-                "queue this node once to list the event's assets"));
+                upstreamNode(node, "order")
+                    ? "the wired order has no assets yet — pick a feature on "
+                      + "Order Specs, or queue this node"
+                    : "wire an Order Specs (or a Reference Browser) into order"));
             refit();
             return;
         }
@@ -115,6 +158,16 @@ registerSymbioticaExtension(app, {
         nodeType.prototype.onConfigure = function () {
             onConfigure?.apply(this, arguments);
             queueMicrotask(() => this._symRenderFocus?.());
+        };
+
+        // Wiring the order in is the moment the choices become knowable.
+        const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+        nodeType.prototype.onConnectionsChange = function (type, index, connected,
+                                                            link, ioSlot) {
+            onConnectionsChange?.apply(this, arguments);
+            if (ioSlot?.name === "order") {
+                queueMicrotask(() => this._symRenderFocus?.());
+            }
         };
     },
 });

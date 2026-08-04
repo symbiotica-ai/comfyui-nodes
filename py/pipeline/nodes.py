@@ -1095,6 +1095,10 @@ class SymbioticaAssetFocus(io.ComfyNode):
                                       "anything still handed a list."),
             ],
             hidden=[io.Hidden.unique_id],
+            # An output node so it can be queued on its own. Without that there
+            # is no way to run it before anything is wired downstream, and its
+            # list of choices only exists once it has run at least once.
+            is_output_node=True,
         )
 
     @classmethod
