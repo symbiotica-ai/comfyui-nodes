@@ -3470,11 +3470,13 @@ class SymbioticaPick(io.ComfyNode):
                                          "`images` for pictures and add them "
                                          "here. If that is a generator, this "
                                          "is what makes it render — and what "
-                                         "it costs. OFF: nothing upstream is "
-                                         "asked for anything at all; the node "
-                                         "just hands on the images you ticked, "
-                                         "free. Turn it on to make more, off "
-                                         "once you are choosing between them."),
+                                         "it costs. OFF: no generator is asked "
+                                         "for anything; the node hands on the "
+                                         "images you ticked, free. Another "
+                                         "Pick upstream is always read either "
+                                         "way — taking its picks costs "
+                                         "nothing, so a chain of pickers works "
+                                         "with this off the whole way down."),
                 io.String.Input("asset", default="", optional=True,
                                 tooltip="The asset these candidates belong to "
                                         "— tags them, and the node opens on "
@@ -3566,6 +3568,46 @@ class SymbioticaPick(io.ComfyNode):
         return None
 
     @classmethod
+    def _images_source_class(cls):
+        """The class_type of whatever feeds `images`, or "" when unknowable.
+
+        Whether asking for the wire costs anything depends entirely on what is
+        at the other end of it: a generator renders, another picker hands over
+        images it already has.
+        """
+        node = cls._prompt_node()
+        if not isinstance(node, dict):
+            return ""
+        link = (node.get("inputs") or {}).get("images")
+        if not isinstance(link, list) or not link:
+            return ""
+        source = cls._prompt_node(str(link[0]))
+        return str((source or {}).get("class_type", "")) if source else ""
+
+    @classmethod
+    def _prompt_node(cls, node_id=None):
+        """One node out of the prompt, by id, from whichever hidden carries it."""
+        hidden = getattr(cls, "hidden", None)
+        wanted = node_id if node_id is not None else str(
+            getattr(hidden, "unique_id", "") or "")
+        if not wanted:
+            return None
+        for source in (getattr(hidden, "prompt", None),
+                       getattr(hidden, "dynprompt", None)):
+            try:
+                if isinstance(source, dict):
+                    found = source.get(wanted)
+                elif source is not None and hasattr(source, "get_node"):
+                    found = source.get_node(wanted)
+                else:
+                    continue
+            except Exception:
+                continue
+            if isinstance(found, dict):
+                return found
+        return None
+
+    @classmethod
     def check_lazy_status(cls, images=None, get_new=True, asset="",
                           category="", role="", order=None, selection="",
                           view="", folder="", phase=""):
@@ -3579,9 +3621,16 @@ class SymbioticaPick(io.ComfyNode):
         because a lazy input that is not requested is never computed.
         """
         one = SymbioticaCategoryPrompts._one
-        if not bool(one(get_new, True)):
-            return []
         if cls._images_wired() is False:
+            return []
+        # `get_new` is about letting a GENERATOR run, not about refusing to
+        # speak to another picker. Reading from a picker upstream costs
+        # nothing — it serves images it already holds, or declines its own
+        # input in turn — so a chain of pickers works with fetching off all
+        # the way down, which is the only way to route picks without paying
+        # for a render.
+        if not bool(one(get_new, True)) \
+                and cls._images_source_class() != "SymbioticaPick":
             return []
         return ["images"] if _unevaluated(images) else []
 
@@ -3624,7 +3673,9 @@ class SymbioticaPick(io.ComfyNode):
         # the rest come from the folder structure, which is more specific than
         # a single value shared by the whole run.
         tag_defaults = {"phase": pass_name} if pass_name else {}
-        items = _as_list(images) if bool(one(get_new, True)) else []
+        from_picker = cls._images_source_class() == "SymbioticaPick"
+        items = _as_list(images) if (bool(one(get_new, True)) or from_picker) \
+            else []
         assets = _as_list(asset)
         cats = _as_list(category)
         parts = _as_list(role)

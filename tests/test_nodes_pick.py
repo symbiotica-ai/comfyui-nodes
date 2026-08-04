@@ -582,3 +582,49 @@ class TestSeeingWhatWasAlreadyMade:
             order=[{"month": "Oct", "feature": "Mini 1"}])
         # The folder's one image, and nothing from the wire.
         assert len(buffer_of(nodes_mod, tmp_path)) == 1
+
+
+class TestAChainOfPickersCostsNothing:
+    """"pick edit still not showing the selected images from pick base though
+    and it also triggers a fucking new generation" — both from one mistake:
+    `get_new` refused to speak to another picker, not just to a generator."""
+
+    def wire(self, nodes_mod, source_class):
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id="7",
+            prompt={"7": {"inputs": {"images": ["9", 0]}},
+                    "9": {"class_type": source_class}},
+            dynprompt=None)
+
+    def test_a_picker_upstream_is_read_even_with_fetching_off(self, nodes_mod):
+        """Taking another picker's picks costs nothing: it serves what it holds
+        or declines its own input in turn."""
+        self.wire(nodes_mod, "SymbioticaPick")
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,), get_new=[False]) == ["images"]
+
+    def test_a_generator_upstream_is_still_refused(self, nodes_mod):
+        self.wire(nodes_mod, "GeminiNanoBanana2V2")
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,), get_new=[False]) == []
+
+    def test_an_unknowable_source_is_still_refused(self, nodes_mod):
+        """Guessing wrong costs a render, so silence means no."""
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(unique_id="7")
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=(None,), get_new=[False]) == []
+
+    def test_the_picks_of_the_picker_upstream_are_actually_recorded(self,
+                                                                    nodes_mod,
+                                                                    tmp_path):
+        """Requesting the wire buys nothing if execute then throws it away."""
+        self.wire(nodes_mod, "SymbioticaPick")
+        nodes_mod.SymbioticaPick.execute(images=[frames(0.3), frames(0.6)],
+                                         get_new=[False])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 2
+
+    def test_a_generators_images_are_still_thrown_away_with_fetching_off(
+            self, nodes_mod, tmp_path):
+        self.wire(nodes_mod, "GeminiNanoBanana2V2")
+        nodes_mod.SymbioticaPick.execute(images=[frames(0.3)], get_new=[False])
+        assert buffer_of(nodes_mod, tmp_path) == []
