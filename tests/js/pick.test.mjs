@@ -367,12 +367,20 @@ test("an empty buffer says what to do, not which switch to flip", async () => {
 const EXPORTED = { ...CAKE_A, id: "e1", thumb: "/out/e1_thumb.png", phase: "export" };
 const EDITED = { ...CAKE_A, id: "d1", thumb: "/out/d1_thumb.png", phase: "edit" };
 
-test("a picker pinned to a pass shows only that pass", async () => {
+test("a picker pinned to a pass hides the other passes", async () => {
     // A 128px cutout with alpha is not an alternative to a full render.
-    const node = await panelNode([], [EXPORTED, EDITED, CAKE_B],
-                                 { phase: "export" });
+    const node = await panelNode([], [EXPORTED, EDITED], { phase: "export" });
     assert.equal(tiles(node).length, 1);
     assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/e1_thumb.png")));
+});
+
+test("pinning a pass keeps the candidates collected before the pin", async () => {
+    // "it worked well until i've set it to base then it broke down yet again".
+    // Everything already in the buffer when a pass is chosen carries no pass,
+    // so excluding them blanks a picker holding every render of the asset.
+    const node = await panelNode([], [EXPORTED, CAKE_A, CAKE_B],
+                                 { phase: "base" });
+    assert.equal(tiles(node).length, 2);
 });
 
 test("an unpinned picker shows every pass", async () => {
@@ -390,9 +398,11 @@ test("the pass is shown on the node body", async () => {
 });
 
 test("a buffer with nothing in this pass says so, and offers a way out", async () => {
-    // Images collected before the picker was pinned carry no pass at all, so
-    // this must not read as an empty buffer.
-    const node = await panelNode([], [EDITED, CAKE_B], { phase: "export" });
+    // Only reachable now when every candidate states a DIFFERENT pass — an
+    // untagged one belongs to whichever pass is pinned — and it must still not
+    // read as an empty buffer.
+    const node = await panelNode([], [EDITED, { ...CAKE_B, phase: "base" }],
+                                 { phase: "export" });
     const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
     assert.match(text, /none tagged "export"/);
     assert.equal(buttonsSaying(node, "show all 2").length, 1);

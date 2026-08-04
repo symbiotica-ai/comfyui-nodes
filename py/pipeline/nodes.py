@@ -3395,7 +3395,7 @@ def _pil_to_tensor_keep_alpha(img):
     return torch.from_numpy(arr)[None, ...]
 
 
-def _derived_pick_folder(tag):
+def _derived_pick_folder(tag, order=None):
     """Where this asset's renders are already filed, from what the node knows.
 
     `save_paths` builds `month/feature/category/asset` from the same values the
@@ -3404,12 +3404,21 @@ def _derived_pick_folder(tag):
     present. Built through `order_assets._segment` so it matches the folder a
     save node actually wrote, separator-for-separator.
 
+    The event level has to come through `event_label`, exactly as `save_paths`
+    takes it: the order's `feature` is "Mini 1" while the folder on disk is
+    "Mini 1 — Ghostly Goodies". Deriving from the bare feature named a path
+    that has never existed, which is a silent miss — a folder that is not
+    there reads the same as a folder with nothing in it.
+
     Returns "" when there is nothing specific enough to point at: reading a
     whole month because only the month is known would pull in every asset of
     every event.
     """
-    from .order_assets import _segment
-    parts = [_segment(tag.get(key, ""))
+    from .order_assets import _segment, event_label
+    labelled = dict(tag)
+    if order:
+        labelled["feature"] = event_label(order) or tag.get("feature", "")
+    parts = [_segment(labelled.get(key, ""))
              for key in ("month", "feature", "category", "asset")]
     if not parts[-1] and not parts[-2]:
         return ""
@@ -3718,7 +3727,11 @@ class SymbioticaPick(io.ComfyNode):
         context = {"month": month, "feature": feature,
                    "category": _at_or_first(cats, 0),
                    "asset": _at_or_first(assets, 0)}
-        home = _pick_folders([_derived_pick_folder(context)])
+        # The folder takes the event's full label because that is what the save
+        # node wrote; the TAGS keep the order's plain feature, which is what
+        # every candidate already in a buffer carries — relabelling them would
+        # hide every tick made before this run.
+        home = _pick_folders([_derived_pick_folder(context, ord_dict)])
         home = home[0] if home else ""
         # Both save layouts, because both are real. Save Image treats the last
         # segment of a filename prefix as the FILE's name, so pointing it at
@@ -3781,7 +3794,14 @@ class SymbioticaPick(io.ComfyNode):
         for entry in entries:
             if entry.get("id") not in wanted:
                 continue
-            if pass_name and str(entry.get("phase", "")).lower() != pass_name:
+            # A candidate with no pass on it matches whichever pass is pinned.
+            # It was collected by THIS picker, for this asset, before the pin
+            # existed — every image already in a buffer when a pass is chosen
+            # is in that state. Excluding them made pinning `base` empty a
+            # picker holding 73 renders, which reads as the node breaking. The
+            # folder import has always had this rule; the output did not.
+            entry_phase = str(entry.get("phase", "")).lower()
+            if pass_name and entry_phase and entry_phase != pass_name:
                 continue
             if current and current != "untagged" \
                     and str(entry.get("group", "")) != current:

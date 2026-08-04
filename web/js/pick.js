@@ -171,9 +171,16 @@ function pickPanel(node) {
     // matters for candidates collected before the pin was set.
     const phaseOf = (n) => widgetOf(n, "phase")?.value?.trim?.() || "";
 
+    // An untagged candidate belongs to whichever pass is pinned: it was
+    // collected by this picker before the pin existed, which is the state of
+    // everything already in the buffer the moment a pass is chosen. Hiding
+    // those made pinning `base` blank a picker holding 73 renders. Only a
+    // candidate that states a DIFFERENT pass is filtered out.
     const inPhase = () => {
         const phase = phaseOf(node);
-        return phase ? images.filter((i) => (i.phase || "") === phase) : images;
+        return phase
+            ? images.filter((i) => !i.phase || i.phase === phase)
+            : images;
     };
 
     const shown = () => {

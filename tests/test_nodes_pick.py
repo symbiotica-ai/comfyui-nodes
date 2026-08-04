@@ -625,6 +625,37 @@ class TestSeeingWhatWasAlreadyMade:
             order=[{"month": "Oct", "feature": "Mini 1"}])
         assert len(buffer_of(nodes_mod, tmp_path)) == 1
 
+    def test_the_event_folder_is_the_one_the_save_node_wrote(self, nodes_mod,
+                                                              tmp_path):
+        """Found live, and the reason node 483 stayed empty after the layout
+        fix. `save_paths` files under `event_label(order)` — "Mini 1 — Ghostly
+        Goodies" — while the picker derived from the order's bare `feature`,
+        "Mini 1". That path has never existed, and a folder that is not there
+        reads exactly like a folder with nothing in it."""
+        self.renders(tmp_path, "October/Mini 1 — Ghostly Goodies/Food",
+                     ("Spookies_00001_.png",))
+        run(nodes_mod, asset=["Spookies"], category=["Food"],
+            order=[{"month": "October", "feature": "Mini 1",
+                    "eventName": "Ghostly Goodies"}])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1
+
+    def test_the_tags_keep_the_plain_feature_the_buffer_already_uses(
+            self, nodes_mod, tmp_path):
+        """The folder needs the event's full label; the tags must not take it.
+        Every candidate already collected carries the bare feature, and
+        relabelling would put them in another group than the one on screen —
+        which is to say, hide every tick already made."""
+        self.renders(tmp_path, "October/Mini 1 — Ghostly Goodies/Food",
+                     ("Spookies_00001_.png",))
+        order = [{"month": "October", "feature": "Mini 1",
+                  "eventName": "Ghostly Goodies"}]
+        run(nodes_mod, asset=["Spookies"], category=["Food"], order=order)
+        entry = buffer_of(nodes_mod, tmp_path)[0]
+        assert entry["feature"] == "Mini 1"
+        assert len(run(nodes_mod, asset=["Spookies"], category=["Food"],
+                       order=order,
+                       selection=[json.dumps([entry["id"]])]).args[0]) == 1
+
     def test_a_prefix_read_is_tagged_with_what_the_node_is_wired_to(
             self, nodes_mod, tmp_path):
         """Found live. Reading by prefix means the file sits one level up, so
@@ -808,6 +839,20 @@ class TestWhatYouSeeIsWhatComesOut:
                   order=[{"month": "Oct", "feature": "Mini 3"}],
                   selection=[json.dumps(every_tick)])
         assert len(out.args[0]) == 2
+
+    def test_pinning_a_pass_keeps_what_was_collected_before_the_pin(
+            self, nodes_mod, tmp_path):
+        """"it worked well until i've set it to base then it broke down yet
+        again". Everything already in a buffer when a pass is chosen carries no
+        pass, so excluding those emitted nothing from a picker holding every
+        render of the asset. The folder import always had this rule."""
+        run(nodes_mod, images=[frames(0.1)], asset=["Cake"], category=["Food"],
+            order=[{"month": "Oct", "feature": "Ev"}])
+        ids = [e["id"] for e in buffer_of(nodes_mod, tmp_path)]
+        out = run(nodes_mod, asset=["Cake"], category=["Food"], phase=["base"],
+                  order=[{"month": "Oct", "feature": "Ev"}],
+                  selection=[json.dumps(ids)])
+        assert len(out.args[0]) == 1
 
     def test_a_pinned_pass_narrows_it_further(self, nodes_mod, tmp_path):
         run(nodes_mod, images=[frames(0.1)], asset=["Cake"], category=["Food"],
