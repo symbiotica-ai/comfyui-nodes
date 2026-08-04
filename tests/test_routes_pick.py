@@ -175,3 +175,71 @@ class TestClearing:
     def test_a_request_with_no_body_is_refused_not_a_crash(self, env):
         res = _run(env.routes.pick_clear(_Req()))
         assert res["status"] == 400
+
+
+class TestReadingAFolder:
+    def make(self, folder, names):
+        os.makedirs(folder, exist_ok=True)
+        for i, name in enumerate(names):
+            Image.new("RGB", (6, 6), (10 + i * 7, 0, 0)).save(
+                os.path.join(folder, name))
+
+    def test_a_folder_under_a_declared_root_is_read(self, env):
+        src = env.out / "renders" / "Frankencrisps"
+        self.make(str(src), ["a.png", "b.png"])
+        res = _run(env.routes.pick_import(
+            _Req(body={"node_id": "7", "folder": str(src)})))
+        assert res["body"]["added"] == 2
+        assert len(_run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"]) == 2
+
+    def test_the_folder_structure_stands_in_for_the_tags(self, env):
+        """A wired asset input has no widget value to send, and does not need
+        one: renders are filed outputs/<month>/<event>/<category>/<recipe>."""
+        src = env.out / "outputs" / "October" / "Mini 3" / "Food" / "Frankencrisps"
+        self.make(str(src), ["a.png"])
+        _run(env.routes.pick_import(
+            _Req(body={"node_id": "7", "folder": str(src)})))
+        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
+        assert entry["group"] == "Mini 3 / Food / Frankencrisps"
+        assert entry["month"] == "October"
+
+    def test_an_explicit_asset_wins_over_the_folder_name(self, env):
+        src = env.out / "renders" / "batch-04"
+        self.make(str(src), ["a.png"])
+        _run(env.routes.pick_import(_Req(body={
+            "node_id": "7", "folder": str(src), "asset": "cake",
+            "category": "Food", "role": "prep"})))
+        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
+        assert (entry["role"], entry["group"]) == ("prep", "Food / cake")
+
+    def test_a_folder_outside_every_declared_root_is_refused(self, env, tmp_path):
+        """Naming a folder is not what grants access to it."""
+        outside = tmp_path / "elsewhere"
+        self.make(str(outside), ["a.png"])
+        res = _run(env.routes.pick_import(
+            _Req(body={"node_id": "7", "folder": str(outside)})))
+        assert res["status"] == 403
+
+    def test_traversal_out_of_a_declared_root_is_refused(self, env, tmp_path):
+        outside = tmp_path / "elsewhere"
+        self.make(str(outside), ["a.png"])
+        res = _run(env.routes.pick_import(_Req(body={
+            "node_id": "7", "folder": str(env.out / ".." / "elsewhere")})))
+        assert res["status"] == 403
+
+    def test_no_folder_is_an_actionable_message(self, env):
+        res = _run(env.routes.pick_import(_Req(body={"node_id": "7"})))
+        assert res["status"] == 400
+        assert "folder" in res["body"]["error"]
+
+    def test_no_node_id_is_refused(self, env):
+        res = _run(env.routes.pick_import(_Req(body={"folder": str(env.out)})))
+        assert res["status"] == 400
+
+    def test_the_imported_images_are_immediately_servable(self, env):
+        """Otherwise the import lands and every new tile draws broken."""
+        src = env.out / "renders" / "cake"
+        self.make(str(src), ["a.png"])
+        _run(env.routes.pick_import(_Req(body={"node_id": "7", "folder": str(src)})))
+        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
+        assert env.routes.is_allowed(entry["thumb"])

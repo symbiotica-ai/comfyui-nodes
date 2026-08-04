@@ -744,3 +744,50 @@ async def pick_clear(request):
         return web.json_response({"ok": True, "removed": drop(dir_path, ids)})
     clear(dir_path)
     return web.json_response({"ok": True, "removed": "all"})
+
+
+@PromptServer.instance.routes.post("/symbiotica/pick-import")
+async def pick_import(request):
+    """File the images already sitting in a folder as one picker's candidates.
+
+    The buffer is per node, so a picker added after the work was generated
+    starts empty — and re-running the generator to fill it pays for renders
+    that already exist. The folder is checked against the declared roots like
+    every other path a request names; naming a folder is not what grants access
+    to it.
+    """
+    from .pick_buffer import import_folder
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    dir_path = _pick_dir(str(body.get("node_id") or ""))
+    if not dir_path:
+        return web.json_response({"error": "no buffer for that node"}, status=400)
+
+    folder = _expand_project(str(body.get("folder") or "").strip())
+    if not folder:
+        return web.json_response(
+            {"error": "type a folder into the node's `folder` field first"},
+            status=400)
+    real = resolve_within(declared_roots(), folder, kind="dir")
+    if real is None:
+        return web.json_response(
+            {"error": f"{folder} is not inside a folder this install serves"},
+            status=403)
+
+    # The wired asset name is not readable from the canvas — a wired input has
+    # no widget value — and it does not need to be: renders are filed
+    # `outputs/<month>/<event>/<category>/<recipe>/…`, so the path states it.
+    # Anything typed on the node still overrides what the path says.
+    tag = {"asset": str(body.get("asset") or "").strip(),
+           "category": str(body.get("category") or "").strip(),
+           "role": str(body.get("role") or "").strip()}
+    stamp = str(body.get("at") or "")
+    # Off the event loop: a few hundred PNGs get opened and thumbnailed here,
+    # and the canvas still needs to talk to the server while that runs.
+    result = await asyncio.to_thread(import_folder, dir_path, real,
+                                     tag=tag, at=stamp)
+    register_root_within(dir_path)
+    return web.json_response({"ok": True, "folder": real, **result})

@@ -88,6 +88,9 @@ function pickPanel(node) {
     let images = [];
     let groups = [];
     let error = "";
+    // What the last folder read did. Separate from `error` so a successful
+    // import is not reported in the red the failures use.
+    let notice = "";
     let loading = false;
 
     // The group the node opens on when `view` is empty: whatever arrived last.
@@ -343,6 +346,11 @@ function pickPanel(node) {
         list.replaceChildren();
         list.appendChild(renderHead(ticks));
         if (error) list.appendChild(errorLine(error));
+        if (notice) {
+            list.appendChild(el("div",
+                `color:${HUB.inkTertiary};font:10px ${HUB.font};padding:0 3px 3px;`,
+                notice));
+        }
         if (loading && !images.length) {
             list.appendChild(emptyState("reading…"));
             refit();
@@ -364,6 +372,56 @@ function pickPanel(node) {
         }
         refit();
     }
+
+    // Reading a folder of renders that already exist, so a picker added after
+    // the work was generated does not have to re-render it to have something
+    // to choose from. A NATIVE litegraph button with serialize off: it adds no
+    // widgets_values entry, so it cannot shift the positions of the widgets
+    // saved in someone's workflow the way a new input would.
+    let reading = false;
+    const readBtn = node.addWidget("button", "📁 Read folder", null, async () => {
+        if (reading) return;
+        const folder = widgetOf(node, "folder")?.value?.trim?.();
+        if (!folder) {
+            error = "type a folder into the node's `folder` field first";
+            render();
+            return;
+        }
+        reading = true;
+        readBtn.name = "⏳ Reading…";
+        node.setDirtyCanvas?.(true, true);
+        try {
+            const body = { node_id: String(node.id), folder };
+            // Only unwired values are readable from the canvas; a wired input
+            // has no widget value, and the route falls back to the folder's
+            // own name for the asset.
+            for (const name of ["asset", "category", "role"]) {
+                const value = widgetOf(node, name)?.value?.trim?.();
+                if (value) body[name] = value;
+            }
+            const res = await fetchJson("/symbiotica/pick-import", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            notice = res.added || res.skipped || res.failed
+                ? `read ${res.folder}: ${res.added} added`
+                    + `${res.skipped ? `, ${res.skipped} already here` : ""}`
+                    + `${res.failed ? `, ${res.failed} unreadable` : ""}`
+                    + `${res.truncated ? `, ${res.truncated} beyond the limit` : ""}`
+                : "no images in that folder";
+            error = "";
+            await load();
+        } catch (e) {
+            error = e.message || "could not read that folder";
+            render();
+        } finally {
+            reading = false;
+            readBtn.name = "📁 Read folder";
+            node.setDirtyCanvas?.(true, true);
+        }
+    });
+    readBtn.serialize = false;
 
     render();
     load();

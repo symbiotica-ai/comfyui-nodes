@@ -5,10 +5,13 @@ import os
 
 from PIL import Image
 
-from pipeline.pick_buffer import (INDEX_NAME, add_image, buffer_dir, clear,
+from pipeline.pick_buffer import (BUFFER_ROOT, INDEX_NAME, add_image,
+                                  buffer_dir, clear,
                                   drop, group_key, groups, image_id,
+                                  import_folder,
                                   list_entries, read_index, roles, safe_node_id,
-                                  selected_paths, write_index)
+                                  selected_paths, tag_from_path,
+                                  write_index)
 
 
 def solid(color=(10, 20, 30), size=(8, 6), mode="RGB"):
@@ -264,3 +267,166 @@ class TestStageRows:
         d = str(tmp_path / "buf")
         add_image(d, solid())
         assert roles(list_entries(d)) == [""]
+
+
+class TestImportingAFolderThatAlreadyExists:
+    """The buffer is per node, so a picker added after the work was generated
+    starts empty — and re-running the generator to fill it pays for renders
+    that already exist."""
+
+    def make(self, folder, names, colour=10):
+        os.makedirs(folder, exist_ok=True)
+        for i, name in enumerate(names):
+            Image.new("RGB", (6, 6), (colour + i, 0, 0)).save(
+                os.path.join(folder, name))
+
+    def test_every_image_in_the_folder_becomes_a_candidate(self, tmp_path):
+        src = str(tmp_path / "renders")
+        self.make(src, ["a.png", "b.png", "c.jpg"])
+        result = import_folder(str(tmp_path / "buf"), src)
+        assert result["added"] == 3
+        assert len(list_entries(str(tmp_path / "buf"))) == 3
+
+    def test_subfolders_are_read_too(self, tmp_path):
+        """Renders are filed one directory per asset; pointing at the parent is
+        the natural thing to do."""
+        src = str(tmp_path / "renders")
+        self.make(src, ["a.png"])
+        self.make(os.path.join(src, "cake"), ["b.png"], colour=90)
+        assert import_folder(str(tmp_path / "buf"), src)["added"] == 2
+
+    def test_importing_twice_does_not_double_the_buffer(self, tmp_path):
+        src = str(tmp_path / "renders")
+        self.make(src, ["a.png", "b.png"])
+        d = str(tmp_path / "buf")
+        import_folder(d, src)
+        second = import_folder(d, src)
+        assert second == {"added": 0, "skipped": 2, "failed": 0,
+                          "found": 2, "truncated": 0}
+        assert len(list_entries(d)) == 2
+
+    def test_the_tag_is_applied_to_everything_imported(self, tmp_path):
+        src = str(tmp_path / "renders")
+        self.make(src, ["a.png"])
+        import_folder(str(tmp_path / "buf"), src,
+                      tag={"asset": "cake", "category": "Food", "role": "prep"})
+        entry = list_entries(str(tmp_path / "buf"))[0]
+        assert (entry["asset"], entry["role"]) == ("cake", "prep")
+
+    def test_a_file_that_will_not_open_does_not_abort_the_import(self, tmp_path):
+        """One bad file must not cost the other three hundred."""
+        src = str(tmp_path / "renders")
+        self.make(src, ["a.png"])
+        with open(os.path.join(src, "broken.png"), "wb") as fh:
+            fh.write(b"not a png")
+        result = import_folder(str(tmp_path / "buf"), src)
+        assert (result["added"], result["failed"]) == (1, 1)
+
+    def test_non_images_are_ignored(self, tmp_path):
+        src = str(tmp_path / "renders")
+        self.make(src, ["a.png"])
+        open(os.path.join(src, "notes.txt"), "w").close()
+        assert import_folder(str(tmp_path / "buf"), src)["found"] == 1
+
+    def test_the_buffers_own_thumbnails_are_not_re_imported(self, tmp_path):
+        """Importing a thumbnail would file a 320px copy as a candidate of its
+        own, beside the full image it is a thumbnail OF."""
+        d = str(tmp_path / "buf")
+        add_image(d, solid(size=(400, 400)))
+        assert import_folder(str(tmp_path / "buf2"), d)["found"] == 1
+
+    def test_a_huge_folder_is_capped_and_says_so(self, tmp_path):
+        """One wrong click on a whole output volume must not file thousands."""
+        src = str(tmp_path / "renders")
+        self.make(src, [f"{i:03d}.png" for i in range(12)])
+        result = import_folder(str(tmp_path / "buf"), src, limit=5)
+        assert (result["added"], result["found"], result["truncated"]) == (5, 12, 7)
+
+    def test_a_folder_that_is_not_there_imports_nothing(self, tmp_path):
+        assert import_folder(str(tmp_path / "buf"),
+                             str(tmp_path / "nope"))["found"] == 0
+
+
+class TestTagsReadOffTheFolderStructure:
+    """Renders are filed `outputs/<month>/<event>/<category>/<recipe>/…`, so
+    the path already says what an image is."""
+
+    def make(self, folder, names=("a.png",), colour=10):
+        os.makedirs(folder, exist_ok=True)
+        for i, name in enumerate(names):
+            Image.new("RGB", (6, 6), (colour + i, 0, 0)).save(
+                os.path.join(folder, name))
+
+    def test_the_four_levels_below_outputs_become_the_tag(self):
+        tag = tag_from_path(
+            "/studio/outputs/October/Mini 3 — Franken-Feast/Food - 3 stages/"
+            "Frankencrisps")
+        assert tag == {"month": "October", "feature": "Mini 3 — Franken-Feast",
+                       "category": "Food - 3 stages", "asset": "Frankencrisps"}
+
+    def test_a_partial_tree_fills_only_what_is_there(self):
+        assert tag_from_path("/studio/outputs/October") == {"month": "October"}
+
+    def test_subfolders_of_the_pointed_folder_continue_the_chain(self):
+        """Point at the category and each recipe under it becomes its own asset
+        in a single read."""
+        tag = tag_from_path("/studio/outputs/October/Mini 3/Food",
+                            "Frankencrisps/a.png")
+        assert tag["asset"] == "Frankencrisps"
+        assert tag["category"] == "Food"
+
+    def test_the_last_outputs_wins_so_a_higher_one_shifts_nothing(self):
+        tag = tag_from_path("/outputs/studio/outputs/October/Mini 3/Food/Cake")
+        assert tag["month"] == "October" and tag["asset"] == "Cake"
+
+    def test_levels_below_the_asset_are_ignored_not_folded_in(self):
+        """Inventing a name for a deeper tree would file one asset under two
+        labels."""
+        tag = tag_from_path("/studio/outputs/Oct/Ev/Cat/Cake/extra/deeper")
+        assert tag["asset"] == "Cake"
+
+    def test_without_an_outputs_anchor_only_the_deepest_folder_is_read(self):
+        assert tag_from_path("/somewhere/else/Frankencrisps") == \
+            {"asset": "Frankencrisps"}
+
+    def test_an_import_tags_each_recipe_from_its_own_subfolder(self, tmp_path):
+        base = tmp_path / "outputs" / "October" / "Mini 3" / "Food - 3 stages"
+        self.make(str(base / "Frankencrisps"), ("a.png",), colour=10)
+        self.make(str(base / "Frankenstein Pops"), ("b.png",), colour=90)
+        d = str(tmp_path / "buf")
+        import_folder(d, str(base))
+        by_asset = {e["asset"]: e for e in list_entries(d)}
+        assert set(by_asset) == {"Frankencrisps", "Frankenstein Pops"}
+        assert by_asset["Frankencrisps"]["group"] == \
+            "Mini 3 / Food - 3 stages / Frankencrisps"
+
+    def test_a_typed_value_overrides_what_the_path_says(self, tmp_path):
+        base = tmp_path / "outputs" / "October" / "Mini 3" / "Food" / "Cake"
+        self.make(str(base))
+        d = str(tmp_path / "buf")
+        import_folder(d, str(base), tag={"asset": "Renamed", "role": "prep"})
+        entry = list_entries(d)[0]
+        assert (entry["asset"], entry["role"]) == ("Renamed", "prep")
+        assert entry["category"] == "Food"
+
+    def test_a_blank_value_does_not_erase_what_the_path_says(self, tmp_path):
+        """An untyped widget must not wipe a label the folder structure gave."""
+        base = tmp_path / "outputs" / "October" / "Mini 3" / "Food" / "Cake"
+        self.make(str(base))
+        d = str(tmp_path / "buf")
+        import_folder(d, str(base), tag={"asset": "", "category": "  "})
+        entry = list_entries(d)[0]
+        assert (entry["asset"], entry["category"]) == ("Cake", "Food")
+
+
+class TestTheBuffersDoNotImportThemselves:
+    def test_the_buffer_root_is_skipped_when_reading_its_parent(self, tmp_path):
+        """The buffers live under the output directory. Pointing an import at
+        that directory would re-file every picker's own copies as candidates of
+        a new picker — one click to duplicate the lot."""
+        out = tmp_path / "outputs"
+        (out / "renders").mkdir(parents=True)
+        Image.new("RGB", (6, 6), (5, 5, 5)).save(out / "renders" / "real.png")
+        add_image(str(out / BUFFER_ROOT / "483"), solid((9, 9, 9)))
+        result = import_folder(str(tmp_path / "buf"), str(out))
+        assert result["found"] == 1

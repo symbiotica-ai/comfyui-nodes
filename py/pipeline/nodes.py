@@ -3339,6 +3339,13 @@ class SymbioticaPick(io.ComfyNode):
                                         "serving — so all three show at once "
                                         "and a stage is compared against its "
                                         "own alternatives."),
+                io.String.Input("folder", default="", optional=True,
+                                tooltip="A folder of images already on disk. "
+                                        "The node's 📁 button files everything "
+                                        "under it as candidates, so a picker "
+                                        "added after the work was generated "
+                                        "does not have to re-render it to have "
+                                        "something to choose from."),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
@@ -3386,7 +3393,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def check_lazy_status(cls, images=None, collect=True, asset="",
                           category="", role="", order=None, selection="",
-                          view=""):
+                          view="", folder=""):
         """Whether the wire above this node is worth evaluating at all.
 
         This is the difference between looking at a pick and paying for it.
@@ -3405,7 +3412,8 @@ class SymbioticaPick(io.ComfyNode):
 
     @classmethod
     def execute(cls, images=None, collect=True, asset="", category="",
-                role="", order=None, selection="", view="") -> io.NodeOutput:
+                role="", order=None, selection="", view="",
+                folder="") -> io.NodeOutput:
         import datetime
 
         from PIL import Image

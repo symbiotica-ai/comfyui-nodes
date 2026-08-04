@@ -84,7 +84,7 @@ class TestSchema:
         wires = {"images", "order"}
         widgets = [i.id for i in schema.inputs if i.id not in wires]
         assert widgets == ["collect", "asset", "category", "selection",
-                           "view", "role"]
+                           "view", "role", "folder"]
 
 
 class TestCollecting:

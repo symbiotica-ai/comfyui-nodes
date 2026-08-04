@@ -34,6 +34,12 @@ function router(seen, images) {
         if (route.startsWith("/symbiotica/pick-clear")) {
             return { ok: true, status: 200, body: { ok: true, removed: 1 } };
         }
+        if (route.startsWith("/symbiotica/pick-import")) {
+            return { ok: true, status: 200,
+                     body: { ok: true, folder: "/out/renders/cake", asset: "cake",
+                             added: 4, skipped: 1, failed: 0, found: 5,
+                             truncated: 0 } };
+        }
         return { ok: false, status: 404, body: { error: "no route" } };
     };
 }
@@ -273,4 +279,42 @@ test("ticking still works inside a stage row", async () => {
     const node = await panelNode([], [PREP, READY, SERVING]);
     fire(tiles(node)[2], "click");
     assert.deepEqual(ticksOf(node), ["s1"]);
+});
+
+test("Read folder posts the node's folder and reloads the buffer", async () => {
+    // The buffer is per node, so a picker added after the work was generated
+    // starts empty; re-running the generator to fill it pays twice.
+    const seen = [];
+    const node = await panelNode(seen, [], { folder: "/out/renders/cake" });
+    const btn = node.widgets.find((w) => w.name === "📁 Read folder");
+    assert.ok(btn);
+    assert.equal(btn.serialize, false, "a serialised button shifts widgets_values");
+    await btn.callback();
+    for (let i = 0; i < 20; i++) await tick();
+    const post = seen.find((c) => c.route === "/symbiotica/pick-import");
+    assert.deepEqual(JSON.parse(post.init.body),
+                     { node_id: String(node.id), folder: "/out/renders/cake" });
+    // It re-lists afterwards, or the new candidates would not appear.
+    assert.ok(seen.filter((c) => c.route.startsWith("/symbiotica/pick-list")).length > 1);
+});
+
+test("Read folder sends the tags that are typed, and omits the wired ones", async () => {
+    const seen = [];
+    const node = await panelNode(seen, [], {
+        folder: "/out/renders", asset: "cake", category: "", role: "prep" });
+    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
+    for (let i = 0; i < 20; i++) await tick();
+    const body = JSON.parse(seen.find((c) => c.route === "/symbiotica/pick-import").init.body);
+    assert.equal(body.asset, "cake");
+    assert.equal(body.role, "prep");
+    assert.ok(!("category" in body), "an empty widget must not overwrite the fallback");
+});
+
+test("Read folder with no folder says so instead of posting", async () => {
+    const seen = [];
+    const node = await panelNode(seen, [], { folder: "" });
+    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
+    assert.equal(seen.filter((c) => c.route === "/symbiotica/pick-import").length, 0);
+    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
+    assert.match(text, /type a folder/);
 });

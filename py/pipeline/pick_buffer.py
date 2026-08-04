@@ -243,3 +243,110 @@ def drop(dir_path: str, ids) -> int:
 def clear(dir_path: str) -> None:
     """Empty the whole buffer. Missing is already empty, not an error."""
     shutil.rmtree(dir_path, ignore_errors=True)
+
+
+# A folder import walks whatever is pointed at; a cap keeps one wrong click on
+# a whole output volume from filing thousands of PNGs and thumbnailing each.
+IMPORT_LIMIT = 400
+
+# Renders are filed `outputs/<month>/<event>/<category>/<recipe>/…`, so the path
+# already says what an image is — deriving the tag from it beats asking for the
+# same four facts to be typed again beside a folder that states them.
+OUTPUTS_ANCHOR = "outputs"
+_PATH_KEYS = ("month", "feature", "category", "asset")
+
+
+def tag_from_path(folder: str, rel: str = "", anchor: str = OUTPUTS_ANCHOR) -> dict:
+    """month / feature / category / asset, read off where a render is filed.
+
+    The anchor is matched at its LAST occurrence, so a studio that happens to
+    have an `outputs` higher up does not shift every field by one. Segments
+    below the fourth are ignored rather than folded into the asset: a deeper
+    tree means something this does not know about, and inventing a name for it
+    would put one asset under two labels.
+
+    With no anchor in sight there is no positional meaning to read, so only the
+    deepest folder is used, as the asset. That is the honest reading of "these
+    images are in a folder called Frankencrisps".
+    """
+    parts = [p for p in os.path.normpath(folder).split(os.sep) if p]
+    sub = [p for p in os.path.dirname(rel or "").replace(os.sep, "/").split("/") if p]
+    at = None
+    for index, part in enumerate(parts):
+        if part.lower() == anchor.lower():
+            at = index
+    if at is None:
+        deepest = sub[-1] if sub else (parts[-1] if parts else "")
+        return {"asset": deepest} if deepest else {}
+    chain = parts[at + 1:] + sub
+    return {key: value for key, value in zip(_PATH_KEYS, chain)}
+
+
+def import_folder(dir_path: str, folder: str, *, tag=None, at: str = "",
+                  limit: int = IMPORT_LIMIT, derive: bool = True) -> dict:
+    """File every image under `folder` as a candidate.
+
+    This is how a picker sees work that already exists: the buffer is per node,
+    so a picker added after the fact starts empty even though the renders are
+    on disk. Re-running the generator to populate it costs a render for
+    something that has already been rendered.
+
+    Images already in the buffer are skipped by their pixel hash, so importing
+    the same folder twice is not the same as importing it once and doubling it.
+    A file PIL cannot open is counted and passed over rather than aborting the
+    import — one bad file must not cost the other three hundred.
+    """
+    from PIL import Image, UnidentifiedImageError
+
+    # An explicitly supplied field always wins; the path fills the rest. Blank
+    # values are dropped rather than treated as an override, or an untyped
+    # widget would erase a label the folder structure already stated.
+    explicit = {k: str(v).strip() for k, v in (tag or {}).items()
+                if str(v or "").strip()}
+    found = _images_under(folder)
+    truncated = max(0, len(found) - limit)
+    added, skipped, failed = 0, 0, 0
+    for rel in found[:limit]:
+        path = os.path.join(folder, rel.replace("/", os.sep))
+        # Per image, not per folder: pointing at a category reads each recipe
+        # subfolder under it as its own asset in one go.
+        merged = {**(tag_from_path(folder, rel) if derive else {}), **explicit}
+        try:
+            with Image.open(path) as img:
+                img.load()
+                entry = add_image(dir_path, img, tag=merged, at=at)
+        except (OSError, UnidentifiedImageError, ValueError):
+            failed += 1
+            continue
+        if entry is None:
+            skipped += 1
+        else:
+            added += 1
+    return {"added": added, "skipped": skipped, "failed": failed,
+            "found": len(found), "truncated": truncated}
+
+
+def _images_under(folder: str) -> list[str]:
+    """Sorted /-separated rel paths of the images under `folder`.
+
+    Recursive, because renders are normally filed one directory per asset and
+    pointing at the parent is the natural thing to do. Dot-directories and the
+    buffer's own thumbnails are skipped — importing a thumbnail would file a
+    320px copy as a candidate in its own right.
+    """
+    exts = {".png", ".jpg", ".jpeg", ".webp"}
+    out: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(folder):
+        # The buffers live under the output directory, so importing that
+        # directory would re-file every picker's own copies as fresh
+        # candidates of a new picker — one click to duplicate the lot.
+        dirnames[:] = [d for d in dirnames
+                       if not d.startswith(".") and d != BUFFER_ROOT]
+        for name in filenames:
+            if name.startswith(".") or name.endswith(THUMB_SUFFIX):
+                continue
+            if os.path.splitext(name)[1].lower() not in exts:
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, name), folder)
+            out.append(rel.replace(os.sep, "/"))
+    return sorted(out)
