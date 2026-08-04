@@ -54,9 +54,18 @@ jobs:
             exit 0
           fi
 
+          # Both calls end in `|| true` under `set -e`: publishing has ALREADY
+          # succeeded by the time this step runs, so a transport error here must
+          # not paint the run red. v2026.8.6 did exactly that — curl exited 35
+          # (SSL connect) on the lookup below, the assignment failed, and `-e`
+          # killed a step whose own logic was written to warn and carry on.
+          # --retry covers the transient case before we give up on it.
+          CURL="curl -s --retry 3 --retry-connrefused --retry-delay 2 --max-time 30"
+
           # The PUT wants the version's database id, not its string.
-          VERSION_ID=$(curl -s "https://api.comfy.org/nodes/symbiotica/versions?limit=10" \
-            | jq -r --arg v "$VERSION" '.[] | select(.version == $v) | .id')
+          VERSIONS=$($CURL "https://api.comfy.org/nodes/symbiotica/versions?limit=10" || true)
+          VERSION_ID=$(printf '%s' "$VERSIONS" \
+            | jq -r --arg v "$VERSION" '.[] | select(.version == $v) | .id' 2>/dev/null || true)
           if [ -z "$VERSION_ID" ]; then
             echo "Warning: no registry version id for $VERSION — skipping changelog."
             exit 0
@@ -66,11 +75,11 @@ jobs:
           # jq -Rs turns the body into a valid JSON string, newlines and all.
           BODY_JSON=$(printf '%s' "$RELEASE_BODY" | jq -Rs .)
 
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          HTTP_STATUS=$($CURL -o /dev/null -w "%{http_code}" \
             -X PUT "https://api.comfy.org/publishers/razvan-symbiotica/nodes/symbiotica/versions/$VERSION_ID" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${REGISTRY_TOKEN}" \
-            -d "{\"changelog\": $BODY_JSON}")
+            -d "{\"changelog\": $BODY_JSON}" || echo 000)
 
           if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
             echo "Changelog updated (HTTP $HTTP_STATUS)."
