@@ -33,7 +33,15 @@ def _fetch_image(url):
         res = safe_get(lambda u: _get(u, 10), url)
         if not res or not res.ok:
             return None
-        img = Image.open(io.BytesIO(res.content)).convert("RGB")
+        img = Image.open(io.BytesIO(res.content))
+        # Transparency flattens to WHITE, not black: brand marks are usually dark
+        # lettering on a transparent background (teilor.ro's wordmark), and the
+        # default RGB conversion would bury them on black.
+        if img.mode in ("P", "LA", "RGBA") or "transparency" in img.info:
+            rgba = img.convert("RGBA")
+            base = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            img = Image.alpha_composite(base, rgba)
+        img = img.convert("RGB")
         arr = np.asarray(img, dtype=np.float32) / 255.0
         return torch.from_numpy(arr).unsqueeze(0)
     except Exception:
@@ -71,7 +79,20 @@ class HypereelProductScrape:
     def scrape(self, url, platform, include_details=False):
         assets = scrape_product(url.strip(), fetch=_fetch_html)
 
-        logo = _fetch_image(assets["logo"]) if assets["logo"] else None
+        # Walk the logo cascade (JSON-LD declaration, apple-touch icon, manifest,
+        # logo-named files, favicon service): first candidate that downloads and
+        # decodes at a usable size is the brand mark.
+        logo = None
+        logo_found = False
+        for cand in assets.get("logo_candidates") or ([assets["logo"]] if assets["logo"] else []):
+            t = _fetch_image(cand)
+            if t is None:
+                continue
+            if min(t.shape[1], t.shape[2]) < 64:
+                continue
+            logo = t
+            logo_found = True
+            break
         shots = []
         for u in assets["screenshots"]:
             t = _fetch_image(u)
@@ -92,6 +113,7 @@ class HypereelProductScrape:
         summary = build_summary(
             assets["name"], assets["description"], platform,
             details=assets.get("details", ""), include_details=include_details,
+            logo_found=logo_found,
         )
         return (summary, logo, shots[0], shots[1], shots[2], len(assets["screenshots"]))
 

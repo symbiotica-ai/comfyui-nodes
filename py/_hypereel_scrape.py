@@ -2,6 +2,7 @@
 # ABOUTME: from a product/app page. Port of the platform's field-hardened scrape-product.
 import html as html_mod
 import ipaddress
+import json
 import re
 import socket
 from urllib.parse import urljoin, urlparse
@@ -13,6 +14,11 @@ NOISE = re.compile(
 )
 
 MAX_SCREENSHOTS = 6
+
+# "logo" as a word (logo, site-logo, logotype, logo_dark) — never a substring of
+# an unrelated word: teilor.ro's "Inele_de_logodna" (engagement rings) must not
+# be promoted to logo, nor "catalogo".
+LOGO_WORD = re.compile(r"(?<![a-z0-9])logo(?:type|mark)?(?![a-z])", re.IGNORECASE)
 
 
 def is_store_host(url):
@@ -157,8 +163,11 @@ def extract_product_assets(html, page_url):
             if not re.search(r"appicon|placeholder", u, re.IGNORECASE) and "{" not in u
         ][:MAX_SCREENSHOTS]
         logo = app_icon or ("" if re.search(r"placeholder", og_image, re.IGNORECASE) else og_image)
+        host = (urlparse(page_url).hostname or "").lower()
+        cands = ([logo] if logo else []) + [f"https://www.google.com/s2/favicons?domain={host}&sz=256"]
         return {"name": name, "description": description, "logo": logo,
-                "screenshots": screenshots, "details": extract_page_text(html)}
+                "logo_candidates": cands, "screenshots": screenshots,
+                "details": extract_page_text(html)}
 
     srcs = [
         _absolutize(m.group(1), page_url)
@@ -173,22 +182,107 @@ def extract_product_assets(html, page_url):
     # over the studio's site chrome), then the biggest variant.
     tokens = _name_tokens(name)
     logos = sorted(
-        [u for u in unique if re.search(r"logo", u, re.IGNORECASE) and not NOISE.search(fname(u))],
+        [u for u in unique if LOGO_WORD.search(u) and not NOISE.search(fname(u))],
         key=lambda u: (any(t in fname(u) for t in tokens), _area(u)),
         reverse=True,
     )
     screenshots = sorted(
-        [u for u in unique if not re.search(r"logo", u, re.IGNORECASE) and not NOISE.search(fname(u))],
+        [u for u in unique if not LOGO_WORD.search(u) and not NOISE.search(fname(u))],
         key=_area,
         reverse=True,
     )[:MAX_SCREENSHOTS]
+    candidates = extract_logo_candidates(html, page_url)
+    declared = _jsonld_logos(html)
+    logo = ""
+    if declared:
+        logo = _absolutize(declared[0], page_url) or ""
+    elif logos:
+        logo = logos[0]
     return {
         "name": name,
         "description": description,
-        "logo": logos[0] if logos else og_image,
+        "logo": logo,
+        "logo_candidates": candidates,
         "screenshots": screenshots,
         "details": extract_page_text(html),
     }
+
+
+def _jsonld_logos(html):
+    """Logo URLs the site itself declares in JSON-LD (Organization/WebSite.logo).
+    Google requires this declaration for search, so commercial sites carry it —
+    and it names the real brand mark even when the filename says 'placeholder'
+    (teilor.ro). Handles logo as string, ImageObject, and @graph nesting."""
+    out = []
+    for m in re.finditer(r"<script[^>]+application/ld\+json[^>]*>([\s\S]*?)</script>", html, re.IGNORECASE):
+        try:
+            data = json.loads(m.group(1))
+        except ValueError:
+            continue
+        nodes = data if isinstance(data, list) else [data]
+        items = []
+        for d in nodes:
+            if isinstance(d, dict):
+                items.append(d)
+                if isinstance(d.get("@graph"), list):
+                    items.extend(x for x in d["@graph"] if isinstance(x, dict))
+        for it in items:
+            logo = it.get("logo")
+            if isinstance(logo, dict):
+                logo = logo.get("url")
+            if isinstance(logo, str) and logo.strip():
+                out.append(logo.strip())
+    return out
+
+
+def extract_logo_candidates(html, page_url):
+    """Ordered brand-logo candidates, most authoritative first: JSON-LD
+    declaration, apple-touch-icon (biggest), word-boundary logo-named images,
+    sized link icons (>=96px), and the Google favicon service as the final
+    always-available fallback. The consumer walks the list and keeps the first
+    URL that downloads and decodes at a usable size."""
+    cands = []
+    for u in _jsonld_logos(html):
+        a = _absolutize(u, page_url)
+        if a:
+            cands.append(a)
+
+    touch = []
+    for m in re.finditer(r"<link[^>]+rel=[\"\'][^\"\']*apple-touch-icon[^\"\']*[\"\'][^>]*>", html, re.IGNORECASE):
+        tag = m.group(0)
+        href = re.search(r"href=[\"\']([^\"\']+)[\"\']", tag)
+        if not href:
+            continue
+        s = re.search(r"sizes=[\"\'](\d+)x\d+[\"\']", tag)
+        a = _absolutize(href.group(1), page_url)
+        if a:
+            touch.append((int(s.group(1)) if s else 180, a))
+    cands.extend(u for _, u in sorted(touch, key=lambda t: t[0], reverse=True))
+
+    def fname(u):
+        return (u.rsplit("/", 1)[-1] if "/" in u else u).lower()
+
+    for m in re.finditer(r"(?:src|href)=[\"\']([^\"\']+\.(?:png|jpe?g|webp))(?:\?[^\"\']*)?[\"\']", html, re.IGNORECASE):
+        a = _absolutize(m.group(1), page_url)
+        if a and LOGO_WORD.search(a) and not NOISE.search(fname(a)):
+            cands.append(a)
+
+    for m in re.finditer(r"<link[^>]+rel=[\"\'][^\"\']*\bicon\b[^\"\']*[\"\'][^>]*>", html, re.IGNORECASE):
+        tag = m.group(0)
+        if re.search(r"apple-touch", tag, re.IGNORECASE):
+            continue
+        s = re.search(r"sizes=[\"\'](\d+)x\d+[\"\']", tag)
+        if not s or int(s.group(1)) < 96:
+            continue
+        href = re.search(r"href=[\"\']([^\"\']+)[\"\']", tag)
+        a = _absolutize(href.group(1), page_url) if href else None
+        if a:
+            cands.append(a)
+
+    host = (urlparse(page_url).hostname or "").lower()
+    if host:
+        cands.append(f"https://www.google.com/s2/favicons?domain={host}&sz=256")
+    return list(dict.fromkeys(cands))
 
 
 def extract_page_text(html, max_chars=900):
@@ -221,7 +315,8 @@ _PLATFORM_NOTE = {
 }
 
 
-def build_summary(name, description, platform, details="", include_details=False):
+def build_summary(name, description, platform, details="", include_details=False,
+                  logo_found=True):
     """The product line the script LLM reads, byte-identical to the platform
     product node's output: `App (…CTA…): Name — Description`. The page-text
     DETAILS digest is opt-in — the platform engine never sends one."""
@@ -229,6 +324,8 @@ def build_summary(name, description, platform, details="", include_details=False
     summary = f"{kind}{_PLATFORM_NOTE.get(platform, '')}: {name}"
     if description:
         summary += f" — {description}"
+    if not logo_found:
+        summary += " (no logo found on the page — end the ad on the product itself)"
     if include_details and details:
         summary += f"\nDETAILS: {details}"
     return summary
@@ -261,6 +358,31 @@ def scrape_product(url, fetch):
     if html is None:
         raise RuntimeError("page fetch failed")
     assets = extract_product_assets(html, url)
+
+    # Web-app manifest icons (PWA 192/512px brand marks) join the logo cascade
+    # just before the favicon-service fallback; a stub manifest with no icons
+    # (teilor.ro ships a bare push-notification one) is skipped silently.
+    mlink = re.search(r"<link[^>]+rel=[\"\']manifest[\"\'][^>]+href=[\"\']([^\"\']+)[\"\']", html, re.IGNORECASE)
+    if mlink:
+        murl = _absolutize(mlink.group(1), url)
+        mtext = safe_fetch(murl) if murl else None
+        if mtext:
+            try:
+                icons = json.loads(mtext).get("icons", [])
+            except ValueError:
+                icons = []
+            sized = []
+            for ic in icons:
+                if not isinstance(ic, dict) or not ic.get("src"):
+                    continue
+                s = re.match(r"(\d+)x\d+", str(ic.get("sizes", "")))
+                a = _absolutize(ic["src"], murl)
+                if a:
+                    sized.append((int(s.group(1)) if s else 0, a))
+            manifest_icons = [u for _, u in sorted(sized, key=lambda t: t[0], reverse=True)]
+            if manifest_icons:
+                cands = assets.get("logo_candidates", [])
+                assets["logo_candidates"] = list(dict.fromkeys(cands[:-1] + manifest_icons + cands[-1:]))
 
     store_link = find_store_link(html)
     if store_link and not is_store_host(url):
