@@ -138,7 +138,8 @@ def resolve_transport(environ, provider: str, path: str,
             # What analytics can group by. The alias cannot serve this — no
             # AiGateway dataset exposes a dimension for it — so spend sent
             # without this tag is spend that cannot be attributed to anyone.
-            "cf-aig-metadata": studio_tag(studio),
+            "cf-aig-metadata": studio_tag(
+                studio, environ.get("SYMBIOTICA_AIG_SURFACE") or ""),
             "Content-Type": "application/json",
         }
         headers.update(extra_headers or {})
@@ -150,8 +151,23 @@ def resolve_transport(environ, provider: str, path: str,
     return Transport(direct.base + path, headers, None)
 
 
-def studio_tag(studio: str) -> str:
-    return json.dumps({"studio": studio, "surface": "order"})
+DEFAULT_SURFACE = "order"
+
+
+def studio_tag(studio: str, surface: str = DEFAULT_SURFACE) -> str:
+    """The cf-aig-metadata tag: whose key pays, and what kind of run it was.
+
+    Gateway analytics groups by these, so `surface` decides which bucket the
+    spend lands in. It defaults to `order` because every sandbox that exists
+    today sets no surface variable, and changing what their traffic is called
+    would relabel the history it is compared against.
+
+    A canvas box routed through the gateway must set it to something else. A
+    canvas render counted as an order inflates order spend under a label that
+    reads correctly, which is the kind of wrong number nobody thinks to
+    question."""
+    return json.dumps({"studio": studio,
+                       "surface": (surface or "").strip() or DEFAULT_SURFACE})
 
 
 def usable_as_header(value: str, source: str, quote_it: bool) -> str:

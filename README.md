@@ -297,6 +297,7 @@ key is consulted:
 | `SYMBIOTICA_AIG_BASE` | Cloudflare AI Gateway base, **without** a provider slug, e.g. `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>`. Each node appends its own provider. Must be `https` — the token is a bearer credential for the studio's whole spend. |
 | `SYMBIOTICA_AIG_TOKEN` | AI Gateway token, sent as `cf-aig-authorization`. Not a provider key — provider keys are stored in the gateway as BYOK and injected there. |
 | `ORDER_STUDIO` | The studio slug. Selects that studio's own stored provider key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
+| `SYMBIOTICA_AIG_SURFACE` | What kind of run this is, tagged alongside the studio. Optional, and `order` when unset, which is what every existing sandbox reports. A box that is not running orders should set its own value, or its spend joins the order totals under a label that reads correctly. |
 
 Setting the base without the token is an error, not a fall back: a call that
 succeeds on somebody's personal key while its spend leaves the gateway is a
