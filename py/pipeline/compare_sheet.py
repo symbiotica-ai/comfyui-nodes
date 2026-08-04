@@ -74,7 +74,8 @@ def with_alpha(image, mask, mask_is_transparency=True):
     return out
 
 
-def compose_rows(rows, cell, spacing, background, padding_color=None):
+def compose_rows(rows, cell, spacing, background, padding_color=None,
+                 row_scales=None):
     """Rows of PIL images laid out as a grid, returned as one RGB image.
 
     A short row keeps its empty cells rather than closing up: column alignment
@@ -98,12 +99,23 @@ def compose_rows(rows, cell, spacing, background, padding_color=None):
                 x, y = cell_origin(column, row_index, cell, spacing)
                 sheet.paste(background, (x, y, x + cell, y + cell))
     for row_index, row in enumerate(rows):
+        # A row may be drawn smaller than its cell. The CELL keeps its size, so
+        # the grid and the columns are untouched — only the picture inside
+        # shrinks, centred, which is what keeps a reference sitting directly
+        # above the result it belongs to.
+        scale = 1.0
+        if row_scales and row_index < len(row_scales):
+            scale = max(0.01, min(1.0, float(row_scales[row_index] or 1.0)))
+        inner = max(1, int(round(cell * scale)))
+        inset = (cell - inner) // 2
         for column, image in enumerate(row):
             if image is None:
                 continue
-            new_w, new_h, dx, dy = fit_box(image.width, image.height, cell)
+            new_w, new_h, dx, dy = fit_box(image.width, image.height, inner)
             if not new_w or not new_h:
                 continue
+            dx += inset
+            dy += inset
             x, y = cell_origin(column, row_index, cell, spacing)
             # Pasted THROUGH its alpha where it has any. `convert("RGB")` would
             # discard it instead of applying it, and these sprites are exported

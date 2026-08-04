@@ -1531,6 +1531,15 @@ class SymbioticaCompareSheet(io.ComfyNode):
                                         "cell ringed in the matte. Set it to "
                                         "the same colour as the background for "
                                         "a plain sheet with no outlines."),
+                io.Float.Input("reference_scale", default=1.0, min=0.05,
+                               max=1.0, step=0.05,
+                               tooltip="Draws the top row smaller inside its "
+                                       "own cells. The cells and the columns "
+                                       "do not move, and each reference stays "
+                                       "centred over the result below it — so "
+                                       "a reference that dwarfs the finished "
+                                       "asset stops reading as the bigger of "
+                                       "the two. 1.0 leaves it alone."),
             ],
             outputs=[
                 io.Image.Output(display_name="sheet",
@@ -1543,7 +1552,8 @@ class SymbioticaCompareSheet(io.ComfyNode):
     def execute(cls, references=None, results=None, cell_size=0, spacing=16,
                 background=DEFAULT_BACKGROUND, reference_masks=None,
                 result_masks=None, mask_is_transparency=True,
-                padding_color="#000000") -> io.NodeOutput:
+                padding_color="#000000",
+                reference_scale=1.0) -> io.NodeOutput:
         from .asset_refs import parse_hex
         from .compare_sheet import auto_cell, compose_rows, with_alpha
         one = SymbioticaCategoryPrompts._one
@@ -1590,9 +1600,13 @@ class SymbioticaCompareSheet(io.ComfyNode):
         # came from, and closing the row up would pair each with the wrong one.
         columns = max(len(top), len(bottom))
         rows = [row + [None] * (columns - len(row)) for row in (top, bottom)]
+        # Only the references shrink; the results keep their cell, so the two
+        # rows stay column-aligned and the size difference reads as intended.
+        scales = [float(one(reference_scale, 1.0) or 1.0), 1.0]
         sheet = compose_rows(rows, cell, max(0, int(one(spacing, 16) or 0)),
                              parse_hex(one(background, DEFAULT_BACKGROUND)),
-                             parse_hex(one(padding_color, "#000000")))
+                             parse_hex(one(padding_color, "#000000")),
+                             row_scales=scales)
         return io.NodeOutput(_pil_to_tensor(sheet))
 
 

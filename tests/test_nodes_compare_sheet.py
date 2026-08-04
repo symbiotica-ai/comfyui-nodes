@@ -94,7 +94,7 @@ def test_takes_both_rows_whole(nodes_mod):
     assert [i.id for i in schema.inputs] == [
         "references", "results", "cell_size", "spacing", "background",
         "reference_masks", "result_masks", "mask_is_transparency",
-        "padding_color"]
+        "padding_color", "reference_scale"]
     assert [o.display_name for o in schema.outputs] == ["sheet"]
 
 
@@ -180,8 +180,42 @@ def test_padding_colour_rings_every_cell(nodes_mod):
     assert [round(float(v) * 255) for v in out[40][40]] == [128, 128, 128]
 
 
-def test_padding_colour_is_appended(nodes_mod):
-    # ComfyUI restores widgets_values positionally; mask_is_transparency was
-    # already in saved graphs, so this had to go after it.
+def test_padding_colour_stayed_put_when_a_widget_was_added(nodes_mod):
+    # ComfyUI restores widgets_values positionally, so every new widget goes on
+    # the END — an existing one must never shift, or a saved graph loads its
+    # value onto the wrong control.
+    ids = [i.id for i in nodes_mod.SymbioticaCompareSheet.define_schema().inputs]
+    assert ids.index("padding_color") == ids.index("mask_is_transparency") + 1
+
+
+def test_reference_scale_shrinks_only_the_top_row(nodes_mod):
+    import torch
+    ref = torch.full((1, 64, 64, 3), 0.9)
+    res = torch.full((1, 64, 64, 3), 0.2)
+    out = nodes_mod.SymbioticaCompareSheet.execute(
+        references=[ref], results=[res], cell_size=[64], spacing=[0],
+        background=["#808080"], padding_color=["#808080"],
+        reference_scale=[0.5]).args[0][0]
+    # Top cell 0..64: the reference now occupies only the middle 32 (16..48).
+    assert round(float(out[32][32][0]) * 255) == round(0.9 * 255), "centred"
+    assert round(float(out[32][4][0]) * 255) == 128, "background beside it"
+    # Bottom row untouched, still filling its cell edge to edge.
+    assert round(float(out[66][4][0]) * 255) == round(0.2 * 255)
+
+
+def test_reference_scale_of_one_changes_nothing(nodes_mod):
+    import torch
+    ref = torch.full((1, 64, 64, 3), 0.9)
+    res = torch.full((1, 64, 64, 3), 0.2)
+    kw = dict(references=[ref], results=[res], cell_size=[64], spacing=[0],
+              background=["#808080"], padding_color=["#000000"])
+    a = nodes_mod.SymbioticaCompareSheet.execute(**kw).args[0]
+    b = nodes_mod.SymbioticaCompareSheet.execute(reference_scale=[1.0],
+                                                 **kw).args[0]
+    import torch as t
+    assert t.equal(a, b)
+
+
+def test_reference_scale_is_appended(nodes_mod):
     schema = nodes_mod.SymbioticaCompareSheet.define_schema()
-    assert [i.id for i in schema.inputs][-1] == "padding_color"
+    assert [i.id for i in schema.inputs][-1] == "reference_scale"

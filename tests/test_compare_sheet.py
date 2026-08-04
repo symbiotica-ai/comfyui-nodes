@@ -216,3 +216,59 @@ def test_one_colour_behaves_exactly_as_before():
     after = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8),
                          padding_color=(8, 8, 8))
     assert before.tobytes() == after.tobytes()
+
+
+# --- reference scale ---------------------------------------------------------
+# The reference is often drawn bigger than the finished asset, which makes the
+# asset read as the smaller of the two. Shrinking the reference INSIDE its own
+# cell fixes the read without moving the grid.
+
+def test_scaling_a_row_keeps_the_sheet_and_the_columns_identical():
+    rows = [[_img(100, 100, (255, 0, 0))], [_img(100, 100, (0, 0, 255))]]
+    full = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8))
+    scaled = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8),
+                          row_scales=[0.5, 1.0])
+    assert full.size == scaled.size, "canvas must not move"
+
+
+def test_a_scaled_row_is_centred_in_its_cell():
+    rows = [[_img(100, 100, (255, 0, 0))], [_img(100, 100, (0, 0, 255))]]
+    sheet = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8),
+                         row_scales=[0.5, 1.0])
+    # Cell spans 10..110. At 0.5 the picture occupies the middle 50: 35..85.
+    assert sheet.getpixel((60, 60)) == (255, 0, 0), "centre of the reference"
+    assert sheet.getpixel((20, 60)) == (8, 8, 8), "left of it is background"
+    assert sheet.getpixel((100, 60)) == (8, 8, 8), "right of it is background"
+
+
+def test_the_scaled_row_stays_column_aligned_with_the_unscaled_one():
+    rows = [[_img(100, 100, (255, 0, 0)), _img(100, 100, (0, 255, 0))],
+            [_img(100, 100, (0, 0, 255)), _img(100, 100, (255, 255, 0))]]
+    sheet = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8),
+                         row_scales=[0.5, 1.0])
+    # Column 1's centre is x=170 in both rows.
+    assert sheet.getpixel((170, 60)) == (0, 255, 0), "reference, column 1"
+    assert sheet.getpixel((170, 170)) == (255, 255, 0), "result, column 1"
+
+
+def test_the_results_row_is_untouched_by_the_reference_scale():
+    rows = [[_img(100, 100, (255, 0, 0))], [_img(100, 100, (0, 0, 255))]]
+    sheet = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8),
+                         row_scales=[0.5, 1.0])
+    assert sheet.getpixel((12, 120)) == (0, 0, 255), "result fills its cell"
+
+
+def test_scale_of_one_is_pixel_identical_to_no_scale():
+    rows = [[_img(100, 100, (255, 0, 0))], [_img(100, 100, (0, 0, 255))]]
+    a = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8))
+    b = compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8),
+                     row_scales=[1.0, 1.0])
+    assert a.tobytes() == b.tobytes()
+
+
+def test_an_absurd_scale_is_clamped_rather_than_inverting_the_cell():
+    rows = [[_img(100, 100, (255, 0, 0))]]
+    assert compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8),
+                        row_scales=[-3.0]).size == (120, 120)
+    assert compose_rows(rows, cell=100, spacing=10, background=(8, 8, 8),
+                        row_scales=[9.0]).size == (120, 120)
