@@ -3,6 +3,7 @@
 import base64
 import importlib.util
 import inspect
+import json
 import io
 import os
 import sys
@@ -213,6 +214,11 @@ class FakeResponse:
         return self._payload
 
 
+# The names that live inside the combo rather than beside it.
+COMBO_INPUTS = {"model", "aspect_ratio", "resolution", "thinking_level",
+                "images", "files"}
+
+
 def chosen_model(**overrides):
     """The value ComfyUI hands the `model` input: the label plus the inputs
     that option carries. Tests that call execute directly build it here so the
@@ -238,13 +244,8 @@ def run_execute(node_module, monkeypatch, response, env=None, **kwargs):
     # The per-model inputs arrive inside the combo's value rather than as
     # keywords of their own, so a caller still names them flatly and they are
     # folded in here — otherwise every test would have to know the shape.
-    chosen = dict(model="Nano Banana 2 (Gemini 3.1 Flash Image)",
-                  aspect_ratio="auto", resolution="2K",
-                  thinking_level="MINIMAL", images={}, files=None)
-    for key in list(kwargs):
-        if key in chosen:
-            chosen[key] = kwargs.pop(key)
-    call["model"] = chosen
+    gated = {k: kwargs.pop(k) for k in list(kwargs) if k in COMBO_INPUTS}
+    call["model"] = chosen_model(**gated)
     call.update(kwargs)
     return sent, node_module.SymbioticaGeminiImage.execute(**call)
 
@@ -276,9 +277,9 @@ def test_a_render_reaches_the_gateway_and_comes_back_as_a_batch(node_module,
     assert sent["headers"]["cf-aig-byok-alias"] == "example-studio"
     assert tuple(batch.shape) == (1, 4, 4, 3)
     assert text == "here you go"
-    # None rather than an empty batch: this reply carried no sketch, and an
-    # IMAGE output has no empty value ComfyUI can carry downstream.
-    assert thought is None
+    # A placeholder rather than None: this reply carried no sketch, and the
+    # slot still has to hand the next node something with a shape.
+    assert tuple(thought.shape) == (1, 1024, 1024, 3)
 
 
 def test_the_request_is_given_a_connect_deadline_of_its_own(node_module,
@@ -445,3 +446,87 @@ def test_the_model_input_gates_resolution_on_the_model_chosen(node_module):
         "Nano Banana 2 (Gemini 3.1 Flash Image)": ["1K", "2K", "4K"],
         "Nano Banana 2 Lite": ["1K"],
     }
+
+
+class FakeGeminiPart:
+    """Stands in for ComfyUI's own GeminiPart, which is a pydantic model.
+
+    Only `model_dump` matters here: the real type is not importable without
+    ComfyUI installed, and what this node has to cope with is an object that
+    is not a dict and cannot be JSON-encoded as itself."""
+
+    def __init__(self, text=None, inline=None):
+        self.text = text
+        self.inline = inline
+
+    def model_dump(self, exclude_none=False):
+        out = {"text": self.text, "inlineData": self.inline}
+        return {k: v for k, v in out.items()
+                if not exclude_none or v is not None}
+
+
+def test_a_context_file_reaches_the_wire_as_json_rather_than_an_object(
+        node_module, monkeypatch):
+    """`files` takes ComfyUI's GEMINI_INPUT_FILES, and its producer hands back
+    pydantic models. Dropped into the body raw they reach json.dumps as
+    objects and raise TypeError — which is not a RequestException, so it also
+    escapes this node's error wrapper and arrives with no studio context at
+    all. The stock node never hits it because it serialises through pydantic."""
+    sent, _ = run_execute(
+        node_module, monkeypatch, FakeResponse(payload=one_png()),
+        env=dict(GATEWAY_ENV),
+        files=[FakeGeminiPart(inline={"mimeType": "text/plain", "data": "aGk="})])
+    parts = sent["body"]["contents"][0]["parts"]
+    assert all(isinstance(p, dict) for p in parts), "a part is not JSON-able"
+    assert parts[-1] == {"inlineData": {"mimeType": "text/plain", "data": "aGk="}}
+    # Encodes without raising — the actual failure being pinned.
+    json.dumps(sent["body"])
+
+
+def thought_reply(*sizes):
+    """A good 4x4 render plus interim sketches of the given sizes."""
+    parts = []
+    for w, h in sizes:
+        buf = io.BytesIO()
+        Image.new("RGB", (w, h), (255, 0, 0)).save(buf, format="PNG")
+        parts.append({"thought": True, "inlineData": {
+            "mimeType": "image/png",
+            "data": base64.b64encode(buf.getvalue()).decode()}})
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (0, 255, 0)).save(buf, format="PNG")
+    parts.append({"inlineData": {"mimeType": "image/png",
+                                 "data": base64.b64encode(buf.getvalue()).decode()}})
+    return {"candidates": [{"content": {"parts": parts}}]}
+
+
+def test_sketches_that_disagree_on_size_do_not_destroy_the_render(
+        node_module, monkeypatch):
+    """Nothing constrains interim sketches to a common size — they are the one
+    set of images that genuinely varies. Batching them with the same helper
+    that batches renders means a diagnostic-only third output can raise and
+    take a perfectly good render with it, blaming aspect_ratio and resolution,
+    which govern the final image and would change nothing."""
+    pytest.importorskip("torch")
+    _, output = run_execute(
+        node_module, monkeypatch,
+        FakeResponse(payload=thought_reply((8, 8), (12, 6))),
+        env=dict(GATEWAY_ENV))
+    batch, _text, thought = output.args
+    assert tuple(batch.shape) == (1, 4, 4, 3)
+    assert thought is not None
+
+
+def test_no_sketch_still_yields_an_image_the_next_node_can_read(node_module,
+                                                               monkeypatch):
+    """thinking_level defaults to MINIMAL, so a freshly dropped node produces
+    no sketch on every run. Returning None there is not an empty output — it
+    reaches SaveImage as None and dies on `images[0].shape`, naming neither
+    this node nor Gemini. The stock node returns a placeholder for exactly
+    this reason."""
+    pytest.importorskip("torch")
+    _, output = run_execute(node_module, monkeypatch,
+                            FakeResponse(payload=one_png()),
+                            env=dict(GATEWAY_ENV))
+    thought = output.args[2]
+    assert thought is not None
+    assert len(tuple(thought.shape)) == 4

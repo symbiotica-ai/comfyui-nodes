@@ -412,3 +412,38 @@ def test_a_float_batch_above_one_is_clipped_rather_than_wrapping_round(
     sent_image = PILImage.open(io.BytesIO(
         base64.b64decode(block["source"]["data"])))
     assert sent_image.getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_reference_slots_reach_the_wire_the_way_the_canvas_filled_them(
+        node_module, monkeypatch):
+    """Autogrow hands `images` over as a DICT keyed by slot name, not a batch.
+
+    Iterating that dict yields its KEYS — strings — so a node that treats it as
+    a batch sends no images at all, or dies converting 'image_1' to pixels. The
+    schema declares Autogrow, so this is the only shape the canvas ever
+    produces; a test passing a raw batch exercises a path ComfyUI never takes.
+
+    Slots are also numbered, and sorted as text `image_10` falls between
+    `image_1` and `image_2` — so the order is asserted, not just the count."""
+    import numpy as np
+
+    def slot(value):
+        return np.full((1, 2, 2, 3), value, dtype=np.float32)
+
+    sent, _ = run_execute(
+        node_module, monkeypatch, FakeResponse(payload=ANSWERED),
+        images={"image_1": slot(0.0), "image_2": slot(0.5),
+                "image_10": slot(1.0)})
+    blocks = [b for b in sent["body"]["messages"][0]["content"]
+              if b.get("type") == "image"]
+    assert len(blocks) == 3
+    # The pixel values, not the count: sorted as text `image_10` lands between
+    # `image_1` and `image_2`, which sends three blocks in the wrong order and
+    # passes any assertion that only counts them.
+    import base64 as b64
+    import io as _io
+
+    from PIL import Image as _Image
+    greys = [_Image.open(_io.BytesIO(b64.b64decode(b["source"]["data"])))
+             .convert("RGB").getpixel((0, 0))[0] for b in blocks]
+    assert greys == [0, 128, 255], f"slots arrived out of order: {greys}"

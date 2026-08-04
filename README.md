@@ -194,6 +194,15 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   the order the order sheet pairs it, so the index that picks a cell picks the
   reference belonging to it. References with transparency are composited onto a
   chosen background rather than flattened, and their alpha comes out as `masks`.
+- **Symbiotica Reconstruct Cells** — the inverse of Slice Cells: edited cells go
+  back onto the grid they were cut from, on the same `cell_boxes`, so a sheet
+  survives a per-asset edit intact. The canvas is measured from the boxes, which
+  record the grid rather than the sheet, so the outer margin is recovered from
+  the centring rather than lost.
+- **Symbiotica Compare Sheet** — a row of references over a row of results in one
+  image, so an asset and the art it was drawn from can be read in a glance
+  instead of flipped between. Cell size, spacing and background are settable, and
+  a reference can be drawn smaller than its cell.
 - **Symbiotica Category Prompts** — composes a category's architect prompt from
   the project's shared `prompts/_rules/*.md` (filename order) followed by
   `prompts/<Category>.md`, which stays last because the tail of a prompt

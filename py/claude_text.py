@@ -2,12 +2,11 @@
 # ABOUTME: an answer, routed through Cloudflare AI Gateway when configured.
 import os
 
-import numpy as np
 import requests
-from PIL import Image
 from comfy_api.latest import io
 
 from .pipeline import claude_text as core
+from .pipeline.reference_images import to_pil
 from .pipeline import ai_gateway
 
 
@@ -30,8 +29,9 @@ def _model_inputs(label):
         inputs.append(io.Float.Input(
             "temperature", default=1.0, min=0.0, max=1.0, step=0.01,
             advanced=True,
-            tooltip="Lower is more repeatable. Dropped whenever reasoning is "
-                    "on, which Anthropic requires."))
+            tooltip="Lower is more repeatable. Ignored for Opus 4.7, and for "
+                    "any model whenever reasoning is on — Anthropic rejects a "
+                    "temperature alongside thinking."))
     if label in core.ALWAYS_THINKING:
         inputs.append(io.Combo.Input(
             "reasoning_effort",
@@ -180,22 +180,6 @@ class SymbioticaClaude(io.ComfyNode):
                           f"reply was not JSON: {response.text}") from None
 
         return io.NodeOutput(core.parse_response(payload))
-
-
-def to_pil(images):
-    """A ComfyUI [B,H,W,C] float batch as a list of PIL images. None and an
-    empty batch are both 'no references', which is a text-only question."""
-    if images is None:
-        return []
-    out = []
-    for frame in images:
-        if hasattr(frame, "cpu"):
-            frame = frame.cpu().numpy()
-        arr = np.asarray(frame)
-        if arr.dtype != np.uint8:
-            arr = (np.clip(arr, 0.0, 1.0) * 255.0).round().astype(np.uint8)
-        out.append(Image.fromarray(arr))
-    return out
 
 
 NODE_CLASS_MAPPINGS = {"SymbioticaClaude": SymbioticaClaude}

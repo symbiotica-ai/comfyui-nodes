@@ -6,13 +6,13 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
-## Unreleased
+## 2026.8.7
 
 **Node change, and this one breaks saved workflows.** `Gemini Image
 (Symbiotica)` and `Claude (Symbiotica)` move to ComfyUI's V3 schema. Everything
 that varies by model now lives inside the model combo and reaches the node
 under a dotted name — `model.resolution`, `model.reasoning_effort`,
-`model.image_1` — and reference images become numbered slots rather than one
+`model.images.image_1` — and reference images become numbered slots rather than one
 batch input. Widget positions are not shifted, they are replaced, so a workflow
 carrying either node must be rebuilt. The Gemini node also gains a third
 output, `thought_image`. No node is removed or renamed.
@@ -40,6 +40,24 @@ output, `thought_image`. No node is removed or renamed.
   model list — thinking is four different behaviours depending on the model,
   and `temperature` is a 400 on four of them. Per-model inputs are what
   retired that constraint rather than any change at the providers.
+### Fixed
+
+- **The Claude node could not read its own reference slots.** It declared
+  numbered `image_1..20` inputs but its converter still expected a single batch,
+  so any wired reference reached it as a slot NAME rather than pixels. Both nodes
+  now share one converter, which is what stops them diverging again.
+- **Context files crashed every Gemini request that used one.** ComfyUI's Gemini
+  Input Files node hands back objects this node posted without converting, so the
+  request failed while being encoded — outside the handler that would have named
+  the studio and the gateway.
+- **A mismatched interim sketch could destroy a finished render.** Nothing
+  constrains the model's thinking sketches to a common size, and batching them
+  with the render meant a diagnostic output could fail the real one, blaming
+  settings that govern the final image.
+- **`thought_image` handed the next node nothing.** With thinking at its default
+  it produced no sketch on every run, which reached a save or preview node as an
+  absent image and failed there instead of here.
+
 ## 2026.8.6
 
 **Node change.** Eight nodes are added: `Camera Shake`, `Focus Pull`,

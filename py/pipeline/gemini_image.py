@@ -145,6 +145,26 @@ def image_parts(pil_images) -> list:
 
 
 
+def file_parts(files) -> list:
+    """Context files as plain JSON parts, whatever the producer handed over.
+
+    ComfyUI's own Gemini Input Files node returns pydantic models, and the
+    stock node gets away with it because it serialises the whole request
+    through pydantic. This one builds a plain dict and posts it with
+    `json=`, so an unconverted model reaches `json.dumps` and raises
+    TypeError — which is not a RequestException, so it escapes the wrapper
+    that would have named the studio and the gateway.
+
+    `exclude_none` matters: a bare dump carries every unset field, so a file
+    part arrives with `"text": null` beside its `inlineData` and Google reads
+    a part claiming to be both."""
+    parts = []
+    for part in files or []:
+        dump = getattr(part, "model_dump", None)
+        parts.append(dump(exclude_none=True) if callable(dump) else part)
+    return parts
+
+
 def decode_inline_image(inline: dict):
     """One inlineData part as a PIL image.
 

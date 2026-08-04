@@ -4,10 +4,10 @@ import os
 
 import numpy as np
 import requests
-from PIL import Image
 from comfy_api.latest import io
 
 from .pipeline import gemini_image as core
+from .pipeline.reference_images import to_pil
 from .pipeline import ai_gateway
 
 
@@ -140,14 +140,15 @@ class SymbioticaGeminiImage(io.ComfyNode):
         # is read from here.
         label = model["model"]
         model_id = core.MODEL_LABELS.get(label, label)
-        references = to_pil(model.get("images"))
 
         # First, because everything below it is wasted otherwise: the ladder
-        # can reach a file on disk and the encoding runs once per reference.
+        # can reach a file on disk, and every reference costs a device copy
+        # and three full-size temporaries before it is even a PIL image.
         core.require_prompt(prompt)
         transport = core.resolve_transport(os.environ, model_id,
                                            interactive_key)
-        parts = core.image_parts(references) + list(model.get("files") or [])
+        parts = (core.image_parts(to_pil(model.get("images")))
+                 + core.file_parts(model.get("files")))
         body = core.request_body(prompt, parts, model["aspect_ratio"],
                                  model["resolution"], system_prompt,
                                  thinking_level=model["thinking_level"],
@@ -193,47 +194,37 @@ class SymbioticaGeminiImage(io.ComfyNode):
                           f"reply was not JSON: {response.text}") from None
 
         rendered, text, thoughts = core.parse_response(payload)
-        # None rather than an empty batch when the model did not sketch: an
-        # IMAGE output has no empty value ComfyUI will carry, and a zero-length
-        # tensor fails downstream naming shapes rather than the missing sketch.
-        return io.NodeOutput(to_tensor(rendered), text,
-                             to_tensor(thoughts) if thoughts else None)
+        return io.NodeOutput(to_tensor(rendered), text, sketch(thoughts))
 
 
-def _slot_order(name):
-    """Autogrow slot names in the order the canvas shows them.
+def sketch(thoughts):
+    """The interim sketches as a batch, and never a reason the render fails.
 
-    Sorted as text, `image_10` lands between `image_1` and `image_2`, so a
-    graph with ten references sends them in an order nobody wired and the
-    prompt's "the second image" means the tenth. Unnumbered names keep their
-    own alphabetical order after the numbered ones rather than raising."""
-    prefix, _, suffix = name.rpartition("_")
-    return (0, int(suffix), "") if suffix.isdigit() else (1, 0, name)
+    Two rules, both learned from what the alternatives do downstream.
 
+    It cannot raise. Nothing constrains sketches to a common size — they are
+    the one set of images that genuinely varies — so batching them with the
+    helper that batches renders lets a diagnostic-only third output kill a
+    good first one, blaming `aspect_ratio` and `resolution`, which govern the
+    final image and would change nothing. Mismatched sketches fall back to the
+    first, which is the one the model drew from.
 
-def to_pil(images):
-    """Reference images as a list of PIL images, whatever shape they arrive in.
+    It is never None. thinking_level defaults to MINIMAL, so a freshly dropped
+    node produces no sketch on EVERY run, and None reaching SaveImage dies on
+    `images[0].shape` naming neither this node nor Gemini. ComfyUI's own node
+    returns a placeholder here for the same reason. Three channels rather than
+    its four, so the slot always carries the shape everything else on this node
+    emits."""
+    import torch
 
-    Autogrow hands over a DICT keyed by slot name, and a slot may hold a batch
-    of its own, so the slots are flattened in name order and each batch is
-    expanded in place. None, an empty dict and an empty batch are all 'no
-    references', which is a prompt-only generation."""
-    if images is None:
-        return []
-    if isinstance(images, dict):
-        out = []
-        for name in sorted(images, key=_slot_order):
-            out.extend(to_pil(images[name]))
-        return out
-    out = []
-    for frame in images:
-        if hasattr(frame, "cpu"):
-            frame = frame.cpu().numpy()
-        arr = np.asarray(frame)
-        if arr.dtype != np.uint8:
-            arr = (np.clip(arr, 0.0, 1.0) * 255.0).round().astype(np.uint8)
-        out.append(Image.fromarray(arr))
-    return out
+    for candidates in (thoughts, thoughts[:1] if thoughts else []):
+        if not candidates:
+            continue
+        try:
+            return to_tensor(candidates)
+        except ValueError:
+            continue
+    return torch.zeros((1, 1024, 1024, 3))
 
 
 def to_tensor(pil_images):
