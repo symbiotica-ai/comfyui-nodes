@@ -64,15 +64,22 @@ def test_a_system_prompt_is_sent_without_a_role_and_an_empty_one_not_at_all():
     assert "systemInstruction" not in body(system_prompt="   ")
 
 
-def test_the_body_carries_nothing_this_node_deliberately_does_not_send():
-    """The seed exists to defeat ComfyUI's output cache, not to reach Google;
-    thinking, temperature and topP are v1 scope cuts. Each would change what
-    comes back if it leaked in."""
+def test_the_seed_never_reaches_google():
+    """It exists to defeat ComfyUI's output cache, not to reach the model.
+    Leaked into the body it would change what comes back, which is the one
+    thing a cache-buster must not do."""
     sent = body()
-    assert "thinkingConfig" not in sent["generationConfig"]
-    assert "temperature" not in sent["generationConfig"]
-    assert "topP" not in sent["generationConfig"]
     assert "seed" not in sent and "seed" not in sent["generationConfig"]
+
+
+def test_the_generation_controls_are_sent_with_the_defaults_core_uses():
+    """These were cut from v1 because a flat model combo could not vary them
+    per model — the omission was the constraint, not a preference. Pinned to
+    core's own defaults so the same prompt on either node draws the same."""
+    config = body()["generationConfig"]
+    assert config["thinkingConfig"] == {"thinkingLevel": "MINIMAL"}
+    assert config["temperature"] == 1.0
+    assert config["topP"] == 0.95
 
 
 def test_a_prompt_of_whitespace_is_refused_before_anything_is_sent():
@@ -128,7 +135,7 @@ def reply(*parts, finish_reason=None, **top_level):
 
 
 def test_the_image_and_the_models_words_both_come_back():
-    images, text = gemini_image.parse_response(
+    images, text, _thoughts = gemini_image.parse_response(
         reply({"text": "here you go"}, returned_image(GREEN_PIXEL)))
     assert len(images) == 1
     assert images[0].convert("RGB").getpixel((0, 0)) == GREEN_PIXEL
@@ -136,7 +143,7 @@ def test_the_image_and_the_models_words_both_come_back():
 
 
 def test_several_text_parts_are_joined_into_one_account():
-    _, text = gemini_image.parse_response(
+    _, text, _thoughts = gemini_image.parse_response(
         reply({"text": "first"}, {"text": "second"},
               returned_image(GREEN_PIXEL)))
     assert text == "first\nsecond"
@@ -147,7 +154,7 @@ def test_the_render_comes_back_as_the_jpeg_the_api_actually_sends():
     would reject every real render."""
     buf = io.BytesIO()
     swatch(GREEN_PIXEL).save(buf, format="JPEG")
-    images, _ = gemini_image.parse_response(reply(
+    images, _, _thoughts = gemini_image.parse_response(reply(
         {"inlineData": {"mimeType": "image/jpeg",
                         "data": base64.b64encode(buf.getvalue()).decode()}}))
     assert len(images) == 1
@@ -161,7 +168,7 @@ def test_a_thought_signature_on_the_real_render_does_not_get_it_filtered():
     report that Gemini produced nothing."""
     part = returned_image(GREEN_PIXEL)
     part["thoughtSignature"] = "an-opaque-token-from-the-model"
-    images, _ = gemini_image.parse_response(reply(part))
+    images, _, _thoughts = gemini_image.parse_response(reply(part))
     assert len(images) == 1
     assert images[0].convert("RGB").getpixel((0, 0)) == GREEN_PIXEL
 
@@ -171,7 +178,7 @@ def test_a_thinking_sketch_never_ships_as_the_render():
     the thought_image OUTPUT does not drop this filter: without it the sketch
     is simply the first image in the list, and the render is whatever the
     caller takes first."""
-    images, _ = gemini_image.parse_response(
+    images, _, _thoughts = gemini_image.parse_response(
         reply(returned_image(RED_PIXEL, thought=True),
               returned_image(GREEN_PIXEL)))
     assert len(images) == 1

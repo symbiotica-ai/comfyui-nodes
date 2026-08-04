@@ -52,6 +52,43 @@ class NodeOutput:
         self.ui = ui
 
 
+class _DynamicCombo(_IOType):
+    """A combo whose chosen option carries its own inputs.
+
+    The generic `_IOType` already builds the Input, because `_IOValue` keeps
+    every kwarg — what it cannot express is `Option`, and a schema that calls
+    it would fail here for a reason that says nothing about the node."""
+
+    class Option:
+        def __init__(self, label, inputs=None, **kw):
+            self.label = label
+            self.inputs = inputs or []
+            self.__dict__.update(kw)
+
+
+class _Autogrow(_IOType):
+    """Slots that grow as they are filled — `image_1..N` rather than a batch.
+
+    At execute time ComfyUI hands these over as a DICT keyed by slot name, not
+    a list, and a slot may hold a batch of its own. Tests that build the value
+    by hand have to match that shape or they verify a graph nobody runs."""
+
+    class TemplateNames:
+        def __init__(self, template_input, names=None, min=0, **kw):
+            self.template_input = template_input
+            self.names = list(names or [])
+            self.min = min
+            self.__dict__.update(kw)
+
+    class TemplatePrefix:
+        def __init__(self, template_input, prefix="", max=0, min=0, **kw):
+            self.template_input = template_input
+            self.prefix = prefix
+            self.max = max
+            self.min = min
+            self.__dict__.update(kw)
+
+
 class _IONamespace(types.SimpleNamespace):
     """`io`, with every datatype we did not list behaving like a plain IO type.
 
@@ -71,6 +108,7 @@ def build_modules():
     io_ns = _IONamespace(
         ComfyNode=ComfyNode, Schema=Schema, NodeOutput=NodeOutput,
         String=_IOType, Boolean=_IOType, Custom=lambda name: _IOType,
+        DynamicCombo=_DynamicCombo, Autogrow=_Autogrow,
         # Named values a schema lists rather than a type it builds from.
         Hidden=types.SimpleNamespace(unique_id="unique_id"))
     latest = types.ModuleType("comfy_api.latest")

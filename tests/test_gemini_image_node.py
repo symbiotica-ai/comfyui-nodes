@@ -12,6 +12,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import comfy_api_stub
+
 PY_DIR = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "py")
 
@@ -26,6 +28,9 @@ def node_module(monkeypatch):
     that loud — and it must be loaded as a package member, because the module
     reaches its pure half through a relative import that a flat load cannot
     resolve."""
+    comfy_pkg, comfy_latest = comfy_api_stub.build_modules()
+    monkeypatch.setitem(sys.modules, "comfy_api", comfy_pkg)
+    monkeypatch.setitem(sys.modules, "comfy_api.latest", comfy_latest)
     pkg = types.ModuleType("symbiotica_gemini_under_test")
     pkg.__path__ = [PY_DIR]
     monkeypatch.setitem(sys.modules, "symbiotica_gemini_under_test", pkg)
@@ -49,67 +54,88 @@ def test_the_display_name_tells_it_apart_from_comfyuis_own_gemini_nodes(node_mod
     assert shown == "Gemini Image (Symbiotica)"
 
 
+def by_id(node_module):
+    """The schema's inputs keyed by name, and the per-model inputs the chosen
+    combo option carries, flattened alongside them under `model.<name>` — the
+    same dotted names ComfyUI shows on the canvas."""
+    schema = node_module.SymbioticaGeminiImage.define_schema()
+    inputs = {i.id: i for i in schema.inputs}
+    for option in inputs["model"].options:
+        for inner in option.inputs:
+            inputs.setdefault(f"model.{inner.id}", inner)
+    return schema, inputs
+
+
 def test_the_node_sits_with_the_packs_other_image_work(node_module):
-    assert node_module.SymbioticaGeminiImage.CATEGORY == "symbiotica/image"
+    schema, _ = by_id(node_module)
+    assert schema.category == "symbiotica/image"
+    assert schema.node_id == "SymbioticaGeminiImage"
 
 
-def test_it_returns_the_render_and_the_models_words(node_module):
-    cls = node_module.SymbioticaGeminiImage
-    assert cls.RETURN_TYPES == ("IMAGE", "STRING")
-    assert cls.RETURN_NAMES == ("image", "text")
+def test_it_returns_the_render_the_words_and_the_sketch(node_module):
+    """The third output is core's `thought_image`. Without it the interim
+    sketch is either lost or, worse, shipped as the render."""
+    schema, _ = by_id(node_module)
+    assert [o.display_name for o in schema.outputs] == [
+        "image", "text", "thought_image"]
 
 
 def test_every_widget_the_scope_calls_for_is_present(node_module):
-    schema = node_module.SymbioticaGeminiImage.INPUT_TYPES()
-    required, optional = schema["required"], schema["optional"]
-    assert set(required) == {"prompt", "model", "seed", "aspect_ratio",
-                             "resolution"}
-    assert set(optional) == {"images", "system_prompt", "api_key"}
+    """The per-model inputs live inside the combo, so a flat name that used to
+    be top-level moving inside it is a real change to what ComfyUI passes."""
+    _, inputs = by_id(node_module)
+    assert set(inputs) == {
+        "prompt", "model", "seed", "response_modalities", "system_prompt",
+        "temperature", "top_p", "api_key",
+        "model.aspect_ratio", "model.resolution", "model.thinking_level",
+        "model.images", "model.files"}
 
 
 def test_the_execute_signature_matches_the_widgets_comfyui_will_pass(node_module):
-    """ComfyUI calls execute with the widget names as keywords. A schema that
-    names something execute does not accept fails only at run time, in a
-    sandbox, on somebody's order."""
-    schema = node_module.SymbioticaGeminiImage.INPUT_TYPES()
-    declared = set(schema["required"]) | set(schema["optional"])
+    """ComfyUI calls execute with the top-level widget names as keywords, and
+    hands the combo's own inputs inside the combo value. A schema that names
+    something execute does not accept fails only at run time, in a sandbox, on
+    somebody's order."""
+    schema, _ = by_id(node_module)
+    declared = {i.id for i in schema.inputs}
     accepted = set(inspect.signature(
-        node_module.SymbioticaGeminiImage.execute).parameters) - {"self"}
+        node_module.SymbioticaGeminiImage.execute).parameters) - {"cls", "self"}
     assert declared == accepted
 
 
-def test_the_reference_input_is_optional_so_a_prompt_alone_works(node_module):
-    schema = node_module.SymbioticaGeminiImage.INPUT_TYPES()
-    assert schema["optional"]["images"][0] == "IMAGE"
-    signature = inspect.signature(node_module.SymbioticaGeminiImage.execute)
-    assert signature.parameters["images"].default is None
+def test_the_reference_slots_grow_rather_than_taking_one_batch(node_module):
+    """Core's shape: image_1..14 filled as needed. The cap is Google's."""
+    from pipeline import gemini_image
+    _, inputs = by_id(node_module)
+    template = inputs["model.images"].template
+    assert template.names == [f"image_{i}" for i in
+                              range(1, gemini_image.MAX_REFERENCE_IMAGES + 1)]
+    assert template.min == 0
 
 
 def test_the_model_choices_are_the_ones_the_module_knows(node_module):
     from pipeline import gemini_image
-    schema = node_module.SymbioticaGeminiImage.INPUT_TYPES()
-    assert schema["required"]["model"][0] == gemini_image.MODELS
-    assert schema["required"]["aspect_ratio"][0] == gemini_image.ASPECT_RATIOS
-    assert schema["required"]["resolution"][0] == gemini_image.RESOLUTIONS
+    _, inputs = by_id(node_module)
+    labels = [o.label for o in inputs["model"].options]
+    assert labels == list(gemini_image.MODEL_LABELS)
+    assert inputs["model.aspect_ratio"].options == gemini_image.ASPECT_RATIOS
 
 
 def test_the_system_prompt_defaults_to_the_one_that_forces_an_image(node_module):
     """Left blank the node sends no systemInstruction at all, and a
     conversational prompt comes back as a paragraph — a failed order."""
     from pipeline import gemini_image
-    schema = node_module.SymbioticaGeminiImage.INPUT_TYPES()
-    assert (schema["optional"]["system_prompt"][1]["default"]
-            == gemini_image.GEMINI_IMAGE_SYS_PROMPT)
+    _, inputs = by_id(node_module)
+    assert inputs["system_prompt"].default == gemini_image.GEMINI_IMAGE_SYS_PROMPT
 
 
 def test_the_seed_says_out_loud_that_it_never_reaches_google(node_module):
     """It exists to defeat ComfyUI's output cache. Without the tooltip saying
     so, the next reader finds a widget that is built and never sent, and
     "fixes" it by sending it."""
-    schema = node_module.SymbioticaGeminiImage.INPUT_TYPES()
-    tooltip = schema["required"]["seed"][1]["tooltip"].lower()
-    assert "not sent" in tooltip
-    assert schema["required"]["seed"][1]["control_after_generate"] is True
+    _, inputs = by_id(node_module)
+    assert "not sent" in inputs["seed"].tooltip.lower()
+    assert inputs["seed"].control_after_generate is True
 
 
 def test_no_reference_input_is_no_references_rather_than_a_crash(node_module):
@@ -187,6 +213,17 @@ class FakeResponse:
         return self._payload
 
 
+def chosen_model(**overrides):
+    """The value ComfyUI hands the `model` input: the label plus the inputs
+    that option carries. Tests that call execute directly build it here so the
+    shape lives in one place."""
+    value = dict(model="Nano Banana 2 (Gemini 3.1 Flash Image)",
+                 aspect_ratio="auto", resolution="2K",
+                 thinking_level="MINIMAL", images={}, files=None)
+    value.update(overrides)
+    return value
+
+
 def run_execute(node_module, monkeypatch, response, env=None, **kwargs):
     """execute with the network replaced, returning what it sent."""
     sent = {}
@@ -197,11 +234,19 @@ def run_execute(node_module, monkeypatch, response, env=None, **kwargs):
 
     monkeypatch.setattr(node_module.requests, "post", fake_post)
     monkeypatch.setattr(node_module.os, "environ", env or {})
-    node = node_module.SymbioticaGeminiImage()
-    call = dict(prompt="a knight", model="gemini-3.1-flash-image", seed=0,
-                aspect_ratio="auto", resolution="2K", api_key="a-google-key")
+    call = dict(prompt="a knight", seed=0, api_key="a-google-key")
+    # The per-model inputs arrive inside the combo's value rather than as
+    # keywords of their own, so a caller still names them flatly and they are
+    # folded in here — otherwise every test would have to know the shape.
+    chosen = dict(model="Nano Banana 2 (Gemini 3.1 Flash Image)",
+                  aspect_ratio="auto", resolution="2K",
+                  thinking_level="MINIMAL", images={}, files=None)
+    for key in list(kwargs):
+        if key in chosen:
+            chosen[key] = kwargs.pop(key)
+    call["model"] = chosen
     call.update(kwargs)
-    return sent, node.execute(**call)
+    return sent, node_module.SymbioticaGeminiImage.execute(**call)
 
 
 GATEWAY_ENV = {
@@ -223,13 +268,17 @@ def one_png(colour=(0, 255, 0)):
 def test_a_render_reaches_the_gateway_and_comes_back_as_a_batch(node_module,
                                                                 monkeypatch):
     pytest.importorskip("torch")
-    sent, (batch, text) = run_execute(
+    sent, output = run_execute(
         node_module, monkeypatch, FakeResponse(payload=one_png()),
         env=dict(GATEWAY_ENV))
+    batch, text, thought = output.args
     assert sent["url"].startswith("https://gateway.example.invalid")
     assert sent["headers"]["cf-aig-byok-alias"] == "example-studio"
     assert tuple(batch.shape) == (1, 4, 4, 3)
     assert text == "here you go"
+    # None rather than an empty batch: this reply carried no sketch, and an
+    # IMAGE output has no empty value ComfyUI can carry downstream.
+    assert thought is None
 
 
 def test_the_request_is_given_a_connect_deadline_of_its_own(node_module,
@@ -322,9 +371,8 @@ def test_a_call_that_never_reached_the_gateway_still_names_the_studio(
     monkeypatch.setattr(node_module.requests, "post", refuse_to_connect)
     monkeypatch.setattr(node_module.os, "environ", dict(GATEWAY_ENV))
     with pytest.raises(RuntimeError) as caught:
-        node_module.SymbioticaGeminiImage().execute(
-            prompt="a knight", model="gemini-3.1-flash-image", seed=0,
-            aspect_ratio="auto", resolution="2K")
+        node_module.SymbioticaGeminiImage.execute(
+            prompt="a knight", model=chosen_model(), seed=0)
     message = str(caught.value)
     assert "example-studio" in message
     assert "ConnectTimeout" in message
@@ -343,9 +391,8 @@ def test_a_transport_failure_does_not_leak_the_token_either(node_module,
     monkeypatch.setattr(node_module.requests, "post", leaky)
     monkeypatch.setattr(node_module.os, "environ", dict(GATEWAY_ENV))
     with pytest.raises(RuntimeError) as caught:
-        node_module.SymbioticaGeminiImage().execute(
-            prompt="a knight", model="gemini-3.1-flash-image", seed=0,
-            aspect_ratio="auto", resolution="2K")
+        node_module.SymbioticaGeminiImage.execute(
+            prompt="a knight", model=chosen_model(), seed=0)
     assert token not in str(caught.value)
 
 
@@ -360,9 +407,8 @@ def test_an_empty_prompt_is_refused_before_the_key_ladder_is_walked(
     monkeypatch.setattr(node_module.requests, "post", exploding_post)
     monkeypatch.setattr(node_module.os, "environ", {})
     with pytest.raises(ValueError, match="prompt"):
-        node_module.SymbioticaGeminiImage().execute(
-            prompt="   ", model="gemini-3.1-flash-image", seed=0,
-            aspect_ratio="auto", resolution="2K", api_key="")
+        node_module.SymbioticaGeminiImage.execute(
+            prompt="   ", model=chosen_model(), seed=0, api_key="")
 
 
 def test_the_prompt_is_sent_as_the_users_turn(node_module, monkeypatch):
@@ -380,3 +426,22 @@ def test_torch_is_reached_for_only_when_a_render_actually_runs(node_module):
     the box where the pack silently loses the node."""
     source = open(os.path.join(PY_DIR, "gemini_image.py")).read()
     assert "import torch" not in source.split("def execute")[0]
+
+
+def test_the_model_input_gates_resolution_on_the_model_chosen(node_module):
+    """Lite tops out at 1K and the full model reaches 4K, so a flat resolution
+    combo offers Lite two sizes it will refuse. Core expresses that with a
+    DynamicCombo whose options carry their own inputs, and this pins that the
+    per-model gating is real rather than a tooltip asking users to remember."""
+    schema = node_module.SymbioticaGeminiImage.define_schema()
+    model_input = next(i for i in schema.inputs if i.id == "model")
+
+    resolutions = {
+        option.label: [inp.options for inp in option.inputs
+                       if inp.id == "resolution"][0]
+        for option in model_input.options
+    }
+    assert resolutions == {
+        "Nano Banana 2 (Gemini 3.1 Flash Image)": ["1K", "2K", "4K"],
+        "Nano Banana 2 Lite": ["1K"],
+    }

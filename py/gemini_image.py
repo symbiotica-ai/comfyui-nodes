@@ -5,12 +5,49 @@ import os
 import numpy as np
 import requests
 from PIL import Image
+from comfy_api.latest import io
 
 from .pipeline import gemini_image as core
 from .pipeline import ai_gateway
 
 
-class SymbioticaGeminiImage:
+def _model_inputs(resolutions):
+    """The inputs one model choice carries.
+
+    Built per option rather than shared, because the whole point of the
+    per-model combo is that Lite offers 1K alone — a single input list with
+    every resolution in it is the flat combo this replaced."""
+    return [
+        io.Combo.Input("aspect_ratio", options=core.ASPECT_RATIOS,
+                       default="auto",
+                       tooltip="'auto' matches the reference images, or gives "
+                               "a square when there are none"),
+        io.Combo.Input("resolution", options=resolutions,
+                       tooltip="2K and 4K run Gemini's own upscaler"),
+        io.Combo.Input("thinking_level", options=core.THINKING_LEVELS,
+                       tooltip="HIGH lets the model plan the image before "
+                               "drawing it, and is what the thought_image "
+                               "output needs. It costs latency on every "
+                               "render, so an order pipeline wants MINIMAL."),
+        io.Autogrow.Input(
+            "images",
+            template=io.Autogrow.TemplateNames(
+                io.Image.Input("image"),
+                names=[f"image_{i}" for i in
+                       range(1, core.MAX_REFERENCE_IMAGES + 1)],
+                min=0),
+            tooltip=f"Reference images, in slot order. Each slot may itself "
+                    f"carry a batch; {core.MAX_REFERENCE_IMAGES} images total "
+                    f"is Google's ceiling."),
+        io.Custom("GEMINI_INPUT_FILES").Input(
+            "files", optional=True,
+            tooltip="Optional context files from ComfyUI's own Gemini Input "
+                    "Files node. That node reads local .txt and .pdf and needs "
+                    "no account, so it works in an order sandbox."),
+    ]
+
+
+class SymbioticaGeminiImage(io.ComfyNode):
     """Generate an image with Google's Gemini image models.
 
     On a box carrying SYMBIOTICA_AIG_BASE the call goes through Cloudflare AI
@@ -19,80 +56,103 @@ class SymbioticaGeminiImage:
     Google on a key from the node, the Settings UI or the environment."""
 
     @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "prompt": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "tooltip": "What to draw. Reference images are described "
-                               "by this prompt, not replaced by it."
-                }),
-                "model": (core.MODELS, {
-                    "default": core.MODELS[0],
-                    "tooltip": "The Lite model is the cheap lever for drafts"
-                }),
-                "seed": ("INT", {
-                    "default": 0,
-                    "min": 0,
-                    "max": 0xFFFFFFFFFFFFFFFF,
-                    "control_after_generate": True,
-                    "tooltip": "Not sent to Google — Gemini takes no seed. It "
-                               "exists so re-queueing re-runs this node "
-                               "instead of serving ComfyUI's cached output."
-                }),
-                "aspect_ratio": (core.ASPECT_RATIOS, {
-                    "default": "auto",
-                    "tooltip": "'auto' matches the reference images, or gives "
-                               "a square when there are none"
-                }),
-                "resolution": (core.RESOLUTIONS, {
-                    "default": "2K",
-                    "tooltip": "2K and 4K run Gemini's own upscaler"
-                }),
-            },
-            "optional": {
-                "images": ("IMAGE", {
-                    "tooltip": f"Up to {core.MAX_REFERENCE_IMAGES} reference "
-                               f"images, sent in batch order"
-                }),
-                "system_prompt": ("STRING", {
-                    "multiline": True,
-                    "default": core.GEMINI_IMAGE_SYS_PROMPT,
-                    "tooltip": "Standing instructions. Emptying this lets a "
-                               "conversational prompt come back as prose "
-                               "instead of a picture."
-                }),
-                "api_key": ("STRING", {
-                    "default": "",
-                    "tooltip": "Google AI Studio key for direct calls; empty "
-                               "falls back to Symbiotica.GEMINI_API_KEY or "
-                               "Symbiotica.GOOGLE_API_KEY in Settings, then "
-                               "the GEMINI_API_KEY or GOOGLE_API_KEY env "
-                               "vars, in that order. Ignored where the studio "
-                               "gateway is configured."
-                }),
-            },
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaGeminiImage",
+            display_name="Gemini Image (Symbiotica)",
+            category="symbiotica/image",
+            description="Generate or edit images with Gemini, billed to the "
+                        "studio's own key through Cloudflare AI Gateway rather "
+                        "than to a ComfyUI account.",
+            inputs=[
+                io.String.Input("prompt", multiline=True, default="",
+                                tooltip="What to draw. Reference images are "
+                                        "described by this prompt, not "
+                                        "replaced by it."),
+                io.DynamicCombo.Input(
+                    "model",
+                    options=[
+                        io.DynamicCombo.Option(
+                            label,
+                            _model_inputs(core.MODEL_RESOLUTIONS[model_id]))
+                        for label, model_id in core.MODEL_LABELS.items()
+                    ],
+                    tooltip="The Lite model is the cheap lever for drafts, and "
+                            "renders at 1K only."),
+                io.Int.Input("seed", default=0, min=0,
+                             max=0xFFFFFFFFFFFFFFFF,
+                             control_after_generate=True,
+                             tooltip="Not sent to Google — Gemini takes no "
+                                     "seed. It exists so re-queueing re-runs "
+                                     "this node instead of serving ComfyUI's "
+                                     "cached output."),
+                io.Combo.Input("response_modalities",
+                               options=core.RESPONSE_MODALITIES,
+                               default="IMAGE+TEXT", advanced=True,
+                               tooltip="IMAGE alone suppresses the model's "
+                                       "commentary, and with it the thought "
+                                       "image."),
+                io.String.Input("system_prompt", multiline=True,
+                                default=core.GEMINI_IMAGE_SYS_PROMPT,
+                                optional=True, advanced=True,
+                                tooltip="Standing instructions. Emptying this "
+                                        "lets a conversational prompt come "
+                                        "back as prose instead of a picture."),
+                io.Float.Input("temperature", default=1.0, min=0.0, max=2.0,
+                               step=0.01, optional=True, advanced=True,
+                               tooltip="Lower is more focused and repeatable."),
+                io.Float.Input("top_p", default=0.95, min=0.0, max=1.0,
+                               step=0.01, optional=True, advanced=True,
+                               tooltip="Nucleus sampling threshold. Lower is "
+                                       "more focused, higher more diverse."),
+                io.String.Input("api_key", default="", optional=True,
+                                advanced=True,
+                                tooltip="Google AI Studio key for direct "
+                                        "calls; empty falls back to "
+                                        "Symbiotica.GEMINI_API_KEY or "
+                                        "Symbiotica.GOOGLE_API_KEY in "
+                                        "Settings, then the GEMINI_API_KEY or "
+                                        "GOOGLE_API_KEY env vars, in that "
+                                        "order. Ignored where the studio "
+                                        "gateway is configured."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="image"),
+                io.String.Output(display_name="text"),
+                io.Image.Output(
+                    display_name="thought_image",
+                    tooltip="The model's interim sketch. Only arrives with "
+                            "thinking_level HIGH and IMAGE+TEXT."),
+            ],
+        )
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("image", "text")
-    CATEGORY = "symbiotica/image"
-    FUNCTION = "execute"
-
-    def execute(self, prompt, model, seed, aspect_ratio, resolution,
-                images=None, system_prompt="", api_key=""):
+    @classmethod
+    def execute(cls, prompt, model, seed, response_modalities="IMAGE+TEXT",
+                system_prompt="", temperature=1.0, top_p=0.95,
+                api_key="") -> io.NodeOutput:
         def interactive_key():
             from ._settings import resolve_provider_key
             return resolve_provider_key(
                 api_key, ["GEMINI_API_KEY", "GOOGLE_API_KEY"], "Gemini")
 
+        # The chosen option's own inputs ride inside the combo's value rather
+        # than arriving as separate keywords, so everything gated on the model
+        # is read from here.
+        label = model["model"]
+        model_id = core.MODEL_LABELS.get(label, label)
+        references = to_pil(model.get("images"))
+
         # First, because everything below it is wasted otherwise: the ladder
         # can reach a file on disk and the encoding runs once per reference.
         core.require_prompt(prompt)
-        transport = core.resolve_transport(os.environ, model, interactive_key)
-        body = core.request_body(prompt, core.image_parts(to_pil(images)),
-                                 aspect_ratio, resolution, system_prompt)
+        transport = core.resolve_transport(os.environ, model_id,
+                                           interactive_key)
+        parts = core.image_parts(references) + list(model.get("files") or [])
+        body = core.request_body(prompt, parts, model["aspect_ratio"],
+                                 model["resolution"], system_prompt,
+                                 thinking_level=model["thinking_level"],
+                                 temperature=temperature, top_p=top_p,
+                                 response_modalities=response_modalities)
 
         # Anything that is not a rendered image goes through one formatter, so
         # that a failure carries the same account whether the gateway refused
@@ -132,15 +192,39 @@ class SymbioticaGeminiImage:
             raise failure(response.status_code,
                           f"reply was not JSON: {response.text}") from None
 
-        rendered, text = core.parse_response(payload)
-        return (to_tensor(rendered), text)
+        rendered, text, thoughts = core.parse_response(payload)
+        # None rather than an empty batch when the model did not sketch: an
+        # IMAGE output has no empty value ComfyUI will carry, and a zero-length
+        # tensor fails downstream naming shapes rather than the missing sketch.
+        return io.NodeOutput(to_tensor(rendered), text,
+                             to_tensor(thoughts) if thoughts else None)
+
+
+def _slot_order(name):
+    """Autogrow slot names in the order the canvas shows them.
+
+    Sorted as text, `image_10` lands between `image_1` and `image_2`, so a
+    graph with ten references sends them in an order nobody wired and the
+    prompt's "the second image" means the tenth. Unnumbered names keep their
+    own alphabetical order after the numbered ones rather than raising."""
+    prefix, _, suffix = name.rpartition("_")
+    return (0, int(suffix), "") if suffix.isdigit() else (1, 0, name)
 
 
 def to_pil(images):
-    """A ComfyUI [B,H,W,C] float batch as a list of PIL images. None and an
-    empty batch are both 'no references', which is a prompt-only generation."""
+    """Reference images as a list of PIL images, whatever shape they arrive in.
+
+    Autogrow hands over a DICT keyed by slot name, and a slot may hold a batch
+    of its own, so the slots are flattened in name order and each batch is
+    expanded in place. None, an empty dict and an empty batch are all 'no
+    references', which is a prompt-only generation."""
     if images is None:
         return []
+    if isinstance(images, dict):
+        out = []
+        for name in sorted(images, key=_slot_order):
+            out.extend(to_pil(images[name]))
+        return out
     out = []
     for frame in images:
         if hasattr(frame, "cpu"):

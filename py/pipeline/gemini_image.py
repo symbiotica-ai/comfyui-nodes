@@ -43,9 +43,35 @@ GENERATE_CONTENT_KEYS = {"candidates", "promptFeedback", "usageMetadata",
                          "modelVersion", "responseId"}
 
 MODELS = ["gemini-3.1-flash-image", "gemini-3.1-flash-lite-image"]
+
+# What the canvas shows against what the API is sent. Raw ids do not say which
+# of the two is the cheap one, and the labels are the ones ComfyUI's own node
+# uses, so the same model reads the same in both. The full model resolves to
+# the unsuffixed AI Studio id rather than core's `-preview`: both answer 200
+# through the gateway and each echoes its own name back as `modelVersion`, so
+# they are separate ids on this surface and ours is the stable channel. Core
+# talks Vertex, which is not a surface this pack supports.
+MODEL_LABELS = {
+    "Nano Banana 2 (Gemini 3.1 Flash Image)": "gemini-3.1-flash-image",
+    "Nano Banana 2 Lite": "gemini-3.1-flash-lite-image",
+}
+
 ASPECT_RATIOS = ["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4",
-                 "9:16", "16:9", "21:9"]
+                 "9:16", "16:9", "21:9", "1:4", "4:1", "8:1", "1:8"]
 RESOLUTIONS = ["1K", "2K", "4K"]
+
+# Lite renders at 1K only. Offered the full list it takes 2K or 4K and refuses
+# the call, so the ceiling belongs in the input rather than in a tooltip.
+MODEL_RESOLUTIONS = {
+    "gemini-3.1-flash-image": ["1K", "2K", "4K"],
+    "gemini-3.1-flash-lite-image": ["1K"],
+}
+
+THINKING_LEVELS = ["MINIMAL", "HIGH"]
+
+# What the model is allowed to answer with. IMAGE alone suppresses the
+# commentary; the thought image needs TEXT present as well as HIGH thinking.
+RESPONSE_MODALITIES = ["IMAGE", "IMAGE+TEXT"]
 
 
 def generate_content_path(model: str) -> str:
@@ -138,7 +164,7 @@ def decode_inline_image(inline: dict):
 
 
 def parse_response(payload):
-    """The images Gemini drew and what it said about them, `(images, text)`.
+    """What Gemini drew, said, and thought: `(images, text, thought_images)`.
 
     `payload` is whatever the response body decoded to, not necessarily a
     generateContent object: a misconfigured endpoint answers 200 with its own
@@ -178,6 +204,7 @@ def parse_response(payload):
         raise ValueError("Gemini returned no candidates.")
 
     images, texts, refusals, explained = [], [], [], []
+    thoughts = []  # Interim sketches, kept out of `images` — see the loop.
     for candidate in candidates:
         # Same guard the payload carries, one level down: a reply whose
         # candidates are not objects is a wrong-endpoint symptom, and letting
@@ -227,10 +254,19 @@ def parse_response(payload):
             # arrives carrying `thoughtSignature` with no `thought` key at
             # all, so a filter asking whether a part looks thought-ish would
             # discard the image and report that Gemini produced nothing.
-            if part.get("thought") is True:
-                continue
             inline = part.get("inlineData")
-            if inline and str(inline.get("mimeType", "")).startswith("image/"):
+            is_image = inline and str(
+                inline.get("mimeType", "")).startswith("image/")
+            if part.get("thought") is True:
+                # Kept apart rather than dropped: an interim sketch is worth
+                # seeing, but it is not the render, and letting it join `images`
+                # can make it the FIRST one. Thought TEXT stays discarded — the
+                # text output reaches clients and stored runs, where reasoning
+                # prose would bury a one-line refusal.
+                if is_image and not prohibited:
+                    thoughts.append(decode_inline_image(inline))
+                continue
+            if is_image:
                 if not prohibited:
                     images.append(decode_inline_image(inline))
             elif part.get("text"):
@@ -253,20 +289,33 @@ def parse_response(payload):
         if not refusals and not text and not explained:
             said += " Try rephrasing the prompt."
         raise ValueError(said)
-    return images, text
+    return images, text, thoughts
+
+
+def modalities_for(response_modalities: str) -> list:
+    """Google's `responseModalities` for the choice the canvas offers.
+
+    IMAGE alone is a real setting rather than a saving: it suppresses the
+    commentary, and with it the thought image, which needs a TEXT modality to
+    come back at all. Anything unrecognised asks for both, because the failure
+    of a bad value here is a render that silently loses its text."""
+    return ["IMAGE"] if response_modalities == "IMAGE" else ["TEXT", "IMAGE"]
 
 
 def request_body(prompt: str, inline_images: list, aspect_ratio: str,
-                 resolution: str, system_prompt: str) -> dict:
+                 resolution: str, system_prompt: str,
+                 thinking_level: str = "MINIMAL", temperature: float = 1.0,
+                 top_p: float = 0.95,
+                 response_modalities: str = "IMAGE+TEXT") -> dict:
     """One native Gemini generateContent call. `inline_images` are the parts
     `image_parts` built, and they follow the prompt in input order.
 
-    Text is asked for alongside the image because the model's commentary is
-    worth having and costs nothing — not because a refusal arrives there. A
-    refusal carries no parts at all and explains itself in `finishMessage`, so
-    asking for IMAGE only would lose the commentary and change nothing about
-    diagnosing a decline. `auto` is Google's absence of aspectRatio rather
-    than a value it accepts, so it is omitted."""
+    Text is asked for alongside the image by default because the model's
+    commentary is worth having and costs nothing — not because a refusal
+    arrives there. A refusal carries no parts at all and explains itself in
+    `finishMessage`, so asking for IMAGE only would lose the commentary and
+    change nothing about diagnosing a decline. `auto` is Google's absence of
+    aspectRatio rather than a value it accepts, so it is omitted."""
     require_prompt(prompt)
     image_config = {"imageSize": resolution}
     if aspect_ratio != "auto":
@@ -277,8 +326,11 @@ def request_body(prompt: str, inline_images: list, aspect_ratio: str,
             "parts": [{"text": prompt}] + list(inline_images),
         }],
         "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
+            "responseModalities": modalities_for(response_modalities),
             "imageConfig": image_config,
+            "thinkingConfig": {"thinkingLevel": thinking_level},
+            "temperature": temperature,
+            "topP": top_p,
         },
     }
     # No role inside systemInstruction: Google's shape has none, and the stock
