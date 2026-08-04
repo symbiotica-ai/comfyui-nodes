@@ -529,3 +529,26 @@ def test_a_retired_name_left_empty_is_not_treated_as_set():
     assert resolve({"GEMINI_GATEWAY_URL": "  ", "GEMINI_GATEWAY_TOKEN": ""},
                    lambda: "k").url.startswith(
         "https://generativelanguage.googleapis.com")
+
+
+def test_the_surface_says_where_the_call_came_from(monkeypatch):
+    """Gateway analytics groups by this tag, so a canvas render arriving as an
+    order inflates order spend with a label that looks right, which is the kind
+    of wrong number nobody thinks to question."""
+    assert json.loads(ai_gateway.studio_tag("a-studio", "canvas")) == {
+        "studio": "a-studio", "surface": "canvas"}
+
+
+def test_an_unset_surface_still_says_order(monkeypatch):
+    """Every order sandbox in existence sets no surface variable, so the
+    default is what keeps their traffic labelled as it always has been. A
+    change of default would silently relabel history's worth of runs."""
+    transport = resolve(gateway_env())
+    assert json.loads(transport.headers["cf-aig-metadata"])["surface"] == "order"
+
+
+def test_the_environment_chooses_the_surface(monkeypatch):
+    """Set alongside the base and the studio, by whoever creates the sandbox."""
+    transport = resolve(gateway_env(SYMBIOTICA_AIG_SURFACE="canvas"))
+    assert json.loads(transport.headers["cf-aig-metadata"]) == {
+        "studio": STUDIO, "surface": "canvas"}
