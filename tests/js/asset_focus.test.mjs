@@ -317,3 +317,22 @@ test("a saved empty category is normalised to All", async () => {
     assert.equal(node.widgets.find((x) => x.name === "category").value, "All");
     assert.equal(rows(node).length, 3);
 });
+
+test("nothing in the panel is allowed to paint outside the node", async () => {
+    // A flex row whose content is wider than the node resolves its width
+    // against a shrink-to-fit parent and paints over whatever is behind it.
+    const node = await focusNode({}, [
+        { name: "A Very Long Asset Name That Would Otherwise Widen The Row",
+          category: "A Very Long Category Name As Well" },
+    ]);
+    const boxes = [listOf(node), ...rows(node)];
+    for (const box of boxes) {
+        assert.match(box.style.cssText, /width:100%/);
+        assert.match(box.style.cssText, /box-sizing:border-box/);
+        assert.match(box.style.cssText, /overflow:hidden/);
+    }
+    // Both texts must be able to shrink, or one of them forces the row wide.
+    const [name, category] = rows(node)[0].children;
+    assert.match(name.style.cssText, /min-width:0/);
+    assert.match(category.style.cssText, /min-width:0/);
+});

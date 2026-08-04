@@ -126,7 +126,12 @@ function focusPanel(node) {
 
     const container = el("div", "box-sizing:border-box;width:100%;"
         + "overflow-y:auto;overflow-x:hidden;");
-    const list = el("div", `padding:2px;font:11px ${HUB.font};color:${HUB.ink};`);
+    // Every level gets an explicit width and border-box sizing. A flex row
+    // whose content is wider than the node otherwise resolves its width
+    // against a shrink-to-fit parent and paints outside the node, over
+    // whatever is behind it.
+    const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
+        + `padding:2px;font:11px ${HUB.font};color:${HUB.ink};`);
     container.appendChild(list);
     container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
 
@@ -200,7 +205,9 @@ function focusPanel(node) {
         }
 
         const head = el("div",
-            `display:flex;align-items:center;gap:6px;padding:2px 3px 4px;color:${HUB.inkSubtle};`);
+            "display:flex;align-items:center;gap:6px;width:100%;"
+            + "box-sizing:border-box;overflow:hidden;"
+            + `padding:2px 3px 4px;color:${HUB.inkSubtle};`);
         head.append(el("span", "flex:1;min-width:0;",
                        `${assets.length} asset${assets.length === 1 ? "" : "s"}`
                        + `${narrowed() ? ` · ${narrowed()}` : ""}`));
@@ -218,14 +225,18 @@ function focusPanel(node) {
         for (const asset of assets) {
             const on = asset.name === pick;
             const row = el("div",
-                "display:flex;align-items:center;gap:6px;padding:3px 5px;margin:2px 0;"
+                "display:flex;align-items:center;gap:6px;width:100%;"
+                + "box-sizing:border-box;overflow:hidden;"
+                + "padding:3px 5px;margin:2px 0;"
                 + `border:1px solid ${on ? HUB.accent : HUB.hairline};`
                 + `border-radius:5px;cursor:pointer;`
                 + (on ? "" : "opacity:.75;"));
             row.append(el("span", "flex:1;min-width:0;overflow:hidden;"
                 + "text-overflow:ellipsis;white-space:nowrap;", asset.name));
-            row.appendChild(el("span", `flex:none;color:${HUB.inkTertiary};`,
-                               asset.category || ""));
+            row.appendChild(el("span",
+                "flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;"
+                + `white-space:nowrap;color:${HUB.inkTertiary};`,
+                asset.category || ""));
             row.title = `${asset.name}${asset.category ? ` · ${asset.category}` : ""}`;
             row.addEventListener("pointerdown", (e) => e.stopPropagation());
             row.addEventListener("click", () => choose(asset.name));
