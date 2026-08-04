@@ -3200,6 +3200,32 @@ def _image_frames(images):
     return [images]
 
 
+def _as_list(value):
+    """A per-item input as a list, whatever arrived.
+
+    Under is_input_list a widget reaches the node as a list of one, but a node
+    executed directly (a test, or ComfyUI collapsing a single item) hands the
+    bare value — treating that string as a sequence would tag candidates with
+    one character each.
+    """
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else [value]
+
+
+def _at_or_first(seq, index, default=""):
+    """Item `index`, falling back to the first value rather than to nothing.
+
+    A lane that fans out gives one label per image; a single batch of variants
+    of one asset gives one label for all of them. Repeating the first value
+    covers the second case, where indexing past the end would silently leave
+    every candidate after the first untagged.
+    """
+    if not seq:
+        return default
+    return str(seq[index] if index < len(seq) else seq[0])
+
+
 def _pil_to_tensor_keep_alpha(img):
     """A stored candidate back on the wire, with its transparency intact.
 
@@ -3257,6 +3283,11 @@ class SymbioticaPick(io.ComfyNode):
                         "the asset and category being worked on and the "
                         "candidates are tagged with it, so the node can show "
                         "one asset at a time instead of everything ever made.",
+            # The whole run at once. Without this the node executes once per
+            # item whenever the lane above it fans out — three variants means
+            # three executions, each re-emitting the same single pick, and the
+            # preview downstream shows one approved image three times.
+            is_input_list=True,
             inputs=[
                 io.Image.Input("images", optional=True,
                                tooltip="Candidates to add to the buffer. Leave "
@@ -3299,18 +3330,33 @@ class SymbioticaPick(io.ComfyNode):
         # Two hops, because a node executed outside a running ComfyUI has no
         # `hidden` at all: an absent id must land in the "unknown" buffer, not
         # raise on the attribute lookup.
+        one = SymbioticaCategoryPrompts._one
         node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
+        node_id = one(node_id, None) if isinstance(node_id, list) else node_id
         dir_path = buffer_dir(folder_paths.get_output_directory(), node_id)
-        ord_dict = order if isinstance(order, dict) else {}
-        tag = {"asset": asset, "category": category,
-               "feature": str(ord_dict.get("feature", "")),
-               "month": str(ord_dict.get("month", ""))}
+        ord_dict = one(order, {}) or {}
+        if not isinstance(ord_dict, dict):
+            ord_dict = {}
+        feature = str(ord_dict.get("feature", ""))
+        month = str(ord_dict.get("month", ""))
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # is_input_list hands every input in as a list, so a fanned-out lane
+        # arrives index-aligned: item i of `images` was made for item i of
+        # `asset`. A single label against many images is the other real case —
+        # one batch of variants of one asset — so a short list repeats its
+        # first value rather than leaving the rest untagged.
+        items = _as_list(images)
+        assets = _as_list(asset)
+        cats = _as_list(category)
         added = 0
-        for frame in _image_frames(images):
-            if add_image(dir_path, _tensor_to_pil(frame), tag=tag, at=stamp):
-                added += 1
+        for index, item in enumerate(items):
+            tag = {"asset": _at_or_first(assets, index),
+                   "category": _at_or_first(cats, index),
+                   "feature": feature, "month": month}
+            for frame in _image_frames(item):
+                if add_image(dir_path, _tensor_to_pil(frame), tag=tag, at=stamp):
+                    added += 1
 
         entries = list_entries(dir_path)
         # Tell the canvas to redraw: the node's thumbnails are the whole point,
@@ -3320,7 +3366,7 @@ class SymbioticaPick(io.ComfyNode):
             "groups": groups(entries),
         })
 
-        paths = selected_paths(dir_path, _pick_ids(selection))
+        paths = selected_paths(dir_path, _pick_ids(one(selection, "")))
         # Nothing ticked is a legitimate state, not a failure: it is what every
         # collecting run looks like before the images have been looked at. An
         # empty list simply runs nothing downstream, where raising here would

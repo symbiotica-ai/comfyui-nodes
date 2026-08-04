@@ -112,6 +112,54 @@ class TestCollecting:
         assert len(buffer_of(nodes_mod, tmp_path, "2")) == 1
 
 
+class TestAFannedOutLaneIsOneRun:
+    """Found live: one image ticked, three in the preview downstream. The lane
+    above the picker fans out, so ComfyUI ran the node once per item and each
+    execution re-emitted the same single pick."""
+
+    def test_the_schema_takes_the_whole_run_at_once(self, nodes_mod):
+        assert nodes_mod.SymbioticaPick.GET_SCHEMA().is_input_list is True
+
+    def test_a_fanned_out_lane_records_every_item_in_one_execution(self, nodes_mod,
+                                                                   tmp_path):
+        out = run(nodes_mod, images=[frames(0.1), frames(0.2), frames(0.3)])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 3
+        assert out.args[0] == []
+
+    def test_one_tick_leaves_the_node_once_not_once_per_item(self, nodes_mod,
+                                                             tmp_path):
+        run(nodes_mod, images=[frames(0.1), frames(0.2), frames(0.3)])
+        ident = buffer_of(nodes_mod, tmp_path)[0]["id"]
+        out = run(nodes_mod, images=[frames(0.1), frames(0.2), frames(0.3)],
+                  selection=[json.dumps([ident])])
+        assert len(out.args[0]) == 1
+
+    def test_widgets_arriving_as_lists_of_one_are_unwrapped(self, nodes_mod,
+                                                            tmp_path):
+        """is_input_list hands EVERY input in as a list, widgets included."""
+        run(nodes_mod, images=[frames(0.4)], asset=["cake"], category=["Food"],
+            order=[{"feature": "Halloween", "month": "2026-10"}])
+        entry = buffer_of(nodes_mod, tmp_path)[0]
+        assert entry["group"] == "Halloween / Food / cake"
+
+    def test_each_item_is_tagged_with_its_own_label(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=[frames(0.1), frames(0.2)],
+            asset=["cake", "pie"], category=["Food", "Food"])
+        assert [e["asset"] for e in buffer_of(nodes_mod, tmp_path)] == ["cake", "pie"]
+
+    def test_one_label_covers_a_whole_batch_of_variants(self, nodes_mod, tmp_path):
+        """Three variants of one asset: the label must not run out after the
+        first image and leave the rest untagged."""
+        run(nodes_mod, images=[frames(0.1, 0.2, 0.3)], asset=["cake"])
+        assert [e["asset"] for e in buffer_of(nodes_mod, tmp_path)] == \
+            ["cake", "cake", "cake"]
+
+    def test_fewer_labels_than_items_repeats_the_first(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=[frames(0.1), frames(0.2)], asset=["cake"])
+        assert [e["asset"] for e in buffer_of(nodes_mod, tmp_path)] == \
+            ["cake", "cake"]
+
+
 class TestTagging:
     def test_candidates_carry_the_asset_they_were_made_for(self, nodes_mod, tmp_path):
         run(nodes_mod, images=frames(0.1), asset="pumpkin-cake", category="Food",
