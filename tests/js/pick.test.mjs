@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, fire, reset, setResponder, tick } from "./comfy_stub.mjs";
+import { app, create, fire, link, reset, setResponder, tick } from "./comfy_stub.mjs";
 import "../../web/js/pick.js";
 
 globalThis.window.confirm = () => true;
@@ -357,4 +357,66 @@ test("Read folder tells the server which pass this picker is", async () => {
     for (let i = 0; i < 20; i++) await tick();
     const body = JSON.parse(seen.find((c) => c.route === "/symbiotica/pick-import").init.body);
     assert.equal(body.phase, "export");
+});
+
+const SPOOKIES = { ...CAKE_A, id: "s1", thumb: "/out/s1_thumb.png",
+                   group: "Mini 1 / Food - 3 stages / Spookies" };
+const POPSICLE = { ...CAKE_A, id: "s2", thumb: "/out/s2_thumb.png",
+                   group: "Mini 1 / Food - 3 stages / Spooky Stack Popsicle" };
+
+async function pickWithFocus(images, assetValue) {
+    reset();
+    setResponder(router([], images));
+    const focus = await create("SymbioticaAssetFocus", { asset: assetValue });
+    focus.comfyClass = "SymbioticaAssetFocus";
+    const node = await create("SymbioticaPick", { selection: "", view: "" });
+    await node.onNodeCreated?.call(node);
+    link(focus, node, "asset");
+    for (let i = 0; i < 20; i++) await tick();
+    node._symReloadPick && await node._symReloadPick();
+    for (let i = 0; i < 20; i++) await tick();
+    return node;
+}
+
+test("the grid follows the asset the upstream Asset Focus is set to", async () => {
+    // The `asset` input is wired, so it has no widget value of its own — but
+    // the node feeding it does.
+    const node = await pickWithFocus([SPOOKIES, POPSICLE], "Spooky Stack Popsicle");
+    assert.equal(tiles(node).length, 1);
+    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s2_thumb.png")));
+});
+
+test("switching the asset upstream switches the grid, with no run", async () => {
+    const node = await pickWithFocus([SPOOKIES, POPSICLE], "Spookies");
+    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s1_thumb.png")));
+    const focus = app.graph.getNodeById(node.id - 1);
+    focus.widgets.find((w) => w.name === "asset").value = "Spooky Stack Popsicle";
+    node._symReloadPick && await node._symReloadPick();
+    for (let i = 0; i < 20; i++) await tick();
+    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s2_thumb.png")));
+});
+
+test("an asset with no candidates yet does not hide everything", async () => {
+    // Falling through to the newest arrival beats showing an empty grid for a
+    // group that does not exist.
+    const node = await pickWithFocus([SPOOKIES], "Ghostly Jelly Cake");
+    assert.equal(tiles(node).length, 1);
+});
+
+test("the run's own group is used when there is no Focus to read", async () => {
+    const seen = [];
+    const node = await panelNode(seen, [SPOOKIES, POPSICLE]);
+    node._symPickCurrent = "Mini 1 / Food - 3 stages / Spookies";
+    await node._symReloadPick();
+    for (let i = 0; i < 20; i++) await tick();
+    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s1_thumb.png")));
+});
+
+test("a pinned group still beats both", async () => {
+    // Auto is a default, not an override of what was chosen by hand.
+    const node = await pickWithFocus([SPOOKIES, POPSICLE], "Spookies");
+    widgetOf(node, "view").value = "Mini 1 / Food - 3 stages / Spooky Stack Popsicle";
+    node._symReloadPick && await node._symReloadPick();
+    for (let i = 0; i < 20; i++) await tick();
+    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s2_thumb.png")));
 });

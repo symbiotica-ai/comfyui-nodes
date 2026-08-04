@@ -3567,7 +3567,7 @@ class SymbioticaPick(io.ComfyNode):
 
         from PIL import Image
 
-        from .pick_buffer import (add_image, buffer_dir, groups,
+        from .pick_buffer import (add_image, buffer_dir, group_key, groups,
                                   import_if_changed, list_entries,
                                   selected_paths)
 
@@ -3627,11 +3627,19 @@ class SymbioticaPick(io.ComfyNode):
                 pass
 
         entries = list_entries(dir_path)
+        # `current` is the group this run was working on, so the panel can open
+        # on the asset being worked on rather than on whatever arrived last.
+        # The wired asset is not readable from the canvas — a wired input has
+        # no widget value — so the node is the only thing that knows it.
+        current = group_key({"feature": feature, "month": month,
+                             "asset": _at_or_first(assets, 0),
+                             "category": _at_or_first(cats, 0)})
         # Tell the canvas to redraw: the node's thumbnails are the whole point,
         # and the buffer just changed underneath the panel already on screen.
         _push("symbiotica.pick", {
             "node_id": str(node_id), "added": added, "count": len(entries),
             "groups": groups(entries),
+            "current": current if current != "untagged" else "",
         })
 
         paths = selected_paths(dir_path, _pick_ids(one(selection, "")))

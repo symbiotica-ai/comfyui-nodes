@@ -16,6 +16,30 @@ const DEFAULT_SIZE = "M";
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
 
+function upstreamNode(node, inputName) {
+    const input = node?.inputs?.find((i) => i.name === inputName);
+    if (!input || input.link == null) return null;
+    const link = app.graph.links[input.link];
+    return link ? app.graph.getNodeById(link.origin_id) : null;
+}
+
+// The asset an upstream Asset Focus is set to. The `asset` input is wired, so
+// it has no widget value of its own to read — but the node feeding it does,
+// and reading it there is what lets the grid follow a change immediately
+// rather than only after the next run.
+function focusAsset(node) {
+    let cur = upstreamNode(node, "asset");
+    for (let hop = 0; hop < 6 && cur; hop++) {
+        if (cur.comfyClass === "SymbioticaAssetFocus") {
+            return widgetOf(cur, "asset")?.value?.trim?.() || "";
+        }
+        const wired = (cur.inputs ?? []).filter((i) => i.link != null);
+        if (wired.length !== 1) return "";
+        cur = upstreamNode(cur, wired[0].name);
+    }
+    return "";
+}
+
 // Keep the /api/ prefix: ComfyUI mirrors custom routes under /api/ locally AND
 // the Modal gateway proxies /api/* only, so a root-level /symbiotica/* would
 // blank every thumbnail there.
@@ -113,11 +137,28 @@ function pickPanel(node) {
         return counted;
     }
 
+    // In auto mode, follow the asset being worked on. The upstream Asset Focus
+    // answers immediately when it changes; the last run's own group is the
+    // authority when there is no Focus to read. Newest-arrival is the fallback
+    // for a picker wired to neither.
+    function autoGroup() {
+        const pool = visibleGroups();
+        const asset = focusAsset(node);
+        if (asset) {
+            const match = pool.find((g) => g.key === asset
+                || g.key.endsWith(` / ${asset}`));
+            if (match) return match.key;
+        }
+        const current = node._symPickCurrent;
+        if (current && pool.some((g) => g.key === current)) return current;
+        return newestGroup() || ALL;
+    }
+
     function effectiveView() {
         const stored = readView(node);
         if (stored === ALL) return ALL;
         if (stored && visibleGroups().some((g) => g.key === stored)) return stored;
-        return newestGroup() || ALL;
+        return autoGroup();
     }
 
     // The pass this picker is pinned to. Filtering here as well as at import
@@ -499,9 +540,11 @@ registerSymbioticaExtension(app, {
 // A run just filed new candidates — redraw the node that received them rather
 // than making the user press reload to find out the render finished.
 api.addEventListener("symbiotica.pick", (event) => {
-    const nodeId = event?.detail?.node_id;
-    if (nodeId == null) return;
-    const node = app.graph?.getNodeById?.(Number(nodeId))
-        ?? app.graph?.getNodeById?.(nodeId);
-    node?._symReloadPick?.();
+    const detail = event?.detail ?? {};
+    if (detail.node_id == null) return;
+    const node = app.graph?.getNodeById?.(Number(detail.node_id))
+        ?? app.graph?.getNodeById?.(detail.node_id);
+    if (!node) return;
+    if (typeof detail.current === "string") node._symPickCurrent = detail.current;
+    node._symReloadPick?.();
 });
