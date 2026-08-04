@@ -6,6 +6,41 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## Unreleased
+
+**Node change, and this one breaks saved workflows.** `Gemini Image
+(Symbiotica)` and `Claude (Symbiotica)` move to ComfyUI's V3 schema. Everything
+that varies by model now lives inside the model combo and reaches the node
+under a dotted name — `model.resolution`, `model.reasoning_effort`,
+`model.image_1` — and reference images become numbered slots rather than one
+batch input. Widget positions are not shifted, they are replaced, so a workflow
+carrying either node must be rebuilt. The Gemini node also gains a third
+output, `thought_image`. No node is removed or renamed.
+
+### Added
+
+- **Both gateway nodes now offer what ComfyUI's own nodes offer.** An order
+  sandbox has no comfy.org account, so the core Gemini and Claude nodes cannot
+  run there and the order template has to use these. Until now that meant
+  accepting a poorer node: no thinking control, no sampling parameters, and a
+  single resolution list that let the Lite model be set to a size it refuses.
+
+  Gemini gains `thinking_level`, `temperature`, `top_p`, a choice of response
+  modalities, the four extreme aspect ratios, optional context files, and the
+  `thought_image` output that HIGH thinking produces — which was previously
+  discarded, and which an unfiltered run could have shipped as the render.
+  Claude gains `reasoning_effort` with the whole per-model matrix behind it,
+  and `temperature` on the models that still accept one.
+
+  Both keep what they exist for: the studio's own key through Cloudflare AI
+  Gateway, the 10 MB request ceiling that keeps spend attributable, and inline
+  base64 images rather than an upload through comfy.org.
+
+  The settings were absent because they cannot be expressed against one flat
+  model list — thinking is four different behaviours depending on the model,
+  and `temperature` is a 400 on four of them. Per-model inputs are what
+  retired that constraint rather than any change at the providers.
+
 ## 2026.8.5
 
 **Node change.** Two nodes are added: `Symbiotica Slice Cells` and `Symbiotica
