@@ -288,3 +288,32 @@ test("a chosen asset the new category still shows is kept", async () => {
     for (let i = 0; i < 5; i++) await tick();
     assert.equal(node.widgets.find((x) => x.name === "asset").value, "Frankencrisps");
 });
+
+test("switching the event drops a choice that event does not have", async () => {
+    // The name survives on the widget, highlighting nothing while still being
+    // what the node would render — which is a refusal on the next run.
+    const node = await focusNode({ asset: "Frankenstein Pops" }, [
+        { name: "Spookies", category: "Food - 3 stages" },
+        { name: "Ghost Bakery Queue", category: "Decoration" },
+    ]);
+    assert.equal(node.widgets.find((x) => x.name === "asset").value, "");
+    assert.equal(rows(node).length, 2);
+});
+
+test("a choice the event still has survives", async () => {
+    const node = await focusNode({ asset: "Bunting" });
+    assert.equal(node.widgets.find((x) => x.name === "asset").value, "Bunting");
+});
+
+test("an empty list does not clear the choice", async () => {
+    // Nothing is known yet; forgetting the pick would lose it on every reload.
+    const node = await focusNode({ asset: "Bunting" }, []);
+    assert.equal(node.widgets.find((x) => x.name === "asset").value, "Bunting");
+});
+
+test("a saved empty category is normalised to All", async () => {
+    // onConfigure restores the widget AFTER onNodeCreated normalised it.
+    const node = await focusNode({ category: "" });
+    assert.equal(node.widgets.find((x) => x.name === "category").value, "All");
+    assert.equal(rows(node).length, 3);
+});

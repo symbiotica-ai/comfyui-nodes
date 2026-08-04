@@ -171,7 +171,23 @@ function focusPanel(node) {
         const assets = (node._symFocusAssets?.length
             ? node._symFocusAssets : (publishedAssets(node) ?? [])).filter(
                 (a) => !narrow || String(a.category ?? "").toLowerCase() === narrow);
-        const pick = chosen();
+        // A saved workflow restores the widget AFTER onNodeCreated ran, so the
+        // normalising done there is overwritten by the empty value on disk.
+        const categoryW = widgetOf(node, "category");
+        if (categoryW && !categoryW.value) categoryW.value = ALL_CATEGORIES;
+
+        let pick = chosen();
+        // Switching the feature upstream replaces the whole list, and a name
+        // from the previous event survives on the widget — highlighting
+        // nothing while still being what the node would render, which is a
+        // refusal on the next run. Drop it here rather than let the graph
+        // carry a choice the panel is not showing.
+        if (pick && assets.length && !assets.some((a) => a.name === pick)) {
+            const w = widgetOf(node, "asset");
+            if (w) w.value = "";
+            pick = "";
+            node.setDirtyCanvas?.(true, true);
+        }
 
         if (!assets.length) {
             list.appendChild(emptyState(
