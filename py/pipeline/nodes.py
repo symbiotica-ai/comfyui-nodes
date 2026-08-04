@@ -3180,7 +3180,157 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
         return io.NodeOutput(*descs, preview, ui=ui.PreviewText(preview))
 
 
+def _image_frames(images):
+    """Every HxWxC frame in whatever arrived on an IMAGE input.
+
+    Three shapes reach here and all three are ordinary: a batch tensor from one
+    generator, a single frame, and a Python list when an upstream node fans out
+    per asset. Flattening them all to frames means the picker never has to care
+    which stage of the pipeline it was dropped into.
+    """
+    if images is None:
+        return []
+    if isinstance(images, (list, tuple)):
+        out = []
+        for item in images:
+            out.extend(_image_frames(item))
+        return out
+    if hasattr(images, "ndim") and images.ndim == 4:
+        return [images[i] for i in range(images.shape[0])]
+    return [images]
+
+
+def _pil_to_tensor_keep_alpha(img):
+    """A stored candidate back on the wire, with its transparency intact.
+
+    The RGB-only converter next door would flatten a background-removed pick on
+    its way out of the node — the picker would then be the thing that undid the
+    removal it was used to approve.
+    """
+    if img.mode == "P" and "transparency" in img.info:
+        img = img.convert("RGBA")
+    elif img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    return torch.from_numpy(arr)[None, ...]
+
+
+def _pick_ids(selection):
+    """The ticked candidate ids from the node's stored selection.
+
+    The value is written by the canvas, so it is JSON in practice; a
+    comma-separated string is accepted too so the widget stays usable by hand.
+    Anything unparseable means nothing is ticked, which the node treats as "no
+    picks yet" rather than an error.
+    """
+    text = str(selection or "").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return [p.strip() for p in text.split(",") if p.strip()]
+    if isinstance(data, str):
+        return [data] if data.strip() else []
+    if isinstance(data, list):
+        return [str(i).strip() for i in data if str(i).strip()]
+    return []
+
+
+class SymbioticaPick(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaPick",
+            display_name="Symbiotica Pick",
+            category="symbiotica/pipeline",
+            description="Look at what was generated and tick the ones that go "
+                        "forward. Every image that reaches this node is filed "
+                        "in its own buffer and drawn as a thumbnail on the "
+                        "node body, so three separate runs of the same "
+                        "generator stack up as three candidates instead of "
+                        "overwriting each other. Only the ticked ones leave "
+                        "the node. `images` is optional on purpose: once the "
+                        "picks are made the generator branch can be muted and "
+                        "this node still serves them from disk, so queueing "
+                        "the edit stage does not re-fire a paid render. Wire "
+                        "the asset and category being worked on and the "
+                        "candidates are tagged with it, so the node can show "
+                        "one asset at a time instead of everything ever made.",
+            inputs=[
+                io.Image.Input("images", optional=True,
+                               tooltip="Candidates to add to the buffer. Leave "
+                                       "unwired (or mute what feeds it) to "
+                                       "serve the existing picks without "
+                                       "regenerating anything."),
+                io.String.Input("asset", default="", optional=True,
+                                tooltip="The asset these candidates belong to "
+                                        "— tags them, and the node opens on "
+                                        "that tag."),
+                io.String.Input("category", default="", optional=True),
+                Order.Input("order", optional=True,
+                            tooltip="Optional: tags candidates with the "
+                                    "order's feature and month too."),
+                # Canvas state, hidden by the web extension: the ticks and the
+                # filter live on the node so they are saved with the workflow.
+                io.String.Input("selection", default="", optional=True),
+                io.String.Input("view", default="", optional=True),
+            ],
+            outputs=[
+                io.Image.Output(display_name="picked", is_output_list=True),
+            ],
+            hidden=[io.Hidden.unique_id],
+            # An output node so the buffer can be filled on its own: "Queue
+            # Selected Output Node" on this node collects candidates without
+            # anything downstream needing to exist yet.
+            is_output_node=True,
+        )
+
+    @classmethod
+    def execute(cls, images=None, asset="", category="", order=None,
+                selection="", view="") -> io.NodeOutput:
+        import datetime
+
+        from PIL import Image
+
+        from .pick_buffer import (add_image, buffer_dir, groups, list_entries,
+                                  selected_paths)
+
+        # Two hops, because a node executed outside a running ComfyUI has no
+        # `hidden` at all: an absent id must land in the "unknown" buffer, not
+        # raise on the attribute lookup.
+        node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
+        dir_path = buffer_dir(folder_paths.get_output_directory(), node_id)
+        ord_dict = order if isinstance(order, dict) else {}
+        tag = {"asset": asset, "category": category,
+               "feature": str(ord_dict.get("feature", "")),
+               "month": str(ord_dict.get("month", ""))}
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        added = 0
+        for frame in _image_frames(images):
+            if add_image(dir_path, _tensor_to_pil(frame), tag=tag, at=stamp):
+                added += 1
+
+        entries = list_entries(dir_path)
+        # Tell the canvas to redraw: the node's thumbnails are the whole point,
+        # and the buffer just changed underneath the panel already on screen.
+        _push("symbiotica.pick", {
+            "node_id": str(node_id), "added": added, "count": len(entries),
+            "groups": groups(entries),
+        })
+
+        paths = selected_paths(dir_path, _pick_ids(selection))
+        # Nothing ticked is a legitimate state, not a failure: it is what every
+        # collecting run looks like before the images have been looked at. An
+        # empty list simply runs nothing downstream, where raising here would
+        # paint the generator run red for having worked correctly.
+        picked = [_pil_to_tensor_keep_alpha(Image.open(p)) for p in paths]
+        return io.NodeOutput(picked)
+
+
 PIPELINE_NODE_CLASSES = [
+    SymbioticaPick,
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
     SymbioticaReferenceBrowser,

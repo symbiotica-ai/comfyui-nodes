@@ -663,3 +663,74 @@ async def prompt_write(request):
     except OSError as exc:
         return web.json_response({"error": f"cannot save: {exc}"}, status=500)
     return web.json_response({"ok": True, **saved})
+
+
+def _pick_dir(node_id: str) -> str:
+    """One Pick node's buffer, derived server-side from its node id.
+
+    The caller names a node, never a path: the id is reduced to a bare
+    directory segment and joined onto ComfyUI's own output directory here, so
+    there is no traversal to defend against further down. Requests that arrive
+    before folder_paths is importable get no buffer rather than a stack trace.
+
+    A blank id has no buffer. It must not fall through to the one the node
+    itself uses when it runs without an id: a clear request that simply forgot
+    to name a node would then delete a real node's candidates.
+    """
+    from .pick_buffer import buffer_dir
+    if not str(node_id or "").strip():
+        return ""
+    try:
+        import folder_paths
+        base = folder_paths.get_output_directory()
+    except Exception:
+        return ""
+    return buffer_dir(base, node_id)
+
+
+@PromptServer.instance.routes.get("/symbiotica/pick-list")
+async def pick_list(request):
+    """The candidates a Pick node is holding, with the tags they were recorded
+    under and the distinct groups those tags form — the node's filter bar."""
+    from .pick_buffer import groups, list_entries
+
+    dir_path = _pick_dir(request.query.get("node_id", ""))
+    if not dir_path:
+        return web.json_response({"ok": True, "images": [], "groups": []})
+    entries = list_entries(dir_path)
+    return web.json_response({
+        "ok": True,
+        "images": [{
+            "id": e.get("id", ""), "path": e.get("path", ""),
+            "thumb": e.get("thumb_path", ""), "group": e.get("group", ""),
+            "asset": e.get("asset", ""), "category": e.get("category", ""),
+            "feature": e.get("feature", ""), "month": e.get("month", ""),
+            "w": e.get("w", 0), "h": e.get("h", 0), "at": e.get("at", ""),
+        } for e in entries],
+        "groups": groups(entries),
+    })
+
+
+@PromptServer.instance.routes.post("/symbiotica/pick-clear")
+async def pick_clear(request):
+    """Drop named candidates, or the whole buffer when no ids are given.
+
+    Deleting is deliberate here rather than a "hidden" flag: the buffer is
+    full-size PNGs of every render that was ever looked at, and a triage tool
+    that only ever grows fills the output volume.
+    """
+    from .pick_buffer import clear, drop
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    dir_path = _pick_dir(str(body.get("node_id") or ""))
+    if not dir_path:
+        return web.json_response({"error": "no buffer for that node"},
+                                 status=400)
+    ids = body.get("ids")
+    if isinstance(ids, list) and ids:
+        return web.json_response({"ok": True, "removed": drop(dir_path, ids)})
+    clear(dir_path)
+    return web.json_response({"ok": True, "removed": "all"})

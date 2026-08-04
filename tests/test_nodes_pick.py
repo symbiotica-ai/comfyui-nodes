@@ -1,0 +1,191 @@
+# ABOUTME: Node-face tests for Symbiotica Pick — what it records, what it hands
+# ABOUTME: on, and the muted-generator case the optional image input exists for.
+import importlib
+import json
+import os
+import sys
+import types
+
+import pytest
+import torch
+
+sys.path.insert(0, os.path.dirname(__file__))
+from comfy_api_stub import build_modules
+
+
+@pytest.fixture()
+def nodes_mod(monkeypatch, tmp_path):
+    pkg, latest = build_modules()
+    monkeypatch.setitem(sys.modules, "comfy_api", pkg)
+    monkeypatch.setitem(sys.modules, "comfy_api.latest", latest)
+    fp = types.ModuleType("folder_paths")
+    out = tmp_path / "output"
+    out.mkdir()
+    fp.get_output_directory = lambda: str(out)
+    monkeypatch.setitem(sys.modules, "folder_paths", fp)
+    sys.modules.pop("pipeline.nodes", None)
+    import pipeline.nodes as nodes
+    importlib.reload(nodes)
+    yield nodes
+    sys.modules.pop("pipeline.nodes", None)
+
+
+def frames(*values, size=4, channels=3):
+    """A batch whose every frame is one flat colour, so a mixed-up pick shows
+    up as the wrong value rather than merely the wrong count."""
+    batch = torch.zeros(len(values), size, size, channels)
+    for i, v in enumerate(values):
+        batch[i] = v
+    return batch
+
+
+def run(nodes, node_id="7", **kw):
+    nodes.SymbioticaPick.hidden = types.SimpleNamespace(unique_id=node_id)
+    return nodes.SymbioticaPick.execute(**kw)
+
+
+def buffer_of(nodes, tmp_path, node_id="7"):
+    from pipeline.pick_buffer import buffer_dir, list_entries
+    return list_entries(buffer_dir(str(tmp_path / "output"), node_id))
+
+
+class TestSchema:
+    def test_images_are_optional(self, nodes_mod):
+        """The whole point of the optional input: once the picks are made the
+        generator branch is muted and the node still serves them from disk, so
+        queueing the edit stage does not re-fire a paid render."""
+        schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
+        images = next(i for i in schema.inputs if i.id == "images")
+        assert images.optional is True
+
+    def test_the_picked_output_is_a_list(self, nodes_mod):
+        """A list, not a batch: two picks of different sizes cannot stack into
+        one tensor, and downstream should run once per approved image."""
+        schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
+        assert schema.outputs[0].is_output_list is True
+
+    def test_it_is_an_output_node(self, nodes_mod):
+        """So the buffer can be filled on its own — "Queue Selected Output
+        Node" on the picker collects candidates with nothing downstream yet."""
+        assert nodes_mod.SymbioticaPick.GET_SCHEMA().is_output_node is True
+
+    def test_it_is_registered(self, nodes_mod):
+        assert nodes_mod.SymbioticaPick in nodes_mod.PIPELINE_NODE_CLASSES
+
+
+class TestCollecting:
+    def test_every_frame_becomes_a_candidate(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=frames(0.1, 0.2, 0.3))
+        assert len(buffer_of(nodes_mod, tmp_path)) == 3
+
+    def test_separate_runs_stack_up_instead_of_overwriting(self, nodes_mod, tmp_path):
+        """Generating the same recipe three times is three candidates. This is
+        the behaviour the node exists for."""
+        run(nodes_mod, images=frames(0.1))
+        run(nodes_mod, images=frames(0.2))
+        run(nodes_mod, images=frames(0.3))
+        assert len(buffer_of(nodes_mod, tmp_path)) == 3
+
+    def test_a_replayed_frame_does_not_stack_up(self, nodes_mod, tmp_path):
+        """Queueing a downstream node replays the generator from ComfyUI's
+        cache, handing the picker the identical frame again."""
+        run(nodes_mod, images=frames(0.1, 0.2))
+        run(nodes_mod, images=frames(0.1, 0.2))
+        assert len(buffer_of(nodes_mod, tmp_path)) == 2
+
+    def test_a_single_frame_and_a_list_are_both_accepted(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=torch.full((4, 4, 3), 0.4))
+        run(nodes_mod, images=[frames(0.5), frames(0.6)])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 3
+
+    def test_no_images_records_nothing_and_does_not_raise(self, nodes_mod, tmp_path):
+        out = run(nodes_mod, images=None)
+        assert out.args[0] == []
+        assert buffer_of(nodes_mod, tmp_path) == []
+
+    def test_two_pickers_keep_separate_buffers(self, nodes_mod, tmp_path):
+        """One after generation and one after the edit must never show each
+        other's images."""
+        run(nodes_mod, node_id="1", images=frames(0.1))
+        run(nodes_mod, node_id="2", images=frames(0.2))
+        assert len(buffer_of(nodes_mod, tmp_path, "1")) == 1
+        assert len(buffer_of(nodes_mod, tmp_path, "2")) == 1
+
+
+class TestTagging:
+    def test_candidates_carry_the_asset_they_were_made_for(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=frames(0.1), asset="pumpkin-cake", category="Food",
+            order={"feature": "Halloween", "month": "2026-10"})
+        entry = buffer_of(nodes_mod, tmp_path)[0]
+        assert entry["asset"] == "pumpkin-cake"
+        assert entry["category"] == "Food"
+        assert entry["group"] == "Halloween / Food / pumpkin-cake"
+
+    def test_an_order_that_is_not_a_dict_is_ignored(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=frames(0.1), asset="cake", order="nonsense")
+        assert buffer_of(nodes_mod, tmp_path)[0]["group"] == "cake"
+
+    def test_untagged_candidates_still_group(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=frames(0.1))
+        assert buffer_of(nodes_mod, tmp_path)[0]["group"] == "untagged"
+
+
+class TestPicking:
+    def test_nothing_ticked_sends_nothing_forward(self, nodes_mod):
+        """Not an error: it is what every collecting run looks like before the
+        images have been looked at. An empty list runs nothing downstream."""
+        out = run(nodes_mod, images=frames(0.1, 0.2))
+        assert out.args[0] == []
+
+    def test_only_the_ticked_candidates_leave_the_node(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=frames(0.25, 0.5, 0.75))
+        ids = [e["id"] for e in buffer_of(nodes_mod, tmp_path)]
+        out = run(nodes_mod, images=None,
+                  selection=json.dumps([ids[0], ids[2]]))
+        picked = out.args[0]
+        assert len(picked) == 2
+        assert picked[0].shape == (1, 4, 4, 3)
+        assert round(float(picked[0].max()), 2) == 0.25
+        assert round(float(picked[1].max()), 2) == 0.75
+
+    def test_picks_survive_the_generator_being_muted(self, nodes_mod, tmp_path):
+        """The case the optional input exists for: no images on the wire at
+        all, and the approved renders still come out."""
+        run(nodes_mod, images=frames(0.5))
+        ident = buffer_of(nodes_mod, tmp_path)[0]["id"]
+        out = run(nodes_mod, images=None, selection=json.dumps([ident]))
+        assert len(out.args[0]) == 1
+
+    def test_a_comma_separated_selection_is_accepted(self, nodes_mod, tmp_path):
+        """So the widget stays usable by hand, not only by the canvas."""
+        run(nodes_mod, images=frames(0.5, 0.9))
+        ids = [e["id"] for e in buffer_of(nodes_mod, tmp_path)]
+        out = run(nodes_mod, images=None, selection=f"{ids[0]}, {ids[1]}")
+        assert len(out.args[0]) == 2
+
+    def test_an_unparseable_selection_means_nothing_ticked(self, nodes_mod):
+        run(nodes_mod, images=frames(0.5))
+        assert run(nodes_mod, images=None, selection="{").args[0] == []
+
+    def test_a_tick_whose_image_was_deleted_is_skipped(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=frames(0.5))
+        ident = buffer_of(nodes_mod, tmp_path)[0]["id"]
+        from pipeline.pick_buffer import buffer_dir, drop
+        drop(buffer_dir(str(tmp_path / "output"), "7"), [ident])
+        assert run(nodes_mod, images=None, selection=json.dumps([ident])).args[0] == []
+
+
+class TestTransparency:
+    def test_a_four_channel_pick_comes_out_with_four_channels(self, nodes_mod,
+                                                              tmp_path):
+        """The picker must not be the thing that undoes the background removal
+        it was used to approve."""
+        batch = torch.zeros(1, 4, 4, 4)
+        batch[..., :3] = 0.5
+        batch[..., 3] = 0.0
+        run(nodes_mod, images=batch)
+        ident = buffer_of(nodes_mod, tmp_path)[0]["id"]
+        picked = run(nodes_mod, images=None,
+                     selection=json.dumps([ident])).args[0]
+        assert picked[0].shape == (1, 4, 4, 4)
+        assert float(picked[0][..., 3].max()) == 0.0
