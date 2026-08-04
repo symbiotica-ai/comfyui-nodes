@@ -28,8 +28,29 @@ const featureKey = (value) => String(value ?? "").split(" — ")[0].trim();
 // exists before anything is queued. Order Specs keeps its parsed events on the
 // node and a Reference Browser publishes its picks in the same shape, which is
 // how the Auto Packer's panel fills without a run either.
+// Walk up the order wire. More than one hop because the wire commonly passes
+// through a reroute, and a node in between that simply forwards the order is
+// not a reason to stop looking for who produced it.
+function orderSource(node) {
+    let cur = upstreamNode(node, "order");
+    for (let hop = 0; hop < 6 && cur; hop++) {
+        if (cur.comfyClass === "SymbioticaOrderSpecs"
+            || cur.comfyClass === "SymbioticaReferenceBrowser") {
+            return cur;
+        }
+        const next = upstreamNode(cur, "order");
+        if (next) { cur = next; continue; }
+        // A reroute names its input whatever it likes; one wired input is
+        // unambiguous, several are not worth guessing between.
+        const wired = (cur.inputs ?? []).filter((i) => i.link != null);
+        if (wired.length !== 1) return null;
+        cur = upstreamNode(cur, wired[0].name);
+    }
+    return null;
+}
+
 function publishedAssets(node) {
-    const source = upstreamNode(node, "order");
+    const source = orderSource(node);
     if (!source) return null;
     let event = null;
     if (source.comfyClass === "SymbioticaOrderSpecs") {
@@ -94,8 +115,8 @@ function focusPanel(node) {
         if (!assets.length) {
             list.appendChild(emptyState(
                 upstreamNode(node, "order")
-                    ? "the wired order has no assets yet — pick a feature on "
-                      + "Order Specs, or queue this node"
+                    ? "no assets from the wired order yet — pick a feature on "
+                      + "Order Specs, or queue this node once"
                     : "wire an Order Specs (or a Reference Browser) into order"));
             refit();
             return;

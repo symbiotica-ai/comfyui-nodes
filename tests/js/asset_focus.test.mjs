@@ -142,3 +142,45 @@ test("what a run reported wins over what was published", async () => {
     assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
                      ["FromTheRun"]);
 });
+
+test("the order is followed through a reroute", async () => {
+    // The wire commonly passes through one; a node in between that forwards
+    // the order is not a reason to stop looking for who produced it.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Frankencrisps", category: "Food - 3 stages" }] }];
+    const hop = await create("Reroute", {});
+    hop.comfyClass = "Reroute";
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, hop, "in");
+    link(hop, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["Frankencrisps"]);
+});
+
+test("an ambiguous hop is not guessed at", async () => {
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Frankencrisps", category: "Food" }] }];
+    const other = await create("SomethingElse", {});
+    const merge = await create("Merge", {});
+    merge.comfyClass = "Merge";
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, merge, "a");
+    link(other, merge, "b");
+    link(merge, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
+    assert.match(text, /no assets from the wired order yet/);
+});
