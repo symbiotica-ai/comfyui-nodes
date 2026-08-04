@@ -223,6 +223,61 @@ class TestPicking:
         assert run(nodes_mod, images=None, selection=json.dumps([ident])).args[0] == []
 
 
+class TestLookingAtAPickMustNotPayForIt:
+    """Found live: queueing the stage AFTER the picker re-ran the stage BEFORE
+    it. ComfyUI resolves an ordinary input by executing whatever produces it,
+    and an API generator that does not cache re-renders every time — a fixed
+    seed does not help when the node is asked for a value at all."""
+
+    def test_the_images_input_is_lazy(self, nodes_mod):
+        schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
+        images = next(i for i in schema.inputs if i.id == "images")
+        assert images.lazy is True
+
+    def test_collecting_asks_for_the_wire(self, nodes_mod):
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=None, collect=[True]) == ["images"]
+
+    def test_not_collecting_never_asks_for_the_wire(self, nodes_mod):
+        """The whole point: an input that is not requested is never computed,
+        so nothing upstream runs."""
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=None, collect=[False]) == []
+
+    def test_an_already_resolved_wire_is_not_asked_for_again(self, nodes_mod):
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=[frames(0.1)], collect=[True]) == []
+
+    def test_not_collecting_records_nothing(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=[frames(0.1)], collect=[False])
+        assert buffer_of(nodes_mod, tmp_path) == []
+
+    def test_not_collecting_still_sends_the_picks_on(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=[frames(0.5)], collect=[True])
+        ident = buffer_of(nodes_mod, tmp_path)[0]["id"]
+        out = run(nodes_mod, images=None, collect=[False],
+                  selection=[json.dumps([ident])])
+        assert len(out.args[0]) == 1
+
+    def test_collect_defaults_to_on(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=[frames(0.1)])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1
+
+
+class TestChainingTwoPickers:
+    def test_the_picks_of_one_become_the_candidates_of_the_next(self, nodes_mod,
+                                                                tmp_path):
+        run(nodes_mod, node_id="1", images=[frames(0.2, 0.4, 0.6)])
+        first = [e["id"] for e in buffer_of(nodes_mod, tmp_path, "1")]
+        passed = run(nodes_mod, node_id="1", images=None, collect=[False],
+                     selection=[json.dumps([first[0], first[2]])]).args[0]
+        run(nodes_mod, node_id="2", images=passed)
+        second = buffer_of(nodes_mod, tmp_path, "2")
+        assert len(second) == 2
+        # The same two images, not merely the same count.
+        assert {e["id"] for e in second} == {first[0], first[2]}
+
+
 class TestTransparency:
     def test_a_four_channel_pick_comes_out_with_four_channels(self, nodes_mod,
                                                               tmp_path):

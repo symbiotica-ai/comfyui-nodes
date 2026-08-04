@@ -196,6 +196,14 @@ test("clear sends no ids, which the route reads as the whole buffer", async () =
     assert.deepEqual(ticksOf(node), []);
 });
 
+test("the node says so when it is not collecting", async () => {
+    // A run that adds nothing looks exactly like a generator that failed.
+    const on = await panelNode([], [CAKE_A], { collect: true });
+    assert.equal(buttonsSaying(on, "not collecting").length, 0);
+    const off = await panelNode([], [CAKE_A], { collect: false });
+    assert.equal(buttonsSaying(off, "not collecting").length, 1);
+});
+
 test("the thumbnail size buttons change the tiles", async () => {
     const node = await panelNode([], [CAKE_A]);
     assert.match(tiles(node)[0].style.cssText, /width:108px/);

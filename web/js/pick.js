@@ -169,6 +169,19 @@ function pickPanel(node) {
                           + (ticks.size > tickedHere ? ` (${ticks.size} total)` : "")
                           : "no candidates yet"));
 
+        // With collecting off the wire above is never evaluated, so a run adds
+        // nothing here. Say so on the node: silence looks identical to a
+        // generator that failed.
+        if (widgetOf(node, "collect")?.value === false) {
+            const chip = el("div",
+                `flex:none;padding:1px 6px;border-radius:3px;font:10px ${HUB.font};`
+                + `background:${HUB.surface1};color:${HUB.inkTertiary};`
+                + `border:1px solid ${HUB.hairline};`, "not collecting");
+            chip.title = "collect is off — running this adds no candidates and "
+                + "nothing upstream is asked for";
+            bar.appendChild(chip);
+        }
+
         for (const key of Object.keys(SIZES)) {
             const b = el("button", ghostButtonCss + "padding:1px 6px;flex:none;"
                 + (thumbSize(node) === key ? `border-color:${HUB.accent};color:${HUB.ink};` : ""),

@@ -3276,10 +3276,12 @@ class SymbioticaPick(io.ComfyNode):
                         "node body, so three separate runs of the same "
                         "generator stack up as three candidates instead of "
                         "overwriting each other. Only the ticked ones leave "
-                        "the node. `images` is optional on purpose: once the "
-                        "picks are made the generator branch can be muted and "
-                        "this node still serves them from disk, so queueing "
-                        "the edit stage does not re-fire a paid render. Wire "
+                        "the node. Turn `collect` off once the picks are made "
+                        "and the wire above is never evaluated at all, so "
+                        "queueing the edit stage cannot re-fire a paid render "
+                        "— the node serves the approved images from disk. "
+                        "Chain one after another: the picks of one become the "
+                        "candidates of the next. Wire "
                         "the asset and category being worked on and the "
                         "candidates are tagged with it, so the node can show "
                         "one asset at a time instead of everything ever made.",
@@ -3289,11 +3291,19 @@ class SymbioticaPick(io.ComfyNode):
             # preview downstream shows one approved image three times.
             is_input_list=True,
             inputs=[
-                io.Image.Input("images", optional=True,
-                               tooltip="Candidates to add to the buffer. Leave "
-                                       "unwired (or mute what feeds it) to "
-                                       "serve the existing picks without "
-                                       "regenerating anything."),
+                io.Image.Input("images", optional=True, lazy=True,
+                               tooltip="Candidates to add to the buffer. Only "
+                                       "read when `collect` is on — with it "
+                                       "off this wire is never evaluated, so "
+                                       "nothing upstream runs."),
+                io.Boolean.Input("collect", default=True,
+                                 tooltip="On: read `images` and add whatever "
+                                         "arrives to the buffer. Off: ignore "
+                                         "the wire entirely and just send the "
+                                         "ticked images on — the generator "
+                                         "above is never asked for anything, "
+                                         "so previewing or routing a pick "
+                                         "costs no render."),
                 io.String.Input("asset", default="", optional=True,
                                 tooltip="The asset these candidates belong to "
                                         "— tags them, and the node opens on "
@@ -3318,8 +3328,25 @@ class SymbioticaPick(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, images=None, asset="", category="", order=None,
-                selection="", view="") -> io.NodeOutput:
+    def check_lazy_status(cls, images=None, collect=True, asset="",
+                          category="", order=None, selection="", view=""):
+        """Whether the wire above this node is worth evaluating at all.
+
+        This is the difference between looking at a pick and paying for it.
+        ComfyUI resolves an ordinary input by executing whatever produces it,
+        and an API generator that does not cache re-renders every time — so
+        merely queueing the stage AFTER the picker was re-running the stage
+        BEFORE it. Declining `images` here means the generator is never asked,
+        because a lazy input that is not requested is never computed.
+        """
+        one = SymbioticaCategoryPrompts._one
+        if not bool(one(collect, True)):
+            return []
+        return ["images"] if images is None else []
+
+    @classmethod
+    def execute(cls, images=None, collect=True, asset="", category="",
+                order=None, selection="", view="") -> io.NodeOutput:
         import datetime
 
         from PIL import Image
@@ -3346,7 +3373,10 @@ class SymbioticaPick(io.ComfyNode):
         # `asset`. A single label against many images is the other real case —
         # one batch of variants of one asset — so a short list repeats its
         # first value rather than leaving the rest untagged.
-        items = _as_list(images)
+        # Belt and braces with check_lazy_status: `images` is already None when
+        # collecting is off, but a stale value must never be able to file a
+        # candidate the user did not ask to generate.
+        items = _as_list(images) if bool(one(collect, True)) else []
         assets = _as_list(asset)
         cats = _as_list(category)
         added = 0
