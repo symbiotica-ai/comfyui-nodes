@@ -190,3 +190,22 @@ def test_every_layout_role_is_unique_within_its_sheet():
             continue
         roles = [r for row in grid for r in row if r]
         assert len(roles) == len(set(roles)), name
+
+
+def test_canvas_is_recovered_from_the_boxes():
+    """The boxes stop at the last cell, so the far margin is missing from them
+    — the grid is centred, which is what makes the full sheet recoverable."""
+    from pipeline.sheet_cells import canvas_of
+    assert canvas_of(cell_boxes("food2row", CANVAS, CANVAS, PADDING)) == (
+        CANVAS, CANVAS)
+    assert canvas_of(cell_boxes("pair", CANVAS, CANVAS, PADDING)) == (
+        CANVAS, CANVAS)
+    assert canvas_of(cell_boxes("grid2x2", CANVAS, CANVAS, PADDING)) == (
+        CANVAS, CANVAS)
+    assert canvas_of(cell_boxes("single", CANVAS, CANVAS, PADDING)) == (
+        CANVAS, CANVAS)
+
+
+def test_canvas_of_nothing_is_nothing():
+    from pipeline.sheet_cells import canvas_of
+    assert canvas_of([]) == (0, 0)

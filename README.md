@@ -104,11 +104,25 @@ Wrappers around Wavespeed's hosted endpoints.
 - `NS Get Video Components` / `NS Create Video` — frame ↔ video conversion utilities
 - `NS Transition Settings` — transition config between clips
 
+### Camera and film look
+- `Camera Shake` — seeded Perlin handheld wiggle on a VIDEO
+- `Focus Pull` — animated depth-of-field rack between two focus points
+- `Film Grain` — analog grain, with per-channel weighting
+- `Chromatic Aberration` — corner-weighted RGB split
+
+### Product research
+- `Product Gallery Scrape` — an e-commerce product page's gallery, split into
+  product-only / on-model / other IMAGE batches
+- `Product Image Sort` — orders a gallery batch by category
+
 ### Workflow utilities
 - `NS Workflow Model Downloader` — pulls models referenced in a workflow JSON
 - `NS Prompt List` — multi-prompt iteration
 - `NS Qwen Resolution` — common Qwen-friendly resolutions
 - `Symbiotica Seed` — reproducible seeds with optional auto-increment
+- `Load Text File` — one text file as a STRING
+- `Load Text List` — one text file's blank-line-separated blocks as a list,
+  emitting the same `(prompts, names, count)` contract as `NS Prompt List`
 
 ## Order pipeline (Symbiotica Hub port)
 

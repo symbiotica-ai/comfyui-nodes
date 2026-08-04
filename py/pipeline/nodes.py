@@ -117,6 +117,37 @@ def _pil_to_tensor(img) -> torch.Tensor:
     return torch.from_numpy(arr)[None, ...]
 
 
+def _tensor_to_pil_mask(frame):
+    """One MASK frame as an L-mode image. A mask is HxW, but ComfyUI is loose
+    about a trailing channel axis, so squeeze one if it is there."""
+    from PIL import Image
+    arr = frame.detach().cpu().clamp(0.0, 1.0).numpy()
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = arr[..., 0]
+    return Image.fromarray((arr * 255.0).round().astype(np.uint8), mode="L")
+
+
+def _tensor_to_pil(frame):
+    """One HxWxC frame — NOT a batch — as a PIL image, KEEPING a fourth channel
+    as alpha where the frame carries one.
+
+    ComfyUI's IMAGE is conventionally three channels, but a background remover
+    hands back four, and converting straight to RGB there discards the very
+    thing it was run to produce: the sprite lands on whatever was hiding under
+    its transparency, which for this art is black. Anything else — one channel,
+    three, or an odd count — becomes RGB as before.
+
+    Clamped before scaling: a frame that came through an upscaler can carry
+    values a shade outside 0..1, and uint8 wraps rather than clips, so an
+    overshoot of 1.004 would land as a black pixel in the middle of white art.
+    """
+    from PIL import Image
+    arr = frame.detach().cpu().clamp(0.0, 1.0).numpy()
+    out = Image.fromarray((arr * 255.0).round().astype(np.uint8))
+    keep_alpha = arr.ndim == 3 and arr.shape[-1] == 4
+    return out if keep_alpha and out.mode == "RGBA" else out.convert("RGB")
+
+
 class SymbioticaOrderRead(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1302,6 +1333,281 @@ class SymbioticaDatasetReference(io.ComfyNode):
                 per_type[key] = json.dumps(boxes_for_category(project, key))
             boxes.append(per_type[key])
         return io.NodeOutput(images, names, boxes)
+
+
+class SymbioticaReconstructCells(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaReconstructCells",
+            display_name="Symbiotica Reconstruct Cells",
+            category="symbiotica/pipeline",
+            description="Puts cells back into the sheet they were cut from — "
+                        "Slice Cells read the other way, on the same boxes. "
+                        "Edit each asset on its own, then rebuild the packed "
+                        "layout a style LoRA was trained on, at the same size "
+                        "and the same padding as the sheet that was split.",
+            # Every cell at once: a sheet cannot be laid out one cell per
+            # execution, and mapped per image this would emit one sheet each.
+            is_input_list=True,
+            inputs=[
+                io.Image.Input("cells",
+                               tooltip="The finished sprites, in the order "
+                                       "Slice Cells returned them."),
+                io.String.Input("cell_boxes", force_input=True,
+                                tooltip="The same `cell_boxes` that cut them — "
+                                        "from Dataset Reference. The sheet is "
+                                        "rebuilt on exactly those boxes."),
+                io.String.Input("background", default=DEFAULT_BACKGROUND,
+                                tooltip="What the gutters and any cell with no "
+                                        "sprite are filled with. Match the "
+                                        "packed sheets and the result is "
+                                        "indistinguishable from one."),
+                io.Int.Input("canvas_size", default=0, min=0, max=8192,
+                             tooltip="Sheet size, or 0 to recover it from the "
+                                     "boxes — the grid is centred, so the "
+                                     "margin after the last cell equals the "
+                                     "one before the first."),
+                io.Mask.Input("masks", optional=True,
+                              tooltip="Transparency for the cells. A loader "
+                                      "flattens alpha before this node sees "
+                                      "it, so without the mask a transparent "
+                                      "sprite lands on a black rectangle "
+                                      "instead of the background."),
+                io.Boolean.Input("mask_is_transparency", default=True,
+                                 tooltip="ON for ComfyUI's Load Image, whose "
+                                         "mask is 1 where the picture is "
+                                         "see-through. OFF for a straight "
+                                         "alpha channel, where 1 is the art."),
+                # Appended: links address an input by slot index.
+                io.String.Input("padding_color", default="#000000",
+                                tooltip="What sits OUTSIDE the cells — the "
+                                        "gutters and the border. The packer "
+                                        "floods the sheet with this and then "
+                                        "punches each cell back to the "
+                                        "background above, which is what draws "
+                                        "the black outline around every cell. "
+                                        "Set it to the same colour as the "
+                                        "background for no outline at all."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="sheet",
+                                tooltip="One sheet, laid out like the packed "
+                                        "one the cells came from."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, cells=None, cell_boxes="", background=DEFAULT_BACKGROUND,
+                canvas_size=0, masks=None, mask_is_transparency=True,
+                padding_color="#000000") -> io.NodeOutput:
+        from PIL import Image
+
+        from .asset_refs import parse_hex
+        from .compare_sheet import fit_box, with_alpha
+        from .sheet_cells import canvas_of
+        one = SymbioticaCategoryPrompts._one
+
+        raw = one(cell_boxes, "")
+        try:
+            boxes = json.loads(str(raw or "").strip() or "[]")
+        except ValueError:
+            boxes = None
+        if not isinstance(boxes, list) or not boxes:
+            raise ValueError(
+                "no cell boxes — wire the Dataset Reference node's "
+                "`cell_boxes` output into this node, the same one that cut "
+                "these cells")
+
+        frames = [f for t in (cells or []) if t is not None for f in t]
+        if not frames:
+            raise ValueError("wire the finished sprites into 'cells'")
+        mask_frames = [f for t in (masks or []) if t is not None for f in t]
+
+        size = int(one(canvas_size, 0) or 0)
+        width, height = (size, size) if size > 0 else canvas_of(boxes)
+        if width <= 0 or height <= 0:
+            raise ValueError("these boxes describe no sheet — set canvas_size")
+
+        # Flooded with the matte, then each cell punched back to the
+        # background — the packer's own order, and the reason every cell comes
+        # out ringed in the gutter colour. Painting the cells first and the
+        # gutters after would leave no outline at all.
+        cell_colour = parse_hex(one(background, DEFAULT_BACKGROUND))
+        sheet = Image.new("RGB", (width, height),
+                          parse_hex(one(padding_color, "#000000")))
+        for box in boxes:
+            sheet.paste(cell_colour,
+                        (int(box.get("x", 0)), int(box.get("y", 0)),
+                         int(box.get("x", 0)) + int(box.get("w", 0)),
+                         int(box.get("y", 0)) + int(box.get("h", 0))))
+        # Zipped, so a run with fewer sprites than cells leaves the rest as
+        # background rather than shifting every later sprite into the wrong
+        # cell — the same alignment rule the cut side keeps.
+        for index, box in enumerate(boxes):
+            if index >= len(frames):
+                break
+            image = _tensor_to_pil(frames[index])
+            if index < len(mask_frames):
+                image = with_alpha(image,
+                                   _tensor_to_pil_mask(mask_frames[index]),
+                                   bool(one(mask_is_transparency, True)))
+            box_w, box_h = int(box.get("w", 0)), int(box.get("h", 0))
+            new_w, new_h, dx, dy = fit_box(image.width, image.height,
+                                           min(box_w, box_h))
+            if not new_w or not new_h:
+                continue
+            # Centred in its own box, so a sprite whose aspect drifted during
+            # editing still sits where the cell is rather than overhanging it.
+            dx += (box_w - min(box_w, box_h)) // 2
+            dy += (box_h - min(box_w, box_h)) // 2
+            at = (int(box.get("x", 0)) + dx, int(box.get("y", 0)) + dy)
+            if image.mode == "RGBA":
+                scaled = image.resize((new_w, new_h), Image.LANCZOS)
+                sheet.paste(scaled, at, scaled)
+            else:
+                sheet.paste(image.convert("RGB").resize((new_w, new_h),
+                                                        Image.LANCZOS), at)
+        return io.NodeOutput(_pil_to_tensor(sheet))
+
+
+class SymbioticaCompareSheet(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaCompareSheet",
+            display_name="Symbiotica Compare Sheet",
+            category="symbiotica/pipeline",
+            description="Lays a row of references over a row of results as one "
+                        "image, so an asset and the art it was drawn from are "
+                        "read side by side instead of clicked between. Takes "
+                        "whole batches, unlike a two-image stitch: wire Asset "
+                        "Refs into the top row and Slice Cells into the "
+                        "bottom, and each result lands under the reference it "
+                        "belongs to.",
+            # Both rows at once: laying them out needs every image together, and
+            # mapped per image this would emit one sheet per cell.
+            is_input_list=True,
+            inputs=[
+                io.Image.Input("references",
+                               tooltip="The top row — the client's reference "
+                                       "art, e.g. Asset Refs' `images`."),
+                io.Image.Input("results",
+                               tooltip="The bottom row — what was made from "
+                                       "it, e.g. Slice Cells' `cells`."),
+                io.Int.Input("cell_size", default=0, min=0, max=4096,
+                             tooltip="Square each image is fitted into, or 0 "
+                                     "to take the largest edge among them so "
+                                     "nothing is enlarged into softness."),
+                io.Int.Input("spacing", default=16, min=0, max=512,
+                             tooltip="Gutter between cells, and the sheet's "
+                                     "own border."),
+                io.String.Input("background", default=DEFAULT_BACKGROUND,
+                                tooltip="What sits behind each sprite, and what "
+                                        "fills a cell with no sprite in it."),
+                # Appended: links address an input by slot index.
+                io.Mask.Input("reference_masks", optional=True,
+                              tooltip="Transparency for the top row. A loader "
+                                      "hands the pixels on with alpha already "
+                                      "flattened — over black, for these "
+                                      "sprites — so without the mask a "
+                                      "transparent PNG lands as a black "
+                                      "rectangle instead of the background."),
+                io.Mask.Input("result_masks", optional=True,
+                              tooltip="Transparency for the bottom row."),
+                io.Boolean.Input("mask_is_transparency", default=True,
+                                 tooltip="ON for ComfyUI's own Load Image, "
+                                         "whose mask is 1 where the picture is "
+                                         "SEE-THROUGH. OFF for a straight "
+                                         "alpha channel, where 1 is where the "
+                                         "art is — which is what this pack's "
+                                         "Asset Refs `masks` hands out. Wrong "
+                                         "way round and every sprite is cut "
+                                         "out instead of its background."),
+                io.String.Input("padding_color", default="#000000",
+                                tooltip="What sits OUTSIDE the cells — the "
+                                        "gutters and the border — so the sheet "
+                                        "reads like the packed ones, every "
+                                        "cell ringed in the matte. Set it to "
+                                        "the same colour as the background for "
+                                        "a plain sheet with no outlines."),
+                io.Float.Input("reference_scale", default=1.0, min=0.05,
+                               max=1.0, step=0.05,
+                               tooltip="Draws the top row smaller inside its "
+                                       "own cells. The cells and the columns "
+                                       "do not move, and each reference stays "
+                                       "centred over the result below it — so "
+                                       "a reference that dwarfs the finished "
+                                       "asset stops reading as the bigger of "
+                                       "the two. 1.0 leaves it alone."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="sheet",
+                                tooltip="One image: references on top, results "
+                                        "beneath, aligned by column."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, references=None, results=None, cell_size=0, spacing=16,
+                background=DEFAULT_BACKGROUND, reference_masks=None,
+                result_masks=None, mask_is_transparency=True,
+                padding_color="#000000",
+                reference_scale=1.0) -> io.NodeOutput:
+        from .asset_refs import parse_hex
+        from .compare_sheet import auto_cell, compose_rows, with_alpha
+        one = SymbioticaCategoryPrompts._one
+        transparency = bool(one(mask_is_transparency, True))
+
+        def frames(batch):
+            """Every frame on the wire, whatever shape it arrived in. A list
+            input carries one tensor per upstream execution, and each of those
+            may itself hold a batch — flattening both is what lets this take a
+            fanned-out lane and a plain batch on the same socket."""
+            out = []
+            for tensor in (batch or []):
+                if tensor is None:
+                    continue
+                for frame in tensor:
+                    out.append(frame)
+            return out
+
+        def as_images(batch, masks):
+            """The row's images, each given back its transparency where a mask
+            came with it. Paired by position, and a row with fewer masks than
+            images keeps the extra images opaque rather than dropping them."""
+            mask_frames = frames(masks)
+            out = []
+            for index, frame in enumerate(frames(batch)):
+                image = _tensor_to_pil(frame)
+                if index < len(mask_frames):
+                    image = with_alpha(image,
+                                       _tensor_to_pil_mask(mask_frames[index]),
+                                       transparency)
+                out.append(image)
+            return out
+
+        top = as_images(references, reference_masks)
+        bottom = as_images(results, result_masks)
+        if not top and not bottom:
+            raise ValueError("wire images into 'references' and 'results' — "
+                             "both rows are empty")
+
+        cell = int(one(cell_size, 0) or 0)
+        if cell <= 0:
+            cell = auto_cell([(im.width, im.height) for im in top + bottom])
+        # A short row keeps its holes: the result belongs UNDER the reference it
+        # came from, and closing the row up would pair each with the wrong one.
+        columns = max(len(top), len(bottom))
+        rows = [row + [None] * (columns - len(row)) for row in (top, bottom)]
+        # Only the references shrink; the results keep their cell, so the two
+        # rows stay column-aligned and the size difference reads as intended.
+        scales = [float(one(reference_scale, 1.0) or 1.0), 1.0]
+        sheet = compose_rows(rows, cell, max(0, int(one(spacing, 16) or 0)),
+                             parse_hex(one(background, DEFAULT_BACKGROUND)),
+                             parse_hex(one(padding_color, "#000000")),
+                             row_scales=scales)
+        return io.NodeOutput(_pil_to_tensor(sheet))
 
 
 _REF_SIZES = ["native", "512", "1024"]
@@ -2889,6 +3195,8 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaDatasetReference,
     SymbioticaSliceCells,
     SymbioticaAssetRefs,
+    SymbioticaCompareSheet,
+    SymbioticaReconstructCells,
     SymbioticaTemplateLibrary,
     SymbioticaEventSpecs,
     SymbioticaTemplateBuilder,

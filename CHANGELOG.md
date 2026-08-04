@@ -40,6 +40,51 @@ output, `thought_image`. No node is removed or renamed.
   model list — thinking is four different behaviours depending on the model,
   and `temperature` is a 400 on four of them. Per-model inputs are what
   retired that constraint rather than any change at the providers.
+## 2026.8.6
+
+**Node change.** Eight nodes are added: `Camera Shake`, `Focus Pull`,
+`Film Grain`, `Chromatic Aberration`, `Product Gallery Scrape`,
+`Product Image Sort`, `Load Text File` and `Load Text List`. None of them is
+new work — all eight had been running on the Modal install for weeks and were
+missing from this repository. No node is removed or renamed, and no existing
+input or output changed position or meaning.
+
+### Added
+
+- **Eight nodes that existed only on a deployed volume are now in git.** A
+  second, stale copy of this pack (`comfyui-nodes`, version 2026.7.21) sat
+  beside the current one on the Modal volume, and ComfyUI loaded both. That
+  collision is what raised the "Extension named … already registered" banner —
+  but the stale copy also turned out to be the only place these eight nodes
+  existed. `git log --all` found no commit, on any branch, that had ever
+  contained them. Version numbers made the directory look like a subset of
+  `main`; it was not.
+
+  They arrived with no tests at all. `tests/test_rescued_node_registration.py`
+  is the floor for that: `__init__.py` discovers nodes by importing every
+  non-underscore module under `py/` and swallowing failures into a printed
+  traceback, so a module that stops importing removes its nodes from the menu
+  in silence. The guard imports each of the eight and asserts it still
+  contributes its keys.
+
+### Fixed
+
+- **A brand logo is found where a filename search cannot see it.** The product
+  scrape took the first image whose URL contained "logo", which picked
+  `Inele_de_logodna` (Romanian for engagement rings) on teilor.ro and missed
+  the real wordmark, and it flattened transparency onto black — burying dark
+  lettering that is nearly always drawn for a light background.
+
+  The search is now a cascade, most authoritative first: the logo the site
+  declares to Google in JSON-LD, then the largest `apple-touch-icon`, then
+  files whose name carries "logo" as a *word* (so `logodna` and `catalogo` no
+  longer match), then sized link icons, and finally the favicon service, which
+  always answers. Each candidate is downloaded in turn and the first that
+  decodes at 64px or better wins; transparency composites onto white. The node
+  reports whether it found one, so a summary can say so rather than implying a
+  mark it never had.
+
+  This fix was also written weeks ago and lived only on that same volume.
 
 ## 2026.8.5
 
