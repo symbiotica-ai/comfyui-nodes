@@ -231,3 +231,60 @@ test("re-wiring the order lets it ask the new source", async () => {
     for (let i = 0; i < 10; i++) await tick();
     assert.equal(asked, 2);
 });
+
+test("category is a dropdown of what the order actually holds", async () => {
+    // A text box you cannot be told what to type is not an input.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Frankenstein Date", category: "Decoration" },
+        { assetName: "Frankencrisps", category: "Food - 3 stages" },
+        { assetName: "Franken-Scream Cones", category: "Food - 3 stages" },
+        { assetName: "Black Marble Stove", category: "Appliance" },
+    ] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    const w = node.widgets.find((x) => x.name === "category");
+    assert.equal(w.type, "combo");
+    // First-appearance order, the way the order sheet reads.
+    assert.deepEqual(w.options.values(),
+                     ["All", "Decoration", "Food - 3 stages", "Appliance"]);
+});
+
+test("All means no narrowing", async () => {
+    const node = await focusNode({ category: "All" });
+    assert.equal(rows(node).length, 3);
+});
+
+test("choosing a category narrows the rows", async () => {
+    const node = await focusNode({ category: "All" });
+    const w = node.widgets.find((x) => x.name === "category");
+    w.value = "Decoration";
+    w.callback("Decoration");
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent), ["Bunting"]);
+});
+
+test("a chosen asset the new category hides is dropped, not left chosen invisibly", async () => {
+    // Otherwise the node renders an asset that is not on screen.
+    const node = await focusNode({ category: "All", asset: "Bunting" });
+    const w = node.widgets.find((x) => x.name === "category");
+    w.value = "Food - 3 stages";
+    w.callback("Food - 3 stages");
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(node.widgets.find((x) => x.name === "asset").value, "");
+});
+
+test("a chosen asset the new category still shows is kept", async () => {
+    const node = await focusNode({ category: "All", asset: "Frankencrisps" });
+    const w = node.widgets.find((x) => x.name === "category");
+    w.value = "Food - 3 stages";
+    w.callback("Food - 3 stages");
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(node.widgets.find((x) => x.name === "asset").value, "Frankencrisps");
+});

@@ -82,6 +82,45 @@ function publishedAssets(node) {
         .map((a) => ({ name: a.assetName, category: a.category ?? "" }));
 }
 
+// A text box you cannot be told what to type is not an input. The classic node
+// UI will not turn a text widget into a dropdown by mutating `.type`, so the
+// widget is recreated as a real combo in the same slot — same approach as
+// order_pipeline.js's `comboify`, kept here because that module exports
+// nothing. Value and serialisation are preserved, so the string still reaches
+// the Python node and a saved workflow still restores it.
+const ALL_CATEGORIES = "All";
+
+function comboify(node, widgetName, valuesFn) {
+    const i = node.widgets?.findIndex((x) => x.name === widgetName);
+    if (i == null || i < 0) return null;
+    const existing = node.widgets[i];
+    if (existing.type === "combo") {
+        existing.options = existing.options ?? {};
+        existing.options.values = valuesFn;
+        return existing;
+    }
+    const value = existing.value;
+    node.widgets.splice(i, 1);
+    const w = node.addWidget("combo", widgetName, value,
+                             (v) => { w.value = v; }, { values: valuesFn });
+    node.widgets = node.widgets.filter((x) => x !== w);
+    node.widgets.splice(i, 0, w);
+    w.serializeValue = () => w.value;
+    return w;
+}
+
+// The categories the wired order actually holds, in the order they appear in
+// it — the same first-appearance order `assets_by_category` groups by, so the
+// dropdown reads down the order sheet rather than alphabetically.
+function categoriesOf(node) {
+    const out = [ALL_CATEGORIES];
+    for (const asset of publishedAssets(node) ?? []) {
+        const category = String(asset.category ?? "").trim();
+        if (category && !out.includes(category)) out.push(category);
+    }
+    return out;
+}
+
 function focusPanel(node) {
     injectHubStyles();
 
@@ -104,7 +143,12 @@ function focusPanel(node) {
     node.size[0] = Math.max(node.size[0], MIN_NODE_W);
 
     const chosen = () => widgetOf(node, "asset")?.value?.trim?.() || "";
-    const narrowed = () => widgetOf(node, "category")?.value?.trim?.() || "";
+    // "All" is the label for no narrowing; the Python node reads an empty
+    // string, and every other value passes through untouched.
+    const narrowed = () => {
+        const value = widgetOf(node, "category")?.value?.trim?.() || "";
+        return value === ALL_CATEGORIES ? "" : value;
+    };
 
     function choose(name) {
         const w = widgetOf(node, "asset");
@@ -121,10 +165,12 @@ function focusPanel(node) {
         // from, already narrowed by `category`. Otherwise fall back to what the
         // wired source published, so the choices are there before any run.
         const narrow = narrowed().toLowerCase();
-        const published = (publishedAssets(node) ?? []).filter(
-            (a) => !narrow || String(a.category ?? "").toLowerCase() === narrow);
-        const assets = node._symFocusAssets?.length
-            ? node._symFocusAssets : published;
+        // Narrow whichever list is in use. A run's list already arrives
+        // narrowed by the same widget, but between runs the widget can move
+        // and the panel must not keep showing what it would no longer choose.
+        const assets = (node._symFocusAssets?.length
+            ? node._symFocusAssets : (publishedAssets(node) ?? [])).filter(
+                (a) => !narrow || String(a.category ?? "").toLowerCase() === narrow);
         const pick = chosen();
 
         if (!assets.length) {
@@ -170,6 +216,27 @@ function focusPanel(node) {
             list.appendChild(row);
         }
         refit();
+    }
+
+    // Choosing a category re-lists, and an asset hidden by the new one would
+    // otherwise stay chosen invisibly — and be what the node renders.
+    const categoryWidget = comboify(node, "category", () => categoriesOf(node));
+    if (categoryWidget) {
+        if (!categoryWidget.value) categoryWidget.value = ALL_CATEGORIES;
+        const previous = categoryWidget.callback;
+        categoryWidget.callback = function (value) {
+            previous?.apply(this, arguments);
+            const pool = node._symFocusAssets?.length
+                ? node._symFocusAssets : (publishedAssets(node) ?? []);
+            const keep = pool.some(
+                (a) => a.name === chosen()
+                    && (!narrowed() || a.category === narrowed()));
+            if (!keep) {
+                const w = widgetOf(node, "asset");
+                if (w) w.value = "";
+            }
+            render();
+        };
     }
 
     node._symRenderFocus = render;
