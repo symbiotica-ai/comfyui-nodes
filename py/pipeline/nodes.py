@@ -1055,6 +1055,98 @@ class SymbioticaOrderAssets(io.ComfyNode):
                              save_paths(order, items))
 
 
+class SymbioticaAssetFocus(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaAssetFocus",
+            display_name="Symbiotica Asset Focus",
+            category="symbiotica/pipeline",
+            description="One asset out of the order, chosen on the node, with "
+                        "its whole record on separate outputs. Order Assets "
+                        "emits four index-aligned lists and Dataset Reference "
+                        "three more, so working on a single asset meant an "
+                        "index node per list, all held at the same position by "
+                        "hand. The index is applied once, here, and nothing "
+                        "downstream has a list to index. Order Assets is still "
+                        "the node to use to render a whole event in one press; "
+                        "this is the one to use while iterating on one asset.",
+            inputs=[
+                Order.Input("order"),
+                io.String.Input("category", default="",
+                                tooltip="Narrow the choice to one asset type, "
+                                        "or leave empty for every type."),
+                io.String.Input("asset", default="",
+                                tooltip="Which asset, by name. Set by clicking "
+                                        "it on the node; typed names work too. "
+                                        "Empty means the first."),
+            ],
+            outputs=[
+                io.String.Output(display_name="asset_name"),
+                io.String.Output(display_name="category"),
+                io.String.Output(display_name="client_prompt"),
+                io.String.Output(display_name="save_path",
+                                 tooltip="month/feature/category/asset — the "
+                                         "same value Order Assets emits, so a "
+                                         "save node and a Pick node's folder "
+                                         "both take it."),
+                io.Int.Output(display_name="index",
+                              tooltip="Where this asset sits in the run, for "
+                                      "anything still handed a list."),
+            ],
+            hidden=[io.Hidden.unique_id],
+        )
+
+    @classmethod
+    def execute(cls, order=None, category="", asset="") -> io.NodeOutput:
+        if not isinstance(order, dict) or "assets" not in order:
+            raise ValueError("wire an Order Specs (or a Reference Browser) "
+                             "into 'order'")
+        items = assets_by_category(order, category)
+        if not items:
+            present = sorted({str(a.get("category", "") or "").strip()
+                              for a in order.get("assets", []) or []
+                              if str(a.get("assetName", "") or "").strip()})
+            want = (category or "All").strip() or "All"
+            if want != "All" and present:
+                raise ValueError(
+                    f"no {want!r} assets in {order.get('feature', '')!r} — "
+                    f"this event holds: {', '.join(present)}")
+            raise ValueError(
+                f"the event {order.get('feature', '')!r} has no named assets — "
+                "pick a feature on the Order Specs node")
+
+        # The panel needs the choices before anything is chosen, and the order
+        # arrives on a wire the canvas cannot read.
+        _push("symbiotica.focus", {
+            "node_id": str(getattr(getattr(cls, "hidden", None),
+                                   "unique_id", "")),
+            "feature": str(order.get("feature", "")),
+            "assets": [{"name": a["assetName"], "category": a["category"],
+                        "refs": list(a.get("refFiles", []) or [])[:1]}
+                       for a in items],
+        })
+
+        wanted = str(asset or "").strip()
+        index = 0
+        if wanted:
+            names = [a["assetName"] for a in items]
+            if wanted in names:
+                index = names.index(wanted)
+            else:
+                # Falling back silently would render the wrong asset under the
+                # wrong name and file it in the wrong folder. An event whose
+                # assets were renamed must say so.
+                raise ValueError(
+                    f"no asset called {wanted!r} in "
+                    f"{order.get('feature', '')!r} — it holds: "
+                    f"{', '.join(names)}")
+        item = items[index]
+        return io.NodeOutput(item["assetName"], item["category"],
+                             item["prompt"], save_paths(order, [item])[0],
+                             index)
+
+
 class SymbioticaSaveRender(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -3538,6 +3630,7 @@ class SymbioticaPick(io.ComfyNode):
 
 PIPELINE_NODE_CLASSES = [
     SymbioticaPick,
+    SymbioticaAssetFocus,
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
     SymbioticaReferenceBrowser,
