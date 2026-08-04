@@ -7,6 +7,17 @@ import { resolveProjectPath } from "./order_pipeline.js";
 
 const NODE = "SymbioticaPromptBook";
 
+// Picker entries that are a composed VIEW of an asset type rather than a file.
+// A prefix, not a separate control, so switching between "the block I edit" and
+// "what the model gets" is one click in the list already in front of you.
+const COMPOSED = "composed:";
+
+// A book with no image block yet still offers one to write into: the folder is
+// created by the first save, and without this entry there is nothing in the
+// picker to select, so the feature would be unreachable from the panel that
+// owns it.
+const NEW_IMAGE = "_image/01-image-model.md";
+
 function widgetOf(node, name) {
     return (node.widgets ?? []).find((w) => w.name === name);
 }
@@ -70,6 +81,13 @@ function promptPanel(node) {
         + "border:1px solid #555;background:#333;color:#ddd;";
     bar.append(picker, saveBtn);
 
+    // The blocks a composed view was built from, in composition order. Kept
+    // OUTSIDE the text: the preview has to stay byte-exact to what the model
+    // receives, so no separators or headings may be injected into it.
+    const blocksBar = document.createElement("div");
+    blocksBar.style.cssText = "display:none;opacity:.65;line-height:1.45;"
+        + "font-family:ui-monospace,monospace;";
+
     const status = document.createElement("div");
     status.style.cssText = "min-height:13px;opacity:.7;";
 
@@ -82,7 +100,7 @@ function promptPanel(node) {
     keepEvents(editor);
     keepEvents(picker);
 
-    container.append(bar, status, editor);
+    container.append(bar, blocksBar, status, editor);
     const w = node.addDOMWidget("prompt_book", "sym_prompt_book", container,
                                 { serialize: false, hideOnZoom: true });
     w.computeSize = (width) => [width, 320];
@@ -104,6 +122,9 @@ function promptPanel(node) {
     };
 
     let loaded = { name: "", text: "" };
+    // The blocks that exist on disk, as of the last refresh. A picked name that
+    // is not among them is a block being created, not a read that failed.
+    let existing = new Set();
 
     const setStatus = (msg, bad) => {
         status.textContent = msg;
@@ -112,17 +133,56 @@ function promptPanel(node) {
 
     const dirty = () => editor.value !== loaded.text;
 
+    // Read-only is enforced on the widget, not just by hiding Save: a composed
+    // document saved back would overwrite the type block with the rules baked
+    // into it, and the next compose would then repeat every shared rule twice.
+    const setEditable = (on) => {
+        editor.readOnly = !on;
+        saveBtn.disabled = !on;
+        saveBtn.style.opacity = on ? "1" : ".4";
+        editor.style.background = on ? "#1b1b1b" : "#171a17";
+        blocksBar.style.display = on ? "none" : "block";
+    };
+
+    async function loadComposed(project, category) {
+        const { text, blocks } = await getJson(
+            `/symbiotica/prompt-compose?project=${encodeURIComponent(project)}`
+            + `&category=${encodeURIComponent(category)}`);
+        loaded = { name: COMPOSED + category, text };
+        editor.value = text;
+        setEditable(false);
+        blocksBar.textContent = blocks
+            .map((b) => `${b.name} (${b.chars})`).join("  +  ");
+        setStatus(`${blocks.length} blocks · ${text.length} chars — read-only,`
+                  + " this is what the LLM receives");
+    }
+
     async function load(name) {
         const project = projectOf(node);
         if (!project || !name) return;
         try {
+            if (name.startsWith(COMPOSED)) {
+                await loadComposed(project, name.slice(COMPOSED.length));
+                return;
+            }
+            if (!existing.has(name)) {
+                loaded = { name, text: "" };
+                editor.value = "";
+                setEditable(true);
+                setStatus(`${name} — new block, Save creates it`);
+                return;
+            }
             const { text } = await getJson(
                 `/symbiotica/prompt-read?project=${encodeURIComponent(project)}`
                 + `&name=${encodeURIComponent(name)}`);
             loaded = { name, text };
             editor.value = text;
+            setEditable(true);
             setStatus(`${text.length} chars`);
         } catch (err) {
+            // Leave the editor holding whatever failed to load rather than
+            // blanking it — a composed view that errors on one missing type
+            // must not look like an empty prompt book.
             setStatus(String(err.message || err), true);
         }
     }
@@ -155,9 +215,27 @@ function promptPanel(node) {
             // Rules first, in composition order — the same order they appear in
             // the prompt the model receives, so the list reads as the prompt does.
             group("Game rules — apply to every type", book.rules);
+            const image = book.image ?? [];
+            group("Image model — style, light, camera",
+                  image.length ? image
+                               : [{ name: NEW_IMAGE, title: "01-image-model",
+                                    chars: "new" }]);
             group("Asset type", book.types);
-            const names = [...book.rules, ...book.types].map((r) => r.name);
-            const pick = names.includes(keep) ? keep : names[0];
+            // Composed last, because it is where you go after an edit rather
+            // than before one: same types again, this time assembled.
+            group("Composed — what the LLM receives", (book.types ?? []).map(
+                (row) => ({ name: COMPOSED + row.title, title: row.title,
+                            chars: "rules + type" })));
+            const names = [...book.rules, ...image, ...book.types]
+                .map((r) => r.name);
+            existing = new Set(names);
+            if (!image.length) names.push(NEW_IMAGE);   // pickable, not on disk
+            // Keep a composed selection across a reload too — it is not in
+            // `names` (it is a view, not a file), and dropping back to the
+            // first rule every time the panel refreshes loses your place.
+            const selectable = [...names, ...(book.types ?? []).map(
+                (r) => COMPOSED + r.title)];
+            const pick = selectable.includes(keep) ? keep : names[0];
             if (pick) { picker.value = pick; await load(pick); }
             else setStatus("no prompts in this project's book", true);
         } catch (err) {
@@ -179,6 +257,7 @@ function promptPanel(node) {
     saveBtn.addEventListener("click", async () => {
         const project = projectOf(node);
         if (!project || !picker.value) return;
+        if (picker.value.startsWith(COMPOSED)) return;   // a view, not a file
         saveBtn.disabled = true;
         try {
             const res = await postJson("/symbiotica/prompt-write", {

@@ -2,7 +2,7 @@
 # ABOUTME: confined to <project>/prompts/, shared _rules/ blocks and type blocks.
 import os
 
-from .prompt_book import RULES_DIR, prompts_dir
+from .prompt_book import IMAGE_DIR, RULES_DIR, prompts_dir
 
 
 class PromptPathError(Exception):
@@ -16,8 +16,9 @@ def _root(project_path):
 def resolve(project_path, name):
     """The absolute path of one prompt file, or raise.
 
-    `name` is either a type block (`Chair.md`) or a shared rule
-    (`_rules/03-unified-lighting.md`) — nothing else. Containment is by
+    `name` is a type block (`Chair.md`), a shared rule
+    (`_rules/03-unified-lighting.md`) or an image-model block
+    (`_image/01-image-model.md`) — nothing else. Containment is by
     realpath, the same rule the reference browser applies, so a crafted name
     cannot climb out of the book and hand the editor an arbitrary file to
     overwrite. The extension is checked too: this editor writes prompts, and a
@@ -34,16 +35,20 @@ def resolve(project_path, name):
     if path != root and not path.startswith(root + os.sep):
         raise PromptPathError(f"outside the prompt book: {name!r}")
     parent = os.path.dirname(path)
-    if parent not in (root, os.path.join(root, RULES_DIR)):
+    folders = (root, os.path.join(root, RULES_DIR),
+               os.path.join(root, IMAGE_DIR))
+    if parent not in folders:
         raise PromptPathError(
-            f"prompts live in the book or its {RULES_DIR}/ folder: {name!r}")
+            f"prompts live in the book or its {RULES_DIR}/ and {IMAGE_DIR}/ "
+            f"folders: {name!r}")
     return path
 
 
 def list_book(project_path):
     """Every editable block: the shared rules first, in composition order, then
-    the per-type blocks. Each entry carries the size so the panel can show what
-    it is about to open without reading all of them."""
+    the image-model blocks, then the per-type blocks. Each entry carries the
+    size so the panel can show what it is about to open without reading all of
+    them."""
     root = _root(project_path)
 
     def entries(directory, prefix):
@@ -64,6 +69,7 @@ def list_book(project_path):
 
     return {
         "rules": entries(os.path.join(root, RULES_DIR), f"{RULES_DIR}/"),
+        "image": entries(os.path.join(root, IMAGE_DIR), f"{IMAGE_DIR}/"),
         "types": entries(root, ""),
     }
 

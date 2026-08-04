@@ -8,15 +8,17 @@ from pipeline.prompt_store import (PromptPathError, list_book, read_block,
                                    resolve, write_block)
 
 
-def _book(tmp_path, rules=None, **types):
+def _book(tmp_path, rules=None, image=None, **types):
     d = tmp_path / "prompts"
     d.mkdir()
     for stem, text in types.items():
         (d / f"{stem}.md").write_text(text)
-    if rules:
-        r = d / "_rules"
+    for folder, files in (("_rules", rules), ("_image", image)):
+        if not files:
+            continue
+        r = d / folder
         r.mkdir()
-        for stem, text in rules.items():
+        for stem, text in files.items():
             (r / f"{stem}.md").write_text(text)
     return str(tmp_path)
 
@@ -97,6 +99,28 @@ def test_a_trailing_newline_is_added_once(tmp_path):
     p = _book(tmp_path, **{"Chair": "C"})
     write_block(p, "Chair.md", "TEXT\n")
     assert read_block(p, "Chair.md") == "TEXT\n"
+
+
+def test_lists_the_image_blocks_as_their_own_group(tmp_path):
+    p = _book(tmp_path, rules={"01-a": "A"}, image={"01-image-model": "STYLE"},
+              **{"Chair": "C"})
+    book = list_book(p)
+    assert [e["name"] for e in book["image"]] == ["_image/01-image-model.md"]
+    # And they stay out of the other two groups — the panel shows three lists.
+    assert [e["name"] for e in book["types"]] == ["Chair.md"]
+    assert [e["name"] for e in book["rules"]] == ["_rules/01-a.md"]
+
+
+def test_a_book_with_no_image_folder_lists_an_empty_group(tmp_path):
+    p = _book(tmp_path, **{"Chair": "C"})
+    assert list_book(p)["image"] == []
+
+
+def test_an_image_block_can_be_read_and_created(tmp_path):
+    p = _book(tmp_path, **{"Chair": "C"})
+    write_block(p, "_image/01-image-model.md", "FLAT CEL SHADING")
+    assert read_block(p, "_image/01-image-model.md") == "FLAT CEL SHADING\n"
+    assert os.path.isdir(str(tmp_path / "prompts" / "_image"))
 
 
 def test_backups_are_not_listed_as_blocks(tmp_path):

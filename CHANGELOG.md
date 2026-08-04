@@ -6,6 +6,46 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.9
+
+**Node change, and saved workflows keep working.** `Symbiotica Prompt Book`
+gains a second output, `image_system_prompt`, appended after `project`. Nothing
+is removed, renamed or reordered, so existing links still land where they did.
+
+### Added
+
+- **The image model's system prompt now lives in the prompt book.** The book
+  held the architect prompts — what an asset IS — while the rules that decide
+  how it is DRAWN sat outside it, pasted into whatever node needed them and
+  copied by hand between projects. Style, light and camera are the part that
+  must not drift between one asset type and the next, and they were the part
+  with no home.
+
+  Blocks in `<project>/prompts/_image/` compose in filename order, the same way
+  `_rules/` already does, and the Prompt Book panel edits them in a group of
+  their own — a project with no image block yet is offered an empty one, which
+  the first save creates along with the folder. The node emits the composed
+  text on `image_system_prompt`, ready to wire into the image node. A project with no `_image/` folder yields an
+  empty string rather than an error, because the node that carries the output
+  is also the editor those blocks are written in — it has to load before they
+  exist.
+
+  Editing a block re-fires the image node: the node now fingerprints the
+  `_image/` folder, so a tightened lighting rule reaches the next queue instead
+  of being served from cache.
+
+- **The panel can show the prompt as the LLM receives it.** Every entry in the
+  book was one block, and nothing showed the assembled document — so after
+  editing a shared rule the only way to confirm it had landed was to queue a
+  run and read the model's output backwards.
+
+  A `Composed` group lists each asset type again, this time assembled: shared
+  rules, then that type's block, byte-for-byte what `Category Prompts` resolves.
+  The block names and their sizes sit above the text rather than inside it, so
+  the preview stays exactly what the model sees. It is read-only — a composed
+  document saved back would bake every shared rule into the type block, and the
+  next compose would then state each rule twice.
+
 ## 2026.8.8
 
 **No node change.** No node is added, removed or renamed, and no input or output

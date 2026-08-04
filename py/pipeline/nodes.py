@@ -37,7 +37,8 @@ from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import (assets_by_category, dataset_dir,
                            pick_reference_per_category, save_paths)
 from .project_layout import project_root_of
-from .prompt_book import prompts_dir, resolve_category_prompts
+from .prompt_book import (compose_image_prompt, image_dir, prompts_dir,
+                          resolve_category_prompts)
 from .texture_pack import PackSettings
 
 OrderEvents = io.Custom("SYMBIOTICA_ORDER_EVENTS")
@@ -1187,8 +1188,33 @@ class SymbioticaPromptBook(io.ComfyNode):
                                  tooltip="The project whose book this panel is "
                                          "editing — wire into Category Prompts "
                                          "so both read the same one."),
+                io.String.Output(display_name="image_system_prompt",
+                                 tooltip="The blocks in <project>/prompts/"
+                                         "_image/, joined in filename order — "
+                                         "the style, light and camera rules the "
+                                         "IMAGE model needs. Wire into the "
+                                         "image node's system prompt. Empty "
+                                         "until the book has an image block."),
             ],
         )
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", order=None):
+        # An edited image block must re-fire the image node, and ComfyUI would
+        # otherwise serve the string it cached on the first queue. Same shape
+        # and same caveats as Category Prompts: only WIDGET values are real
+        # here, so the wired order cannot be read, and this must never raise —
+        # a raise sets is_changed to NaN, which folds into every descendant's
+        # cache key and re-bills the image model on every queue.
+        root = image_dir(str(project_path or "").strip())
+        h = hashlib.sha256(root.encode())
+        try:
+            for name in sorted(os.listdir(root)):
+                st = os.stat(os.path.join(root, name))
+                h.update(f"{name}:{st.st_mtime_ns}:{st.st_size}".encode())
+        except OSError:
+            pass
+        return h.hexdigest()
 
     @classmethod
     def execute(cls, project_path="", order=None) -> io.NodeOutput:
@@ -1197,7 +1223,10 @@ class SymbioticaPromptBook(io.ComfyNode):
             raise ValueError(
                 "no project folder to read the prompt book from — wire an "
                 "order, or set project_path")
-        return io.NodeOutput(project)
+        # Empty when the project has no _image/ blocks yet, rather than a
+        # raise: this node is the editor those blocks are written in, so it has
+        # to run before they exist.
+        return io.NodeOutput(project, compose_image_prompt(project))
 
 
 class SymbioticaDatasetReference(io.ComfyNode):
