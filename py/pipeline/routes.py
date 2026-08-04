@@ -766,7 +766,17 @@ async def pick_import(request):
     if not dir_path:
         return web.json_response({"error": "no buffer for that node"}, status=400)
 
-    folder = _expand_project(str(body.get("folder") or "").strip())
+    folder = str(body.get("folder") or "").strip()
+    # A relative value is what Order Assets' `save_paths` emits, so resolve it
+    # the same way the node does rather than refusing it here.
+    if folder and not os.path.isabs(folder):
+        try:
+            import folder_paths
+            folder = os.path.normpath(
+                os.path.join(folder_paths.get_output_directory(), folder))
+        except Exception:
+            pass
+    folder = _expand_project(folder)
     if not folder:
         return web.json_response(
             {"error": "type a folder into the node's `folder` field first"},

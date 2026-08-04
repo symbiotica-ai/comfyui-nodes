@@ -409,3 +409,83 @@ class TestOnePickerPerPass:
         run(nodes_mod, images=[frames(0.3)], asset=["cake"], category=["Food"],
             phase=["edit"])
         assert buffer_of(nodes_mod, tmp_path)[0]["group"] == "Food / cake"
+
+
+class TestTheFolderComesFromTheWireNotFromTyping:
+    """`save_paths` from Order Assets is `month/feature/category/asset` — the
+    tail of the tree the renders are already filed in — and it moves with the
+    selected asset. Typing that path by hand goes stale the moment the asset
+    changes."""
+
+    def renders(self, tmp_path, rel, names=("a.png",), colour=10):
+        from PIL import Image
+        folder = tmp_path / "output" / rel
+        folder.mkdir(parents=True, exist_ok=True)
+        for i, name in enumerate(names):
+            Image.new("RGB", (6, 6), (colour + i, 0, 0)).save(folder / name)
+        return folder
+
+    def test_a_relative_save_path_resolves_under_the_output_directory(self, nodes_mod,
+                                                                      tmp_path):
+        self.renders(tmp_path, "October/Mini 3/Food/Frankencrisps",
+                     ("a.png", "b.png"))
+        run(nodes_mod, folder=["October/Mini 3/Food/Frankencrisps"])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 2
+
+    def test_the_tags_come_off_that_path(self, nodes_mod, tmp_path):
+        self.renders(tmp_path, "October/Mini 3/Food/Frankencrisps")
+        run(nodes_mod, folder=["October/Mini 3/Food/Frankencrisps"])
+        entry = buffer_of(nodes_mod, tmp_path)[0]
+        assert entry["group"] == "Mini 3 / Food / Frankencrisps"
+
+    def test_switching_asset_reads_the_new_folder(self, nodes_mod, tmp_path):
+        """The whole point of wiring it: no field to go back and edit."""
+        self.renders(tmp_path, "Oct/Ev/Food/Frankencrisps", colour=10)
+        self.renders(tmp_path, "Oct/Ev/Food/Pops", colour=200)
+        run(nodes_mod, folder=["Oct/Ev/Food/Frankencrisps"])
+        run(nodes_mod, folder=["Oct/Ev/Food/Pops"])
+        assert {e["asset"] for e in buffer_of(nodes_mod, tmp_path)} == \
+            {"Frankencrisps", "Pops"}
+
+    def test_a_fanned_out_lane_reads_every_asset_folder_once(self, nodes_mod,
+                                                             tmp_path):
+        self.renders(tmp_path, "Oct/Ev/Food/A", colour=10)
+        self.renders(tmp_path, "Oct/Ev/Food/B", colour=200)
+        run(nodes_mod, folder=["Oct/Ev/Food/A", "Oct/Ev/Food/B",
+                               "Oct/Ev/Food/A"])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 2
+
+    def test_an_unchanged_folder_is_not_read_twice(self, nodes_mod, tmp_path):
+        """Re-reading four hundred renders on every run means four hundred PIL
+        opens for nothing."""
+        from pipeline.pick_buffer import buffer_dir, read_marks
+        self.renders(tmp_path, "Oct/Ev/Food/A")
+        run(nodes_mod, folder=["Oct/Ev/Food/A"])
+        marks = read_marks(buffer_dir(str(tmp_path / "output"), "7"))
+        assert len(marks) == 1
+        run(nodes_mod, folder=["Oct/Ev/Food/A"])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1
+
+    def test_a_new_render_in_a_read_folder_is_picked_up(self, nodes_mod, tmp_path):
+        self.renders(tmp_path, "Oct/Ev/Food/A", ("a.png",), colour=10)
+        run(nodes_mod, folder=["Oct/Ev/Food/A"])
+        self.renders(tmp_path, "Oct/Ev/Food/A", ("b.png",), colour=200)
+        run(nodes_mod, folder=["Oct/Ev/Food/A"])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 2
+
+    def test_a_pinned_picker_reads_only_its_own_pass(self, nodes_mod, tmp_path):
+        self.renders(tmp_path, "Oct/Ev/Food/A/base", colour=10)
+        self.renders(tmp_path, "Oct/Ev/Food/A/export", colour=200)
+        run(nodes_mod, folder=["Oct/Ev/Food/A"], phase=["export"])
+        entries = buffer_of(nodes_mod, tmp_path)
+        assert len(entries) == 1 and entries[0]["phase"] == "export"
+
+    def test_a_folder_that_is_not_there_does_not_fail_the_graph(self, nodes_mod,
+                                                                tmp_path):
+        out = run(nodes_mod, folder=["Oct/Ev/Food/Nothing"])
+        assert out.args[0] == []
+        assert buffer_of(nodes_mod, tmp_path) == []
+
+    def test_no_folder_reads_nothing(self, nodes_mod, tmp_path):
+        run(nodes_mod, folder=[""], images=[frames(0.5)])
+        assert len(buffer_of(nodes_mod, tmp_path)) == 1

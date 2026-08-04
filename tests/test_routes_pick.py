@@ -203,14 +203,19 @@ class TestReadingAFolder:
         assert entry["group"] == "Mini 3 / Food / Frankencrisps"
         assert entry["month"] == "October"
 
-    def test_an_explicit_asset_wins_over_the_folder_name(self, env):
+    def test_an_explicit_value_wins_over_the_one_the_path_derived(self, env):
+        """The folder is under the output directory, so a month and a feature
+        are read off it either way; what is typed replaces only the fields it
+        names."""
         src = env.out / "renders" / "batch-04"
         self.make(str(src), ["a.png"])
         _run(env.routes.pick_import(_Req(body={
             "node_id": "7", "folder": str(src), "asset": "cake",
             "category": "Food", "role": "prep"})))
         entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
-        assert (entry["role"], entry["group"]) == ("prep", "Food / cake")
+        assert (entry["asset"], entry["category"], entry["role"]) == \
+            ("cake", "Food", "prep")
+        assert entry["month"] == "renders"
 
     def test_a_folder_outside_every_declared_root_is_refused(self, env, tmp_path):
         """Naming a folder is not what grants access to it."""
@@ -281,3 +286,17 @@ class TestAPinnedPickerReadsOnlyItsOwnPass:
             "node_id": "8", "folder": str(flat), "phase": "export"})))
         entry = _run(env.routes.pick_list(_Req(node_id="8")))["body"]["images"][0]
         assert entry["phase"] == "export"
+
+
+class TestARelativeFolderResolvesLikeSavePaths:
+    def test_a_save_path_shaped_value_is_read_under_the_output_directory(self, env):
+        """`save_paths` emits `month/feature/category/asset`, so the button and
+        the node must resolve the same string the same way."""
+        src = env.out / "October" / "Mini 3" / "Food" / "Cake"
+        os.makedirs(str(src), exist_ok=True)
+        Image.new("RGB", (6, 6), (12, 0, 0)).save(src / "a.png")
+        res = _run(env.routes.pick_import(_Req(body={
+            "node_id": "7", "folder": "October/Mini 3/Food/Cake"})))
+        assert res["body"]["added"] == 1
+        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
+        assert entry["group"] == "Mini 3 / Food / Cake"

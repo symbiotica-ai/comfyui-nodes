@@ -3261,6 +3261,27 @@ def _pil_to_tensor_keep_alpha(img):
     return torch.from_numpy(arr)[None, ...]
 
 
+def _pick_folders(values):
+    """The distinct folders a Pick node was pointed at, resolved and de-duped.
+
+    A relative value resolves under ComfyUI's output directory, because that is
+    what `save_paths` emits — `month/feature/category/asset`, the tail of the
+    tree the renders are already filed in. A fanned-out lane hands one folder
+    per asset, and the same folder repeated is one read, not several.
+    """
+    out = []
+    for value in values or ():
+        text = str(value or "").strip()
+        if not text:
+            continue
+        path = text if os.path.isabs(text) else os.path.join(
+            folder_paths.get_output_directory(), text)
+        path = os.path.normpath(path)
+        if path not in out:
+            out.append(path)
+    return out
+
+
 def _pick_ids(selection):
     """The ticked candidate ids from the node's stored selection.
 
@@ -3344,12 +3365,17 @@ class SymbioticaPick(io.ComfyNode):
                                         "and a stage is compared against its "
                                         "own alternatives."),
                 io.String.Input("folder", default="", optional=True,
-                                tooltip="A folder of images already on disk. "
-                                        "The node's 📁 button files everything "
-                                        "under it as candidates, so a picker "
-                                        "added after the work was generated "
-                                        "does not have to re-render it to have "
-                                        "something to choose from."),
+                                tooltip="Where this asset's renders are already "
+                                        "filed. Wire Order Assets' `save_paths` "
+                                        "in and it follows whichever asset is "
+                                        "selected — a relative path resolves "
+                                        "under ComfyUI's output directory. "
+                                        "Everything under it is read in as "
+                                        "candidates, so work that already "
+                                        "exists does not have to be generated "
+                                        "again to be chosen from. Re-read only "
+                                        "happens when the folder actually "
+                                        "changed."),
                 io.Combo.Input("phase", options=_PICK_PHASES, default="",
                                optional=True,
                                tooltip="Which pass of the pipeline this picker "
@@ -3434,7 +3460,8 @@ class SymbioticaPick(io.ComfyNode):
 
         from PIL import Image
 
-        from .pick_buffer import (add_image, buffer_dir, groups, list_entries,
+        from .pick_buffer import (add_image, buffer_dir, groups,
+                                  import_if_changed, list_entries,
                                   selected_paths)
 
         # Two hops, because a node executed outside a running ComfyUI has no
@@ -3460,6 +3487,10 @@ class SymbioticaPick(io.ComfyNode):
         # Belt and braces with check_lazy_status: `images` is already None when
         # collecting is off, but a stale value must never be able to file a
         # candidate the user did not ask to generate.
+        # Only the pass is forced onto an imported image; asset, category and
+        # the rest come from the folder structure, which is more specific than
+        # a single value shared by the whole run.
+        tag_defaults = {"phase": pass_name} if pass_name else {}
         items = _as_list(images) if bool(one(collect, True)) else []
         assets = _as_list(asset)
         cats = _as_list(category)
@@ -3474,6 +3505,19 @@ class SymbioticaPick(io.ComfyNode):
             for frame in _image_frames(item):
                 if add_image(dir_path, _tensor_to_pil(frame), tag=tag, at=stamp):
                     added += 1
+
+        # Whatever is already on disk for this asset, without a re-render and
+        # without a path typed by hand: `save_paths` names the folder and moves
+        # with the selected asset. Skipped outright when the folder has not
+        # changed since the last run, which is every run after the first.
+        for known in _pick_folders(_as_list(folder)):
+            try:
+                import_if_changed(dir_path, known, tag=tag_defaults,
+                                  at=stamp, only_phase=pass_name)
+            except OSError:
+                # A folder that cannot be read must not fail the graph; the
+                # candidates already collected are still worth showing.
+                pass
 
         entries = list_entries(dir_path)
         # Tell the canvas to redraw: the node's thumbnails are the whole point,

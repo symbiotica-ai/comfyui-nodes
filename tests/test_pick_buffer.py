@@ -480,3 +480,14 @@ class TestThePassAPickerIsPinnedTo:
         d = str(tmp_path / "buf")
         add_image(d, solid(), tag={"asset": "cake", "phase": "export"})
         assert list_entries(d)[0]["group"] == "cake"
+
+
+class TestBothSpellingsOfTheOutputDirectory:
+    def test_comfyuis_own_output_directory_anchors_too(self):
+        """A default install calls it `output`; matching only `outputs` would
+        silently reduce every derived tag to a bare asset name."""
+        assert tag_from_path("/root/output/Oct/Ev/Food/Cake") == {
+            "month": "Oct", "feature": "Ev", "category": "Food", "asset": "Cake"}
+
+    def test_the_studios_plural_spelling_still_anchors(self):
+        assert tag_from_path("/s/outputs/Oct/Ev/Food/Cake")["month"] == "Oct"

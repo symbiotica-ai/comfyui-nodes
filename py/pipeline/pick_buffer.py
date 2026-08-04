@@ -256,15 +256,20 @@ IMPORT_LIMIT = 400
 # Renders are filed `outputs/<month>/<event>/<category>/<recipe>/…`, so the path
 # already says what an image is — deriving the tag from it beats asking for the
 # same four facts to be typed again beside a folder that states them.
-OUTPUTS_ANCHOR = "outputs"
+# Both spellings: a default ComfyUI install calls its directory `output`, and
+# this studio's volume calls it `outputs`. Matching only one silently turns
+# every derived tag into a bare asset name on the other.
+OUTPUTS_ANCHORS = ("outputs", "output")
 _PATH_KEYS = ("month", "feature", "category", "asset", "phase")
 
 
-def tag_from_path(folder: str, rel: str = "", anchor: str = OUTPUTS_ANCHOR) -> dict:
+def tag_from_path(folder: str, rel: str = "", anchors=OUTPUTS_ANCHORS) -> dict:
     """month / feature / category / asset, read off where a render is filed.
 
     The anchor is matched at its LAST occurrence, so a studio that happens to
-    have an `outputs` higher up does not shift every field by one. Segments
+    have an `outputs` higher up does not shift every field by one. Both
+    spellings count: ComfyUI's own directory is `output`, this studio's is
+    `outputs`. Segments
     below the fourth are ignored rather than folded into the asset: a deeper
     tree means something this does not know about, and inventing a name for it
     would put one asset under two labels.
@@ -275,9 +280,11 @@ def tag_from_path(folder: str, rel: str = "", anchor: str = OUTPUTS_ANCHOR) -> d
     """
     parts = [p for p in os.path.normpath(folder).split(os.sep) if p]
     sub = [p for p in os.path.dirname(rel or "").replace(os.sep, "/").split("/") if p]
+    names = {a.lower() for a in
+             ((anchors,) if isinstance(anchors, str) else anchors)}
     at = None
     for index, part in enumerate(parts):
-        if part.lower() == anchor.lower():
+        if part.lower() in names:
             at = index
     if at is None:
         deepest = sub[-1] if sub else (parts[-1] if parts else "")
@@ -366,3 +373,71 @@ def _images_under(folder: str) -> list[str]:
             rel = os.path.relpath(os.path.join(dirpath, name), folder)
             out.append(rel.replace(os.sep, "/"))
     return sorted(out)
+
+
+IMPORT_MARKS = "_imports.json"
+
+
+def folder_signature(folder: str) -> str:
+    """A cheap fingerprint of a folder's images: how many, and the newest mtime.
+
+    Stat only — no image is opened. This is what makes an automatic import
+    affordable on every run: re-reading a folder of four hundred renders means
+    four hundred PIL opens and thumbnails, while deciding NOT to re-read it
+    costs one walk of directory entries.
+    """
+    exts = {".png", ".jpg", ".jpeg", ".webp"}
+    count, newest = 0, 0.0
+    for dirpath, dirnames, filenames in os.walk(folder):
+        dirnames[:] = [d for d in dirnames
+                       if not d.startswith(".") and d != BUFFER_ROOT]
+        for name in filenames:
+            if name.startswith(".") or name.endswith(THUMB_SUFFIX):
+                continue
+            if os.path.splitext(name)[1].lower() not in exts:
+                continue
+            count += 1
+            try:
+                newest = max(newest, os.stat(os.path.join(dirpath, name)).st_mtime)
+            except OSError:
+                pass
+    return f"{count}:{newest:.0f}"
+
+
+def _marks_path(dir_path: str) -> str:
+    return os.path.join(dir_path, IMPORT_MARKS)
+
+
+def read_marks(dir_path: str) -> dict:
+    try:
+        with open(_marks_path(dir_path), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def import_if_changed(dir_path: str, folder: str, **kwargs) -> dict | None:
+    """Import `folder` unless it looks exactly as it did last time.
+
+    None means "nothing to do", which is the normal answer on every run after
+    the first. Recording the mark only after a successful import means an
+    interrupted read is retried rather than remembered as done.
+    """
+    if not folder or not os.path.isdir(folder):
+        return None
+    signature = folder_signature(folder)
+    marks = read_marks(dir_path)
+    if marks.get(folder) == signature:
+        return None
+    result = import_folder(dir_path, folder, **kwargs)
+    marks[folder] = signature
+    os.makedirs(dir_path, exist_ok=True)
+    tmp = _marks_path(dir_path) + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(marks, fh)
+        os.replace(tmp, _marks_path(dir_path))
+    except OSError:
+        pass
+    return result
