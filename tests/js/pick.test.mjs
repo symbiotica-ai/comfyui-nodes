@@ -202,13 +202,23 @@ test("clear sends no ids, which the route reads as the whole buffer", async () =
     assert.deepEqual(ticksOf(node), []);
 });
 
-test("the node says so when it is not fetching", async () => {
-    // A run that adds nothing looks exactly like a generator that failed.
-    const on = await panelNode([], [CAKE_A], { get_new: true });
-    assert.equal(buttonsSaying(on, "not fetching").length, 0);
-    const off = await panelNode([], [CAKE_A], { get_new: false });
-    assert.equal(buttonsSaying(off, "not fetching").length, 1);
+test("ticks belonging to another asset are shown as not being sent", async () => {
+    // Three ticked thumbnails turning into six images is what this prevents.
+    const node = await panelNode([], [CAKE_A, CAKE_B, PIE],
+                                 { selection: JSON.stringify(["aaa", "bbb", "ccc"]) });
+    // The panel opens on PIE's group, so aaa and bbb are ticked elsewhere.
+    assert.equal(buttonsSaying(node, "2 elsewhere ✕").length, 1);
+    fire(buttonsSaying(node, "2 elsewhere ✕")[0], "click");
+    assert.deepEqual(ticksOf(node), ["ccc"]);
 });
+
+test("no stray ticks means no such button", async () => {
+    const node = await panelNode([], [CAKE_A, CAKE_B],
+                                 { selection: JSON.stringify(["aaa"]) });
+    assert.equal(walk(listOf(node)).filter(
+        (e) => /elsewhere/.test(String(e.textContent))).length, 0);
+});
+
 
 test("the thumbnail size buttons change the tiles", async () => {
     const node = await panelNode([], [CAKE_A]);

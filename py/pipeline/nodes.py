@@ -3465,18 +3465,15 @@ class SymbioticaPick(io.ComfyNode):
                                        "read when `collect` is on — with it "
                                        "off this wire is never evaluated, so "
                                        "nothing upstream runs."),
-                io.Boolean.Input("get_new", default=True,
-                                 tooltip="ON: go and ask whatever is wired to "
-                                         "`images` for pictures and add them "
-                                         "here. If that is a generator, this "
-                                         "is what makes it render — and what "
-                                         "it costs. OFF: no generator is asked "
-                                         "for anything; the node hands on the "
-                                         "images you ticked, free. Another "
-                                         "Pick upstream is always read either "
-                                         "way — taking its picks costs "
-                                         "nothing, so a chain of pickers works "
-                                         "with this off the whole way down."),
+                # Kept only so the widget positions of graphs saved before
+                # this node stopped fetching still line up; it does nothing.
+                # The web extension hides it.
+                io.Boolean.Input("get_new", default=False,
+                                 tooltip="Unused. This node never causes a "
+                                         "render: it reads what is already on "
+                                         "disk, and takes images from another "
+                                         "Pick. Kept so older saved workflows "
+                                         "keep their widget positions."),
                 io.String.Input("asset", default="", optional=True,
                                 tooltip="The asset these candidates belong to "
                                         "— tags them, and the node opens on "
@@ -3620,17 +3617,14 @@ class SymbioticaPick(io.ComfyNode):
         BEFORE it. Declining `images` here means the generator is never asked,
         because a lazy input that is not requested is never computed.
         """
-        one = SymbioticaCategoryPrompts._one
         if cls._images_wired() is False:
             return []
-        # `get_new` is about letting a GENERATOR run, not about refusing to
-        # speak to another picker. Reading from a picker upstream costs
-        # nothing — it serves images it already holds, or declines its own
-        # input in turn — so a chain of pickers works with fetching off all
-        # the way down, which is the only way to route picks without paying
-        # for a render.
-        if not bool(one(get_new, True)) \
-                and cls._images_source_class() != "SymbioticaPick":
+        # This node NEVER causes a render. Asking for a wire is what makes
+        # whatever is behind it run, so the only wire ever asked for is one
+        # coming from another picker — that costs nothing, because it hands
+        # over images it already holds. Everything a generator made is read
+        # off disk instead, from the folder it was saved to.
+        if cls._images_source_class() != "SymbioticaPick":
             return []
         return ["images"] if _unevaluated(images) else []
 
@@ -3643,8 +3637,7 @@ class SymbioticaPick(io.ComfyNode):
         from PIL import Image
 
         from .pick_buffer import (add_image, buffer_dir, group_key, groups,
-                                  import_if_changed, list_entries,
-                                  selected_paths)
+                                  import_if_changed, list_entries)
 
         # Two hops, because a node executed outside a running ComfyUI has no
         # `hidden` at all: an absent id must land in the "unknown" buffer, not
@@ -3673,9 +3666,10 @@ class SymbioticaPick(io.ComfyNode):
         # the rest come from the folder structure, which is more specific than
         # a single value shared by the whole run.
         tag_defaults = {"phase": pass_name} if pass_name else {}
-        from_picker = cls._images_source_class() == "SymbioticaPick"
-        items = _as_list(images) if (bool(one(get_new, True)) or from_picker) \
-            else []
+        # Only ever from another picker; a generator's output is read from its
+        # folder, never pulled through the wire.
+        items = _as_list(images) \
+            if cls._images_source_class() == "SymbioticaPick" else []
         assets = _as_list(asset)
         cats = _as_list(category)
         parts = _as_list(role)
@@ -3728,7 +3722,23 @@ class SymbioticaPick(io.ComfyNode):
             "current": current if current != "untagged" else "",
         })
 
-        paths = selected_paths(dir_path, _pick_ids(one(selection, "")))
+        # Only what is ticked AND on screen. Ticks survive a switch to another
+        # asset, so a picker that has been used for two assets holds ticks for
+        # both — and emitting the invisible ones means three ticked thumbnails
+        # producing six images, half of them from an asset that is not even
+        # being worked on. What you can see is what comes out.
+        wanted = set(_pick_ids(one(selection, "")))
+        in_view = []
+        for entry in entries:
+            if entry.get("id") not in wanted:
+                continue
+            if pass_name and str(entry.get("phase", "")) != pass_name:
+                continue
+            if current and current != "untagged" \
+                    and str(entry.get("group", "")) != current:
+                continue
+            in_view.append(entry["path"])
+        paths = in_view
         # Nothing ticked is a legitimate state, not a failure: it is what every
         # collecting run looks like before the images have been looked at. An
         # empty list simply runs nothing downstream, where raising here would

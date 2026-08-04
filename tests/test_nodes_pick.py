@@ -39,8 +39,18 @@ def frames(*values, size=4, channels=3):
     return batch
 
 
-def run(nodes, node_id="7", **kw):
-    nodes.SymbioticaPick.hidden = types.SimpleNamespace(unique_id=node_id)
+def run(nodes, node_id="7", source="SymbioticaPick", **kw):
+    """Execute the node with `images` coming from another picker by default.
+
+    That is the only wire this node ever reads — a generator's output reaches
+    it from disk, never through the wire — so a test that wants images to be
+    recorded has to say where they came from.
+    """
+    nodes.SymbioticaPick.hidden = types.SimpleNamespace(
+        unique_id=node_id,
+        prompt={node_id: {"inputs": {"images": ["99", 0]}},
+                "99": {"class_type": source}},
+        dynprompt=None)
     return nodes.SymbioticaPick.execute(**kw)
 
 
@@ -248,22 +258,21 @@ class TestLookingAtAPickMustNotPayForIt:
         images = next(i for i in schema.inputs if i.id == "images")
         assert images.lazy is True
 
-    def test_collecting_asks_for_the_wire(self, nodes_mod):
-        assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=None, get_new=[True]) == ["images"]
-
-    def test_not_collecting_never_asks_for_the_wire(self, nodes_mod):
+    def test_a_generator_wire_is_never_asked_for(self, nodes_mod):
         """The whole point: an input that is not requested is never computed,
-        so nothing upstream runs."""
-        assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=None, get_new=[False]) == []
+        so the generator never runs. This node causes no renders at all."""
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id="7",
+            prompt={"7": {"inputs": {"images": ["9", 0]}},
+                    "9": {"class_type": "GeminiNanoBanana2V2"}}, dynprompt=None)
+        assert nodes_mod.SymbioticaPick.check_lazy_status(images=None) == []
 
     def test_an_already_resolved_wire_is_not_asked_for_again(self, nodes_mod):
         assert nodes_mod.SymbioticaPick.check_lazy_status(
             images=[frames(0.1)], get_new=[True]) == []
 
-    def test_not_collecting_records_nothing(self, nodes_mod, tmp_path):
-        run(nodes_mod, images=[frames(0.1)], get_new=[False])
+    def test_a_generators_images_are_never_recorded(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=[frames(0.1)], source="GeminiNanoBanana2V2")
         assert buffer_of(nodes_mod, tmp_path) == []
 
     def test_not_collecting_still_sends_the_picks_on(self, nodes_mod, tmp_path):
@@ -294,15 +303,16 @@ class TestAskingForTheWireOnlyWhenThereIsOne:
         assert nodes_mod._unevaluated([frames(0.1)]) is False
         assert nodes_mod._unevaluated([]) is False
 
-    def _wire(self, nodes_mod, images):
+    def _wire(self, nodes_mod, images, source="SymbioticaPick"):
         node = {"inputs": {} if images is None else {"images": images}}
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
-            unique_id="7", prompt={"7": node}, dynprompt=None)
+            unique_id="7",
+            prompt={"7": node, "9": {"class_type": source}}, dynprompt=None)
 
-    def test_a_connected_but_unevaluated_wire_is_requested(self, nodes_mod):
+    def test_a_connected_but_unevaluated_picker_wire_is_requested(self, nodes_mod):
         self._wire(nodes_mod, ["9", 0])
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), get_new=[True]) == ["images"]
+            images=(None,)) == ["images"]
 
     def test_an_unconnected_wire_is_never_requested(self, nodes_mod):
         """A picker sitting on the canvas before anything is wired to it is an
@@ -314,20 +324,21 @@ class TestAskingForTheWireOnlyWhenThereIsOne:
     def test_dynprompt_answers_when_the_raw_prompt_is_absent(self, nodes_mod):
         class _Dyn:
             def get_node(self, node_id):
-                return {"inputs": {"images": ["9", 0]}} if node_id == "7" else None
+                if node_id == "7":
+                    return {"inputs": {"images": ["9", 0]}}
+                if node_id == "9":
+                    return {"class_type": "SymbioticaPick"}
+                return None
 
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
             unique_id="7", prompt=None, dynprompt=_Dyn())
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), get_new=[True]) == ["images"]
+            images=(None,)) == ["images"]
 
-    def test_an_unanswerable_lookup_still_asks_rather_than_collecting_nothing(
-            self, nodes_mod):
-        """Silently never collecting is the worse failure of the two: it looks
-        like a working run that produced nothing."""
+    def test_an_unanswerable_lookup_asks_for_nothing(self, nodes_mod):
+        """Guessing wrong here costs a render, so silence means no."""
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(unique_id=None)
-        assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), get_new=[True]) == ["images"]
+        assert nodes_mod.SymbioticaPick.check_lazy_status(images=(None,)) == []
 
     def test_a_broken_prompt_lookup_does_not_escape(self, nodes_mod):
         class _Boom:
@@ -336,13 +347,11 @@ class TestAskingForTheWireOnlyWhenThereIsOne:
 
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
             unique_id="7", prompt=None, dynprompt=_Boom())
-        assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), get_new=[True]) == ["images"]
+        assert nodes_mod.SymbioticaPick.check_lazy_status(images=(None,)) == []
 
-    def test_collecting_off_never_asks_even_with_a_wire(self, nodes_mod):
-        self._wire(nodes_mod, ["9", 0])
-        assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,), get_new=[False]) == []
+    def test_a_generator_behind_the_wire_is_never_asked(self, nodes_mod):
+        self._wire(nodes_mod, ["9", 0], source="GeminiNanoBanana2V2")
+        assert nodes_mod.SymbioticaPick.check_lazy_status(images=(None,)) == []
 
     def test_an_unevaluated_wire_records_nothing_rather_than_a_blank(self, nodes_mod,
                                                                      tmp_path):
@@ -574,10 +583,9 @@ class TestSeeingWhatWasAlreadyMade:
             order=[{"month": "Oct", "feature": "Mini 1"}])
         assert len(buffer_of(nodes_mod, tmp_path)) == 2
 
-    def test_fetching_off_still_takes_nothing_off_the_wire(self, nodes_mod,
-                                                           tmp_path):
+    def test_a_generator_wire_adds_nothing_even_so(self, nodes_mod, tmp_path):
         self.renders(tmp_path, "Oct/Mini 1/Food/Spookies")
-        run(nodes_mod, get_new=[False], images=[frames(0.5)],
+        run(nodes_mod, source="GeminiNanoBanana2V2", images=[frames(0.5)],
             asset=["Spookies"], category=["Food"],
             order=[{"month": "Oct", "feature": "Mini 1"}])
         # The folder's one image, and nothing from the wire.
@@ -628,3 +636,56 @@ class TestAChainOfPickersCostsNothing:
         self.wire(nodes_mod, "GeminiNanoBanana2V2")
         nodes_mod.SymbioticaPick.execute(images=[frames(0.3)], get_new=[False])
         assert buffer_of(nodes_mod, tmp_path) == []
+
+
+class TestWhatYouSeeIsWhatComesOut:
+    """"i have 3 assets selected in base and i get 6 fucking images 3 being
+    from somewhere else" — ticks survive a switch to another asset, so a picker
+    used for two assets held ticks for both and emitted all of them."""
+
+    def two_assets(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=[frames(0.1), frames(0.2)], asset=["Spookies"],
+            category=["Food"], order=[{"month": "Oct", "feature": "Mini 1"}])
+        run(nodes_mod, images=[frames(0.7), frames(0.8)], asset=["Frankencrisps"],
+            category=["Food"], order=[{"month": "Oct", "feature": "Mini 3"}])
+        by_asset = {}
+        for e in buffer_of(nodes_mod, tmp_path):
+            by_asset.setdefault(e["asset"], []).append(e["id"])
+        return by_asset
+
+    def test_only_the_ticks_of_the_asset_being_worked_on_leave(self, nodes_mod,
+                                                               tmp_path):
+        by_asset = self.two_assets(nodes_mod, tmp_path)
+        every_tick = by_asset["Spookies"] + by_asset["Frankencrisps"]
+        out = run(nodes_mod, asset=["Spookies"], category=["Food"],
+                  order=[{"month": "Oct", "feature": "Mini 1"}],
+                  selection=[json.dumps(every_tick)])
+        assert len(out.args[0]) == len(by_asset["Spookies"]) == 2
+
+    def test_switching_asset_switches_which_ticks_are_emitted(self, nodes_mod,
+                                                              tmp_path):
+        by_asset = self.two_assets(nodes_mod, tmp_path)
+        every_tick = by_asset["Spookies"] + by_asset["Frankencrisps"]
+        out = run(nodes_mod, asset=["Frankencrisps"], category=["Food"],
+                  order=[{"month": "Oct", "feature": "Mini 3"}],
+                  selection=[json.dumps(every_tick)])
+        assert len(out.args[0]) == 2
+
+    def test_a_pinned_pass_narrows_it_further(self, nodes_mod, tmp_path):
+        run(nodes_mod, images=[frames(0.1)], asset=["Cake"], category=["Food"],
+            phase=["base"], order=[{"month": "Oct", "feature": "Ev"}])
+        run(nodes_mod, images=[frames(0.9)], asset=["Cake"], category=["Food"],
+            phase=["edit"], order=[{"month": "Oct", "feature": "Ev"}])
+        ids = [e["id"] for e in buffer_of(nodes_mod, tmp_path)]
+        out = run(nodes_mod, asset=["Cake"], category=["Food"], phase=["edit"],
+                  order=[{"month": "Oct", "feature": "Ev"}],
+                  selection=[json.dumps(ids)])
+        assert len(out.args[0]) == 1
+
+    def test_with_no_context_every_tick_still_leaves(self, nodes_mod, tmp_path):
+        """An untagged picker has no asset to narrow to, and silently emitting
+        nothing would be worse than emitting what was ticked."""
+        run(nodes_mod, images=[frames(0.1), frames(0.2)])
+        ids = [e["id"] for e in buffer_of(nodes_mod, tmp_path)]
+        out = run(nodes_mod, selection=[json.dumps(ids)])
+        assert len(out.args[0]) == 2

@@ -245,8 +245,25 @@ function pickPanel(node) {
         bar.append(el("span", "flex:1;min-width:0;",
                       images.length
                           ? `${visible} shown · ${tickedHere} ticked`
-                          + (ticks.size > tickedHere ? ` (${ticks.size} total)` : "")
                           : `no candidates yet (node ${node.id})`));
+        // Ticks made while another asset was on screen stay on the node but
+        // are NOT emitted. Saying only "6 total" was what let three ticked
+        // thumbnails turn into six images.
+        const elsewhere = ticks.size - tickedHere;
+        if (elsewhere > 0) {
+            const drop = el("button", ghostButtonCss + "padding:1px 7px;flex:none;",
+                            `${elsewhere} elsewhere ✕`);
+            drop.className = "sym-btn";
+            drop.title = `${elsewhere} tick(s) belong to other assets and are `
+                + "not sent on. Click to forget them.";
+            drop.addEventListener("pointerdown", (e) => e.stopPropagation());
+            drop.addEventListener("click", () => {
+                const here = new Set(shown().map((i) => i.id));
+                writeTicks(node, new Set([...ticks].filter((t) => here.has(t))));
+                render();
+            });
+            bar.appendChild(drop);
+        }
 
         const phase = phaseOf(node);
         if (phase) {
@@ -255,19 +272,6 @@ function pickPanel(node) {
                 + `background:${HUB.surface1};color:${HUB.inkSubtle};`
                 + `border:1px solid ${HUB.hairline};`, phase);
             chip.title = `this picker only takes in and shows ${phase} images`;
-            bar.appendChild(chip);
-        }
-
-        // With `get_new` off the wire above is never evaluated, so a run adds
-        // nothing here. Say so on the node: silence looks identical to a
-        // generator that failed.
-        if (widgetOf(node, "get_new")?.value === false) {
-            const chip = el("div",
-                `flex:none;padding:1px 6px;border-radius:3px;font:10px ${HUB.font};`
-                + `background:${HUB.surface1};color:${HUB.inkTertiary};`
-                + `border:1px solid ${HUB.hairline};`, "not fetching");
-            chip.title = "get_new is off — running this adds nothing and asks "
-                + "nothing upstream, so it costs no render";
             bar.appendChild(chip);
         }
 
@@ -558,7 +562,7 @@ registerSymbioticaExtension(app, {
             onNodeCreated?.apply(this, arguments);
             // Canvas state, not things to type into: collapse them (a bare
             // .hidden is ignored by the classic canvas widgets).
-            for (const name of ["selection", "view"]) {
+            for (const name of ["selection", "view", "get_new"]) {
                 const w = widgetOf(this, name);
                 if (w) { w.hidden = true; w.computeSize = () => [0, -4]; }
             }
