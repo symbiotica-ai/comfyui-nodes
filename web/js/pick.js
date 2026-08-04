@@ -1,6 +1,6 @@
-// ABOUTME: Symbiotica Pick node UI — every candidate the node has been handed,
-// ABOUTME: drawn as thumbnails on the node body, filtered to the asset being
-// ABOUTME: worked on, ticked to choose which ones travel downstream.
+// ABOUTME: Symbiotica Pick node UI — the asset's own render folder listed on the
+// ABOUTME: node body as numbered thumbnails, ticked to choose which files travel
+// ABOUTME: downstream. It holds nothing: every tile is a file already on disk.
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
@@ -10,40 +10,17 @@ import { el, emptyState, errorLine } from "./browser_chrome.js";
 const NODE_CLASS = "SymbioticaPick";
 const MIN_NODE_W = 340;
 const PANEL_MAX = 720;      // past this the grid scrolls instead of growing the node
-const ALL = "__all__";
 const SIZES = { S: 64, M: 108, L: 184 };
 const DEFAULT_SIZE = "M";
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
 
-function upstreamNode(node, inputName) {
-    const input = node?.inputs?.find((i) => i.name === inputName);
-    if (!input || input.link == null) return null;
-    const link = app.graph.links[input.link];
-    return link ? app.graph.getNodeById(link.origin_id) : null;
-}
-
-// The asset an upstream Asset Focus is set to. The `asset` input is wired, so
-// it has no widget value of its own to read — but the node feeding it does,
-// and reading it there is what lets the grid follow a change immediately
-// rather than only after the next run.
-function focusAsset(node) {
-    let cur = upstreamNode(node, "asset");
-    for (let hop = 0; hop < 6 && cur; hop++) {
-        if (cur.comfyClass === "SymbioticaAssetFocus") {
-            return widgetOf(cur, "asset")?.value?.trim?.() || "";
-        }
-        const wired = (cur.inputs ?? []).filter((i) => i.link != null);
-        if (wired.length !== 1) return "";
-        cur = upstreamNode(cur, wired[0].name);
-    }
-    return "";
-}
-
 // Keep the /api/ prefix: ComfyUI mirrors custom routes under /api/ locally AND
 // the Modal gateway proxies /api/* only, so a root-level /symbiotica/* would
 // blank every thumbnail there.
-const imageUrl = (path) => api.apiURL(
+const thumbUrl = (path, px) => api.apiURL(
+    `/symbiotica/pick-thumb?px=${px}&path=${encodeURIComponent(path)}`);
+const fullUrl = (path) => api.apiURL(
     `/symbiotica/local-image?path=${encodeURIComponent(path)}`);
 
 async function fetchJson(url, options) {
@@ -52,10 +29,11 @@ async function fetchJson(url, options) {
     return res.json();
 }
 
-// --- node state --------------------------------------------------------------
-// The ticks live on the `selection` widget (a JSON array of candidate ids) and
-// the filter on `view`, so both are saved with the workflow: reopening a graph
-// has to show the same picks the run was queued with.
+// The ticks live on the `selection` widget as a JSON array of FILE NAMES, so
+// they are saved with the workflow: reopening a graph shows the same picks the
+// run was queued with. Names rather than positions, because a new render
+// landing in the folder shifts every position after it and would silently
+// re-point every tick at its neighbour.
 function readTicks(node) {
     try {
         const raw = JSON.parse(widgetOf(node, "selection")?.value || "[]");
@@ -71,20 +49,11 @@ function writeTicks(node, ticks) {
     node.setDirtyCanvas?.(true, true);
 }
 
-const readView = (node) => widgetOf(node, "view")?.value ?? "";
-
-function writeView(node, value) {
-    const w = widgetOf(node, "view");
-    if (w) w.value = value;
-    node.setDirtyCanvas?.(true, true);
-}
-
 function thumbSize(node) {
     const key = node.properties?.symPickThumb;
     return SIZES[key] ? key : DEFAULT_SIZE;
 }
 
-// --- the panel ---------------------------------------------------------------
 function pickPanel(node) {
     injectHubStyles();
 
@@ -110,178 +79,86 @@ function pickPanel(node) {
     node.size[0] = Math.max(node.size[0], MIN_NODE_W);
 
     let images = [];
-    let groups = [];
+    let folder = "";
     let error = "";
-    // What the last folder read did. Separate from `error` so a successful
-    // import is not reported in the red the failures use.
     let notice = "";
     let loading = false;
-    // A first load can land before the graph has finished configuring, when
-    // the node still carries a placeholder id and its buffer legitimately
-    // reads as empty. Retry a few times rather than sit on that answer
-    // forever — the node looks broken and the images are right there.
+    // A first load can land before the graph has finished configuring, while
+    // the node still carries a placeholder id — and the server answers by node
+    // id, so that reads as "no folder". Retry a few times rather than sit on
+    // that answer forever, with the images right there on disk.
     let loads = 0;
     let loadedOk = false;
 
-    // The group the node opens on when `view` is empty: whatever arrived last.
-    // Derived from the buffer rather than by reading the wired asset/category
-    // widgets, because those are normally WIRED — a wired input has no widget
-    // value to read, and the tag recorded on the newest candidate is the same
-    // context by construction.
-    const newestGroup = () => {
-        const pool = inPhase();
-        return pool.length ? pool[pool.length - 1].group : "";
-    };
-
-    function visibleGroups() {
-        const counted = [];
-        for (const im of inPhase()) {
-            const found = counted.find((g) => g.key === im.group);
-            if (found) found.count += 1;
-            else counted.push({ key: im.group, count: 1 });
-        }
-        return counted;
-    }
-
-    // In auto mode, follow the asset being worked on. The upstream Asset Focus
-    // answers immediately when it changes; the last run's own group is the
-    // authority when there is no Focus to read. Newest-arrival is the fallback
-    // for a picker wired to neither.
-    function autoGroup() {
-        const pool = visibleGroups();
-        const asset = focusAsset(node);
-        if (asset) {
-            const match = pool.find((g) => g.key === asset
-                || g.key.endsWith(` / ${asset}`));
-            if (match) return match.key;
-        }
-        const current = node._symPickCurrent;
-        if (current && pool.some((g) => g.key === current)) return current;
-        return newestGroup() || ALL;
-    }
-
-    function effectiveView() {
-        const stored = readView(node);
-        if (stored === ALL) return ALL;
-        if (stored && visibleGroups().some((g) => g.key === stored)) return stored;
-        return autoGroup();
-    }
-
-    // The pass this picker is pinned to. Filtering here as well as at import
-    // matters for candidates collected before the pin was set.
-    const phaseOf = (n) => widgetOf(n, "phase")?.value?.trim?.() || "";
-
-    // An untagged candidate belongs to whichever pass is pinned: it was
-    // collected by this picker before the pin existed, which is the state of
-    // everything already in the buffer the moment a pass is chosen. Hiding
-    // those made pinning `base` blank a picker holding 73 renders. Only a
-    // candidate that states a DIFFERENT pass is filtered out.
-    const inPhase = () => {
-        const phase = phaseOf(node);
-        return phase
-            ? images.filter((i) => !i.phase || i.phase === phase)
-            : images;
-    };
-
-    const shown = () => {
-        const view = effectiveView();
-        const pool = inPhase();
-        return view === ALL ? pool : pool.filter((i) => i.group === view);
-    };
-
-    async function load() {
+    async function load(explicitFolder = "") {
         loading = true;
         loads += 1;
         render();
         try {
             const q = new URLSearchParams({ node_id: String(node.id) });
+            if (explicitFolder) q.set("folder", explicitFolder);
             const data = await fetchJson(`/symbiotica/pick-list?${q.toString()}`);
             images = Array.isArray(data.images) ? data.images : [];
-            groups = Array.isArray(data.groups) ? data.groups : [];
-            error = "";
+            folder = data.folder || "";
             loadedOk = images.length > 0;
+            error = "";
         } catch (e) {
-            images = [];
-            groups = [];
-            error = e.message || "could not read this node's buffer";
+            error = e.message || "could not list that folder";
         } finally {
             loading = false;
             render();
         }
-        // Empty on an early load is usually a node id that was not final yet.
         if (!loadedOk && !error && loads < 4) {
-            setTimeout(() => { if (!loadedOk) load(); }, 400 * loads);
+            setTimeout(() => { if (!loadedOk) load(explicitFolder); }, 400 * loads);
         }
     }
     node._symReloadPick = load;
-    // A run has something to say that the buffer alone cannot show — where the
-    // approved images were filed. Set from the execution message below.
     node._symPickNote = (text) => { notice = String(text || ""); render(); };
 
-    async function remove(ids) {
-        try {
-            await fetchJson("/symbiotica/pick-clear", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ node_id: String(node.id), ids }),
-            });
-        } catch (e) {
-            error = e.message || "could not clear";
-            render();
-            return;
-        }
-        // A dropped candidate must lose its tick too, or the node keeps
-        // claiming picks that no longer have an image behind them.
+    function toggle(name) {
         const ticks = readTicks(node);
-        const gone = new Set((ids ?? images.map((i) => i.id)).map(String));
-        writeTicks(node, new Set([...ticks].filter((t) => !gone.has(t))));
-        await load();
-    }
-
-    function toggle(id) {
-        const ticks = readTicks(node);
-        if (ticks.has(id)) ticks.delete(id);
-        else ticks.add(id);
+        if (ticks.has(name)) ticks.delete(name);
+        else ticks.add(name);
         writeTicks(node, ticks);
         render();
     }
 
-    // --- header: counts, thumb size, clear ----------------------------------
+    // --- header ------------------------------------------------------------
     function renderHead(ticks) {
         const bar = el("div",
             `display:flex;align-items:center;gap:6px;padding:2px 2px 4px;color:${HUB.inkSubtle};`);
-        const visible = shown().length;
-        const tickedHere = shown().filter((i) => ticks.has(i.id)).length;
-        bar.append(el("span", "flex:1;min-width:0;",
-                      images.length
-                          ? `${visible} shown · ${tickedHere} ticked`
-                          : `no candidates yet (node ${node.id})`));
-        // Ticks made while another asset was on screen stay on the node but
-        // are NOT emitted. Saying only "6 total" was what let three ticked
-        // thumbnails turn into six images.
-        const elsewhere = ticks.size - tickedHere;
-        if (elsewhere > 0) {
+        const here = images.filter((i) => ticks.has(i.id)).length;
+        bar.append(el("span", "flex:1;min-width:0;overflow:hidden;"
+            + "text-overflow:ellipsis;white-space:nowrap;",
+            images.length
+                ? `${images.length} in folder · ${here} ticked`
+                : `nothing listed yet (node ${node.id})`));
+
+        // A tick whose file is no longer in the folder is not sent on, and is
+        // invisible here — saying so beats a count that does not add up.
+        const missing = ticks.size - here;
+        if (missing > 0) {
             const drop = el("button", ghostButtonCss + "padding:1px 7px;flex:none;",
-                            `${elsewhere} elsewhere ✕`);
+                            `${missing} missing ✕`);
             drop.className = "sym-btn";
-            drop.title = `${elsewhere} tick(s) belong to other assets and are `
-                + "not sent on. Click to forget them.";
+            drop.title = `${missing} tick(s) name files that are not in this `
+                + "folder, so they are not sent on. Click to forget them.";
             drop.addEventListener("pointerdown", (e) => e.stopPropagation());
             drop.addEventListener("click", () => {
-                const here = new Set(shown().map((i) => i.id));
-                writeTicks(node, new Set([...ticks].filter((t) => here.has(t))));
+                const present = new Set(images.map((i) => i.id));
+                writeTicks(node, new Set([...ticks].filter((t) => present.has(t))));
                 render();
             });
             bar.appendChild(drop);
         }
 
-        const phase = phaseOf(node);
+        const phase = widgetOf(node, "phase")?.value?.trim?.() || "";
         if (phase) {
             const chip = el("div",
                 `flex:none;padding:1px 6px;border-radius:3px;font:10px ${HUB.font};`
                 + `background:${HUB.surface1};color:${HUB.inkSubtle};`
                 + `border:1px solid ${HUB.hairline};`, phase);
-            chip.title = `this picker only takes in and shows ${phase} images`;
+            chip.title = `ticked images are kept in …/${phase} under this asset`;
             bar.appendChild(chip);
         }
 
@@ -302,141 +179,63 @@ function pickPanel(node) {
 
         const reload = el("button", ghostButtonCss + "padding:1px 6px;flex:none;", "⟳");
         reload.className = "sym-btn";
-        reload.title = "Re-read this node's buffer";
+        reload.title = "Re-read the folder";
         reload.addEventListener("pointerdown", (e) => e.stopPropagation());
-        reload.addEventListener("click", load);
+        reload.addEventListener("click", () => load());
         bar.appendChild(reload);
 
-        if (images.length) {
-            const clear = el("button", ghostButtonCss + "padding:1px 8px;flex:none;", "clear");
+        if (ticks.size) {
+            // Untick, never delete. The tiles are the renders themselves, so a
+            // node that could delete them would be a node that can destroy the
+            // work it exists to choose between.
+            const clear = el("button", ghostButtonCss + "padding:1px 8px;flex:none;",
+                             "untick all");
             clear.className = "sym-btn";
-            clear.title = "Delete every candidate in this node's buffer";
+            clear.title = "Clear every tick. The images on disk are untouched.";
             clear.addEventListener("pointerdown", (e) => e.stopPropagation());
-            clear.addEventListener("click", () => {
-                if (window.confirm(`Delete all ${images.length} candidates from this picker?`)) {
-                    remove(null);
-                }
-            });
+            clear.addEventListener("click", () => { writeTicks(node, new Set()); render(); });
             bar.appendChild(clear);
         }
         return bar;
     }
 
-    // --- filter: one asset at a time, or everything --------------------------
-    function renderFilter() {
-        const row = el("div", "display:flex;align-items:center;gap:5px;padding:0 2px 4px;");
-        const select = el("select",
-            `flex:1;min-width:0;background:${HUB.surface1};color:${HUB.ink};`
-            + `border:1px solid ${HUB.hairline};border-radius:4px;padding:2px 4px;`
-            + `font:11px ${HUB.font};`);
-        select.className = "sym-input";
-        const view = effectiveView();
-
-        const pool = visibleGroups();
-        const optAll = el("option", "", `All (${inPhase().length})`);
-        optAll.value = ALL;
-        select.appendChild(optAll);
-        for (const g of pool) {
-            const o = el("option", "", `${g.key} (${g.count})`);
-            o.value = g.key;
-            select.appendChild(o);
-        }
-        select.value = view;
-        select.title = readView(node)
-            ? "Showing a pinned group — pick All to see everything"
-            : "Following the asset this node was last handed";
-        select.addEventListener("pointerdown", (e) => e.stopPropagation());
-        select.addEventListener("change", () => {
-            writeView(node, select.value);
-            render();
-        });
-        row.appendChild(select);
-
-        // Empty `view` means "follow whatever arrives" — worth being able to
-        // get back to once a group has been pinned by hand.
-        if (readView(node)) {
-            const auto = el("button", ghostButtonCss + "padding:2px 7px;flex:none;", "auto");
-            auto.className = "sym-btn";
-            auto.title = "Follow the asset being worked on";
-            auto.addEventListener("pointerdown", (e) => e.stopPropagation());
-            auto.addEventListener("click", () => { writeView(node, ""); render(); });
-            row.appendChild(auto);
-        }
-        return row;
-    }
-
-    // --- the grid ------------------------------------------------------------
+    // --- grid --------------------------------------------------------------
     function renderGrid(ticks) {
-        const list = shown();
-        // One row per stage when the candidates carry roles, so a prep is
-        // compared against the other preps rather than against a serving. Row
-        // order is arrival order — the order the sheet was cut in — because
-        // alphabetically "prep" would follow "ready".
-        const order = [];
-        for (const im of list) {
-            const role = im.role || "";
-            if (!order.includes(role)) order.push(role);
-        }
-        if (!order.some((r) => r)) return tileStrip(list, ticks);
-
-        const wrap = el("div", "padding:2px;");
-        for (const role of order) {
-            const row = el("div", "margin-bottom:5px;");
-            row.appendChild(el("div",
-                `color:${HUB.inkSubtle};font:10px ${HUB.font};`
-                + "text-transform:uppercase;letter-spacing:.06em;margin:0 0 2px 1px;",
-                role || "unlabelled"));
-            row.appendChild(tileStrip(list.filter((i) => (i.role || "") === role),
-                                      ticks));
-            wrap.appendChild(row);
-        }
-        return wrap;
-    }
-
-    function tileStrip(items, ticks) {
         const px = SIZES[thumbSize(node)];
-        const grid = el("div", "display:flex;flex-wrap:wrap;gap:4px;padding:2px;");
-        for (const im of items) {
-            const on = ticks.has(im.id);
-            const cell = el("div", `position:relative;width:${px}px;flex:none;cursor:pointer;`);
-            cell.title = `${im.group}${im.role ? ` · ${im.role}` : ""}`
-                + `${im.w ? ` · ${im.w}×${im.h}` : ""}`
-                + `${im.at ? ` · ${im.at}` : ""}\nclick to tick · double-click opens full size`;
+        const grid = el("div", "display:flex;flex-wrap:wrap;gap:4px;"
+            + "width:100%;box-sizing:border-box;");
+        for (const image of images) {
+            const on = ticks.has(image.id);
+            const cell = el("div",
+                `position:relative;width:${px}px;height:${px}px;flex:none;`
+                + `border:2px solid ${on ? HUB.accent : HUB.hairline};`
+                + `border-radius:4px;overflow:hidden;cursor:pointer;`
+                + `background:${HUB.surface1};box-sizing:border-box;`);
+            cell.title = `${image.index} · ${image.name}`
+                + (image.w ? ` · ${image.w}×${image.h}` : "")
+                + "\nclick to tick · double-click to open full size";
 
-            const img = el("img",
-                `width:${px}px;height:${px}px;object-fit:contain;display:block;`
-                + "background:#111;border-radius:4px;box-sizing:border-box;"
-                + `border:2px solid ${on ? HUB.accent : "transparent"};`
-                + (on ? "" : "opacity:.72;"));
-            img.src = imageUrl(im.thumb || im.path);
+            const img = el("img", "width:100%;height:100%;object-fit:cover;"
+                + "display:block;pointer-events:none;");
+            img.src = thumbUrl(image.path, px * 2);
             img.loading = "lazy";
-            img.addEventListener("pointerdown", (e) => e.stopPropagation());
-            img.addEventListener("click", () => toggle(im.id));
-            img.addEventListener("dblclick", (e) => {
-                e.stopPropagation();
-                window.open(imageUrl(im.path), "_blank", "noopener");
-            });
+            cell.appendChild(img);
 
+            // The number is how a pick is named out loud — "take 3, 7 and 12".
             const badge = el("div",
-                "position:absolute;top:3px;left:3px;width:14px;height:14px;"
-                + "border-radius:3px;display:flex;align-items:center;justify-content:center;"
-                + `font:10px/1 ${HUB.font};pointer-events:none;`
-                + (on ? `background:${HUB.accent};color:#0b0b0b;`
-                      : "background:rgba(0,0,0,.55);color:#bbb;"),
-                on ? "✓" : "");
+                `position:absolute;left:0;top:0;min-width:14px;padding:0 3px;`
+                + `font:10px ${HUB.font};text-align:center;`
+                + `background:${on ? HUB.accent : "rgba(0,0,0,.55)"};`
+                + `color:${on ? "#000" : HUB.ink};border-radius:0 0 4px 0;`,
+                String(image.index));
+            cell.appendChild(badge);
 
-            const del = el("button",
-                "position:absolute;top:2px;right:2px;border:0;cursor:pointer;"
-                + "background:rgba(0,0,0,.55);color:#ddd;border-radius:3px;"
-                + `font:10px/1 ${HUB.font};padding:2px 4px;`, "✕");
-            del.title = "Delete this candidate";
-            del.addEventListener("pointerdown", (e) => e.stopPropagation());
-            del.addEventListener("click", (e) => {
+            cell.addEventListener("pointerdown", (e) => e.stopPropagation());
+            cell.addEventListener("click", () => toggle(image.id));
+            cell.addEventListener("dblclick", (e) => {
                 e.stopPropagation();
-                remove([im.id]);
+                window.open(fullUrl(image.path), "_blank");
             });
-
-            cell.append(img, badge, del);
             grid.appendChild(cell);
         }
         return grid;
@@ -446,6 +245,12 @@ function pickPanel(node) {
         const ticks = readTicks(node);
         list.replaceChildren();
         list.appendChild(renderHead(ticks));
+        if (folder) {
+            list.appendChild(el("div",
+                `color:${HUB.inkTertiary};font:10px ${HUB.font};padding:0 3px 3px;`
+                + "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
+                folder));
+        }
         if (error) list.appendChild(errorLine(error));
         if (notice) {
             list.appendChild(el("div",
@@ -454,69 +259,25 @@ function pickPanel(node) {
         }
         if (loading && !images.length) {
             list.appendChild(emptyState("reading…"));
-            refit();
-            return;
-        }
-        if (!images.length) {
-            // `get_new` used to gate this and said so here. It gates nothing
-            // now — the node takes what is wired to it and reads the asset's
-            // own renders either way — so a message about switching it on sent
-            // people to a hidden widget that would not have helped.
+        } else if (!images.length) {
             list.appendChild(emptyState(
-                "queue this node — it takes in what is wired to it and "
-                + "reads this asset's own renders"));
-            refit();
-            return;
-        }
-        if (!inPhase().length) {
-            const wrap = el("div", "width:100%;box-sizing:border-box;");
-            wrap.appendChild(emptyState(
-                `${images.length} here, but none tagged "${phaseOf(node)}" — `
-                + "images collected before this picker was pinned to a pass "
-                + "carry no pass at all"));
-            const showAll = el("button",
-                ghostButtonCss + "padding:2px 8px;margin:4px auto;display:block;",
-                `show all ${images.length}`);
-            showAll.className = "sym-btn";
-            showAll.title = "Ignore the pass for now and show everything in "
-                + "this node's buffer";
-            showAll.addEventListener("pointerdown", (e) => e.stopPropagation());
-            showAll.addEventListener("click", () => {
-                const w = widgetOf(node, "phase");
-                if (w) w.value = "";
-                node.setDirtyCanvas?.(true, true);
-                render();
-            });
-            wrap.appendChild(showAll);
-            list.appendChild(wrap);
-            refit();
-            return;
-        }
-        if (visibleGroups().length > 1) list.appendChild(renderFilter());
-        const visible = shown();
-        if (!visible.length) {
-            list.appendChild(emptyState("nothing recorded for this asset yet"));
+                "queue this node once — it works out which folder this asset's "
+                + "renders are in from the wires, then lists them here"));
         } else {
             list.appendChild(renderGrid(ticks));
         }
         refit();
     }
 
-    // Reading a folder of renders that already exist, so a picker added after
-    // the work was generated does not have to re-render it to have something
-    // to choose from. A NATIVE litegraph button with serialize off: it adds no
-    // widgets_values entry, so it cannot shift the positions of the widgets
-    // saved in someone's workflow the way a new input would.
+    // Browsing a folder other than this asset's own. The node lists its own
+    // folder by itself on every run, so this is only for looking elsewhere.
     let reading = false;
     const readBtn = node.addWidget("button", "📁 Read folder", null, async () => {
         if (reading) return;
-        const folder = widgetOf(node, "folder")?.value?.trim?.();
-        if (!folder) {
-            // Not an error: the node reads this asset's own folder while it
-            // executes, from the asset and category it is already wired to.
-            // The button is only for pointing at some OTHER folder.
-            notice = "leave `folder` empty and queue this node — it reads this "
-                + "asset's own folder. Set `folder` only to read a different one.";
+        const typed = widgetOf(node, "folder")?.value?.trim?.();
+        if (!typed) {
+            notice = "leave `folder` empty and queue this node — it lists this "
+                + "asset's own renders. Set `folder` only to browse another one.";
             error = "";
             render();
             return;
@@ -525,32 +286,8 @@ function pickPanel(node) {
         readBtn.name = "⏳ Reading…";
         node.setDirtyCanvas?.(true, true);
         try {
-            const body = { node_id: String(node.id), folder };
-            const phase = phaseOf(node);
-            if (phase) body.phase = phase;
-            // Only unwired values are readable from the canvas; a wired input
-            // has no widget value, and the route falls back to the folder's
-            // own name for the asset.
-            for (const name of ["asset", "category", "role"]) {
-                const value = widgetOf(node, name)?.value?.trim?.();
-                if (value) body[name] = value;
-            }
-            const res = await fetchJson("/symbiotica/pick-import", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
-            });
-            notice = res.added || res.skipped || res.failed
-                ? `read ${res.folder}: ${res.added} added`
-                    + `${res.skipped ? `, ${res.skipped} already here` : ""}`
-                    + `${res.failed ? `, ${res.failed} unreadable` : ""}`
-                    + `${res.truncated ? `, ${res.truncated} beyond the limit` : ""}`
-                : "no images in that folder";
-            error = "";
-            await load();
-        } catch (e) {
-            error = e.message || "could not read that folder";
-            render();
+            await load(typed);
+            notice = images.length ? "" : "no images in that folder";
         } finally {
             reading = false;
             readBtn.name = "📁 Read folder";
@@ -571,9 +308,9 @@ registerSymbioticaExtension(app, {
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             onNodeCreated?.apply(this, arguments);
-            // Canvas state, not things to type into: collapse them (a bare
-            // .hidden is ignored by the classic canvas widgets).
-            for (const name of ["selection", "view", "get_new"]) {
+            // Canvas state and dead widgets kept for their positions: collapse
+            // them (a bare .hidden is ignored by the classic canvas widgets).
+            for (const name of ["selection", "view", "get_new", "role"]) {
                 const w = widgetOf(this, name);
                 if (w) { w.hidden = true; w.computeSize = () => [0, -4]; }
             }
@@ -581,7 +318,7 @@ registerSymbioticaExtension(app, {
         };
 
         // A saved workflow restores the ticks AFTER creation, and the node id
-        // the buffer is keyed by is only final once the graph is configured.
+        // the listing is keyed by is only final once the graph is configured.
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             onConfigure?.apply(this, arguments);
@@ -590,21 +327,19 @@ registerSymbioticaExtension(app, {
     },
 });
 
-// A run just filed new candidates — redraw the node that received them rather
-// than making the user press reload to find out the render finished.
+// A run just resolved the folder — list it, rather than making the user press
+// reload to find out which one the node landed on.
 api.addEventListener("symbiotica.pick", (event) => {
     const detail = event?.detail ?? {};
     if (detail.node_id == null) return;
     const node = app.graph?.getNodeById?.(Number(detail.node_id))
         ?? app.graph?.getNodeById?.(detail.node_id);
     if (!node) return;
-    if (typeof detail.current === "string") node._symPickCurrent = detail.current;
-    // Approved images are copied out to the delivery folder, which is not
-    // somewhere the node can show — so it says where they went rather than
-    // leaving it to be discovered in a file browser.
-    if (detail.kept) {
-        node._symPickNote?.(`kept ${detail.kept} in ${detail.kept_in || "the "
-            + "asset's folder"}`);
-    }
+    // Ticked images are copied to the delivery folder, which is not somewhere
+    // the node can show — so it says where they went rather than leaving it to
+    // be discovered in a file browser.
+    node._symPickNote?.(detail.kept
+        ? `kept ${detail.kept} in ${detail.kept_in || "the asset's folder"}`
+        : "");
     node._symReloadPick?.();
 });

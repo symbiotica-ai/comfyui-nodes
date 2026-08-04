@@ -1,65 +1,55 @@
-// ABOUTME: The Pick node's panel — that it draws a tile per candidate, opens on
-// ABOUTME: the asset being worked on, and that ticking one records it on the node.
+// ABOUTME: The Pick node's panel — it lists the asset's own render folder as
+// ABOUTME: numbered tiles, ticks record file names on the node, and nothing it
+// ABOUTME: draws is a copy: every tile is a file already on disk.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, emit, fire, link, reset, setResponder,
-         tick } from "./comfy_stub.mjs";
+import { app, create, emit, fire, reset, setResponder, tick } from "./comfy_stub.mjs";
 import "../../web/js/pick.js";
 
 globalThis.window.confirm = () => true;
 globalThis.window.open = () => {};
 
-const CAKE_A = {
-    id: "aaa", path: "/out/aaa.png", thumb: "/out/aaa_thumb.png",
-    group: "Halloween / Food / cake", w: 1024, h: 1024, at: "2026-08-04 10:00:00",
-};
-const CAKE_B = { ...CAKE_A, id: "bbb", path: "/out/bbb.png", thumb: "/out/bbb_thumb.png" };
-const PIE = {
-    ...CAKE_A, id: "ccc", path: "/out/ccc.png", thumb: "/out/ccc_thumb.png",
-    group: "Halloween / Food / pie",
-};
+const FOLDER = "/out/Oct/Mini 1 — Ghostly Goodies/Food - 3 stages";
+const shot = (name, index) => ({
+    id: name, name, index, path: `${FOLDER}/${name}`, w: 1024, h: 1024,
+    at: 1785860413,
+});
+const ONE = shot("Spookies_00001_.png", 1);
+const TWO = shot("Spookies_00002_.png", 2);
+const THREE = shot("Spookies_00003_.png", 3);
 
-function router(seen, images) {
+function router(seen, images, folder = `${FOLDER}/Spookies`) {
     return (route, _n, init) => {
         seen.push({ route, init });
         if (route.startsWith("/symbiotica/pick-list")) {
-            const groups = [];
-            for (const im of images) {
-                const g = groups.find((x) => x.key === im.group);
-                if (g) g.count += 1;
-                else groups.push({ key: im.group, count: 1 });
-            }
-            return { ok: true, status: 200, body: { ok: true, images, groups } };
+            return { ok: true, body: { ok: true, folder, images } };
         }
-        if (route.startsWith("/symbiotica/pick-clear")) {
-            return { ok: true, status: 200, body: { ok: true, removed: 1 } };
-        }
-        if (route.startsWith("/symbiotica/pick-import")) {
-            return { ok: true, status: 200,
-                     body: { ok: true, folder: "/out/renders/cake", asset: "cake",
-                             added: 4, skipped: 1, failed: 0, found: 5,
-                             truncated: 0 } };
-        }
-        return { ok: false, status: 404, body: { error: "no route" } };
+        return { ok: false, status: 404, body: { error: "no such route" } };
     };
 }
 
-async function panelNode(seen, images, widgets = {}) {
+const WIDGET_DEFAULTS = {
+    get_new: false, asset: "", category: "", selection: "", view: "",
+    role: "", folder: "", phase: "",
+};
+
+async function panelNode(seen = [], images = [], values = {}) {
     reset();
     setResponder(router(seen, images));
     const node = await create("SymbioticaPick",
-                              { selection: "", view: "", ...widgets });
+                              { ...WIDGET_DEFAULTS, ...values });
     await node.onNodeCreated?.call(node);
     for (let i = 0; i < 20; i++) await tick();
     return node;
 }
 
+const widgetOf = (node, name) => node.widgets.find((w) => w.name === name);
 const listOf = (node) =>
     node.widgets.find((w) => w.name === "pick_panel").element.children[0];
 
-function walk(elem, out = []) {
-    for (const child of elem.children ?? []) {
+function walk(root, out = []) {
+    for (const child of root.children ?? []) {
         out.push(child);
         walk(child, out);
     }
@@ -67,460 +57,183 @@ function walk(elem, out = []) {
 }
 
 const tiles = (node) => walk(listOf(node)).filter((e) => "src" in e);
-const buttonsSaying = (node, text) =>
-    walk(listOf(node)).filter((e) => e.textContent === text);
-const widgetOf = (node, name) => node.widgets.find((w) => w.name === name);
-const ticksOf = (node) => JSON.parse(widgetOf(node, "selection").value || "[]");
+// A tile: the bordered box a click ticks, i.e. whatever holds an <img>.
+const cells = (node) => walk(listOf(node)).filter(
+    (e) => (e.children ?? []).some((c) => "src" in c));
+const buttonsSaying = (node, text) => walk(listOf(node)).filter(
+    (e) => (e.textContent ?? "").includes(text) && e._listeners?.click);
+const textOf = (node) => walk(listOf(node)).map((e) => e.textContent).join(" ");
 
-test("the panel mounts and the state widgets are collapsed off the node", async () => {
-    // They hold the ticks and the filter so the workflow saves them — they are
-    // storage, not fields to type JSON into.
-    const node = await panelNode([], [CAKE_A]);
-    assert.ok(widgetOf(node, "pick_panel"));
-    for (const name of ["selection", "view"]) {
-        assert.equal(widgetOf(node, name).hidden, true);
-        assert.deepEqual(widgetOf(node, name).computeSize(), [0, -4]);
-    }
-});
-
-test("it asks for its own buffer, by node id", async () => {
+test("it lists the folder the node resolved", async () => {
     const seen = [];
-    const node = await panelNode(seen, [CAKE_A]);
-    assert.ok(seen.some((c) =>
-        c.route === `/symbiotica/pick-list?node_id=${node.id}`));
+    const node = await panelNode(seen, [ONE, TWO, THREE]);
+    assert.equal(tiles(node).length, 3);
+    assert.ok(seen.some((c) => c.route.startsWith(
+        `/symbiotica/pick-list?node_id=${node.id}`)));
 });
 
-test("one tile per candidate, drawn from the thumbnail", async () => {
-    // The full renders are what the double-click opens; filling a strip of
-    // 100px tiles with them is what makes a node feel broken.
-    const node = await panelNode([], [CAKE_A, CAKE_B]);
-    const srcs = tiles(node).map((t) => t.src);
-    assert.equal(srcs.length, 2);
-    assert.ok(srcs[0].includes(encodeURIComponent("/out/aaa_thumb.png")));
-    assert.ok(!srcs[0].includes(encodeURIComponent("/out/aaa.png")));
+test("every tile is numbered, and the number is what you read off the screen",
+     async () => {
+    const node = await panelNode([], [ONE, TWO, THREE]);
+    const badges = walk(listOf(node))
+        .filter((e) => ["1", "2", "3"].includes(e.textContent));
+    assert.deepEqual(badges.map((b) => b.textContent), ["1", "2", "3"]);
 });
 
-test("an empty buffer says how to fill it rather than showing nothing", async () => {
+test("a tile draws a shrunk copy, not the render itself", async () => {
+    // The grid draws every image at once; serving full renders into a strip of
+    // tiles is what makes the node feel broken on a slow link.
+    const node = await panelNode([], [ONE]);
+    assert.ok(tiles(node)[0].src.includes("/symbiotica/pick-thumb"));
+    assert.ok(tiles(node)[0].src.includes(encodeURIComponent(ONE.path)));
+});
+
+test("ticking records the FILE NAME on the node", async () => {
+    // Not the position: a new render landing in the folder shifts every
+    // position after it and would silently re-point every tick.
+    const node = await panelNode([], [ONE, TWO]);
+    fire(cells(node)[1], "click");
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value),
+                     ["Spookies_00002_.png"]);
+});
+
+test("ticking twice unticks", async () => {
+    const node = await panelNode([], [ONE]);
+    fire(cells(node)[0], "click");
+    fire(cells(node)[0], "click");
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value), []);
+});
+
+test("the ticks saved in the workflow come back ticked", async () => {
+    const node = await panelNode([], [ONE, TWO], {
+        selection: JSON.stringify(["Spookies_00002_.png"]),
+    });
+    assert.match(textOf(node), /1 ticked/);
+});
+
+test("the header says how many are in the folder", async () => {
+    const node = await panelNode([], [ONE, TWO, THREE]);
+    assert.match(textOf(node), /3 in folder/);
+});
+
+test("the folder being listed is on screen", async () => {
+    // Which folder a picker landed on is the thing that goes wrong, so it is
+    // never something to go and infer from a file browser.
+    const node = await panelNode([], [ONE]);
+    assert.match(textOf(node), /Food - 3 stages\/Spookies/);
+});
+
+test("a tick for a file that is no longer there is offered up to forget",
+     async () => {
+    const node = await panelNode([], [ONE], {
+        selection: JSON.stringify(["Spookies_00001_.png", "gone.png"]),
+    });
+    assert.match(textOf(node), /1 missing/);
+    fire(buttonsSaying(node, "missing")[0], "click");
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value),
+                     ["Spookies_00001_.png"]);
+});
+
+test("untick all clears the ticks and touches no files", async () => {
+    const seen = [];
+    const node = await panelNode(seen, [ONE, TWO], {
+        selection: JSON.stringify(["Spookies_00001_.png"]),
+    });
+    fire(buttonsSaying(node, "untick all")[0], "click");
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value), []);
+    assert.equal(tiles(node).length, 2);
+    // Nothing that could remove an image was ever called.
+    assert.ok(!seen.some((c) => /clear|delete|remove/.test(c.route)));
+});
+
+test("with nothing ticked there is nothing to untick", async () => {
+    const node = await panelNode([], [ONE]);
+    assert.equal(buttonsSaying(node, "untick all").length, 0);
+});
+
+test("an empty folder says what to do about it", async () => {
     const node = await panelNode([], []);
-    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /queue this node/);
-    assert.equal(tiles(node).length, 0);
+    assert.match(textOf(node), /queue this node/);
 });
 
-test("a failed listing is shown on the node instead of only the console", async () => {
+test("a failing list shows the server's reason", async () => {
     reset();
-    setResponder(() => ({ ok: false, status: 500, body: { error: "buffer is gone" } }));
-    const node = await create("SymbioticaPick", { selection: "", view: "" });
+    setResponder(() => ({ ok: false, status: 403,
+                          body: { error: "not inside a folder this install serves" } }));
+    const node = await create("SymbioticaPick", { ...WIDGET_DEFAULTS });
     await node.onNodeCreated?.call(node);
     for (let i = 0; i < 20; i++) await tick();
-    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /buffer is gone/);
+    assert.match(textOf(node), /not inside a folder/);
 });
 
-test("clicking a tile ticks it, and clicking again unticks it", async () => {
-    const node = await panelNode([], [CAKE_A, CAKE_B]);
-    fire(tiles(node)[1], "click");
-    assert.deepEqual(ticksOf(node), ["bbb"]);
-    fire(tiles(node)[1], "click");
-    assert.deepEqual(ticksOf(node), []);
-});
-
-test("ticks accumulate across candidates", async () => {
-    const node = await panelNode([], [CAKE_A, CAKE_B]);
-    fire(tiles(node)[0], "click");
-    fire(tiles(node)[1], "click");
-    assert.deepEqual(ticksOf(node).sort(), ["aaa", "bbb"]);
-});
-
-test("ticks saved with the workflow are restored on the tiles", async () => {
-    const node = await panelNode([], [CAKE_A, CAKE_B],
-                                 { selection: JSON.stringify(["bbb"]) });
-    // The ticked tile is the fully opaque one; the rest are dimmed.
-    const [first, second] = tiles(node);
-    assert.match(first.style.cssText, /opacity:\.72/);
-    assert.doesNotMatch(second.style.cssText, /opacity:\.72/);
-});
-
-test("the panel opens on the asset that arrived last, not on everything", async () => {
-    // "We are working on this asset and I need to see stuff related to it."
-    const node = await panelNode([], [CAKE_A, CAKE_B, PIE]);
-    assert.equal(tiles(node).length, 1);
-    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/ccc_thumb.png")));
-});
-
-test("choosing All shows every candidate the node holds", async () => {
-    const node = await panelNode([], [CAKE_A, CAKE_B, PIE]);
-    const select = listOf(node).children[1].children[0];
-    select.value = "__all__";
-    fire(select, "change");
-    assert.equal(widgetOf(node, "view").value, "__all__");
-    assert.equal(tiles(node).length, 3);
-});
-
-test("pinning one group shows only that group", async () => {
-    const node = await panelNode([], [CAKE_A, CAKE_B, PIE]);
-    const select = listOf(node).children[1].children[0];
-    select.value = "Halloween / Food / cake";
-    fire(select, "change");
-    assert.equal(tiles(node).length, 2);
-});
-
-test("a single group needs no filter row at all", async () => {
-    const node = await panelNode([], [CAKE_A, CAKE_B]);
-    // head, then the grid — nothing in between.
-    assert.equal(listOf(node).children.length, 2);
-    assert.equal(tiles(node).length, 2);
-});
-
-test("a pinned group that no longer exists falls back rather than showing blank",
-     async () => {
-         const node = await panelNode([], [CAKE_A, PIE],
-                                      { view: "Halloween / Food / gone" });
-         assert.equal(tiles(node).length, 1);
-     });
-
-test("deleting one candidate posts its id and drops its tick", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [CAKE_A, CAKE_B],
-                                 { selection: JSON.stringify(["aaa", "bbb"]) });
-    const cross = buttonsSaying(node, "✕")[0];
-    fire(cross, "click", { stopPropagation() {} });
-    for (let i = 0; i < 20; i++) await tick();
-    const post = seen.find((c) => c.route === "/symbiotica/pick-clear");
-    assert.deepEqual(JSON.parse(post.init.body).ids, ["aaa"]);
-    // A tick with no image behind it would claim a pick the node cannot serve.
-    assert.deepEqual(ticksOf(node), ["bbb"]);
-});
-
-test("clear sends no ids, which the route reads as the whole buffer", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [CAKE_A, CAKE_B],
-                                 { selection: JSON.stringify(["aaa"]) });
-    fire(buttonsSaying(node, "clear")[0], "click");
-    for (let i = 0; i < 20; i++) await tick();
-    const post = seen.find((c) => c.route === "/symbiotica/pick-clear");
-    assert.equal(JSON.parse(post.init.body).ids, null);
-    assert.deepEqual(ticksOf(node), []);
-});
-
-test("ticks belonging to another asset are shown as not being sent", async () => {
-    // Three ticked thumbnails turning into six images is what this prevents.
-    const node = await panelNode([], [CAKE_A, CAKE_B, PIE],
-                                 { selection: JSON.stringify(["aaa", "bbb", "ccc"]) });
-    // The panel opens on PIE's group, so aaa and bbb are ticked elsewhere.
-    assert.equal(buttonsSaying(node, "2 elsewhere ✕").length, 1);
-    fire(buttonsSaying(node, "2 elsewhere ✕")[0], "click");
-    assert.deepEqual(ticksOf(node), ["ccc"]);
-});
-
-test("no stray ticks means no such button", async () => {
-    const node = await panelNode([], [CAKE_A, CAKE_B],
-                                 { selection: JSON.stringify(["aaa"]) });
-    assert.equal(walk(listOf(node)).filter(
-        (e) => /elsewhere/.test(String(e.textContent))).length, 0);
-});
-
-
-test("the thumbnail size buttons change the tiles", async () => {
-    const node = await panelNode([], [CAKE_A]);
-    assert.match(tiles(node)[0].style.cssText, /width:108px/);
+test("the thumb size buttons change the tile size", async () => {
+    const node = await panelNode([], [ONE]);
     fire(buttonsSaying(node, "L")[0], "click");
-    assert.match(tiles(node)[0].style.cssText, /width:184px/);
     assert.equal(node.properties.symPickThumb, "L");
+    assert.match(cells(node)[0].style.cssText, /width:184px/);
 });
 
-test("reloading after a run re-reads the buffer", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [CAKE_A]);
-    const before = seen.filter((c) => c.route.startsWith("/symbiotica/pick-list")).length;
-    await node._symReloadPick();
-    const after = seen.filter((c) => c.route.startsWith("/symbiotica/pick-list")).length;
-    assert.equal(after, before + 1);
-});
-
-test("a workflow load re-reads the buffer once the node id is final", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [CAKE_A]);
-    const before = seen.filter((c) => c.route.startsWith("/symbiotica/pick-list")).length;
-    node.onConfigure?.call(node);
-    for (let i = 0; i < 20; i++) await tick();
-    const after = seen.filter((c) => c.route.startsWith("/symbiotica/pick-list")).length;
-    assert.equal(after, before + 1);
-});
-
-test("the extension registered", () => {
-    assert.ok(app.extensions.some((e) => e.name === "symbiotica.pick"));
-});
-
-const PREP = { ...CAKE_A, id: "p1", thumb: "/out/p1_thumb.png", role: "prep" };
-const READY = { ...CAKE_A, id: "r1", thumb: "/out/r1_thumb.png", role: "ready" };
-const SERVING = { ...CAKE_A, id: "s1", thumb: "/out/s1_thumb.png", role: "serving" };
-const PREP2 = { ...CAKE_A, id: "p2", thumb: "/out/p2_thumb.png", role: "prep" };
-
-const rowLabels = (node) =>
-    walk(listOf(node))
-        .filter((e) => ["PREP", "READY", "SERVING"].includes(String(e.textContent).toUpperCase()))
-        .map((e) => e.textContent);
-
-test("stages are laid out one row per stage, in the order the sheet was cut", async () => {
-    // A prep should be compared against the other preps, not against a serving.
-    const node = await panelNode([], [PREP, READY, SERVING, PREP2]);
-    assert.deepEqual(rowLabels(node), ["prep", "ready", "serving"]);
-    assert.equal(tiles(node).length, 4);
-});
-
-test("the two preps sit together in the first row", async () => {
-    const node = await panelNode([], [PREP, READY, SERVING, PREP2]);
-    // Each row is [label, strip]; the strip's children are the tiles.
-    const rows = walk(listOf(node))
-        .filter((e) => e.children.length === 2
-            && ["prep", "ready", "serving"].includes(e.children[0].textContent));
-    assert.deepEqual(rows.map((r) => r.children[0].textContent),
-                     ["prep", "ready", "serving"]);
-    assert.deepEqual(rows.map((r) => r.children[1].children.length), [2, 1, 1]);
-});
-
-test("candidates with no stage keep the flat grid", async () => {
-    const node = await panelNode([], [CAKE_A, CAKE_B]);
-    assert.deepEqual(rowLabels(node), []);
-    assert.equal(tiles(node).length, 2);
-});
-
-test("ticking still works inside a stage row", async () => {
-    const node = await panelNode([], [PREP, READY, SERVING]);
-    fire(tiles(node)[2], "click");
-    assert.deepEqual(ticksOf(node), ["s1"]);
-});
-
-test("Read folder posts the node's folder and reloads the buffer", async () => {
-    // The buffer is per node, so a picker added after the work was generated
-    // starts empty; re-running the generator to fill it pays twice.
-    const seen = [];
-    const node = await panelNode(seen, [], { folder: "/out/renders/cake" });
-    const btn = node.widgets.find((w) => w.name === "📁 Read folder");
-    assert.ok(btn);
-    assert.equal(btn.serialize, false, "a serialised button shifts widgets_values");
-    await btn.callback();
-    for (let i = 0; i < 20; i++) await tick();
-    const post = seen.find((c) => c.route === "/symbiotica/pick-import");
-    assert.deepEqual(JSON.parse(post.init.body),
-                     { node_id: String(node.id), folder: "/out/renders/cake" });
-    // It re-lists afterwards, or the new candidates would not appear.
-    assert.ok(seen.filter((c) => c.route.startsWith("/symbiotica/pick-list")).length > 1);
-});
-
-test("Read folder sends the tags that are typed, and omits the wired ones", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [], {
-        folder: "/out/renders", asset: "cake", category: "", role: "prep" });
-    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
-    for (let i = 0; i < 20; i++) await tick();
-    const body = JSON.parse(seen.find((c) => c.route === "/symbiotica/pick-import").init.body);
-    assert.equal(body.asset, "cake");
-    assert.equal(body.role, "prep");
-    assert.ok(!("category" in body), "an empty widget must not overwrite the fallback");
+test("the pass is shown as a chip, because it names the keep folder", async () => {
+    const node = await panelNode([], [ONE], { phase: "export" });
+    assert.match(textOf(node), /export/);
 });
 
 test("Read folder with no folder explains that it is not needed", async () => {
-    // The node reads this asset's own folder while it executes; the button is
-    // only for pointing at some OTHER folder.
     const seen = [];
     const node = await panelNode(seen, [], { folder: "" });
+    const before = seen.length;
     await node.widgets.find((w) => w.name === "📁 Read folder").callback();
-    assert.equal(seen.filter((c) => c.route === "/symbiotica/pick-import").length, 0);
-    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /leave `folder` empty/);
+    assert.equal(seen.length, before);
+    assert.match(textOf(node), /leave `folder` empty/);
+});
+
+test("Read folder asks the server for the folder that was typed", async () => {
+    const seen = [];
+    const node = await panelNode(seen, [ONE], { folder: "/out/elsewhere" });
+    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
+    const asked = seen.filter((c) => c.route.includes("folder="));
+    assert.equal(asked.length, 1);
+    assert.ok(asked[0].route.includes(encodeURIComponent("/out/elsewhere")));
 });
 
 test("a run that kept picks says where they went", async () => {
-    // The approved images are copied out to the delivery folder, which is not
-    // somewhere the node can show — so a run that filed some says so rather
-    // than leaving it to be found in a file browser.
-    const node = await panelNode([], [CAKE_A]);
+    // Ticked images are copied to the delivery folder, which is not somewhere
+    // the node can show — so it says rather than leaving it to be discovered.
+    const node = await panelNode([], [ONE]);
     emit("symbiotica.pick", {
-        node_id: String(node.id), added: 0, count: 1, groups: [], current: "",
-        kept: 2, kept_in: "October/Mini 1 — Ghostly Goodies/Food/Spookies/Base",
+        node_id: String(node.id), count: 1, picked: 2, kept: 2,
+        kept_in: "October/Mini 1 — Ghostly Goodies/Food/Spookies/Base",
     });
     await tick();
-    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /kept 2 in October\/Mini 1/);
+    assert.match(textOf(node), /kept 2 in October\/Mini 1/);
 });
 
 test("a run that kept nothing says nothing", async () => {
-    const node = await panelNode([], [CAKE_A]);
+    const node = await panelNode([], [ONE]);
     emit("symbiotica.pick", { node_id: String(node.id), count: 1, kept: 0 });
     await tick();
-    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.doesNotMatch(text, /kept/);
+    assert.doesNotMatch(textOf(node), /kept/);
 });
 
-test("an empty buffer says what to do, not which switch to flip", async () => {
-    // It used to blame `get_new`, which gates nothing any more — the node
-    // takes what is wired to it and reads the asset's renders either way. That
-    // message sent people to a hidden widget that would not have helped.
-    const node = await panelNode([], [], { get_new: false });
-    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /queue this node/);
-    assert.doesNotMatch(text, /get_new/);
-});
-
-const EXPORTED = { ...CAKE_A, id: "e1", thumb: "/out/e1_thumb.png", phase: "export" };
-const EDITED = { ...CAKE_A, id: "d1", thumb: "/out/d1_thumb.png", phase: "edit" };
-
-test("a picker pinned to a pass hides the other passes", async () => {
-    // A 128px cutout with alpha is not an alternative to a full render.
-    const node = await panelNode([], [EXPORTED, EDITED], { phase: "export" });
-    assert.equal(tiles(node).length, 1);
-    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/e1_thumb.png")));
-});
-
-test("pinning a pass keeps the candidates collected before the pin", async () => {
-    // "it worked well until i've set it to base then it broke down yet again".
-    // Everything already in the buffer when a pass is chosen carries no pass,
-    // so excluding them blanks a picker holding every render of the asset.
-    const node = await panelNode([], [EXPORTED, CAKE_A, CAKE_B],
-                                 { phase: "base" });
-    assert.equal(tiles(node).length, 2);
-});
-
-test("an unpinned picker shows every pass", async () => {
-    const node = await panelNode([], [EXPORTED, EDITED, CAKE_B], { phase: "" });
-    const select = listOf(node).children[1].children[0];
-    select.value = "__all__";
-    fire(select, "change");
-    assert.equal(tiles(node).length, 3);
-});
-
-test("the pass is shown on the node body", async () => {
-    // Three pickers in three groups otherwise look identical.
-    const node = await panelNode([], [EXPORTED], { phase: "export" });
-    assert.equal(buttonsSaying(node, "export").length, 1);
-});
-
-test("a buffer with nothing in this pass says so, and offers a way out", async () => {
-    // Only reachable now when every candidate states a DIFFERENT pass — an
-    // untagged one belongs to whichever pass is pinned — and it must still not
-    // read as an empty buffer.
-    const node = await panelNode([], [EDITED, { ...CAKE_B, phase: "base" }],
-                                 { phase: "export" });
-    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /none tagged "export"/);
-    assert.equal(buttonsSaying(node, "show all 2").length, 1);
-    fire(buttonsSaying(node, "show all 2")[0], "click");
-    assert.equal(widgetOf(node, "phase").value, "");
-    assert.equal(tiles(node).length, 2);
-});
-
-test("Read folder tells the server which pass this picker is", async () => {
+test("a run re-lists the folder, so a new render appears", async () => {
     const seen = [];
-    const node = await panelNode(seen, [], { folder: "/out/x", phase: "export" });
-    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
-    for (let i = 0; i < 20; i++) await tick();
-    const body = JSON.parse(seen.find((c) => c.route === "/symbiotica/pick-import").init.body);
-    assert.equal(body.phase, "export");
+    const node = await panelNode(seen, [ONE]);
+    const before = seen.filter((c) => c.route.startsWith("/symbiotica/pick-list")).length;
+    emit("symbiotica.pick", { node_id: String(node.id), count: 2 });
+    await tick();
+    const after = seen.filter((c) => c.route.startsWith("/symbiotica/pick-list")).length;
+    assert.ok(after > before);
 });
 
-const SPOOKIES = { ...CAKE_A, id: "s1", thumb: "/out/s1_thumb.png",
-                   group: "Mini 1 / Food - 3 stages / Spookies" };
-const POPSICLE = { ...CAKE_A, id: "s2", thumb: "/out/s2_thumb.png",
-                   group: "Mini 1 / Food - 3 stages / Spooky Stack Popsicle" };
-
-async function pickWithFocus(images, assetValue) {
-    reset();
-    setResponder(router([], images));
-    const focus = await create("SymbioticaAssetFocus", { asset: assetValue });
-    focus.comfyClass = "SymbioticaAssetFocus";
-    const node = await create("SymbioticaPick", { selection: "", view: "" });
-    await node.onNodeCreated?.call(node);
-    link(focus, node, "asset");
-    for (let i = 0; i < 20; i++) await tick();
-    node._symReloadPick && await node._symReloadPick();
-    for (let i = 0; i < 20; i++) await tick();
-    return node;
-}
-
-test("the grid follows the asset the upstream Asset Focus is set to", async () => {
-    // The `asset` input is wired, so it has no widget value of its own — but
-    // the node feeding it does.
-    const node = await pickWithFocus([SPOOKIES, POPSICLE], "Spooky Stack Popsicle");
-    assert.equal(tiles(node).length, 1);
-    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s2_thumb.png")));
+test("the state widgets are hidden, dead ones included", async () => {
+    // `get_new` and `role` do nothing and are kept only so the positions of
+    // widgets saved in someone's workflow still line up.
+    const node = await panelNode([], [ONE]);
+    for (const name of ["selection", "view", "get_new", "role"]) {
+        assert.equal(widgetOf(node, name).hidden, true, name);
+    }
 });
 
-test("switching the asset upstream switches the grid, with no run", async () => {
-    const node = await pickWithFocus([SPOOKIES, POPSICLE], "Spookies");
-    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s1_thumb.png")));
-    const focus = app.graph.getNodeById(node.id - 1);
-    focus.widgets.find((w) => w.name === "asset").value = "Spooky Stack Popsicle";
-    node._symReloadPick && await node._symReloadPick();
-    for (let i = 0; i < 20; i++) await tick();
-    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s2_thumb.png")));
-});
-
-test("an asset with no candidates yet does not hide everything", async () => {
-    // Falling through to the newest arrival beats showing an empty grid for a
-    // group that does not exist.
-    const node = await pickWithFocus([SPOOKIES], "Ghostly Jelly Cake");
-    assert.equal(tiles(node).length, 1);
-});
-
-test("the run's own group is used when there is no Focus to read", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [SPOOKIES, POPSICLE]);
-    node._symPickCurrent = "Mini 1 / Food - 3 stages / Spookies";
-    await node._symReloadPick();
-    for (let i = 0; i < 20; i++) await tick();
-    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s1_thumb.png")));
-});
-
-test("a pinned group still beats both", async () => {
-    // Auto is a default, not an override of what was chosen by hand.
-    const node = await pickWithFocus([SPOOKIES, POPSICLE], "Spookies");
-    widgetOf(node, "view").value = "Mini 1 / Food - 3 stages / Spooky Stack Popsicle";
-    node._symReloadPick && await node._symReloadPick();
-    for (let i = 0; i < 20; i++) await tick();
-    assert.ok(tiles(node)[0].src.includes(encodeURIComponent("/out/s2_thumb.png")));
-});
-
-test("an empty first load is retried rather than left standing", async () => {
-    // A first load can land before the graph has finished configuring, when
-    // the node still carries a placeholder id and its buffer reads as empty.
-    reset();
-    let calls = 0;
-    setResponder((route) => {
-        if (route.startsWith("/symbiotica/pick-list")) {
-            calls += 1;
-            const images = calls > 1 ? [CAKE_A] : [];
-            return { ok: true, status: 200,
-                     body: { ok: true, images, groups: images.length
-                         ? [{ key: CAKE_A.group, count: 1 }] : [] } };
-        }
-        return { ok: false, status: 404, body: { error: "no route" } };
-    });
-    const node = await create("SymbioticaPick", { selection: "", view: "" });
-    await node.onNodeCreated?.call(node);
-    for (let i = 0; i < 40; i++) await tick();
-    await new Promise((r) => setTimeout(r, 600));
-    for (let i = 0; i < 20; i++) await tick();
-    assert.ok(calls > 1, "it should have asked again");
-    assert.equal(tiles(node).length, 1);
-});
-
-test("a load that keeps coming back empty stops asking", async () => {
-    // Retrying forever would hammer the server for a node whose buffer really
-    // is empty, which is every picker before its first run.
-    reset();
-    let calls = 0;
-    setResponder((route) => {
-        if (route.startsWith("/symbiotica/pick-list")) {
-            calls += 1;
-            return { ok: true, status: 200, body: { ok: true, images: [], groups: [] } };
-        }
-        return { ok: false, status: 404, body: { error: "no route" } };
-    });
-    const node = await create("SymbioticaPick", { selection: "", view: "" });
-    await node.onNodeCreated?.call(node);
-    await new Promise((r) => setTimeout(r, 2600));
-    for (let i = 0; i < 20; i++) await tick();
-    assert.ok(calls <= 4, `asked ${calls} times`);
+test("it registers under one extension name", async () => {
+    assert.ok(app.extensions.some((e) => e.name === "symbiotica.pick"));
 });

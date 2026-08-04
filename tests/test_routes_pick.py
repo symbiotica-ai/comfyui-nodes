@@ -1,7 +1,9 @@
-# ABOUTME: The Pick node's routes — the buffer is addressed by node id, never by
-# ABOUTME: a caller-supplied path, and clearing deletes what it says it deletes.
+# ABOUTME: The Pick node's routes — the panel lists the folder the node itself
+# ABOUTME: resolved, never a path a caller talked its way into, and thumbnails
+# ABOUTME: are shrunk on the way out rather than kept anywhere.
 import asyncio
 import importlib
+import io
 import os
 import sys
 import types
@@ -28,6 +30,7 @@ def _load_routes(monkeypatch, output_dir):
     web = types.ModuleType("aiohttp.web")
     web.json_response = lambda body, status=200: {"body": body, "status": status}
     web.FileResponse = lambda *a, **k: None
+    web.Response = lambda **kw: {"response": kw, "status": 200}
     sys.modules["aiohttp"].web = web
     monkeypatch.setitem(sys.modules, "aiohttp.web", web)
 
@@ -61,242 +64,139 @@ def env(monkeypatch, tmp_path):
     out = tmp_path / "output"
     out.mkdir()
     routes = _load_routes(monkeypatch, out)
-    return types.SimpleNamespace(routes=routes, out=out)
+    import pipeline.pick_folder as pick_folder
+    importlib.reload(pick_folder)
+    return types.SimpleNamespace(routes=routes, out=out, pick=pick_folder,
+                                 tmp=tmp_path)
 
 
-def seed(env, node_id, colours, tag=None):
-    from pipeline.pick_buffer import add_image, buffer_dir
-    d = buffer_dir(str(env.out), node_id)
-    made = []
-    for c in colours:
-        made.append(add_image(d, Image.new("RGB", (6, 6), (c, c, c)), tag=tag))
-    return d, made
+def renders(folder, names, size=(40, 30), colour=10):
+    os.makedirs(folder, exist_ok=True)
+    for i, name in enumerate(names):
+        Image.new("RGB", size, (colour + i, 0, 0)).save(
+            os.path.join(folder, name))
+    return folder
 
 
-class TestListing:
-    def test_an_empty_node_lists_nothing_rather_than_failing(self, env):
+class TestListingWhatTheNodeResolved:
+    """Asset and category arrive on wires, so the panel cannot work out which
+    folder to list — it asks for the one the node itself landed on."""
+
+    def test_a_node_that_has_never_run_lists_nothing(self, env):
         res = _run(env.routes.pick_list(_Req(node_id="99")))
-        assert res["body"] == {"ok": True, "images": [], "groups": []}
+        assert res["body"] == {"ok": True, "images": [], "folder": ""}
 
-    def test_candidates_come_back_with_their_paths_and_tags(self, env):
-        seed(env, "7", [10, 20], tag={"asset": "cake", "category": "Food"})
+    def test_the_folder_the_node_resolved_is_listed(self, env):
+        renders(str(env.out / "Oct" / "Food"),
+                ("Spookies_00001_.png", "Spookies_00002_.png",
+                 "Ghosts_00001_.png"))
+        env.pick.remember("7", str(env.out / "Oct" / "Food" / "Spookies"))
         body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
-        assert len(body["images"]) == 2
-        first = body["images"][0]
-        assert os.path.isfile(first["path"])
-        assert os.path.isfile(first["thumb"])
-        assert first["group"] == "Food / cake"
-        assert body["groups"] == [{"key": "Food / cake", "count": 2}]
+        assert [i["name"] for i in body["images"]] == [
+            "Spookies_00001_.png", "Spookies_00002_.png"]
+        assert [i["index"] for i in body["images"]] == [1, 2]
+        assert os.path.isfile(body["images"][0]["path"])
 
-    def test_the_thumbnail_served_is_not_the_full_image(self, env):
-        """The grid draws them all at once; the full renders are the download
-        the double-click is for."""
-        seed(env, "7", [10])
-        first = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
-        assert first["thumb"] != first["path"]
-
-    def test_one_node_never_sees_another_nodes_candidates(self, env):
-        seed(env, "1", [10])
-        seed(env, "2", [20, 30])
+    def test_one_node_never_sees_another_nodes_folder(self, env):
+        renders(str(env.out / "a"), ("x.png",))
+        renders(str(env.out / "b"), ("y.png", "z.png"))
+        env.pick.remember("1", str(env.out / "a"))
+        env.pick.remember("2", str(env.out / "b"))
         assert len(_run(env.routes.pick_list(_Req(node_id="1")))["body"]["images"]) == 1
         assert len(_run(env.routes.pick_list(_Req(node_id="2")))["body"]["images"]) == 2
 
+    def test_an_explicit_folder_is_listed_for_browsing(self, env):
+        renders(str(env.out / "elsewhere"), ("x.png",))
+        body = _run(env.routes.pick_list(
+            _Req(node_id="7", folder=str(env.out / "elsewhere"))))["body"]
+        assert [i["name"] for i in body["images"]] == ["x.png"]
+
+    def test_a_relative_folder_resolves_under_the_output_directory(self, env):
+        """What `save_paths` emits, and what people paste in."""
+        renders(str(env.out / "Oct" / "Food"), ("Spookies_00001_.png",))
+        body = _run(env.routes.pick_list(
+            _Req(node_id="7", folder="Oct/Food/Spookies")))["body"]
+        assert [i["name"] for i in body["images"]] == ["Spookies_00001_.png"]
+
+    def test_a_folder_outside_every_declared_root_is_refused(self, env):
+        renders(str(env.tmp / "outside"), ("x.png",))
+        res = _run(env.routes.pick_list(
+            _Req(node_id="7", folder=str(env.tmp / "outside"))))
+        assert res["status"] == 403
+
+    def test_traversal_out_of_a_declared_root_is_refused(self, env):
+        renders(str(env.tmp / "outside"), ("x.png",))
+        res = _run(env.routes.pick_list(
+            _Req(node_id="7", folder="../outside")))
+        assert res["status"] == 403
+
 
 class TestServingTheThumbnails:
-    """Found live: the node drew a grid of broken images while reporting the
-    right count. `is_allowed` consults only the folders an execution
-    registered — never `declared_roots()` — so listing candidates without
-    registering their buffer hands back paths whose every thumbnail 403s."""
+    """Found live once already: the node drew a grid of broken images while
+    reporting the right count. `is_allowed` consults only the folders an
+    execution or a browse route registered, never `declared_roots()`."""
 
-    def test_listing_makes_that_buffer_servable(self, env):
-        _, made = seed(env, "7", [10])
+    def test_listing_makes_the_images_servable(self, env):
+        renders(str(env.out / "Oct" / "Food"), ("Spookies_00001_.png",))
+        env.pick.remember("7", str(env.out / "Oct" / "Food" / "Spookies"))
         body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
-        assert env.routes.is_allowed(body["images"][0]["thumb"])
-        assert env.routes.is_allowed(body["images"][0]["path"])
+        assert env.routes.is_allowed(body["images"][0]["path"]) is not None
 
-    def test_listing_one_node_does_not_open_another_nodes_buffer(self, env):
-        seed(env, "1", [10])
-        _, other = seed(env, "2", [20])
-        _run(env.routes.pick_list(_Req(node_id="1")))
-        from pipeline.pick_buffer import buffer_dir
-        path = os.path.join(buffer_dir(str(env.out), "2"), other[0]["file"])
-        assert env.routes.is_allowed(path) is None
+    def test_an_unlisted_path_is_not_servable(self, env):
+        renders(str(env.out / "Oct" / "Food"), ("Spookies_00001_.png",))
+        res = _run(env.routes.pick_thumb(
+            _Req(path=str(env.out / "Oct" / "Food" / "Spookies_00001_.png"))))
+        assert res["status"] == 403
 
-    def test_listing_does_not_open_the_rest_of_the_output_directory(self, env):
-        """Registering the buffer must not register its parent: the output
-        directory holds every render this install has ever written."""
-        seed(env, "7", [10])
+    def test_a_thumbnail_is_smaller_than_the_render(self, env):
+        """The grid draws every image at once; serving full renders into a
+        strip of 128px tiles is what makes the node feel broken."""
+        renders(str(env.out / "Food"), ("a.png",), size=(400, 300))
+        env.pick.remember("7", str(env.out / "Food"))
         _run(env.routes.pick_list(_Req(node_id="7")))
-        loose = env.out / "someone-elses-render.png"
-        Image.new("RGB", (4, 4)).save(loose)
-        assert env.routes.is_allowed(str(loose)) is None
+        res = _run(env.routes.pick_thumb(
+            _Req(path=str(env.out / "Food" / "a.png"), px="64")))
+        with Image.open(io.BytesIO(res["response"]["body"])) as img:
+            assert max(img.size) == 64
 
-    def test_an_empty_buffer_registers_nothing(self, env):
-        assert _run(env.routes.pick_list(_Req(node_id="404")))["body"]["ok"] is True
+    def test_transparency_survives_the_shrink(self, env):
+        """A background-removed render judged on a black rectangle is not the
+        image that was approved."""
+        os.makedirs(str(env.out / "Food"), exist_ok=True)
+        Image.new("RGBA", (40, 40), (10, 20, 30, 0)).save(
+            str(env.out / "Food" / "a.png"))
+        env.pick.remember("7", str(env.out / "Food"))
+        _run(env.routes.pick_list(_Req(node_id="7")))
+        res = _run(env.routes.pick_thumb(
+            _Req(path=str(env.out / "Food" / "a.png"))))
+        with Image.open(io.BytesIO(res["response"]["body"])) as img:
+            assert img.mode == "RGBA"
 
+    def test_an_absurd_size_is_clamped_rather_than_honoured(self, env):
+        renders(str(env.out / "Food"), ("a.png",), size=(40, 40))
+        env.pick.remember("7", str(env.out / "Food"))
+        _run(env.routes.pick_list(_Req(node_id="7")))
+        res = _run(env.routes.pick_thumb(
+            _Req(path=str(env.out / "Food" / "a.png"), px="99999")))
+        assert res["status"] == 200
 
-class TestTheBufferIsAddressedByNodeId:
-    def test_a_traversing_node_id_cannot_reach_out_of_the_output_directory(self, env):
-        """The caller names a node, never a path — the id is reduced to a bare
-        directory segment before it is joined, so there is nothing to escape
-        with."""
-        outside = env.out.parent / "secret"
-        outside.mkdir()
-        (outside / "index.json").write_text('[{"id":"x","file":"x.png"}]')
-        res = _run(env.routes.pick_list(_Req(node_id="../../secret")))
-        assert res["body"]["images"] == []
-
-    def test_a_missing_node_id_is_not_an_error(self, env):
-        assert _run(env.routes.pick_list(_Req()))["body"]["ok"] is True
-
-
-class TestClearing:
-    def test_named_candidates_are_deleted(self, env):
-        d, made = seed(env, "7", [10, 20, 30])
-        res = _run(env.routes.pick_clear(
-            _Req(body={"node_id": "7", "ids": [made[0]["id"]]})))
-        assert res["body"] == {"ok": True, "removed": 1}
-        assert not os.path.exists(os.path.join(d, made[0]["file"]))
-        assert os.path.exists(os.path.join(d, made[1]["file"]))
-
-    def test_no_ids_clears_the_whole_buffer(self, env):
-        seed(env, "7", [10, 20])
-        res = _run(env.routes.pick_clear(_Req(body={"node_id": "7"})))
-        assert res["body"]["removed"] == "all"
-        assert _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"] == []
-
-    def test_an_empty_id_list_still_means_clear_everything(self, env):
-        """An empty list is what "I selected nothing to delete individually"
-        looks like, and the button that sends it is the clear-all button."""
-        seed(env, "7", [10, 20])
-        _run(env.routes.pick_clear(_Req(body={"node_id": "7", "ids": []})))
-        assert _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"] == []
-
-    def test_a_request_with_no_body_is_refused_not_a_crash(self, env):
-        res = _run(env.routes.pick_clear(_Req()))
+    def test_a_file_that_is_not_an_image_is_refused(self, env):
+        os.makedirs(str(env.out / "Food"), exist_ok=True)
+        (env.out / "Food" / "broken.png").write_bytes(b"not an image")
+        renders(str(env.out / "Food"), ("a.png",))
+        env.pick.remember("7", str(env.out / "Food"))
+        _run(env.routes.pick_list(_Req(node_id="7")))
+        res = _run(env.routes.pick_thumb(
+            _Req(path=str(env.out / "Food" / "broken.png"))))
         assert res["status"] == 400
 
 
-class TestReadingAFolder:
-    def make(self, folder, names):
-        os.makedirs(folder, exist_ok=True)
-        for i, name in enumerate(names):
-            Image.new("RGB", (6, 6), (10 + i * 7, 0, 0)).save(
-                os.path.join(folder, name))
-
-    def test_a_folder_under_a_declared_root_is_read(self, env):
-        src = env.out / "renders" / "Frankencrisps"
-        self.make(str(src), ["a.png", "b.png"])
-        res = _run(env.routes.pick_import(
-            _Req(body={"node_id": "7", "folder": str(src)})))
-        assert res["body"]["added"] == 2
-        assert len(_run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"]) == 2
-
-    def test_the_folder_structure_stands_in_for_the_tags(self, env):
-        """A wired asset input has no widget value to send, and does not need
-        one: renders are filed outputs/<month>/<event>/<category>/<recipe>."""
-        src = env.out / "outputs" / "October" / "Mini 3" / "Food" / "Frankencrisps"
-        self.make(str(src), ["a.png"])
-        _run(env.routes.pick_import(
-            _Req(body={"node_id": "7", "folder": str(src)})))
-        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
-        assert entry["group"] == "Mini 3 / Food / Frankencrisps"
-        assert entry["month"] == "October"
-
-    def test_an_explicit_value_wins_over_the_one_the_path_derived(self, env):
-        """The folder is under the output directory, so a month and a feature
-        are read off it either way; what is typed replaces only the fields it
-        names."""
-        src = env.out / "renders" / "batch-04"
-        self.make(str(src), ["a.png"])
-        _run(env.routes.pick_import(_Req(body={
-            "node_id": "7", "folder": str(src), "asset": "cake",
-            "category": "Food", "role": "prep"})))
-        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
-        assert (entry["asset"], entry["category"], entry["role"]) == \
-            ("cake", "Food", "prep")
-        assert entry["month"] == "renders"
-
-    def test_a_folder_outside_every_declared_root_is_refused(self, env, tmp_path):
-        """Naming a folder is not what grants access to it."""
-        outside = tmp_path / "elsewhere"
-        self.make(str(outside), ["a.png"])
-        res = _run(env.routes.pick_import(
-            _Req(body={"node_id": "7", "folder": str(outside)})))
-        assert res["status"] == 403
-
-    def test_traversal_out_of_a_declared_root_is_refused(self, env, tmp_path):
-        outside = tmp_path / "elsewhere"
-        self.make(str(outside), ["a.png"])
-        res = _run(env.routes.pick_import(_Req(body={
-            "node_id": "7", "folder": str(env.out / ".." / "elsewhere")})))
-        assert res["status"] == 403
-
-    def test_no_folder_is_an_actionable_message(self, env):
-        res = _run(env.routes.pick_import(_Req(body={"node_id": "7"})))
-        assert res["status"] == 400
-        assert "folder" in res["body"]["error"]
-
-    def test_no_node_id_is_refused(self, env):
-        res = _run(env.routes.pick_import(_Req(body={"folder": str(env.out)})))
-        assert res["status"] == 400
-
-    def test_the_imported_images_are_immediately_servable(self, env):
-        """Otherwise the import lands and every new tile draws broken."""
-        src = env.out / "renders" / "cake"
-        self.make(str(src), ["a.png"])
-        _run(env.routes.pick_import(_Req(body={"node_id": "7", "folder": str(src)})))
-        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
-        assert env.routes.is_allowed(entry["thumb"])
-
-
-class TestAPinnedPickerReadsOnlyItsOwnPass:
-    def make(self, folder, names=("a.png",), colour=10):
-        os.makedirs(folder, exist_ok=True)
-        for i, name in enumerate(names):
-            Image.new("RGB", (6, 6), (colour + i, 0, 0)).save(
-                os.path.join(folder, name))
-
-    def tree(self, env):
-        base = env.out / "outputs" / "Oct" / "Mini 3" / "Food" / "Cake"
-        for i, phase in enumerate(("base", "edit", "export")):
-            self.make(str(base / phase), colour=10 + i * 60)
-        return base
-
-    def test_reading_a_recipe_folder_takes_only_the_pinned_pass(self, env):
-        base = self.tree(env)
-        res = _run(env.routes.pick_import(_Req(body={
-            "node_id": "7", "folder": str(base), "phase": "export"})))
-        assert (res["body"]["added"], res["body"]["filtered"]) == (1, 2)
-        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
-        assert entry["phase"] == "export"
-
-    def test_an_unpinned_picker_takes_every_pass(self, env):
-        base = self.tree(env)
-        res = _run(env.routes.pick_import(
-            _Req(body={"node_id": "7", "folder": str(base)})))
-        assert res["body"]["added"] == 3
-
-    def test_a_folder_with_no_pass_level_is_still_stamped(self, env):
-        """Reading `.../Cake` straight into the Export picker must land tagged,
-        or it would be invisible in the node that just read it."""
-        flat = env.out / "outputs" / "Oct" / "Mini 3" / "Food" / "Cake"
-        self.make(str(flat))
-        _run(env.routes.pick_import(_Req(body={
-            "node_id": "8", "folder": str(flat), "phase": "export"})))
-        entry = _run(env.routes.pick_list(_Req(node_id="8")))["body"]["images"][0]
-        assert entry["phase"] == "export"
-
-
-class TestARelativeFolderResolvesLikeSavePaths:
-    def test_a_save_path_shaped_value_is_read_under_the_output_directory(self, env):
-        """`save_paths` emits `month/feature/category/asset`, so the button and
-        the node must resolve the same string the same way."""
-        src = env.out / "October" / "Mini 3" / "Food" / "Cake"
-        os.makedirs(str(src), exist_ok=True)
-        Image.new("RGB", (6, 6), (12, 0, 0)).save(src / "a.png")
-        res = _run(env.routes.pick_import(_Req(body={
-            "node_id": "7", "folder": "October/Mini 3/Food/Cake"})))
-        assert res["body"]["added"] == 1
-        entry = _run(env.routes.pick_list(_Req(node_id="7")))["body"]["images"][0]
-        assert entry["group"] == "Mini 3 / Food / Cake"
+class TestBothLayoutsAtOnce:
+    def test_the_prefixed_files_and_the_assets_own_folder_are_one_grid(self,
+                                                                       env):
+        renders(str(env.out / "Food"), ("Spookies_00001_.png",))
+        renders(str(env.out / "Food" / "Spookies"), ("older.png",), colour=90)
+        env.pick.remember("7", str(env.out / "Food" / "Spookies"))
+        body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
+        assert [i["name"] for i in body["images"]] == ["Spookies_00001_.png",
+                                                       "older.png"]

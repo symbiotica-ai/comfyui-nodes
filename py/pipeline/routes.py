@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import os
 import threading
@@ -693,145 +694,119 @@ async def prompt_write(request):
     return web.json_response({"ok": True, **saved})
 
 
-def _pick_dir(node_id: str) -> str:
-    """One Pick node's buffer, derived server-side from its node id.
+def _pick_target(node_id: str, folder: str = "") -> str:
+    """The asset path a Pick node's panel should list, resolved server-side.
 
-    The caller names a node, never a path: the id is reduced to a bare
-    directory segment and joined onto ComfyUI's own output directory here, so
-    there is no traversal to defend against further down. Requests that arrive
-    before folder_paths is importable get no buffer rather than a stack trace.
+    Without an explicit folder this is whatever the node itself resolved when
+    it last ran, from the asset and category on its wires — the panel cannot
+    work that out, because a wired input has no value on the canvas.
 
-    A blank id has no buffer. It must not fall through to the one the node
-    itself uses when it runs without an id: a clear request that simply forgot
-    to name a node would then delete a real node's candidates.
+    An explicitly named folder is checked against the declared roots like every
+    other path a request names: naming a folder is not what grants access to
+    it. A save node's own prefix is accepted too, since that is the string
+    people have to hand — `…/Food - 3 stages/Spookies` names the `Spookies_*`
+    files one level up rather than a directory.
     """
-    from .pick_buffer import buffer_dir
-    if not str(node_id or "").strip():
-        return ""
-    try:
-        import folder_paths
-        base = folder_paths.get_output_directory()
-    except Exception:
-        return ""
-    return buffer_dir(base, node_id)
+    from .pick_folder import resolved
+
+    named = str(folder or "").strip()
+    if not named:
+        return resolved(node_id)
+    if not os.path.isabs(named):
+        try:
+            import folder_paths
+            named = os.path.normpath(
+                os.path.join(folder_paths.get_output_directory(), named))
+        except Exception:
+            pass
+    named = _expand_project(named)
+    real = resolve_within(declared_roots(), named, kind="dir")
+    if real is not None:
+        return real
+    parent = resolve_within(declared_roots(), os.path.dirname(named),
+                            kind="dir")
+    return os.path.join(parent, os.path.basename(named)) if parent else ""
 
 
 @PromptServer.instance.routes.get("/symbiotica/pick-list")
 async def pick_list(request):
-    """The candidates a Pick node is holding, with the tags they were recorded
-    under and the distinct groups those tags form — the node's filter bar."""
-    from .pick_buffer import groups, list_entries
+    """The images in the folder a Pick node is looking at, numbered.
 
-    dir_path = _pick_dir(request.query.get("node_id", ""))
-    if not dir_path:
-        return web.json_response({"ok": True, "images": [], "groups": []})
-    # Make this one buffer servable. `is_allowed` consults only the folders an
-    # execution registered, never `declared_roots()`, so listing candidates
-    # without this hands back paths whose every thumbnail then 403s — the node
-    # draws a grid of broken images while reporting the right count.
-    # Narrower than the output directory it sits under (already a declared
-    # root), and the path is derived from the node id here rather than sent by
-    # the caller, so registering it grants nothing that was not already
-    # entitled: `register_root_within` refuses anything outside a declared root.
-    register_root_within(dir_path)
-    entries = list_entries(dir_path)
+    No buffer, no copies: this lists the renders where the save node put them,
+    which is why a picker shows a new generation the moment it is queued and
+    why looking at one costs nothing.
+    """
+    from .pick_folder import listing_for, read_folders
+
+    named = str(request.query.get("folder", "") or "").strip()
+    target = _pick_target(request.query.get("node_id", ""), named)
+    if not target:
+        # A folder that was asked for by name and could not be resolved is a
+        # refusal and has to say so. Silence is only right for a picker that
+        # has not run yet, which is every picker on a freshly opened graph.
+        if named:
+            return web.json_response(
+                {"error": f"{named} is not inside a folder this install serves"},
+                status=403)
+        return web.json_response({"ok": True, "images": [], "folder": ""})
+    # `is_allowed` consults only the folders an execution or a browse route
+    # registered, never `declared_roots()`, so listing without this hands back
+    # paths whose every thumbnail then 403s — a grid of broken images with the
+    # right count. `register_root_within` refuses anything outside a declared
+    # root, so this grants nothing that was not already entitled.
+    allowed = [folder for folder, _ in read_folders(target)
+               if register_root_within(folder)]
+    if not allowed:
+        return web.json_response(
+            {"error": f"{target} is not inside a folder this install serves"},
+            status=403)
+    entries = await asyncio.to_thread(listing_for, target)
     return web.json_response({
-        "ok": True,
-        "images": [{
-            "id": e.get("id", ""), "path": e.get("path", ""),
-            "thumb": e.get("thumb_path", ""), "group": e.get("group", ""),
-            "role": e.get("role", ""), "phase": e.get("phase", ""),
-            "asset": e.get("asset", ""), "category": e.get("category", ""),
-            "feature": e.get("feature", ""), "month": e.get("month", ""),
-            "w": e.get("w", 0), "h": e.get("h", 0), "at": e.get("at", ""),
-        } for e in entries],
-        "groups": groups(entries),
+        "ok": True, "folder": target,
+        "images": [{"id": e["id"], "name": e["name"], "index": e["index"],
+                    "path": e["path"], "w": e["w"], "h": e["h"],
+                    "at": e["at"]} for e in entries],
     })
 
 
-@PromptServer.instance.routes.post("/symbiotica/pick-clear")
-async def pick_clear(request):
-    """Drop named candidates, or the whole buffer when no ids are given.
+@PromptServer.instance.routes.get("/symbiotica/pick-thumb")
+async def pick_thumb(request):
+    """One listed image, shrunk to grid size, never written to disk.
 
-    Deleting is deliberate here rather than a "hidden" flag: the buffer is
-    full-size PNGs of every render that was ever looked at, and a triage tool
-    that only ever grows fills the output volume.
+    The node draws every image in a folder at once, and serving full-size
+    renders into a strip of 128px tiles makes it feel broken. Resizing per
+    request rather than keeping a thumbnail folder is the whole point of this
+    node holding nothing: the browser caches the result, so the work happens
+    once per image per session and leaves nothing behind.
     """
-    from .pick_buffer import clear, drop
+    from PIL import Image, UnidentifiedImageError
+
+    resolved_path = is_allowed(request.query.get("path", ""))
+    if resolved_path is None:
+        return web.json_response({"error": "not an allowed image path"},
+                                 status=403)
+    try:
+        px = max(32, min(1024, int(request.query.get("px", "320"))))
+    except ValueError:
+        px = 320
+
+    def _shrink():
+        buffer = io.BytesIO()
+        with Image.open(resolved_path) as img:
+            img.load()
+            # Alpha survives: a background-removed render judged on a black
+            # rectangle is not the image that was approved.
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGBA" if "transparency" in img.info
+                                  else "RGB")
+            img.thumbnail((px, px))
+            img.save(buffer, format="PNG")
+        return buffer.getvalue()
 
     try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    dir_path = _pick_dir(str(body.get("node_id") or ""))
-    if not dir_path:
-        return web.json_response({"error": "no buffer for that node"},
+        body = await asyncio.to_thread(_shrink)
+    except (OSError, UnidentifiedImageError, ValueError):
+        return web.json_response({"error": "could not read that image"},
                                  status=400)
-    ids = body.get("ids")
-    if isinstance(ids, list) and ids:
-        return web.json_response({"ok": True, "removed": drop(dir_path, ids)})
-    clear(dir_path)
-    return web.json_response({"ok": True, "removed": "all"})
-
-
-@PromptServer.instance.routes.post("/symbiotica/pick-import")
-async def pick_import(request):
-    """File the images already sitting in a folder as one picker's candidates.
-
-    The buffer is per node, so a picker added after the work was generated
-    starts empty — and re-running the generator to fill it pays for renders
-    that already exist. The folder is checked against the declared roots like
-    every other path a request names; naming a folder is not what grants access
-    to it.
-    """
-    from .pick_buffer import import_folder
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    dir_path = _pick_dir(str(body.get("node_id") or ""))
-    if not dir_path:
-        return web.json_response({"error": "no buffer for that node"}, status=400)
-
-    folder = str(body.get("folder") or "").strip()
-    # A relative value is what Order Assets' `save_paths` emits, so resolve it
-    # the same way the node does rather than refusing it here.
-    if folder and not os.path.isabs(folder):
-        try:
-            import folder_paths
-            folder = os.path.normpath(
-                os.path.join(folder_paths.get_output_directory(), folder))
-        except Exception:
-            pass
-    folder = _expand_project(folder)
-    if not folder:
-        return web.json_response(
-            {"error": "type a folder into the node's `folder` field first"},
-            status=400)
-    real = resolve_within(declared_roots(), folder, kind="dir")
-    if real is None:
-        return web.json_response(
-            {"error": f"{folder} is not inside a folder this install serves"},
-            status=403)
-
-    # The wired asset name is not readable from the canvas — a wired input has
-    # no widget value — and it does not need to be: renders are filed
-    # `outputs/<month>/<event>/<category>/<recipe>/…`, so the path states it.
-    # Anything typed on the node still overrides what the path says.
-    tag = {"asset": str(body.get("asset") or "").strip(),
-           "category": str(body.get("category") or "").strip(),
-           "role": str(body.get("role") or "").strip()}
-    # A picker pinned to a pass reads only that pass, and stamps it on what it
-    # reads — so a folder that has no `export` level still lands correctly
-    # tagged in the Export picker.
-    only_phase = str(body.get("phase") or "").strip()
-    if only_phase:
-        tag["phase"] = only_phase
-    stamp = str(body.get("at") or "")
-    # Off the event loop: a few hundred PNGs get opened and thumbnailed here,
-    # and the canvas still needs to talk to the server while that runs.
-    result = await asyncio.to_thread(import_folder, dir_path, real,
-                                     tag=tag, at=stamp, only_phase=only_phase)
-    register_root_within(dir_path)
-    return web.json_response({"ok": True, "folder": real, **result})
+    return web.Response(body=body, content_type="image/png",
+                        headers={"Cache-Control": "private, max-age=600"})
