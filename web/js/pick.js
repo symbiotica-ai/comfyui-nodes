@@ -11,7 +11,7 @@ const NODE_CLASS = "SymbioticaPick";
 const MIN_NODE_W = 340;
 const PANEL_MAX = 720;      // past this the grid scrolls instead of growing the node
 const SIZES = { S: 64, M: 108, L: 184 };
-const DEFAULT_SIZE = "M";
+const DEFAULT_SIZE = "S";
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
 
