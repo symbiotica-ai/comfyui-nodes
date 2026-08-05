@@ -6,6 +6,37 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.10
+
+**Two nodes added, none changed.** Symbiotica Pick and Symbiotica Asset Focus
+are new; no existing node's inputs, outputs or id changed, so saved workflows
+load as they are.
+
+### Added
+
+- **Symbiotica Pick** — the triage step between stages: lists the images a
+  stage of an asset has produced, numbered on the node, and sends on the ticked
+  ones. It writes and copies nothing — files stay where the save node put them,
+  so looking never costs a generation. `stage` names a step under the asset
+  (`edits`); the `folder` output feeds the save node's `filename_prefix` so the
+  node that writes a stage and the node that reads it are named in one place; a
+  picker wired to another picker lists exactly what that one approved; `single`
+  mode for edit steps replaces the tick instead of adding to it.
+- **Symbiotica Asset Focus** — one asset out of the order, chosen on the node:
+  emits its name, category, client prompt and save path; category is a dropdown
+  of what the order holds; re-lists when the order's event changes upstream.
+
+### Fixed
+
+- The picker can no longer be cached out of listing, and a fresh render appears
+  in the same queue that made it.
+- Looking at thumbnails no longer re-runs the render lane or the generator that
+  made a pick.
+- Asset Focus's "all" emits all; a chosen asset the event no longer holds is
+  dropped.
+- Order Specs parses when queued holding nothing; the order wire is followed
+  further than one hop.
+
 ## 2026.8.9
 
 **No node change.** No node is added, removed or renamed, and no input or output
