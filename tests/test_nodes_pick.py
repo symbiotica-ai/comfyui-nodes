@@ -213,6 +213,29 @@ class TestWhichFolderItLists:
                   selection=[json.dumps(["Spookies_00001_.png"])])
         assert len(out.args[0]) == 1
 
+    def test_one_wire_from_save_path_is_enough(self, nodes_mod, tmp_path):
+        """Asset Focus's `save_path` is relative and already names the asset —
+        wired into `folder`, the picker needs no other wire."""
+        renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
+        out = run(nodes_mod, folder=[f"{EVENT_DIR}/Food/Spookies"],
+                  selection=[json.dumps(["Spookies_00001_.png"])])
+        assert len(out.args[0]) == 1
+        assert out.args[1] == f"{EVENT_DIR}/Food/Spookies"
+
+    def test_a_stage_is_a_step_under_the_wired_folder(self, nodes_mod,
+                                                      tmp_path):
+        """`save_path` names the asset; `stage` still names the step under it,
+        exactly as it does for the derived folder."""
+        renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
+        renders(tmp_path, f"{EVENT_DIR}/Food/Spookies", ("edits_00001_.png",),
+                colour=90)
+        out = run(nodes_mod, folder=[f"{EVENT_DIR}/Food/Spookies"],
+                  stage=["edits"],
+                  selection=[json.dumps(["edits_00001_.png",
+                                         "Spookies_00001_.png"])])
+        assert len(out.args[0]) == 1
+        assert out.args[1] == f"{EVENT_DIR}/Food/Spookies/edits"
+
     def test_a_folder_that_is_not_there_is_not_an_error(self, nodes_mod,
                                                          tmp_path):
         assert spookies(nodes_mod, tmp_path).args[0] == []

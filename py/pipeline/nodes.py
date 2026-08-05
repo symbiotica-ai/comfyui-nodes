@@ -3494,10 +3494,11 @@ class SymbioticaPick(io.ComfyNode):
                         "save node put them, so a new render appears by "
                         "queueing this node again and looking at the work can "
                         "never cost a generation. "
-                        "The folder comes from the asset, category and order "
-                        "already wired in; `stage` names a step under it "
-                        "(`edits` reads `…/<asset>/edits_00001_.png`), and "
-                        "`folder` overrides the lot to browse elsewhere. Wire "
+                        "The folder is one wire: Asset Focus's `save_path` "
+                        "into `folder` — or, absent that, it is derived from "
+                        "the asset, category and order wires. `stage` names a "
+                        "step under it "
+                        "(`edits` reads `…/<asset>/edits_00001_.png`). Wire "
                         "the `folder` output into the Save Image that fills "
                         "that stage and this node lists exactly what that node "
                         "wrote, by construction. "
@@ -3544,15 +3545,19 @@ class SymbioticaPick(io.ComfyNode):
                                         "Kept only so older saved workflows "
                                         "keep their widget positions."),
                 io.String.Input("folder", default="", optional=True,
-                                tooltip="Usually leave this empty — the node "
-                                        "works the folder out from the asset, "
-                                        "category and order it is wired to. "
-                                        "Set it to browse a different one; a "
-                                        "relative path resolves under "
-                                        "ComfyUI's output directory. Naming a "
-                                        "save node's own prefix works too "
-                                        "(`…/Food - 3 stages/Spookies` lists "
-                                        "that asset's `Spookies_*` files)."),
+                                tooltip="Wire Asset Focus's `save_path` here "
+                                        "— the same string the save nodes "
+                                        "take, so this node lists exactly "
+                                        "where they write, and `stage` names "
+                                        "a step under it. Left empty, the "
+                                        "node falls back to deriving the "
+                                        "folder from the asset, category and "
+                                        "order wires. A relative path "
+                                        "resolves under ComfyUI's output "
+                                        "directory; a save node's own prefix "
+                                        "works too (`…/Food - 3 stages/"
+                                        "Spookies` lists that asset's "
+                                        "`Spookies_*` files)."),
                 io.Combo.Input("phase", options=_PICK_PHASES, default="",
                                optional=True,
                                tooltip="Unused, and hidden on the canvas — "
@@ -3713,21 +3718,27 @@ class SymbioticaPick(io.ComfyNode):
             ord_dict = {}
         step = _segment_or_blank(one(stage, ""))
 
-        # Where this asset's work is, worked out from the wires the node
-        # already has rather than from a path typed in beside them. `stage` is
-        # a step under the asset: `…/<asset>/edits` names the files the edit
-        # lane writes, the same way `…/<asset>` names its first renders.
-        context = {"month": str(ord_dict.get("month", "")),
-                   "feature": str(ord_dict.get("feature", "")),
-                   "category": _at_or_first(_as_list(category), 0),
-                   "asset": _at_or_first(_as_list(asset), 0)}
-        home = _pick_folders([_derived_pick_folder(context, ord_dict)])
-        home = home[0] if home else ""
+        # One wire names the asset's folder: Asset Focus's `save_path` into
+        # `folder` is the same string the save nodes take, so the picker and
+        # the savers cannot disagree. Without it the node falls back to
+        # deriving the path from the asset, category and order wires. `stage`
+        # is a step under the asset either way: `…/<asset>/edits` names the
+        # files the edit lane writes, the same way `…/<asset>` names its
+        # first renders.
+        typed = _pick_folders(_as_list(folder))
+        if typed:
+            home = typed[0]
+        else:
+            context = {"month": str(ord_dict.get("month", "")),
+                       "feature": str(ord_dict.get("feature", "")),
+                       "category": _at_or_first(_as_list(category), 0),
+                       "asset": _at_or_first(_as_list(asset), 0)}
+            derived = _pick_folders([_derived_pick_folder(context, ord_dict)])
+            home = derived[0] if derived else ""
         # The folder this asset's `stage` step lives in, whether or not this
         # node is the one listing it.
         stage_home = os.path.join(home, step) if (home and step) else home
-        typed = _pick_folders(_as_list(folder))
-        target = typed[0] if typed else stage_home
+        target = stage_home
 
         # Fed by another picker: list exactly what it approved. Its ticks are
         # on its own node in the prompt, and the folder they name is the one it
