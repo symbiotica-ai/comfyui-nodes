@@ -91,10 +91,11 @@ function keepEvents(el) {
 // The DOM every prompt panel shares: a picker/save bar, the composed-blocks
 // line, a status line, and the editor. State (what is loaded, what is dirty)
 // stays with each panel — this is chrome only.
-function panelChrome(node, widgetName, { save = true, height = 320 } = {}) {
+function panelChrome(node, widgetName, { save = true } = {}) {
     const container = document.createElement("div");
-    container.style.cssText = "box-sizing:border-box;width:100%;display:flex;"
-        + "flex-direction:column;gap:4px;font-size:11px;overflow:hidden;";
+    container.style.cssText = "box-sizing:border-box;width:100%;height:100%;"
+        + "display:flex;flex-direction:column;gap:4px;font-size:11px;"
+        + "overflow:hidden;";
 
     const bar = document.createElement("div");
     bar.style.cssText = "display:flex;gap:4px;align-items:center;min-width:0;";
@@ -133,7 +134,13 @@ function panelChrome(node, widgetName, { save = true, height = 320 } = {}) {
     container.append(bar, blocksBar, status, editor);
     const w = node.addDOMWidget(widgetName, `sym_${widgetName}`, container,
                                 { serialize: false, hideOnZoom: true });
-    w.computeSize = (width) => [width, height];
+    // The editor follows the NODE, like a string literal's textarea: drag the
+    // corner, the text grows. Everything above the panel (title bar, slots,
+    // project_path) is a near-constant band, so the panel takes what remains,
+    // floored so a tiny node keeps a usable editor rather than none.
+    const ABOVE = 120;
+    w.computeSize = (width) => [width,
+                                Math.max(160, node.size[1] - ABOVE)];
 
     // The wrapper ComfyUI sizes from the node width follows a widening at once
     // but lags a shrink, leaving the panel hanging off the node's right edge —
@@ -353,7 +360,7 @@ function bookPanel(node) {
 // --- the Prompt Block node: one block, big on the canvas ---------------------
 function blockPanel(node) {
     const blockW = hideBackingWidget(node, "block");
-    const ui = panelChrome(node, "prompt_block", { height: 260 });
+    const ui = panelChrome(node, "prompt_block");
     const { picker, saveBtn, editor, setStatus, setEditable } = ui;
     setEditable(true);
 
