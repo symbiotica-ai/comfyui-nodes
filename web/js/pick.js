@@ -222,10 +222,58 @@ function pickPanel(node) {
         reload.addEventListener("click", () => load());
         bar.appendChild(reload);
 
+        if (here) {
+            // Never delete: the tiles ARE the renders, several of them paid
+            // for and unrepeatable, so the worst this button may do is file
+            // them one folder deeper. Two clicks, because it is the only
+            // control here that touches the disk at all.
+            const armed = node._symDiscardArmed;
+            const bin = el("button", ghostButtonCss + "padding:1px 8px;flex:none;"
+                + (armed ? `border-color:${HUB.accent};color:${HUB.ink};` : ""),
+                           armed ? `discard ${here}?` : "discard");
+            bin.className = "sym-btn";
+            bin.title = `Move the ${here} ticked file(s) into \`discarded/\` `
+                + "under this folder. They leave the grid, not the disk — drag "
+                + "them back to undo.";
+            bin.addEventListener("pointerdown", (e) => e.stopPropagation());
+            bin.addEventListener("click", async () => {
+                if (!node._symDiscardArmed) {
+                    node._symDiscardArmed = true;
+                    render();
+                    setTimeout(() => {
+                        if (node._symDiscardArmed) {
+                            node._symDiscardArmed = false;
+                            render();
+                        }
+                    }, 4000);
+                    return;
+                }
+                node._symDiscardArmed = false;
+                const gone = images.filter((i) => ticks.has(i.id))
+                                   .map((i) => i.id);
+                try {
+                    const res = await fetchJson("/symbiotica/pick-discard", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ node_id: String(node.id),
+                                               names: gone }),
+                    });
+                    // A discarded file must not stay ticked: the tick would
+                    // read as "missing" forever and never travel anywhere.
+                    const dropped = new Set(gone);
+                    writeTicks(node, new Set([...readTicks(node)]
+                        .filter((t) => !dropped.has(t))));
+                    notice = `${(res.discarded || []).length} moved to `
+                        + "discarded/";
+                } catch (e) {
+                    error = e.message || "could not discard those";
+                }
+                await load();
+            });
+            bar.appendChild(bin);
+        }
+
         if (ticks.size) {
-            // Untick, never delete. The tiles are the renders themselves, so a
-            // node that could delete them would be a node that can destroy the
-            // work it exists to choose between.
             const clear = el("button", ghostButtonCss + "padding:1px 8px;flex:none;",
                              "untick all");
             clear.className = "sym-btn";

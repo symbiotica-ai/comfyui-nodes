@@ -22,6 +22,10 @@ const THREE = shot("Spookies_00003_.png", 3);
 function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) {
     return (route, _n, init) => {
         seen.push({ route, init });
+        if (route.startsWith("/symbiotica/pick-discard")) {
+            return { ok: true, body: { ok: true,
+                discarded: JSON.parse(init?.body ?? "{}").names ?? [] } };
+        }
         if (route.startsWith("/symbiotica/pick-list")) {
             return { ok: true, body: { ok: true, folder, images, shortlist } };
         }
@@ -344,4 +348,26 @@ test("roles still row when one of them is the bare asset name", async () => {
     const text = textOf(node);
     assert.ok(text.includes("base · 1"), text);
     assert.ok(text.includes("prep · 1"), text);
+});
+
+test("discard takes two clicks and posts the ticked names", async () => {
+    const seen = [];
+    const node = await panelNode(seen, [ONE, TWO]);
+    fire(cells(node)[0], "click");
+    fire(buttonsSaying(node, "discard")[0], "click");
+    await tick();
+    // Armed, not fired: nothing has touched the disk yet.
+    assert.equal(seen.filter((c) => c.route.includes("pick-discard")).length, 0);
+    fire(buttonsSaying(node, "discard 1?")[0], "click");
+    for (let i = 0; i < 10; i++) await tick();
+    const call = seen.find((c) => c.route.includes("pick-discard"));
+    assert.ok(call, "no discard call");
+    assert.deepEqual(JSON.parse(call.init.body).names, [ONE.name]);
+    // A discarded file must not stay ticked — it would read as missing.
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value), []);
+});
+
+test("discard is offered only once something ticked is on screen", async () => {
+    const node = await panelNode([], [ONE, TWO]);
+    assert.equal(buttonsSaying(node, "discard").length, 0);
 });

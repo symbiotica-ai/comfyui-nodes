@@ -806,6 +806,46 @@ async def pick_list(request):
     })
 
 
+@PromptServer.instance.routes.post("/symbiotica/pick-discard")
+async def pick_discard(request):
+    """Take ticked files out of a picker's grid, without taking them off disk.
+
+    "we need a way to delete some of the generations that are not good" — and
+    a picker that could delete would be a node able to destroy the work it
+    exists to choose between, several images of which cost real money and
+    cannot be regenerated. So this MOVES them into `discarded/` under the same
+    folder: gone from every listing, one drag from coming back.
+
+    Scoped like the listing itself — a name is only accepted if it is one the
+    node actually shows, so a request can no more discard by path than it can
+    read by path.
+    """
+    from .pick_folder import discard, read_folders
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    names = [str(n) for n in (body.get("names") or [])]
+    target, _only = _pick_target(str(body.get("node_id") or ""),
+                                 str(body.get("folder") or ""))
+    if not target:
+        return web.json_response(
+            {"error": "queue this picker once before discarding from it"},
+            status=409)
+    if not names:
+        return web.json_response({"ok": True, "discarded": []})
+    if not register_root_within(target) and not any(
+            register_root_within(folder)
+            for folder, _ in read_folders(target)):
+        return web.json_response(
+            {"error": f"{target} is not inside a folder this install serves"},
+            status=403)
+    moved = await asyncio.to_thread(discard, target, names)
+    return web.json_response({"ok": True,
+                              "discarded": [os.path.basename(p) for p in moved]})
+
+
 @PromptServer.instance.routes.get("/symbiotica/pick-thumb")
 async def pick_thumb(request):
     """One listed image, shrunk to grid size, never written to disk.
