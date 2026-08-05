@@ -110,6 +110,112 @@ test("the assets appear from the wired source, with no run at all", async () => 
                      ["Frankencrisps", "Bunting"]);
 });
 
+test("changing the feature upstream re-lists without touching this node", async () => {
+    // "why doesn't the asset focus node change the category when i change it
+    // in order specs? i have to manually click in 494 on all to see the
+    // categories". LiteGraph has no event for "a widget upstream changed", so
+    // the source announces it and every order reader decides if it cares.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 1" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [
+        { feature: "Mini 1", assets: [
+            { assetName: "Skull Rose Cupcake", category: "Food - 3 stages" }] },
+        { feature: "Mini 3", assets: [
+            { assetName: "Bunting", category: "Decoration" }] },
+    ];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["Skull Rose Cupcake"]);
+
+    widgetOf(specs, "feature").value = "Mini 3";
+    node._symOrderChanged(specs);
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["Bunting"]);
+});
+
+test("a run's list does not survive the feature changing under it", async () => {
+    // What a run reported wins over what the source published, so leaving it
+    // in place shows the PREVIOUS event's assets and emits them too.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Bunting", category: "Decoration" }] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symFocusAssets = [{ name: "Frankencrisps", category: "Food - 3 stages" }];
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["Frankencrisps"]);
+
+    node._symOrderChanged(specs);
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["Bunting"]);
+});
+
+test("a category the new feature does not have falls back to All", async () => {
+    // Narrowing to nothing reads as "this node is broken" rather than as
+    // "Decoration is not in this feature".
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 1" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [
+        { feature: "Mini 1", assets: [
+            { assetName: "Bunting", category: "Decoration" }] },
+        { feature: "Mini 3", assets: [
+            { assetName: "Frankencrisps", category: "Food - 3 stages" }] },
+    ];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "Decoration", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+
+    widgetOf(specs, "feature").value = "Mini 3";
+    node._symOrderChanged(specs);
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(widgetOf(node, "category").value, "All");
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["Frankencrisps"]);
+});
+
+test("an order change from somewhere else is ignored", async () => {
+    // Two orders on one canvas is ordinary; a picker must not re-list because
+    // the OTHER one moved.
+    reset();
+    const mine = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    mine.comfyClass = "SymbioticaOrderSpecs";
+    mine._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Bunting", category: "Decoration" }] }];
+    const other = await create("SymbioticaOrderSpecs", { feature: "Mini 9" });
+    other.comfyClass = "SymbioticaOrderSpecs";
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(mine, node, "order");
+    node._symFocusAssets = [{ name: "Frankencrisps", category: "Food - 3 stages" }];
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+
+    node._symOrderChanged(other);
+    for (let i = 0; i < 5; i++) await tick();
+    // Still the run's list: nothing about this node's own order changed.
+    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+                     ["Frankencrisps"]);
+});
+
 test("the category widget narrows the published list too", async () => {
     reset();
     const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });

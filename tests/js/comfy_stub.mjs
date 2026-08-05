@@ -14,6 +14,7 @@ export function reset() {
     calls.length = 0;
     repaints.count = 0;
     nodes.clear();
+    assignedNodes = null;
     app.graph.links = {};
 }
 
@@ -109,6 +110,7 @@ export const api = {
 
 // --- app / graph -------------------------------------------------------------
 const nodes = new Map();
+let assignedNodes = null;
 export const repaints = { count: 0 };
 let nextLink = 1;
 let nextId = 1;
@@ -116,7 +118,19 @@ let nextId = 1;
 export const app = {
     extensions: [],
     registerExtension(ext) { this.extensions.push(ext); },
-    graph: { links: {}, getNodeById: (id) => nodes.get(id) ?? null },
+    graph: {
+        links: {},
+        getNodeById: (id) => nodes.get(id) ?? null,
+        // LiteGraph keeps every node on the graph in `_nodes`, which is how
+        // code broadcasts to the canvas rather than walking wires. Without it
+        // a broadcast reaches nothing and its test passes for the wrong
+        // reason. Every created node is on it by default; a test that builds a
+        // graph by hand can still assign the list outright, and then that is
+        // exactly what it gets — assigning a subset is how the "two possible
+        // sources" cases are set up.
+        get _nodes() { return assignedNodes ?? [...nodes.values()]; },
+        set _nodes(value) { assignedNodes = value; },
+    },
 };
 
 function makeNode(comfyClass, widgets) {

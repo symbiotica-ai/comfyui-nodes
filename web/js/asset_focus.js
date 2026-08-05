@@ -273,6 +273,34 @@ function focusPanel(node) {
     }
 
     node._symRenderFocus = render;
+
+    // The order upstream changed — a different feature, a different month, a
+    // re-parse. "why doesn't the asset focus node change the category when i
+    // change it in order specs? i have to manually click in 494 on all to see
+    // the categories": the `category` dropdown rebuilds its options when it is
+    // opened, so clicking it looked like the fix, but nothing had told the
+    // panel to re-list.
+    node._symOrderChanged = (source) => {
+        if (!source || orderSource(node) !== source) return;
+        // The list a run reported belongs to the event that ran. Keeping it
+        // would show the previous feature's assets over the new one's — and it
+        // is the list that wins in `render`.
+        node._symFocusAssets = [];
+        // A feature whose events are not parsed yet is worth asking about
+        // again; `publishOrder` repeats itself only when something changed, so
+        // an ask that answers the same thing does not come back round.
+        node._symAskedOrder = false;
+        // A category the new event does not have narrows the list to nothing,
+        // which reads as "this node is broken" rather than as "Decoration is
+        // not in this feature". Fall back to everything, the same way a chosen
+        // asset that is no longer listed is dropped in `render`.
+        const categoryW = widgetOf(node, "category");
+        if (categoryW && !categoriesOf(node).includes(categoryW.value)) {
+            categoryW.value = ALL_CATEGORIES;
+        }
+        render();
+    };
+
     render();
 }
 
