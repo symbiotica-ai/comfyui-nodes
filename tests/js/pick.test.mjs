@@ -286,6 +286,25 @@ test("it registers under one extension name", async () => {
     assert.ok(app.extensions.some((e) => e.name === "symbiotica.pick"));
 });
 
+test("role-named files row themselves with the role as the label", async () => {
+    // `<asset>_<role>_00001_.png` groups by stem-minus-counter; the label is
+    // what the keys do not share, so the asset's own name stays out of it.
+    const node = await panelNode([], [
+        shot("Spookies_prep_00001_.png", 1),
+        shot("Spookies_ready_00001_.png", 2),
+        shot("Spookies_serving_00001_.png", 3),
+    ]);
+    const text = textOf(node);
+    for (const label of ["prep · 1", "ready · 1", "serving · 1"]) {
+        assert.ok(text.includes(label), label);
+    }
+});
+
+test("a single group renders flat, with no row label", async () => {
+    const node = await panelNode([], [ONE, TWO]);
+    assert.ok(!textOf(node).includes("base"));
+});
+
 test("a finished queue re-lists even a picker that did not run", async () => {
     // The picker's change-check answers only for its emission, so a cached
     // picker skips execution entirely — the fresh renders a queue wrote have

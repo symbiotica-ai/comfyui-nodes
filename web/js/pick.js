@@ -238,11 +238,18 @@ function pickPanel(node) {
     }
 
     // --- grid --------------------------------------------------------------
-    function renderGrid(ticks) {
+    // Files saved as `<asset>_<role>_00001_.png` carry their role in the
+    // name, so the grid can row itself by it — one row per role makes "one of
+    // each, none twice" readable at a glance. The group key is the stem minus
+    // ComfyUI's counter; the label is what the keys do not share.
+    const groupOf = (name) =>
+        name.replace(/\.[^.]+$/, "").replace(/_\d+_?$/, "");
+
+    function renderRow(ticks, rowImages) {
         const px = SIZES[thumbSize(node)];
         const grid = el("div", "display:flex;flex-wrap:wrap;gap:4px;"
             + "width:100%;box-sizing:border-box;");
-        for (const image of images) {
+        for (const image of rowImages) {
             const on = ticks.has(image.id);
             const cell = el("div",
                 `position:relative;width:${px}px;height:${px}px;flex:none;`
@@ -277,6 +284,37 @@ function pickPanel(node) {
             grid.appendChild(cell);
         }
         return grid;
+    }
+
+    function renderGrid(ticks) {
+        const groups = new Map();
+        for (const image of images) {
+            const key = groupOf(image.name);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(image);
+        }
+        if (groups.size <= 1) return renderRow(ticks, images);
+
+        // The shared start of every key is the asset's own name — the label
+        // is the part that differs, which is the role.
+        const keys = [...groups.keys()];
+        let shared = keys[0];
+        for (const key of keys) {
+            while (shared && !key.startsWith(shared)) {
+                shared = shared.slice(0, -1);
+            }
+        }
+        const wrap = el("div", "width:100%;box-sizing:border-box;");
+        for (const [key, rowImages] of groups) {
+            const label = key.slice(shared.length).replace(/^_/, "") || "base";
+            const here = rowImages.filter((i) => ticks.has(i.id)).length;
+            wrap.appendChild(el("div",
+                `padding:5px 3px 2px;font:10px ${HUB.font};`
+                + `color:${here ? HUB.ink : HUB.inkSubtle};`,
+                `${label} · ${rowImages.length}${here ? ` · ${here} ✓` : ""}`));
+            wrap.appendChild(renderRow(ticks, rowImages));
+        }
+        return wrap;
     }
 
     function render() {
