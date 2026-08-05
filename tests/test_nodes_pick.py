@@ -71,6 +71,31 @@ class TestSchema:
         widgets = [i.id for i in schema.inputs if i.id != "images"]
         assert widgets == ["save_path", "selection", "view", "mode", "stage"]
 
+    def test_every_input_is_optional(self, nodes_mod):
+        """The other half of surviving a saved workflow: `optional`, not order.
+
+        ComfyUI validates a prompt against the CURRENT schema, and an input
+        without `optional=True` has to be PRESENT in it — `validate_inputs`
+        answers an absent one with "Required input is missing" and never falls
+        back to the declared default. A graph saved before an input existed
+        cannot carry it, which is the same reason the widget order is frozen
+        above; and this node is queueable on its own, before anything at all is
+        wired to it. So nothing here may be required.
+
+        Found live on 2026.8.10, when `get_new` was not optional: the pinned
+        flow4 order template, saved before that widget existed, had all three of
+        its pickers dropped from the render with their outputs. The widget has
+        since gone, but what dropped those graphs was requiring it, not having
+        it — so the rule is worth holding rather than the widget.
+        """
+        schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
+        # getattr, not attribute access: the stub keeps only the kwargs a schema
+        # passes, and absent IS the required case — the reading has to survive
+        # an input that never mentions `optional` at all.
+        required = [i.id for i in schema.inputs
+                    if not getattr(i, "optional", False)]
+        assert required == []
+
     def test_the_picked_output_is_a_list(self, nodes_mod):
         """A list, not a batch: two picks of different sizes cannot stack into
         one tensor, and downstream should run once per approved image."""
