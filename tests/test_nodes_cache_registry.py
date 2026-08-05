@@ -11,6 +11,9 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
 from comfy_api_stub import build_modules
+# routes pulls in aiohttp and ComfyUI's server; the root-scope tests already
+# keep a stub loader for exactly that, and two copies would drift.
+from test_routes_root_scope import _load_routes
 
 
 @pytest.fixture()
@@ -21,7 +24,12 @@ def nodes_mod(monkeypatch, tmp_path):
     fp = types.ModuleType("folder_paths")
     out = tmp_path / "output"
     out.mkdir()
+    inp = tmp_path / "input"
+    inp.mkdir()
     fp.get_output_directory = lambda: str(out)
+    # routes.declared_roots reads BOTH, and its guard is one try/except around
+    # the pair — a stub missing this one silently declares neither.
+    fp.get_input_directory = lambda: str(inp)
     monkeypatch.setitem(sys.modules, "folder_paths", fp)
     sys.modules.pop("pipeline.nodes", None)
     import pipeline.nodes as nodes
@@ -105,7 +113,7 @@ def test_asset_refs_reruns_when_a_reference_file_is_replaced(nodes_mod,
     refs = tmp_path / "Bakery-October"
     refs.mkdir()
     Image.new("RGB", (8, 8), (1, 2, 3)).save(refs / "Spookies.png")
-    monkeypatch.setattr(nodes_mod, "_executed_roots", lambda: [str(refs)])
+    monkeypatch.setattr(nodes_mod, "_reference_roots", lambda: [str(refs)])
     fp = nodes_mod.SymbioticaAssetRefs.fingerprint_inputs
     before = fp()
 
@@ -114,9 +122,54 @@ def test_asset_refs_reruns_when_a_reference_file_is_replaced(nodes_mod,
     assert fp() != before
 
 
+def test_asset_refs_ignores_folders_a_browse_route_made_servable(nodes_mod,
+                                                                 monkeypatch,
+                                                                 tmp_path):
+    """A picker's thumbnail buffer is a served folder, not a reference folder.
+    Hashing every folder the process ever made servable put the Pick buffers —
+    which the pipeline WRITES to — inside this node's cache key: ticking a
+    thumbnail re-ran the reference load, and with it the LLM that reads the
+    reference and the image model that reads the LLM. One render per click, on
+    an unchanged seed."""
+    routes = _load_routes(monkeypatch)
+    refs = tmp_path / "Bakery-October"
+    refs.mkdir()
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(refs / "Spookies.png")
+    buffer = tmp_path / "output" / "symbiotica_pick" / "483"
+    buffer.mkdir(parents=True)
+    routes.register_refs_root(str(refs))
+    assert routes.register_root_within(str(buffer)) is True
+
+    fp = nodes_mod.SymbioticaAssetRefs.fingerprint_inputs
+    before = fp()
+    Image.new("RGB", (8, 8), (4, 5, 6)).save(buffer / "abc123_thumb.png")
+    assert fp() == before
+    # …and the reference folder still moves it.
+    Image.new("RGB", (16, 16), (9, 9, 9)).save(refs / "Spookies.png")
+    assert fp() != before
+
+
+def test_a_served_root_is_not_a_reference_root(monkeypatch, tmp_path):
+    """The two registries answer different questions: what may be served, and
+    what this node's output depends on. A save destination is the first without
+    being the second."""
+    routes = _load_routes(monkeypatch)
+    refs = tmp_path / "refs"
+    saves = tmp_path / "output" / "templates"
+    refs.mkdir()
+    saves.mkdir(parents=True)
+    routes.register_refs_root(str(refs))
+    routes.register_root(str(saves))
+    assert os.path.realpath(str(refs)) in routes.reference_roots()
+    assert os.path.realpath(str(saves)) not in routes.reference_roots()
+    # Both remain servable — narrowing the watch list must not narrow access.
+    assert os.path.realpath(str(refs)) in routes.executed_roots()
+    assert os.path.realpath(str(saves)) in routes.executed_roots()
+
+
 def test_asset_refs_moves_with_its_own_widgets(nodes_mod, monkeypatch,
                                                tmp_path):
-    monkeypatch.setattr(nodes_mod, "_executed_roots", lambda: [])
+    monkeypatch.setattr(nodes_mod, "_reference_roots", lambda: [])
     fp = nodes_mod.SymbioticaAssetRefs.fingerprint_inputs
     assert fp(background=["#808080"]) != fp(background=["#000000"])
     assert fp(output_size=["native"]) != fp(output_size=["512"])
@@ -125,7 +178,7 @@ def test_asset_refs_moves_with_its_own_widgets(nodes_mod, monkeypatch,
 def test_neither_change_check_raises_on_a_missing_folder(nodes_mod,
                                                          monkeypatch):
     # A raise here becomes NaN and re-bills every descendant per queue press.
-    monkeypatch.setattr(nodes_mod, "_executed_roots", lambda: ["/nope/gone"])
+    monkeypatch.setattr(nodes_mod, "_reference_roots", lambda: ["/nope/gone"])
     monkeypatch.setattr(nodes_mod, "_executed_projects", lambda: ["/nope/gone"])
     assert isinstance(nodes_mod.SymbioticaAssetRefs.fingerprint_inputs(), str)
     assert isinstance(

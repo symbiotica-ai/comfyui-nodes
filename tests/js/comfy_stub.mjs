@@ -17,6 +17,7 @@ export function reset() {
     canvasCalls.center.length = 0;
     canvasCalls.dirty = 0;
     nodes.clear();
+    assignedNodes = null;
     app.graph.links = {};
 }
 
@@ -77,9 +78,22 @@ globalThis.window = { addEventListener() {}, devicePixelRatio: 1 };
 globalThis.requestAnimationFrame = (cb) => cb();
 
 // --- api ---------------------------------------------------------------------
+// A module registers its execution-message listeners once, at import time, so
+// these are deliberately NOT cleared by reset() — dropping them would silently
+// disarm every test that runs after the first.
+const apiListeners = new Map();
+
+/** Deliver a ComfyUI execution message, as the server's websocket would. */
+export function emit(type, detail) {
+    for (const fn of apiListeners.get(type) ?? []) fn({ detail });
+}
+
 export const api = {
     apiURL: (route) => `/api${route}`,
-    addEventListener() {},
+    addEventListener(type, fn) {
+        if (!apiListeners.has(type)) apiListeners.set(type, []);
+        apiListeners.get(type).push(fn);
+    },
     async fetchApi(route, init) {
         calls.push(route);
         // `init` is passed through so a test can assert what a POST actually
@@ -99,6 +113,7 @@ export const api = {
 
 // --- app / graph -------------------------------------------------------------
 const nodes = new Map();
+let assignedNodes = null;
 export const repaints = { count: 0 };
 let nextLink = 1;
 let nextId = 1;
@@ -111,7 +126,19 @@ export const canvasCalls = { select: [], center: [], dirty: 0 };
 export const app = {
     extensions: [],
     registerExtension(ext) { this.extensions.push(ext); },
-    graph: { links: {}, getNodeById: (id) => nodes.get(id) ?? null },
+    graph: {
+        links: {},
+        getNodeById: (id) => nodes.get(id) ?? null,
+        // LiteGraph keeps every node on the graph in `_nodes`, which is how
+        // code broadcasts to the canvas rather than walking wires. Without it
+        // a broadcast reaches nothing and its test passes for the wrong
+        // reason. Every created node is on it by default; a test that builds a
+        // graph by hand can still assign the list outright, and then that is
+        // exactly what it gets — assigning a subset is how the "two possible
+        // sources" cases are set up.
+        get _nodes() { return assignedNodes ?? [...nodes.values()]; },
+        set _nodes(value) { assignedNodes = value; },
+    },
     canvas: {
         // LiteGraph's canvas holds the graph being drawn, which is the subgraph
         // once you have stepped into one — not always `app.graph`.
@@ -181,6 +208,9 @@ export async function create(comfyClass, widgets = {}) {
     const node = makeNode(comfyClass, widgets);
     node.onNodeCreated = proto.onNodeCreated;
     node.onConfigure = proto.onConfigure;
+    // ComfyUI calls this on every wire change; without it a test that rewires
+    // is driving nothing and passes for the wrong reason.
+    node.onConnectionsChange = proto.onConnectionsChange;
     return node;
 }
 

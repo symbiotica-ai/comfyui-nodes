@@ -319,11 +319,28 @@ function publishOrder(node, result, events, refsRoot) {
     for (const ap of downstreamNodes(node, "SymbioticaAutoPacker")) {
         ap._symRenderAssets?.();
     }
+    // And tell everything else that reads an order it has changed. Announced to
+    // the whole graph rather than to the nodes one hop down: the order wire
+    // commonly runs through a reroute, and a panel that follows the wire up
+    // six hops to find its source cannot be found by looking one hop down.
+    // Each listener decides for itself whether THIS node is its source, which
+    // keeps the knowledge of what counts as one in the module that already has
+    // it. LiteGraph gives no event for "a widget upstream changed", so without
+    // this a downstream panel keeps showing the previous event until something
+    // else happens to re-render it.
+    for (const other of app.graph?._nodes ?? []) {
+        if (other !== node) other._symOrderChanged?.(node);
+    }
     node.setDirtyCanvas?.(true, true);
 }
 
 function wireOrderSpecs(node) {
     node._symEvents = [];
+    // Parsing on demand, the way `_symRefreshMonths` exposes the month parse.
+    // A panel downstream that needs the event list has no other way to ask for
+    // it: the Auto Packer reaches `refreshOrderSpecs` because it lives in this
+    // module, and nothing outside it does.
+    node._symRefreshOrder = (opts) => refreshOrderSpecs(node, opts);
     wireMonthPicker(node); // month combo, refreshed on project_path change
     comboify(node, "feature", () => (node._symEvents ?? []).map(eventLabel));
     // "Read folder" — resolve project_path (even a wired Local/Modal switch),

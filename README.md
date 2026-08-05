@@ -201,6 +201,24 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   on those boxes, each named by its role, so an edit addresses "serving" rather
   than "the third one" and a run that switches asset type re-cuts itself with
   no rewiring.
+- **Symbiotica Asset Focus** — one asset out of the order, chosen on the
+  node, with its whole record on separate outputs: name, category, client
+  prompt, save path and index. Order Assets emits four index-aligned lists and
+  Dataset Reference three more, so working on a single asset meant an index
+  node per list, all held at the same position by hand. The index is applied
+  once, here, and nothing downstream has a list left to index. Order Assets is
+  still the node for rendering a whole event in one press; this is the one for
+  iterating on one asset.
+- **Symbiotica Pick** — the triage step between two stages: every image wired
+  into it is filed in that node's own buffer and drawn as a thumbnail on the
+  node body, so three separate runs of the same generator stack up as three
+  candidates instead of overwriting each other. Tick the ones worth keeping and
+  only those leave the node. `images` is optional on purpose — once the picks
+  are made the generator branch can be muted and the node still serves them
+  from disk, so queueing the edit stage does not re-fire a paid render. Wire
+  the asset and category being worked on and candidates are tagged with it; the
+  node then opens on that asset rather than on everything ever generated. Drop
+  one after each stage — generate → pick → edit → pick → background removal.
 - **Symbiotica Asset Refs** — the client's own reference art for one asset, in
   the order the order sheet pairs it, so the index that picks a cell picks the
   reference belonging to it. References with transparency are composited onto a

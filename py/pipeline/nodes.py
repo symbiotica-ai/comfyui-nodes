@@ -51,6 +51,12 @@ ModelPresetWire = io.Custom("SYMBIOTICA_MODEL_PRESET")
 # Template Builder/Editor sheet bundle) — different shape, different producer.
 PackTemplateWire = io.Custom("SYMBIOTICA_PACK_TEMPLATE")
 
+# The passes a Pick node can be pinned to. Blank first so a node that has not
+# been assigned one keeps showing everything rather than silently nothing.
+_PICK_PHASES = ["", "base", "edit", "export"]
+# A step takes a set of images, or the one being worked on.
+_PICK_MODES = ["multiple", "single"]
+
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
 _MODELS = [m["id"] for m in MODEL_PRESETS] + ["custom"]
@@ -68,6 +74,20 @@ def _push(event: str, payload: dict) -> None:
 
 
 def _register_refs_root(path: str) -> None:
+    """A folder of reference artwork the graph READS — servable, and watched by
+    the change-checks below."""
+    try:
+        from .routes import register_refs_root
+        register_refs_root(path)
+    except Exception:
+        pass
+
+
+def _register_served_root(path: str) -> None:
+    """A folder the canvas must be able to fetch thumbnails from, which the
+    graph also WRITES into — a template save destination, a picker's buffer.
+    Servable only: a change-check that watched these would fire on the graph's
+    own output and re-bill every descendant (see SymbioticaAssetRefs)."""
     try:
         from .routes import register_root
         register_root(path)
@@ -85,11 +105,14 @@ def _executed_projects() -> list[str]:
         return []
 
 
-def _executed_roots() -> list[str]:
-    """Folders a graph execution registered, an order's references among them."""
+def _reference_roots() -> list[str]:
+    """Folders of reference artwork a graph execution registered — an order's
+    client references and the sprite catalog. NOT every servable folder: the
+    picker buffers and template save folders under ComfyUI's output directory
+    are servable too, and the graph writes into them on every render."""
     try:
-        from .routes import executed_roots
-        return executed_roots()
+        from .routes import reference_roots
+        return reference_roots()
     except Exception:
         return []
 
@@ -842,7 +865,9 @@ class SymbioticaAutoPacker(io.ComfyNode):
             _push("symbiotica.pack_template_saved",
                   {"error": f"could not save template: {err}"})
             return
-        _register_refs_root(base)
+        # Where the save LANDED, so the canvas can fetch its sheet thumbnails.
+        # Served, not watched: the packer writes here.
+        _register_served_root(base)
         _push("symbiotica.pack_template_saved",
               {"name": result["name"], "key": qualified_name(kind, result["name"]),
                "kind": kind, "month": month, "dir": result["dir"],
@@ -1049,6 +1074,113 @@ class SymbioticaOrderAssets(io.ComfyNode):
                              [a["category"] for a in items],
                              [a["prompt"] for a in items],
                              save_paths(order, items))
+
+
+class SymbioticaAssetFocus(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaAssetFocus",
+            display_name="Symbiotica Asset Focus",
+            category="symbiotica/pipeline",
+            description="One asset out of the order, chosen on the node, with "
+                        "its whole record on separate outputs. Order Assets "
+                        "emits four index-aligned lists and Dataset Reference "
+                        "three more, so working on a single asset meant an "
+                        "index node per list, all held at the same position by "
+                        "hand. The index is applied once, here, and nothing "
+                        "downstream has a list to index. Choose nothing and it "
+                        "emits the whole event instead, so the same node "
+                        "covers both the one-asset iteration loop and a run "
+                        "over everything.",
+            inputs=[
+                Order.Input("order"),
+                io.String.Input("category", default="",
+                                tooltip="Narrow the choice to one asset type, "
+                                        "or leave empty for every type."),
+                io.String.Input("asset", default="",
+                                tooltip="Which asset, by name. Set by clicking "
+                                        "it on the node; typed names work too. "
+                                        "Empty means the first."),
+            ],
+            # Lists, but normally of one. A single-element list behaves exactly
+            # like a scalar downstream — it runs once — so choosing an asset
+            # leaves nothing to index. Choosing none emits every asset instead,
+            # and downstream fans out over the whole event.
+            outputs=[
+                io.String.Output(display_name="asset_name", is_output_list=True),
+                io.String.Output(display_name="category", is_output_list=True),
+                io.String.Output(display_name="client_prompt",
+                                 is_output_list=True),
+                io.String.Output(display_name="save_path", is_output_list=True,
+                                 tooltip="month/feature/category/asset — the "
+                                         "same value Order Assets emits, so a "
+                                         "save node and a Pick node's folder "
+                                         "both take it."),
+                io.Int.Output(display_name="index", is_output_list=True,
+                              tooltip="Where each asset sits in the run, for "
+                                      "anything that still wants a position."),
+            ],
+            hidden=[io.Hidden.unique_id],
+            # An output node so it can be queued on its own. Without that there
+            # is no way to run it before anything is wired downstream, and its
+            # list of choices only exists once it has run at least once.
+            is_output_node=True,
+        )
+
+    @classmethod
+    def execute(cls, order=None, category="", asset="") -> io.NodeOutput:
+        if not isinstance(order, dict) or "assets" not in order:
+            raise ValueError("wire an Order Specs (or a Reference Browser) "
+                             "into 'order'")
+        items = assets_by_category(order, category)
+        if not items:
+            present = sorted({str(a.get("category", "") or "").strip()
+                              for a in order.get("assets", []) or []
+                              if str(a.get("assetName", "") or "").strip()})
+            want = (category or "All").strip() or "All"
+            if want != "All" and present:
+                raise ValueError(
+                    f"no {want!r} assets in {order.get('feature', '')!r} — "
+                    f"this event holds: {', '.join(present)}")
+            raise ValueError(
+                f"the event {order.get('feature', '')!r} has no named assets — "
+                "pick a feature on the Order Specs node")
+
+        # The panel needs the choices before anything is chosen, and the order
+        # arrives on a wire the canvas cannot read.
+        _push("symbiotica.focus", {
+            "node_id": str(getattr(getattr(cls, "hidden", None),
+                                   "unique_id", "")),
+            "feature": str(order.get("feature", "")),
+            "assets": [{"name": a["assetName"], "category": a["category"],
+                        "refs": list(a.get("refFiles", []) or [])[:1]}
+                       for a in items],
+        })
+
+        wanted = str(asset or "").strip()
+        chosen = list(enumerate(items))
+        if wanted:
+            names = [a["assetName"] for a in items]
+            if wanted not in names:
+                # Falling back silently would render the wrong asset under the
+                # wrong name and file it in the wrong folder. An event whose
+                # assets were renamed must say so.
+                raise ValueError(
+                    f"no asset called {wanted!r} in "
+                    f"{order.get('feature', '')!r} — it holds: "
+                    f"{', '.join(names)}")
+            index = names.index(wanted)
+            chosen = [(index, items[index])]
+        # No choice means the whole event, which is what the panel's "all"
+        # says: a button that reads "all" and emits one asset is lying about
+        # what the node is going to do.
+        picked = [item for _, item in chosen]
+        return io.NodeOutput([i["assetName"] for i in picked],
+                             [i["category"] for i in picked],
+                             [i["prompt"] for i in picked],
+                             save_paths(order, picked),
+                             [index for index, _ in chosen])
 
 
 class SymbioticaSaveRender(io.ComfyNode):
@@ -1686,11 +1818,18 @@ class SymbioticaAssetRefs(io.ComfyNode):
         # of the old picture is served forever. Hash the reference folders
         # executions have registered instead, by name and size and mtime: a
         # replaced file moves the hash even though its path did not change.
+        #
+        # REFERENCE folders only. This once walked every servable folder, which
+        # includes the ones the graph writes into — so saving a render or
+        # ticking a thumbnail in a Pick node moved this hash, re-ran the
+        # reference load, and with it the LLM reading the reference and the
+        # image model reading the LLM. A new paid image per queue press, on a
+        # seed that never changed.
         one = SymbioticaCategoryPrompts._one
         h = hashlib.sha256(f"{one(background, '')}:"
                            f"{one(keep_transparency, False)}:"
                            f"{one(output_size, 'native')}".encode())
-        for root in _executed_roots():
+        for root in _reference_roots():
             h.update(root.encode())
             try:
                 for name in sorted(os.listdir(root)):
@@ -1944,7 +2083,8 @@ class SymbioticaTemplateLibrary(io.ComfyNode):
         from .pack_library import (collect_checked, load_pack_template_dirs)
         dirs = cls._dirs(project_path, kind, month)
         for d in dirs:
-            _register_refs_root(d)
+            # Template pools — browsed and saved into, so served only.
+            _register_served_root(d)
         # (1) The recipe bundle for the single 'use'-selected template. Missing
         # or unselected → a NEUTRAL bundle, never a raise: this node may sit
         # beside a live Order Specs (the order wins), and it also drives the
@@ -3180,7 +3320,487 @@ class SymbioticaPromptEnhancer(io.ComfyNode):
         return io.NodeOutput(*descs, preview, ui=ui.PreviewText(preview))
 
 
+def _image_frames(images):
+    """Every HxWxC frame in whatever arrived on an IMAGE input.
+
+    Three shapes reach here and all three are ordinary: a batch tensor from one
+    generator, a single frame, and a Python list when an upstream node fans out
+    per asset. Flattening them all to frames means the picker never has to care
+    which stage of the pipeline it was dropped into.
+    """
+    if images is None:
+        return []
+    if isinstance(images, (list, tuple)):
+        out = []
+        for item in images:
+            out.extend(_image_frames(item))
+        return out
+    if hasattr(images, "ndim") and images.ndim == 4:
+        return [images[i] for i in range(images.shape[0])]
+    return [images]
+
+
+def _unevaluated(value):
+    """Whether a lazy input has not been resolved yet.
+
+    Under is_input_list ComfyUI hands an unevaluated lazy input in as `(None,)`
+    rather than `None` (comfy_api/latest/_io.py, check_lazy_status docstring).
+    Testing only for `None` reads that tuple as a real value, so the input is
+    never requested, the wire is never evaluated, and the node quietly records
+    nothing while the run reports success.
+    """
+    if value is None:
+        return True
+    if isinstance(value, (list, tuple)):
+        return len(value) > 0 and all(item is None for item in value)
+    return False
+
+
+def _as_list(value):
+    """A per-item input as a list, whatever arrived.
+
+    Under is_input_list a widget reaches the node as a list of one, but a node
+    executed directly (a test, or ComfyUI collapsing a single item) hands the
+    bare value — treating that string as a sequence would tag candidates with
+    one character each.
+    """
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else [value]
+
+
+def _at_or_first(seq, index, default=""):
+    """Item `index`, falling back to the first value rather than to nothing.
+
+    A lane that fans out gives one label per image; a single batch of variants
+    of one asset gives one label for all of them. Repeating the first value
+    covers the second case, where indexing past the end would silently leave
+    every candidate after the first untagged.
+    """
+    if not seq:
+        return default
+    return str(seq[index] if index < len(seq) else seq[0])
+
+
+def _pil_to_tensor_keep_alpha(img):
+    """A stored candidate back on the wire, with its transparency intact.
+
+    The RGB-only converter next door would flatten a background-removed pick on
+    its way out of the node — the picker would then be the thing that undid the
+    removal it was used to approve.
+    """
+    if img.mode == "P" and "transparency" in img.info:
+        img = img.convert("RGBA")
+    elif img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    return torch.from_numpy(arr)[None, ...]
+
+
+def _derived_pick_folder(tag, order=None):
+    """Where this asset's renders are already filed, from what the node knows.
+
+    `save_paths` builds `month/feature/category/asset` from the same values the
+    picker is already handed on its own wires, so asking for that path to be
+    typed in — or wired a second time — is asking for something already
+    present. Built through `order_assets._segment` so it matches the folder a
+    save node actually wrote, separator-for-separator.
+
+    The event level has to come through `event_label`, exactly as `save_paths`
+    takes it: the order's `feature` is "Mini 1" while the folder on disk is
+    "Mini 1 — Ghostly Goodies". Deriving from the bare feature named a path
+    that has never existed, which is a silent miss — a folder that is not
+    there reads the same as a folder with nothing in it.
+
+    Returns "" when there is nothing specific enough to point at: reading a
+    whole month because only the month is known would pull in every asset of
+    every event.
+    """
+    from .order_assets import _segment, event_label
+    labelled = dict(tag)
+    if order:
+        labelled["feature"] = event_label(order) or tag.get("feature", "")
+    parts = [_segment(labelled.get(key, ""))
+             for key in ("month", "feature", "category", "asset")]
+    if not parts[-1] and not parts[-2]:
+        return ""
+    return "/".join(p for p in parts if p)
+
+
+def _segment_or_blank(value):
+    """A `stage` name reduced to one path segment, or "".
+
+    Typed by hand beside a folder it becomes part of, so a slash in it would
+    silently deepen the tree — and the same cleaning the save paths get is what
+    keeps the folder this node lists identical to the one a save node wrote.
+    """
+    from .order_assets import _segment
+    return _segment(str(value or ""))
+
+
+def _pick_folders(values):
+    """The distinct folders a Pick node was pointed at, resolved and de-duped.
+
+    A relative value resolves under ComfyUI's output directory, because that is
+    what `save_paths` emits — `month/feature/category/asset`, the tail of the
+    tree the renders are already filed in. A fanned-out lane hands one folder
+    per asset, and the same folder repeated is one read, not several.
+    """
+    out = []
+    for value in values or ():
+        text = str(value or "").strip()
+        if not text:
+            continue
+        path = text if os.path.isabs(text) else os.path.join(
+            folder_paths.get_output_directory(), text)
+        path = os.path.normpath(path)
+        if path not in out:
+            out.append(path)
+    return out
+
+
+def _pick_ids(selection):
+    """The ticked candidate ids from the node's stored selection.
+
+    The value is written by the canvas, so it is JSON in practice; a
+    comma-separated string is accepted too so the widget stays usable by hand.
+    Anything unparseable means nothing is ticked, which the node treats as "no
+    picks yet" rather than an error.
+    """
+    text = str(selection or "").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return [p.strip() for p in text.split(",") if p.strip()]
+    if isinstance(data, str):
+        return [data] if data.strip() else []
+    if isinstance(data, list):
+        return [str(i).strip() for i in data if str(i).strip()]
+    return []
+
+
+class SymbioticaPick(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaPick",
+            display_name="Symbiotica Pick",
+            category="symbiotica/pipeline",
+            description="Lists the images one stage of an asset has produced, "
+                        "numbered, and sends on the ones ticked. It writes "
+                        "nothing and stores nothing: the files stay where the "
+                        "save node put them, so a new render appears by "
+                        "queueing this node again and looking at the work can "
+                        "never cost a generation. "
+                        "The folder comes from the asset, category and order "
+                        "already wired in; `stage` names a step under it "
+                        "(`edits` reads `…/<asset>/edits_00001_.png`), and "
+                        "`folder` overrides the lot to browse elsewhere. Wire "
+                        "the `folder` output into the Save Image that fills "
+                        "that stage and this node lists exactly what that node "
+                        "wrote, by construction. "
+                        "Chain them: a picker wired to another picker's "
+                        "`picked` lists exactly what that one approved, so "
+                        "choosing from a shortlist needs no folder of copies. "
+                        "`mode` is whether this step takes a set or one image "
+                        "— editing is done to one.",
+            # The whole run at once. Without this the node executes once per
+            # item whenever the lane above it fans out — three variants means
+            # three executions, each re-emitting the same picks, and the
+            # preview downstream shows one approved image three times.
+            is_input_list=True,
+            inputs=[
+                io.Image.Input("images", optional=True, lazy=True,
+                               tooltip="Wire the save or preview node this "
+                                       "stage's images come out of. Its VALUE "
+                                       "is never used — the images are read "
+                                       "off disk — but the link makes this "
+                                       "node run after it, so a fresh render "
+                                       "is listed the same queue it was made. "
+                                       "Wired to another Pick, this node lists "
+                                       "exactly what that one ticked."),
+                # Kept only so the widget positions of graphs saved before
+                # this node stopped fetching still line up; it does nothing.
+                # The web extension hides it.
+                io.Boolean.Input("get_new", default=False,
+                                 tooltip="Unused, and hidden on the canvas. "
+                                         "Kept only so older saved workflows "
+                                         "keep their widget positions."),
+                io.String.Input("asset", default="", optional=True,
+                                tooltip="The asset being worked on — half of "
+                                        "the folder the node lists."),
+                io.String.Input("category", default="", optional=True),
+                Order.Input("order", optional=True,
+                            tooltip="The order, for the month and event the "
+                                    "renders were filed under."),
+                # Canvas state, hidden by the web extension: the ticks live on
+                # the node so they are saved with the workflow.
+                io.String.Input("selection", default="", optional=True),
+                io.String.Input("view", default="", optional=True),
+                io.String.Input("role", default="", optional=True,
+                                tooltip="Unused, and hidden on the canvas. "
+                                        "Kept only so older saved workflows "
+                                        "keep their widget positions."),
+                io.String.Input("folder", default="", optional=True,
+                                tooltip="Usually leave this empty — the node "
+                                        "works the folder out from the asset, "
+                                        "category and order it is wired to. "
+                                        "Set it to browse a different one; a "
+                                        "relative path resolves under "
+                                        "ComfyUI's output directory. Naming a "
+                                        "save node's own prefix works too "
+                                        "(`…/Food - 3 stages/Spookies` lists "
+                                        "that asset's `Spookies_*` files)."),
+                io.Combo.Input("phase", options=_PICK_PHASES, default="",
+                               optional=True,
+                               tooltip="Unused, and hidden on the canvas — "
+                                       "`stage` replaced it. Kept only so "
+                                       "older saved workflows keep their "
+                                       "widget positions."),
+                io.Combo.Input("mode", options=_PICK_MODES, default="multiple",
+                               optional=True,
+                               tooltip="Whether this step takes a set or one "
+                                       "image. `single` is for editing — you "
+                                       "edit the image you are working on, so "
+                                       "ticking replaces the previous pick "
+                                       "instead of adding to it."),
+                io.String.Input("stage", default="", optional=True,
+                                tooltip="Which step of this asset to list, as "
+                                        "a name under the asset's own folder: "
+                                        "`edits` lists "
+                                        "`…/<asset>/edits_00001_.png`. Empty "
+                                        "lists the asset's own renders, which "
+                                        "is where a save node writes them "
+                                        "first. Wire the `folder` output into "
+                                        "the Save Image that fills this stage "
+                                        "and the two cannot disagree."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="picked", is_output_list=True),
+                io.String.Output(display_name="folder",
+                                 tooltip="The folder this node lists, ready "
+                                         "for a Save Image node's "
+                                         "`filename_prefix` — so the node that "
+                                         "WRITES this stage and the node that "
+                                         "READS it are named in one place."),
+            ],
+            # `prompt`/`dynprompt` are how check_lazy_status finds out whether
+            # `images` actually has a link before asking for it, and how a
+            # picker fed by another picker reads what that one ticked.
+            hidden=[io.Hidden.unique_id, io.Hidden.prompt, io.Hidden.dynprompt],
+            # An output node so it can be queued on its own: "Queue Selected
+            # Output Node" on this picker lists the folder and sends the ticks
+            # on, with nothing downstream needing to exist yet.
+            is_output_node=True,
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, images=None, get_new=True, asset="",
+                           category="", role="", order=None, selection="",
+                           view="", folder="", phase="", mode="multiple",
+                           stage=""):
+        """Always stale, because the folder changes without the inputs doing.
+
+        Found live: "i created a new image i want to select in the pick 518
+        node, the generated images do not show up". The renders were on disk
+        and the save node above had run — but every queue reported
+        `execution_cached: ['518']`. Nothing this node is wired to changes when
+        a render is written, so ComfyUI had no reason to run it, and a picker
+        that does not run does not list.
+
+        NaN is never equal to itself, which is how a node says "assume I
+        changed". Cheap to honour: this node's whole execution is a directory
+        listing.
+        """
+        return float("nan")
+
+    @classmethod
+    def check_lazy_status(cls, images=None, get_new=True, asset="",
+                          category="", role="", order=None, selection="",
+                          view="", folder="", phase="", mode="multiple",
+                          stage=""):
+        """Ask for the wire when there is one — for its ORDER, not its value.
+
+        The images are read off disk, and `execute` ignores whatever arrives
+        here. What the wire buys is sequence: without it this node depends on
+        nothing that the lane above produces, and ComfyUI is free to run it
+        BEFORE the save node writes the new file — so a fresh render would show
+        up one queue late, every time.
+
+        Asking costs nothing that was not already spent. What a picker is wired
+        to is a save or preview node, and those are output nodes: ComfyUI runs
+        them on every queue whether or not this node asks for them.
+
+        Not merely "not False": an unknowable wire is refused too, because
+        asking for an input that has no link fails the whole graph with
+        NodeInputError, and a picker sitting on the canvas before anything is
+        wired to it is an ordinary state.
+        """
+        if cls._images_wired() is not True:
+            return []
+        return ["images"] if _unevaluated(images) else []
+
+    @classmethod
+    def _prompt_node(cls, node_id=None):
+        """One node out of the prompt, by id, from whichever hidden carries it."""
+        hidden = getattr(cls, "hidden", None)
+        wanted = node_id if node_id is not None else str(
+            getattr(hidden, "unique_id", "") or "")
+        if not wanted:
+            return None
+        for source in (getattr(hidden, "prompt", None),
+                       getattr(hidden, "dynprompt", None)):
+            try:
+                if isinstance(source, dict):
+                    found = source.get(wanted)
+                elif source is not None and hasattr(source, "get_node"):
+                    found = source.get_node(wanted)
+                else:
+                    continue
+            except Exception:
+                continue
+            if isinstance(found, dict):
+                return found
+        return None
+
+    @classmethod
+    def _images_wired(cls):
+        """True/False when the `images` input's link can be determined, else None.
+
+        Asking for an input that has no link is not a no-op: ComfyUI answers
+        with `NodeInputError` and fails the whole graph.
+        """
+        node = cls._prompt_node()
+        if not isinstance(node, dict):
+            return None
+        # A wired input is stored as [origin_node_id, slot]; a widget value is
+        # a scalar, and an unconnected optional is absent.
+        return isinstance((node.get("inputs") or {}).get("images"), list)
+
+    @classmethod
+    def _upstream_pick(cls):
+        """The id of the Pick node feeding `images`, or "" when it is not one.
+
+        A picker wired to another picker chooses from what that one approved —
+        "521 reads the indexed 3 images from 518" — which is what makes an
+        "approved" folder of copies unnecessary. The shortlist is the upstream
+        node's ticks, and those are on the wire's own node in the prompt.
+        """
+        node = cls._prompt_node()
+        link = (node or {}).get("inputs", {}).get("images")
+        if not isinstance(link, list) or not link:
+            return ""
+        source_id = str(link[0])
+        source = cls._prompt_node(source_id)
+        return source_id if (source or {}).get("class_type") == "SymbioticaPick" \
+            else ""
+
+    @classmethod
+    def execute(cls, images=None, get_new=True, asset="", category="",
+                role="", order=None, selection="", view="", folder="",
+                phase="", mode="multiple", stage="") -> io.NodeOutput:
+        from PIL import Image
+
+        from .pick_folder import listing_for, picked_paths, remember, resolved
+
+        one = SymbioticaCategoryPrompts._one
+        node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
+        node_id = one(node_id, None) if isinstance(node_id, list) else node_id
+        ord_dict = one(order, {}) or {}
+        if not isinstance(ord_dict, dict):
+            ord_dict = {}
+        step = _segment_or_blank(one(stage, ""))
+
+        # Where this asset's work is, worked out from the wires the node
+        # already has rather than from a path typed in beside them. `stage` is
+        # a step under the asset: `…/<asset>/edits` names the files the edit
+        # lane writes, the same way `…/<asset>` names its first renders.
+        context = {"month": str(ord_dict.get("month", "")),
+                   "feature": str(ord_dict.get("feature", "")),
+                   "category": _at_or_first(_as_list(category), 0),
+                   "asset": _at_or_first(_as_list(asset), 0)}
+        home = _pick_folders([_derived_pick_folder(context, ord_dict)])
+        home = home[0] if home else ""
+        # The folder this asset's `stage` step lives in, whether or not this
+        # node is the one listing it.
+        stage_home = os.path.join(home, step) if (home and step) else home
+        typed = _pick_folders(_as_list(folder))
+        target = typed[0] if typed else stage_home
+
+        # Fed by another picker: list exactly what it approved. Its ticks are
+        # on its own node in the prompt, and the folder they name is the one it
+        # resolved when it ran — which it did, because asking for its wire is
+        # what put it before this node.
+        only = None
+        upstream = cls._upstream_pick()
+        if upstream:
+            source = cls._prompt_node(upstream) or {}
+            only = _pick_ids(str((source.get("inputs") or {}).get("selection", "")))
+            source_target, source_only = resolved(upstream)
+            if source_target:
+                target = source_target
+            if source_only is not None:
+                # The upstream is itself narrowed; a tick it no longer shows is
+                # not something this node may offer.
+                only = [name for name in only if name in set(source_only)]
+
+        entries = listing_for(target, only=only)
+        # The panel lists the same thing this run resolved; it cannot work it
+        # out for itself, because asset and category arrive on wires and a
+        # wired input has no value on the canvas.
+        remember(node_id, target, only)
+
+        # Nothing ticked is a legitimate state, not a failure: it is what the
+        # node looks like before the images have been looked at. An empty list
+        # simply runs nothing downstream, where raising would paint a run red
+        # for having worked correctly.
+        paths = picked_paths(entries, _pick_ids(one(selection, "")))
+        # "in edit mode i want to only be able to select one image. i am
+        # EDITING so it has to be the one i am working on". The panel already
+        # replaces rather than adds under `single`; this is for the graph saved
+        # with several ticks, or switched to `single` after the picks were
+        # made. First in listing order, which is the one numbered lowest on
+        # screen.
+        if str(one(mode, "multiple") or "multiple") == "single":
+            paths = paths[:1]
+
+        out_dir = folder_paths.get_output_directory()
+
+        def _shown(path):
+            """A path as the node should say it: relative to the output tree.
+
+            That is also the form a Save Image node's `filename_prefix` takes,
+            which is the point of handing it out — the node that WRITES this
+            stage and the node that READS it are then named in one place.
+            """
+            try:
+                return os.path.relpath(path, out_dir).replace(os.sep, "/")
+            except ValueError:
+                return path
+
+        # What this node LISTS is not always what it hands out. A picker fed by
+        # another lists that one's approvals — the base renders — while its
+        # `stage` says which step the images it sends are on their way to. So
+        # the folder output follows the stage, and the save node in between
+        # takes it from the picker BEFORE it. Wiring the reader's folder into
+        # that save node instead is a dependency cycle: it feeds this node's
+        # images, so it cannot also wait for this node.
+        out_folder = stage_home if step else target
+        listed = _shown(out_folder) if out_folder else ""
+        _push("symbiotica.pick", {
+            "node_id": str(node_id), "count": len(entries),
+            "folder": listed, "picked": len(paths),
+            "shortlist": bool(upstream),
+        })
+        picked = [_pil_to_tensor_keep_alpha(Image.open(p)) for p in paths]
+        return io.NodeOutput(picked, listed)
+
+
 PIPELINE_NODE_CLASSES = [
+    SymbioticaPick,
+    SymbioticaAssetFocus,
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
     SymbioticaReferenceBrowser,
