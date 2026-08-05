@@ -47,19 +47,27 @@ async function panelNode(seen, project = "/p/bakery") {
 const panelOf = (node) =>
     node.widgets.find((w) => w.name === "prompt_book").element;
 const parts = (node) => {
-    const p = panelOf(node);
-    return { picker: p.children[0].children[0], save: p.children[0].children[1],
-             status: p.children[1], editor: p.children[2] };
+    // container.append(bar, blocksBar, status, editor) — destructured rather
+    // than indexed one by one, so a row added to the panel shifts the names
+    // together instead of silently handing back the element next door.
+    const [bar, blocks, status, editor] = panelOf(node).children;
+    return { picker: bar.children[0], save: bar.children[1], blocks, status,
+             editor };
 };
 
 test("the picker lists shared rules before the type blocks", async () => {
     const node = await panelNode([]);
     const { picker } = parts(node);
     assert.deepEqual(picker.children.map((g) => g.label),
-                     ["Game rules — apply to every type", "Asset type"]);
-    assert.deepEqual(picker.children[0].children.map((o) => o.value),
+                     ["Game rules — apply to every type",
+                      "Image model — style, light, camera",
+                      "Asset type",
+                      "Composed — what the LLM receives"]);
+    const group = (label) =>
+        picker.children.find((g) => g.label.startsWith(label));
+    assert.deepEqual(group("Game rules").children.map((o) => o.value),
                      ["_rules/01-refs.md", "_rules/03-light.md"]);
-    assert.deepEqual(picker.children[1].children.map((o) => o.value),
+    assert.deepEqual(group("Asset type").children.map((o) => o.value),
                      ["Chair.md", "Decoration.md"]);
 });
 

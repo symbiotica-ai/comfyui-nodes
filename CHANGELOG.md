@@ -6,6 +6,48 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.12
+
+**Node change, and a saved graph using Symbiotica Pick must be rewired.** The
+picker's inputs are now `images`, `save_path`, `selection`, `view`, `mode` and
+`stage`. `order`, `asset` and `category` are gone, along with `get_new`, `role`
+and `phase` — the three dead widgets that existed only to hold their positions
+— and both the input and the output formerly called `folder` are now
+`save_path`. A graph saved before this loses those links: wire **Asset Focus's
+`save_path` into each picker's `save_path`**, and the lane works as before. The
+ticks, mode and stage a graph already carries are migrated onto the surviving
+widgets when it loads, so nothing that was chosen is lost.
+
+This also removes `get_new`, which was declared required and so failed
+validation for any workflow saved before it existed — the case
+[#57](https://github.com/symbiotica-ai/comfyui-nodes/pull/57) fixes by making
+it optional. That PR is superseded for the picker, though its test — a node
+queueable on its own cannot have a required input — still guards the rule.
+
+### Fixed
+
+- **Choosing an image no longer re-renders it.** The picker reported itself
+  always-changed so its panel would re-list, but an always-changed node marks
+  its output fresh on every queue, and everything downstream of `picked` re-ran
+  with it: the edit model re-rendered the same pick, at full price, once per
+  queue, filing a near-identical result each time. The change-check now stamps
+  what the node emits — the folder it resolved, the ticks, the mode, the stage,
+  and each ticked file's size and modification time — so a queue that changes
+  nothing costs nothing. Panel freshness moved to the canvas, which re-lists
+  every picker when a queue finishes, so a cached picker still shows the
+  renders that queue wrote.
+
+### Added
+
+- **The grid rows itself by role.** Cells saved with their role in the name —
+  `<asset>_<role>_00001_.png`, which a join of Asset Focus's `save_path` and
+  Slice Cells' `roles` produces — are grouped into a labelled row each, with
+  the tick count beside the label, so "one of each, none twice" is readable
+  without opening the files. A folder whose files share one name renders flat,
+  exactly as before.
+- **Thumbnails start small.** The grid defaults to the S size; a node whose
+  size was chosen by hand keeps it.
+
 ## 2026.8.11
 
 **Node change, and saved workflows keep working.** `Symbiotica Prompt Book`
