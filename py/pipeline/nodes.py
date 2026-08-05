@@ -3449,9 +3449,9 @@ class SymbioticaPick(io.ComfyNode):
                         "queueing this node again and looking at the work can "
                         "never cost a generation. "
                         "The folder is one wire: Asset Focus's `save_path` "
-                        "into `folder`. `stage` names a step under it "
+                        "into `save_path`. `stage` names a step under it "
                         "(`edits` reads `…/<asset>/edits_00001_.png`). Wire "
-                        "the `folder` output into the Save Image that fills "
+                        "the `save_path` output into the Save Image that fills "
                         "that stage and this node lists exactly what that node "
                         "wrote, by construction. "
                         "Chain them: a picker wired to another picker's "
@@ -3474,7 +3474,7 @@ class SymbioticaPick(io.ComfyNode):
                                        "is listed the same queue it was made. "
                                        "Wired to another Pick, this node lists "
                                        "exactly what that one ticked."),
-                io.String.Input("folder", default="", optional=True,
+                io.String.Input("save_path", default="", optional=True,
                                 tooltip="Wire Asset Focus's `save_path` here "
                                         "— the same string the save nodes "
                                         "take, so this node lists exactly "
@@ -3503,14 +3503,14 @@ class SymbioticaPick(io.ComfyNode):
                                         "`…/<asset>/edits_00001_.png`. Empty "
                                         "lists the asset's own renders, which "
                                         "is where a save node writes them "
-                                        "first. Wire the `folder` output into "
-                                        "the Save Image that fills this stage "
-                                        "and the two cannot disagree."),
+                                        "first. Wire the `save_path` output "
+                                        "into the Save Image that fills this "
+                                        "stage and the two cannot disagree."),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
-                io.String.Output(display_name="folder",
-                                 tooltip="The folder this node lists, ready "
+                io.String.Output(display_name="save_path",
+                                 tooltip="The path this node lists, ready "
                                          "for a Save Image node's "
                                          "`filename_prefix` — so the node that "
                                          "WRITES this stage and the node that "
@@ -3527,7 +3527,7 @@ class SymbioticaPick(io.ComfyNode):
         )
 
     @classmethod
-    def fingerprint_inputs(cls, images=None, folder="", selection="",
+    def fingerprint_inputs(cls, images=None, save_path="", selection="",
                            view="", mode="multiple", stage=""):
         """Always stale, because the folder changes without the inputs doing.
 
@@ -3545,7 +3545,7 @@ class SymbioticaPick(io.ComfyNode):
         return float("nan")
 
     @classmethod
-    def check_lazy_status(cls, images=None, folder="", selection="",
+    def check_lazy_status(cls, images=None, save_path="", selection="",
                           view="", mode="multiple", stage=""):
         """Ask for the wire when there is one — for its ORDER, not its value.
 
@@ -3624,7 +3624,7 @@ class SymbioticaPick(io.ComfyNode):
             else ""
 
     @classmethod
-    def execute(cls, images=None, folder="", selection="", view="",
+    def execute(cls, images=None, save_path="", selection="", view="",
                 mode="multiple", stage="") -> io.NodeOutput:
         from PIL import Image
 
@@ -3640,7 +3640,7 @@ class SymbioticaPick(io.ComfyNode):
         # the savers cannot disagree. `stage` is a step under the asset:
         # `…/<asset>/edits` names the files the edit lane writes, the same
         # way `…/<asset>` names its first renders.
-        typed = _pick_folders(_as_list(folder))
+        typed = _pick_folders(_as_list(save_path))
         home = typed[0] if typed else ""
         # The folder this asset's `stage` step lives in, whether or not this
         # node is the one listing it.

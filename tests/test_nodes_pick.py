@@ -50,7 +50,7 @@ def run(nodes, node_id="7", **kw):
 def spookies(nodes, tmp_path, **kw):
     """The node pointed at its own asset, the way his graph wires it: the
     save node's path on the one `folder` wire."""
-    return run(nodes, folder=[f"{EVENT_DIR}/Food/Spookies"], **kw)
+    return run(nodes, save_path=[f"{EVENT_DIR}/Food/Spookies"], **kw)
 
 
 class TestSchema:
@@ -69,7 +69,7 @@ class TestSchema:
         """
         schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
         widgets = [i.id for i in schema.inputs if i.id != "images"]
-        assert widgets == ["folder", "selection", "view", "mode", "stage"]
+        assert widgets == ["save_path", "selection", "view", "mode", "stage"]
 
     def test_the_picked_output_is_a_list(self, nodes_mod):
         """A list, not a batch: two picks of different sizes cannot stack into
@@ -167,7 +167,7 @@ class TestWhichFolderItLists:
         """Pasting the save node's own prefix in is the natural thing to try,
         and it names nothing that exists."""
         renders(tmp_path, "elsewhere", ("Spookies_00001_.png",))
-        out = run(nodes_mod, folder=[str(tmp_path / "output" / "elsewhere"
+        out = run(nodes_mod, save_path=[str(tmp_path / "output" / "elsewhere"
                                          / "Spookies")],
                   selection=[json.dumps(["Spookies_00001_.png"])])
         assert len(out.args[0]) == 1
@@ -176,7 +176,7 @@ class TestWhichFolderItLists:
         """Asset Focus's `save_path` is relative and already names the asset —
         wired into `folder`, the picker needs no other wire."""
         renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
-        out = run(nodes_mod, folder=[f"{EVENT_DIR}/Food/Spookies"],
+        out = run(nodes_mod, save_path=[f"{EVENT_DIR}/Food/Spookies"],
                   selection=[json.dumps(["Spookies_00001_.png"])])
         assert len(out.args[0]) == 1
         assert out.args[1] == f"{EVENT_DIR}/Food/Spookies"
@@ -188,7 +188,7 @@ class TestWhichFolderItLists:
         renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
         renders(tmp_path, f"{EVENT_DIR}/Food/Spookies", ("edits_00001_.png",),
                 colour=90)
-        out = run(nodes_mod, folder=[f"{EVENT_DIR}/Food/Spookies"],
+        out = run(nodes_mod, save_path=[f"{EVENT_DIR}/Food/Spookies"],
                   stage=["edits"],
                   selection=[json.dumps(["edits_00001_.png",
                                          "Spookies_00001_.png"])])
@@ -374,7 +374,7 @@ class TestAPickerFedByAnotherPicker:
         self.wire(nodes_mod, json.dumps(["Spookies_00002_.png",
                                          "Spookies_00003_.png"]))
         out = nodes_mod.SymbioticaPick.execute(
-            folder=[f"{EVENT_DIR}/Food/Spookies"],
+            save_path=[f"{EVENT_DIR}/Food/Spookies"],
             selection=[json.dumps(["Spookies_00001_.png",
                                    "Spookies_00002_.png"])])
         # Its own tick on an image the picker above did not approve is not a
@@ -391,7 +391,7 @@ class TestAPickerFedByAnotherPicker:
         self.wire(nodes_mod, json.dumps(["Spookies_00001_.png",
                                          "Spookies_00002_.png"]))
         out = nodes_mod.SymbioticaPick.execute(
-            folder=[f"{EVENT_DIR}/Food/Spookies"],
+            save_path=[f"{EVENT_DIR}/Food/Spookies"],
             selection=[json.dumps(["Spookies_00001_.png",
                                    "Spookies_00002_.png"])])
         assert len(out.args[0]) == 1
@@ -407,7 +407,7 @@ class TestAPickerFedByAnotherPicker:
             prompt={"7": {"inputs": {"images": ["9", 0]}},
                     "9": {"class_type": "SaveImage"}})
         out = nodes_mod.SymbioticaPick.execute(
-            folder=[f"{EVENT_DIR}/Food/Spookies"],
+            save_path=[f"{EVENT_DIR}/Food/Spookies"],
             selection=[json.dumps(["Spookies_00001_.png",
                                    "Spookies_00002_.png"])])
         assert len(out.args[0]) == 2

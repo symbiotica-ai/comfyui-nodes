@@ -30,7 +30,7 @@ function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) 
 }
 
 const WIDGET_DEFAULTS = {
-    folder: "", selection: "", view: "", mode: "multiple", stage: "",
+    save_path: "", selection: "", view: "", mode: "multiple", stage: "",
 };
 
 async function panelNode(seen = [], images = [], values = {},
@@ -276,7 +276,7 @@ test("a graph saved before the one-wire layout keeps its values", async () => {
         false, "Spookies", "Food", '["a.png"]', "", "", "October/Ev/Food",
         "edit", "single", "edits", "",
     ] });
-    assert.equal(widgetOf(node, "folder").value, "October/Ev/Food");
+    assert.equal(widgetOf(node, "save_path").value, "October/Ev/Food");
     assert.equal(widgetOf(node, "selection").value, '["a.png"]');
     assert.equal(widgetOf(node, "mode").value, "single");
     assert.equal(widgetOf(node, "stage").value, "edits");

@@ -351,7 +351,7 @@ registerSymbioticaExtension(app, {
             // view, role, folder, phase, mode, stage].
             const v = info?.widgets_values;
             if (Array.isArray(v) && v.length >= 10) {
-                for (const [name, i] of [["folder", 6], ["selection", 3],
+                for (const [name, i] of [["save_path", 6], ["selection", 3],
                                          ["view", 4], ["mode", 8],
                                          ["stage", 9]]) {
                     const w = widgetOf(this, name);
