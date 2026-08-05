@@ -135,15 +135,16 @@ function panelChrome(node, widgetName, { save = true } = {}) {
     const w = node.addDOMWidget(widgetName, `sym_${widgetName}`, container,
                                 { serialize: false, hideOnZoom: true });
     // The editor follows the NODE, like a string literal's textarea: drag the
-    // corner, the text grows. The panel takes everything below its own start —
-    // measured from the widget's laid-out position (`last_y`), not guessed, so
-    // no grey band is left at the bottom whatever the node's slot count is.
-    // Floored so a tiny node keeps a usable editor rather than none.
+    // corner, the text grows — and shrinks all the way down to a literal-sized
+    // strip, so a saved block can be parked small on the canvas. The panel
+    // takes everything below its own start — measured from the widget's
+    // laid-out position (`last_y`), not guessed, so no grey band is left at
+    // the bottom whatever the node's slot count is.
     const ABOVE_FALLBACK = 110;   // first layout runs before last_y exists
     w.computeSize = (width) => {
         const top = typeof w.last_y === "number" && w.last_y > 0
             ? w.last_y : ABOVE_FALLBACK;
-        return [width, Math.max(160, node.size[1] - top - 12)];
+        return [width, Math.max(60, node.size[1] - top - 12)];
     };
     // The first draw measures last_y; redraw once so the height computed from
     // the fallback is corrected before the user notices it.
