@@ -184,3 +184,26 @@ def test_neither_change_check_raises_on_a_missing_folder(nodes_mod,
     assert isinstance(
         nodes_mod.SymbioticaDatasetReference.fingerprint_inputs(
             seed=[1], project_path=[""]), str)
+
+
+def test_dataset_reference_serves_the_folder_it_drew_from(nodes_mod, monkeypatch,
+                                                          tmp_path):
+    """A picker wired to `dataset_path` fetches its thumbnails over a route,
+    and a project outside the studio volume is servable only once an execution
+    vouches for it. Servable, never WATCHED: a dataset folder in the refs set
+    would put every new reference file into Asset Refs' change-check and
+    re-bill the lane that reads it."""
+    routes = _load_routes(monkeypatch)
+    drawn_from = tmp_path / "bakery" / "dataset" / "Decoration"
+    drawn_from.mkdir(parents=True)
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(drawn_from / "Bunting.png")
+
+    _images, _names, _boxes, folders = \
+        nodes_mod.SymbioticaDatasetReference.execute(
+            categories=["Decoration"], seed=[1],
+            project_path=[str(tmp_path / "bakery")]).args
+
+    assert folders == [str(drawn_from)]
+    real = os.path.realpath(str(drawn_from))
+    assert real in routes.executed_roots()
+    assert real not in routes.reference_roots()

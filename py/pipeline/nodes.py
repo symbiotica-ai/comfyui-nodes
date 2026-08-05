@@ -1631,6 +1631,21 @@ class SymbioticaDatasetReference(io.ComfyNode):
                                          "the reference was drawn from, so it "
                                          "describes the grid the render was "
                                          "asked to reproduce."),
+                io.String.Output(display_name="dataset_path",
+                                 is_output_list=True,
+                                 tooltip="The type folder asset i's reference "
+                                         "was drawn from. Wire it into a Pick "
+                                         "node's `save_path` to see every "
+                                         "reference of that type in a grid and "
+                                         "tick the ones you want, instead of "
+                                         "taking the seeded draw — leave the "
+                                         "picker's `stage` empty, since these "
+                                         "are source art with no steps under "
+                                         "them. A picker reads the first "
+                                         "folder handed to it, so focus one "
+                                         "asset (Asset Focus's `category`) "
+                                         "when the order carries several "
+                                         "types."),
             ],
         )
 
@@ -1707,7 +1722,19 @@ class SymbioticaDatasetReference(io.ComfyNode):
             if key not in per_type:
                 per_type[key] = json.dumps(boxes_for_category(project, key))
             boxes.append(per_type[key])
-        return io.NodeOutput(images, names, boxes)
+        # The folder each reference came OUT of, so a Pick node can list it and
+        # the reference can be chosen by eye rather than by seed. Taken from
+        # the chosen file rather than re-joined from project/folder/category:
+        # one derivation, and it cannot drift from the draw.
+        folders = [os.path.dirname(p) for p in paths]
+        # Servable so the picker's grid can fetch thumbnails from a project
+        # that lives outside the studio volume — servable ONLY. A dataset
+        # folder in the refs set would enter Asset Refs' change-check, and a
+        # new reference file would then re-run the LLM and the image model
+        # under it.
+        for folder_path in dict.fromkeys(folders):
+            _register_served_root(folder_path)
+        return io.NodeOutput(images, names, boxes, folders)
 
 
 class SymbioticaReconstructCells(io.ComfyNode):
