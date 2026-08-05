@@ -39,6 +39,7 @@ from .order_assets import (assets_by_category, dataset_dir,
 from .project_layout import project_root_of
 from .prompt_book import (compose_image_prompt, image_dir, prompts_dir,
                           resolve_category_prompts)
+from .prompt_store import PromptPathError, read_block, resolve as resolve_block
 from .texture_pack import PackSettings
 
 OrderEvents = io.Custom("SYMBIOTICA_ORDER_EVENTS")
@@ -935,22 +936,41 @@ class SymbioticaCategoryPrompts(io.ComfyNode):
         # — that catches an edited file and a missing one being created. It must
         # never raise: a raise sets is_changed to NaN, which folds into every
         # descendant's cache key and re-bills the LLM and Gemini every queue.
-        root = prompts_dir(str(cls._one(project_path)).strip())
-        h = hashlib.sha256(root.encode())
-        # RECURSIVE: the shared rules live in prompts/_rules/. Listing one level
-        # deep would miss an edited lighting rule entirely — ComfyUI would reuse
-        # the cached prompt and the run would render from the old text while the
-        # new text sat on disk, which reads as "my edit did nothing".
-        try:
-            for where, dirs, files in os.walk(root):
-                dirs.sort()
-                for name in sorted(files):
-                    p = os.path.join(where, name)
-                    st = os.stat(p)
-                    rel = os.path.relpath(p, root)
-                    h.update(f"{rel}:{st.st_mtime_ns}:{st.st_size}".encode())
-        except OSError:
-            pass
+        h = hashlib.sha256(b"category-prompts")
+        # The project usually arrives on the ORDER wire, and a linked input
+        # reads as unset here — the widget alone left this hashing a path that
+        # never resolves, so a prompt edit did not bust the cache in exactly
+        # the graphs this node was written for. Same fallback as Dataset
+        # Reference: the projects executions have registered.
+        candidates = [str(cls._one(project_path)).strip()]
+        if not candidates[0]:
+            candidates = _executed_projects()
+        for project in candidates:
+            if not project:
+                continue
+            root = prompts_dir(project)
+            h.update(root.encode())
+            # RECURSIVE: the shared rules live in prompts/_rules/. Listing one
+            # level deep would miss an edited lighting rule entirely — ComfyUI
+            # would reuse the cached prompt and the run would render from the
+            # old text while the new text sat on disk, which reads as "my edit
+            # did nothing". Only `.md` files count: renders.jsonl and the
+            # editor's `.bak` files live in the same folder and churn on every
+            # run, and hashing them re-billed the LLM each queue press with
+            # the prompts untouched.
+            try:
+                for where, dirs, files in os.walk(root):
+                    dirs.sort()
+                    for name in sorted(files):
+                        if not name.endswith(".md"):
+                            continue
+                        p = os.path.join(where, name)
+                        st = os.stat(p)
+                        rel = os.path.relpath(p, root)
+                        h.update(
+                            f"{rel}:{st.st_mtime_ns}:{st.st_size}".encode())
+            except OSError:
+                pass
         return h.hexdigest()
 
     @classmethod
@@ -1206,14 +1226,27 @@ class SymbioticaPromptBook(io.ComfyNode):
         # here, so the wired order cannot be read, and this must never raise —
         # a raise sets is_changed to NaN, which folds into every descendant's
         # cache key and re-bills the image model on every queue.
-        root = image_dir(str(project_path or "").strip())
-        h = hashlib.sha256(root.encode())
-        try:
-            for name in sorted(os.listdir(root)):
-                st = os.stat(os.path.join(root, name))
-                h.update(f"{name}:{st.st_mtime_ns}:{st.st_size}".encode())
-        except OSError:
-            pass
+        h = hashlib.sha256(b"prompt-book")
+        # Same wire blindness and the same fallback as Category Prompts: with
+        # the project delivered by the order, the widget is empty and the
+        # listing below was dead. And `.md` only — a `.bak` written by the
+        # panel's save must not re-bill the image model.
+        candidates = [str(project_path or "").strip()]
+        if not candidates[0]:
+            candidates = _executed_projects()
+        for project in candidates:
+            if not project:
+                continue
+            root = image_dir(project)
+            h.update(root.encode())
+            try:
+                for name in sorted(os.listdir(root)):
+                    if not name.endswith(".md"):
+                        continue
+                    st = os.stat(os.path.join(root, name))
+                    h.update(f"{name}:{st.st_mtime_ns}:{st.st_size}".encode())
+            except OSError:
+                pass
         return h.hexdigest()
 
     @classmethod
@@ -1227,6 +1260,181 @@ class SymbioticaPromptBook(io.ComfyNode):
         # raise: this node is the editor those blocks are written in, so it has
         # to run before they exist.
         return io.NodeOutput(project, compose_image_prompt(project))
+
+
+def _prompt_node_project(project_path):
+    """The project a prompt-book canvas node reads: its own value — typed or
+    delivered on the wire — nothing else. These nodes sit downstream of the
+    Prompt Book's `project` output, which is already resolved, so there is no
+    order to walk the way Category Prompts must."""
+    cand = str(project_path or "").strip()
+    return cand if cand and os.path.isdir(cand) else ""
+
+
+class SymbioticaPromptBlock(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaPromptBlock",
+            display_name="Symbiotica Prompt Block",
+            category="symbiotica/pipeline",
+            description="One block of the prompt book, edited on the canvas — "
+                        "a shared rule, an image-model block, or an asset "
+                        "type. Several of these side by side ARE the book, "
+                        "laid out like the string-literal graphs they replace, "
+                        "except a save here lands in "
+                        "<project>/prompts/ where every queue reads it. Wire "
+                        "the Prompt Book's `project` output in, and chain "
+                        "block to block through `project` so one wire feeds "
+                        "the row.",
+            inputs=[
+                io.String.Input("project_path", default="",
+                                tooltip="Client project folder holding the "
+                                        "prompt book. Wire the Prompt Book's "
+                                        "`project` output, or a neighbouring "
+                                        "block's `project` passthrough."),
+                io.String.Input("block", default="",
+                                tooltip="Which block this node edits: a type "
+                                        "block (Chair.md), a shared rule "
+                                        "(_rules/02-inputs.md) or an image "
+                                        "block (_image/01-image-model.md). "
+                                        "The panel's picker fills this in."),
+            ],
+            outputs=[
+                io.String.Output(display_name="project",
+                                 tooltip="Passthrough of the project, so "
+                                         "blocks chain on one wire instead of "
+                                         "fanning every node back to the "
+                                         "book."),
+                io.String.Output(display_name="text",
+                                 tooltip="This block's text as saved on disk "
+                                         "— for wiring a single block "
+                                         "somewhere directly. The ARCHITECT "
+                                         "prompt is the composed set, not one "
+                                         "block: wire Category Prompts or "
+                                         "Prompt Compose for that."),
+            ],
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", block=""):
+        # Widgets only — a linked project reads as None here (see Category
+        # Prompts), so fall back to the projects executions registered. Hash
+        # the one file this node edits; never raise — a raise becomes NaN and
+        # re-bills every descendant on each queue press.
+        name = str(block or "").strip()
+        h = hashlib.sha256(f"block:{name}".encode())
+        candidates = [str(project_path or "").strip()]
+        if not candidates[0]:
+            candidates = _executed_projects()
+        for project in candidates:
+            if not project:
+                continue
+            h.update(project.encode())
+            try:
+                st = os.stat(resolve_block(project, name))
+                h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
+            except (PromptPathError, OSError):
+                pass
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, project_path="", block="") -> io.NodeOutput:
+        project = _prompt_node_project(project_path)
+        if not project:
+            raise ValueError(
+                "no project folder to read the prompt book from — wire the "
+                "Prompt Book's `project` output, or set project_path")
+        name = str(block or "").strip()
+        if not name:
+            raise ValueError("no block picked — choose one in the panel")
+        # Empty rather than a raise when the file is not there yet: this node
+        # is the editor the block is written in, so it has to run before its
+        # first save. The composed architect prompts still raise on absence —
+        # they are read by nodes that can do nothing without them.
+        try:
+            text = read_block(project, name)
+        except PromptPathError:
+            text = ""
+        return io.NodeOutput(project, text.strip())
+
+
+class SymbioticaPromptCompose(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaPromptCompose",
+            display_name="Symbiotica Prompt Compose",
+            category="symbiotica/pipeline",
+            description="One asset type's ARCHITECT prompt, composed exactly "
+                        "as the queue composes it: shared _rules/ blocks "
+                        "first, the type's own block last. The panel shows "
+                        "the byte-exact text, so this node replaces the "
+                        "join-strings-and-preview scaffolding — wire "
+                        "`system_prompt` into an LLM node to test the book "
+                        "against a real call.",
+            inputs=[
+                io.String.Input("project_path", default="",
+                                tooltip="Client project folder holding the "
+                                        "prompt book. Wire the Prompt Book's "
+                                        "`project` output, or a block's "
+                                        "`project` passthrough."),
+                io.String.Input("category", default="",
+                                tooltip="The asset type to compose — the "
+                                        "panel's picker lists the book's "
+                                        "types."),
+            ],
+            outputs=[
+                io.String.Output(display_name="system_prompt",
+                                 tooltip="The composed architect prompt for "
+                                         "this type — the same text Category "
+                                         "Prompts hands the LLM for its "
+                                         "sheets."),
+            ],
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", category=""):
+        # Widgets only, fall back to executed projects, never raise — same
+        # contract as Category Prompts. Only `.md` files count: renders.jsonl
+        # and the editor's `.bak` files live in the same folder and churn on
+        # every run, and hashing them would re-bill the LLM each queue press
+        # with the prompts untouched.
+        h = hashlib.sha256(f"compose:{str(category or '').strip()}".encode())
+        candidates = [str(project_path or "").strip()]
+        if not candidates[0]:
+            candidates = _executed_projects()
+        for project in candidates:
+            if not project:
+                continue
+            h.update(project.encode())
+            try:
+                for where, dirs, files in os.walk(prompts_dir(project)):
+                    dirs.sort()
+                    for name in sorted(files):
+                        if not name.endswith(".md"):
+                            continue
+                        p = os.path.join(where, name)
+                        st = os.stat(p)
+                        rel = os.path.relpath(p, prompts_dir(project))
+                        h.update(
+                            f"{rel}:{st.st_mtime_ns}:{st.st_size}".encode())
+            except OSError:
+                pass
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, project_path="", category="") -> io.NodeOutput:
+        project = _prompt_node_project(project_path)
+        if not project:
+            raise ValueError(
+                "no project folder to read the prompt book from — wire the "
+                "Prompt Book's `project` output, or set project_path")
+        cat = str(category or "").strip()
+        if not cat:
+            raise ValueError("no asset type to compose — pick one in the "
+                             "panel")
+        return io.NodeOutput(resolve_category_prompts(project, [cat])[0])
 
 
 class SymbioticaDatasetReference(io.ComfyNode):
@@ -3220,6 +3428,8 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaCategoryPrompts,
     SymbioticaOrderAssets,
     SymbioticaPromptBook,
+    SymbioticaPromptBlock,
+    SymbioticaPromptCompose,
     SymbioticaSaveRender,
     SymbioticaDatasetReference,
     SymbioticaSliceCells,
