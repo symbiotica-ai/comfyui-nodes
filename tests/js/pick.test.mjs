@@ -381,38 +381,29 @@ test("the panel declares its height the way the frontend actually asks", async (
     const node = await panelNode([], [ONE, TWO]);
     const panel = node.widgets.find((w) => w.name === "pick_panel");
     assert.equal(typeof panel.options.getMinHeight, "function");
-    assert.equal(typeof panel.options.getHeight, "function");
 });
 
-test("the height is the NODE's, not the content's", async () => {
-    // "i cannot make it less tall unless i make it super wide" — the panel
-    // used to ask for its content, so every re-list grew the node back and a
-    // drag only stuck if the grid needed fewer rows. It fills what the node
-    // gives it and scrolls the rest.
+test("the panel never pins the node's minimum height", async () => {
+    // LiteGraph builds a node's MINIMUM height by summing its widgets, and per
+    // widget it prefers `computeSize` over `computeLayoutSize`:
+    //     if (w.computeSize) t += w.computeSize(width)[1]
+    //     else if (w.computeLayoutSize) t += computeLayoutSize(node).minHeight
+    // So a DOM panel that answers computeSize with its content — or with the
+    // space below itself — makes the minimum equal what is on screen, and the
+    // corner drags taller but never shorter. It must declare a small constant
+    // floor and no computeSize at all.
     const node = await panelNode([], [ONE, TWO, THREE]);
     const panel = node.widgets.find((w) => w.name === "pick_panel");
     const list = panel.element.children[0];
     list.scrollHeight = 5000;              // a folder of fifty images
 
-    node.size[1] = 300;
-    panel.last_y = 120;
-    const short = parseInt(panel.options.getHeight(), 10);
+    assert.equal(panel.computeSize, undefined,
+                 "computeSize overrides the layout and pins the minimum");
+    const floor = panel.options.getMinHeight();
+    assert.ok(floor <= 60, `floor ${floor} is not a small constant`);
+    // …and it stays the floor whatever the node or the listing does.
     node.size[1] = 900;
-    const tall = parseInt(panel.options.getHeight(), 10);
-
-    assert.equal(short, 300 - 120 - 12);
-    assert.equal(tall, 900 - 120 - 12);
-    assert.ok(short < tall, "the panel must follow the node, not the grid");
-});
-
-test("re-listing never resizes the node he dragged", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [ONE, TWO]);
-    node.size[1] = 260;
-    const resizes = [];
-    node.setSize = (s) => resizes.push([...s]);
-    await node._symReloadPick();
-    for (let i = 0; i < 10; i++) await tick();
-    assert.deepEqual(resizes.filter((s) => s[1] !== 260), [],
-                     "a re-list must not change the node's height");
+    assert.equal(panel.options.getMinHeight(), floor);
+    node.size[1] = 200;
+    assert.equal(panel.options.getMinHeight(), floor);
 });

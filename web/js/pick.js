@@ -63,7 +63,10 @@ function thumbSize(node) {
 function pickPanel(node) {
     injectHubStyles();
 
-    const container = el("div", "box-sizing:border-box;width:100%;"
+    // height:100% — the layout gives the widget a box, this fills it, and the
+    // grid scrolls inside. Sizing to content instead is what used to drive the
+    // node's height.
+    const container = el("div", "box-sizing:border-box;width:100%;height:100%;"
         + "overflow-y:auto;overflow-x:hidden;");
     // ComfyUI sizes the container from computeSize, so its scrollHeight only
     // echoes its own box. Measure this inner list — its natural height IS the
@@ -72,35 +75,27 @@ function pickPanel(node) {
     container.appendChild(list);
     container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
 
-    // THE NODE'S HEIGHT IS HIS. The panel fills whatever is left below where
-    // it was laid out and scrolls the rest — it never asks to be as tall as
-    // its content. Asking for the content is what made a folder of fifty
-    // images re-grow the node on every render: dragging it shorter lasted
-    // until the next list, and the only way to make it short was to make it
-    // wide enough for the grid to need fewer rows.
-    const ABOVE_FALLBACK = 150;   // first layout runs before last_y exists
-    const panelHeight = () => {
-        const top = typeof panelW?.last_y === "number" && panelW.last_y > 0
-            ? panelW.last_y : ABOVE_FALLBACK;
-        return Math.max(PANEL_MIN, node.size[1] - top - 12);
-    };
-
-    const panelW = node.addDOMWidget("pick_panel", "sym_pick", container, {
+    // THE NODE'S HEIGHT IS HIS, AND IT MUST BE DRAGGABLE BOTH WAYS.
+    //
+    // LiteGraph derives a node's MINIMUM height by summing its widgets, and
+    // for each widget it prefers `computeSize` over `computeLayoutSize`:
+    //
+    //     if (w.computeSize) t += w.computeSize(width)[1]
+    //     else if (w.computeLayoutSize) t += w.computeLayoutSize(node).minHeight
+    //
+    // So a `computeSize` that answers with the space currently below the panel
+    // makes the minimum equal the current height, and the node can be dragged
+    // taller but never shorter. That is what "i am pulling on the corner and
+    // it cannot be made smaller" was, here and in the prompt editor.
+    //
+    // The panel therefore declares a small CONSTANT floor and no computeSize
+    // at all: the layout hands it whatever is left of the node's body, the
+    // element fills that box, and the grid scrolls inside it.
+    node.addDOMWidget("pick_panel", "sym_pick", container, {
         serialize: false,
         hideOnZoom: true,
-        // THE sizing contract of the frontend he runs (1.45): a DOM widget is
-        // laid out by `computeLayoutSize`, which reads these three and nothing
-        // else. Without them the widget reports a 50px minimum and no maximum,
-        // so the layout never bounds the element — it kept its content size
-        // and drew outside the node, a grid of fifty tiles spilling across the
-        // canvas. `computeSize` below is the OLD contract and is ignored
-        // there; it stays for older builds, where it is the only one read.
         getMinHeight: () => PANEL_MIN,
-        getHeight: () => `${panelHeight()}px`,
     });
-    panelW.computeSize = function (width) {
-        return [width, panelHeight()];
-    };
     // Redraw, never resize. The only thing this may change is a node so narrow
     // that a tile cannot fit, and a node that has never been given a height.
     const refit = () => requestAnimationFrame(() => {
@@ -110,9 +105,10 @@ function pickPanel(node) {
         node.setDirtyCanvas?.(true, true);
     });
     node.size[0] = Math.max(node.size[0], MIN_NODE_W);
-    // A default only for a node that arrives shorter than the panel's floor —
-    // a graph reopening at the size he left it keeps that size.
-    if (node.size[1] < ABOVE_FALLBACK + PANEL_MIN) {
+    // A starting height for a node that has never had one. Never a floor: a
+    // graph reopening keeps whatever height it was saved at, and dragging goes
+    // all the way down to the widgets plus PANEL_MIN.
+    if (!node.size[1] || node.size[1] < PANEL_MIN) {
         node.size[1] = DEFAULT_NODE_H;
     }
 

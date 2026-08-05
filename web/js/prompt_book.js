@@ -139,25 +139,21 @@ function panelChrome(node, widgetName, { save = true } = {}) {
     // position (`last_y`) rather than guessed, so no grey band is left at the
     // bottom whatever the node's slot count is.
     //
-    // The 1.4x frontend reads these options in `computeLayoutSize` and ignores
-    // `computeSize` (kept below for older builds) — a panel that declares
-    // neither height nor maximum is never bounded and paints outside the node.
-    const ABOVE_FALLBACK = 110;   // first layout runs before last_y exists
-    const panelHeight = () => {
-        const top = typeof w?.last_y === "number" && w.last_y > 0
-            ? w.last_y : ABOVE_FALLBACK;
-        return Math.max(60, node.size[1] - top - 12);
-    };
+    // LiteGraph builds a node's MINIMUM height by summing its widgets, and per
+    // widget it prefers `computeSize` over `computeLayoutSize`:
+    //
+    //     if (w.computeSize) t += w.computeSize(width)[1]
+    //     else if (w.computeLayoutSize) t += w.computeLayoutSize(node).minHeight
+    //
+    // So a `computeSize` answering with "everything below me" makes the
+    // minimum equal the node's current height: the corner drags taller and
+    // never shorter. This editor had exactly that, which is why the node could
+    // not be shrunk. A constant floor and NO computeSize: the layout hands the
+    // widget the rest of the body, and the textarea fills it.
     const w = node.addDOMWidget(widgetName, `sym_${widgetName}`, container, {
         serialize: false, hideOnZoom: true,
         getMinHeight: () => 60,
-        getHeight: () => `${panelHeight()}px`,
     });
-    // Width is a MINIMUM here, not the actual width — echoing the node's
-    // current width back made the minimum track the node and the width could
-    // only ever grow. A small constant frees the drag both ways; the wrapper
-    // is pinned to the real node width by syncWidth.
-    w.computeSize = () => [200, panelHeight()];
     // The first draw measures last_y; redraw once so the height computed from
     // the fallback is corrected before the user notices it.
     requestAnimationFrame(() => node.setDirtyCanvas?.(true, true));
