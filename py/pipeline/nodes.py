@@ -3548,7 +3548,9 @@ class SymbioticaPick(io.ComfyNode):
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
             ],
-            hidden=[io.Hidden.unique_id],
+            # `prompt`/`dynprompt` are how check_lazy_status finds out whether
+            # `images` actually has a link before asking for it.
+            hidden=[io.Hidden.unique_id, io.Hidden.prompt, io.Hidden.dynprompt],
             # An output node so it can be queued on its own: "Queue Selected
             # Output Node" on this picker lists the folder and sends the ticks
             # on, with nothing downstream needing to exist yet.
@@ -3556,19 +3558,71 @@ class SymbioticaPick(io.ComfyNode):
         )
 
     @classmethod
+    def fingerprint_inputs(cls, images=None, get_new=True, asset="",
+                           category="", role="", order=None, selection="",
+                           view="", folder="", phase=""):
+        """Always stale, because the folder changes without the inputs doing.
+
+        Found live: "i created a new image i want to select in the pick 518
+        node, the generated images do not show up". The renders were on disk
+        and the save node above had run — but every queue reported
+        `execution_cached: ['518']`. Nothing this node is wired to changes when
+        a render is written, so ComfyUI had no reason to run it, and a picker
+        that does not run does not list.
+
+        NaN is never equal to itself, which is how a node says "assume I
+        changed". Cheap to honour: this node's whole execution is a directory
+        listing.
+        """
+        return float("nan")
+
+    @classmethod
     def check_lazy_status(cls, images=None, get_new=True, asset="",
                           category="", role="", order=None, selection="",
                           view="", folder="", phase=""):
-        """Never. This node reads files; it does not pull images through a wire.
+        """Ask for the wire when there is one — for its ORDER, not its value.
 
-        Everything it shows is already on disk — the save node in the lane
-        writes each render into the asset's folder before the picker is even
-        reached — so asking for `images` would evaluate the lane above for a
-        value the node then has no use for. Declining a lazy input means the
-        wire is never computed, which is what makes queueing a picker
-        incapable of causing a render.
+        The images are read off disk, and `execute` ignores whatever arrives
+        here. What the wire buys is sequence: without it this node depends on
+        nothing that the render lane produces, and ComfyUI is free to run it
+        BEFORE the save node writes the new file — so a fresh render would show
+        up one queue late, every time.
+
+        Asking costs nothing that was not already spent. What a picker is wired
+        to is a save or preview node, and those are output nodes: ComfyUI runs
+        them on every queue whether or not this node asks for them.
+
+        Not merely "not False": an unknowable wire is refused too, because
+        asking for an input that has no link fails the whole graph with
+        NodeInputError, and a picker sitting on the canvas before anything is
+        wired to it is an ordinary state.
         """
-        return []
+        if cls._images_wired() is not True:
+            return []
+        return ["images"] if _unevaluated(images) else []
+
+    @classmethod
+    def _images_wired(cls):
+        """True/False when the `images` input's link can be determined, else None."""
+        hidden = getattr(cls, "hidden", None)
+        node_id = str(getattr(hidden, "unique_id", "") or "")
+        if not node_id:
+            return None
+        for source in (getattr(hidden, "prompt", None),
+                       getattr(hidden, "dynprompt", None)):
+            node = None
+            try:
+                if isinstance(source, dict):
+                    node = source.get(node_id)
+                elif source is not None and hasattr(source, "get_node"):
+                    node = source.get_node(node_id)
+            except Exception:
+                node = None
+            if isinstance(node, dict):
+                # A wired input is stored as [origin_node_id, slot]; a widget
+                # value is a scalar, and an unconnected optional is absent.
+                return isinstance((node.get("inputs") or {}).get("images"), list)
+        return None
 
     @classmethod
     def execute(cls, images=None, get_new=True, asset="", category="",

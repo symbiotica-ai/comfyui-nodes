@@ -91,26 +91,62 @@ class TestSchema:
         assert phase.options == ["", "base", "edit", "export"]
 
 
-class TestItCannotCauseARender:
-    """"I DONT WANT YOU TO GENERATE A NEW IMAGE EVERY SINGLE TIME". The images
-    are read off disk, so the wire is never evaluated — a lazy input that is
-    not requested is never computed, and nothing upstream runs."""
+class TestItListsAgainOnEveryQueue:
+    """"i created a new image i want to select in the pick 518 node — the
+    generated images do not show up". The renders were on disk and the save
+    node had run, but every queue reported `execution_cached: ['518']`: nothing
+    the picker is wired to changes when a render is written, so ComfyUI had no
+    reason to run it, and a picker that does not run does not list."""
 
-    def test_the_images_input_is_lazy(self, nodes_mod):
-        images = next(i for i in nodes_mod.SymbioticaPick.GET_SCHEMA().inputs
-                      if i.id == "images")
-        assert images.lazy is True
+    def test_it_reports_itself_as_always_changed(self, nodes_mod):
+        """NaN is never equal to itself, which is how a node says "assume I
+        changed". Cheap to honour — the whole execution is a listing."""
+        first = nodes_mod.SymbioticaPick.fingerprint_inputs()
+        assert first != first
 
-    def test_the_wire_is_never_asked_for(self, nodes_mod):
-        assert nodes_mod.SymbioticaPick.check_lazy_status(images=None) == []
-
-    def test_not_even_when_something_is_wired_to_it(self, nodes_mod):
+    def test_the_wire_is_asked_for_so_the_save_node_goes_first(self, nodes_mod):
+        """For its ORDER, not its value: `execute` ignores what arrives. With
+        no dependency on the render lane, ComfyUI is free to run this node
+        BEFORE the save node writes, and a fresh render then shows up one queue
+        late, every time."""
         nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
             unique_id="7",
             prompt={"7": {"inputs": {"images": ["9", 0]}},
                     "9": {"class_type": "SaveImage"}})
         assert nodes_mod.SymbioticaPick.check_lazy_status(
-            images=(None,)) == []
+            images=(None,)) == ["images"]
+
+    def test_an_unconnected_wire_is_never_asked_for(self, nodes_mod):
+        """Asking for an input with no link fails the whole graph, and a picker
+        with nothing wired to it is an ordinary state."""
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id="7", prompt={"7": {"inputs": {}}})
+        assert nodes_mod.SymbioticaPick.check_lazy_status(images=(None,)) == []
+
+    def test_an_unanswerable_lookup_asks_for_nothing(self, nodes_mod):
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(unique_id=None)
+        assert nodes_mod.SymbioticaPick.check_lazy_status(images=(None,)) == []
+
+    def test_a_resolved_wire_is_not_asked_for_again(self, nodes_mod):
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id="7",
+            prompt={"7": {"inputs": {"images": ["9", 0]}},
+                    "9": {"class_type": "SaveImage"}})
+        import torch
+        assert nodes_mod.SymbioticaPick.check_lazy_status(
+            images=[torch.zeros(1, 4, 4, 3)]) == []
+
+
+class TestItCannotCauseARender:
+    """"I DONT WANT YOU TO GENERATE A NEW IMAGE EVERY SINGLE TIME". What a
+    picker is wired to is a save or preview node — an output node ComfyUI runs
+    on every queue anyway — and the value it hands over is thrown away: the
+    images come off disk."""
+
+    def test_the_images_input_is_lazy(self, nodes_mod):
+        images = next(i for i in nodes_mod.SymbioticaPick.GET_SCHEMA().inputs
+                      if i.id == "images")
+        assert images.lazy is True
 
     def test_a_value_on_the_wire_is_ignored_rather_than_shown(self, nodes_mod,
                                                               tmp_path):
