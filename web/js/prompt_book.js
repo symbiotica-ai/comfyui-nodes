@@ -20,6 +20,10 @@ const COMPOSED = "composed:";
 // owns it.
 const NEW_IMAGE = "_image/01-image-model.md";
 
+// The Block node's "+ new block…" picker entry: a sentinel, not a filename —
+// choosing it asks for a name instead of loading anything.
+const NEW_BLOCK = "__new-block__";
+
 // One panel's save is every other panel's stale view: a Block node saving a
 // shared rule changes what the Compose node should be previewing. Saves are
 // announced on the window and every prompt panel refreshes, whichever node
@@ -406,13 +410,22 @@ function blockPanel(node) {
             // A remembered block that is gone from disk stays selectable: the
             // node still points at it, and Save recreates it — dropping to the
             // first rule would silently re-point the node.
-            if (keep && !names.includes(keep)) {
+            if (keep && keep !== NEW_BLOCK && !names.includes(keep)) {
                 groupInto(picker, "Not on disk",
                           [{ name: keep, title: keep, chars: "new" }]);
                 names.push(keep);
             }
+            // Always offered, even over a full book — an empty book otherwise
+            // has nothing to pick and no way to write its first block.
+            groupInto(picker, "New",
+                      [{ name: NEW_BLOCK, title: "+ new block…", chars: "?" }]);
             const pick = names.includes(keep) ? keep : names[0];
-            if (!pick) { setStatus("no prompts in this project's book", true); return; }
+            if (!pick) {
+                picker.value = NEW_BLOCK;
+                setStatus("empty book — pick “+ new block…” to write the "
+                          + "first one", true);
+                return;
+            }
             picker.value = pick;
             if (blockW) blockW.value = pick;
             if (!(dirty() && loaded.name === pick)) await load(pick);
@@ -426,6 +439,18 @@ function blockPanel(node) {
             `Discard your unsaved changes to ${loaded.name}?`)) {
             picker.value = loaded.name;
             return;
+        }
+        if (picker.value === NEW_BLOCK) {
+            const typed = prompt(
+                "New block name — a shared rule (_rules/01-style.md), an image "
+                + "block (_image/01-image-model.md), or an asset type exactly "
+                + "as the order sheet spells it (Food - 3 stages.md):");
+            if (!typed?.trim()) { picker.value = loaded.name; return; }
+            let name = typed.trim();
+            if (!name.endsWith(".md")) name += ".md";
+            groupInto(picker, "Not on disk",
+                      [{ name, title: name, chars: "new" }]);
+            picker.value = name;
         }
         if (blockW) blockW.value = picker.value;
         // Name the node after its block — five of these side by side must read
