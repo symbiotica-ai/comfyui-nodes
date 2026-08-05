@@ -2130,6 +2130,13 @@ class SymbioticaAssetRefs(io.ComfyNode):
                                        "transparency is kept, so a reference "
                                        "can always be composited onto "
                                        "something else downstream."),
+                io.String.Output(display_name="folder",
+                                 tooltip="The folder these references were "
+                                         "read from — the order's own "
+                                         "references root. Wire it into a "
+                                         "Pick node's `folder` to tick the "
+                                         "client's references by eye instead "
+                                         "of taking every one of them."),
             ],
         )
 
@@ -2223,7 +2230,14 @@ class SymbioticaAssetRefs(io.ComfyNode):
             str(order.get("project_path", "") or "").strip(),
             str(asset.get("category", "") or "").strip())
         note = pairing_note(order, asset_name, names, cells)
-        return io.NodeOutput(images, names, masks, ui=ui.PreviewText(note))
+        # The folder, not the files: a Pick node lists a directory and lets him
+        # tick what he wants out of it, so handing it the paths would be the
+        # wrong shape and handing it one file's dirname would break the moment
+        # the order's refs root gains a subfolder.
+        folder = os.path.dirname(paths[0]) if paths else str(
+            (order or {}).get("refsRoot", "") or "").strip()
+        return io.NodeOutput(images, names, masks, folder,
+                             ui=ui.PreviewText(note))
 
 
 def _resize_square(cell, size):

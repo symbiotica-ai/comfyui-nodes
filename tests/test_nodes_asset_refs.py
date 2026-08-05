@@ -60,7 +60,7 @@ def make_transparent_order(tmp_path):
 
 
 def test_flattens_onto_the_background_by_default(nodes_mod, tmp_path):
-    images, _names, _masks = nodes_mod.SymbioticaAssetRefs.execute(
+    images, _names, _masks, _folder = nodes_mod.SymbioticaAssetRefs.execute(
         order=make_transparent_order(tmp_path), asset_name="Spookies",
         background="#808080").args
     px = images[0][0]
@@ -69,7 +69,7 @@ def test_flattens_onto_the_background_by_default(nodes_mod, tmp_path):
 
 
 def test_background_is_selectable(nodes_mod, tmp_path):
-    images, _n, _m = nodes_mod.SymbioticaAssetRefs.execute(
+    images, _n, _m, _f = nodes_mod.SymbioticaAssetRefs.execute(
         order=make_transparent_order(tmp_path), asset_name="Spookies",
         background="#ff0000").args
     assert [round(float(v) * 255) for v in images[0][0][0][0]] == [255, 0, 0]
@@ -77,7 +77,7 @@ def test_background_is_selectable(nodes_mod, tmp_path):
 
 def test_keeping_transparency_leaves_the_pixels_and_gives_the_alpha(nodes_mod,
                                                                     tmp_path):
-    images, _n, masks = nodes_mod.SymbioticaAssetRefs.execute(
+    images, _n, masks, _f = nodes_mod.SymbioticaAssetRefs.execute(
         order=make_transparent_order(tmp_path), asset_name="Spookies",
         keep_transparency=True).args
     # Un-composited, so the hidden backdrop is still there — usable only with
@@ -89,7 +89,7 @@ def test_keeping_transparency_leaves_the_pixels_and_gives_the_alpha(nodes_mod,
 
 def test_masks_come_out_opaque_for_a_reference_with_no_alpha(nodes_mod,
                                                              tmp_path):
-    _i, _n, masks = nodes_mod.SymbioticaAssetRefs.execute(
+    _i, _n, masks, _f = nodes_mod.SymbioticaAssetRefs.execute(
         order=make_order(tmp_path), asset_name="Spookies").args
     assert all(float(m.min()) == 1.0 for m in masks)
 
@@ -97,7 +97,7 @@ def test_masks_come_out_opaque_for_a_reference_with_no_alpha(nodes_mod,
 def test_returns_one_image_per_reference_in_order(nodes_mod, tmp_path):
     out = nodes_mod.SymbioticaAssetRefs.execute(
         order=make_order(tmp_path), asset_name="Spookies")
-    images, names, _masks = out.args
+    images, names, _masks, _folder = out.args
     assert names == ["Spookies.png", "Spookies_1.png", "Spookies_2.png"]
     # Sizes prove each slot holds ITS OWN file rather than the same one thrice.
     assert [tuple(i.shape[1:3]) for i in images] == [(16, 16), (24, 24),
@@ -129,7 +129,7 @@ def test_output_size_resizes_the_image_and_its_mask_together(nodes_mod,
                                                              tmp_path):
     # A full-size cutout against a shrunk picture would not line up in any
     # downstream composite, so the mask has to follow the image.
-    images, _n, masks = nodes_mod.SymbioticaAssetRefs.execute(
+    images, _n, masks, _f = nodes_mod.SymbioticaAssetRefs.execute(
         order=make_transparent_order(tmp_path), asset_name="Spookies",
         output_size="512").args
     assert tuple(images[0].shape) == (1, 512, 512, 3)
@@ -137,7 +137,7 @@ def test_output_size_resizes_the_image_and_its_mask_together(nodes_mod,
 
 
 def test_native_leaves_every_reference_at_its_own_size(nodes_mod, tmp_path):
-    images, _n, _m = nodes_mod.SymbioticaAssetRefs.execute(
+    images, _n, _m, _f = nodes_mod.SymbioticaAssetRefs.execute(
         order=make_order(tmp_path), asset_name="Spookies",
         output_size="native").args
     assert [tuple(i.shape[1:3]) for i in images] == [(16, 16), (24, 24),
@@ -160,3 +160,12 @@ def test_outputs_are_lists_so_the_lane_fans_out(nodes_mod):
     assert [i.id for i in schema.inputs] == ["order", "asset_name",
                                              "background", "keep_transparency",
                                              "output_size"]
+
+
+def test_folder_output_is_the_orders_references_root(nodes_mod, tmp_path):
+    order = make_order(tmp_path)
+    _i, _n, _m, folder = nodes_mod.SymbioticaAssetRefs.execute(
+        order=order, asset_name="Spookies").args
+    # A Pick node lists a DIRECTORY, so this is the folder the references were
+    # read from, not the files themselves.
+    assert folder == order["refsRoot"]
