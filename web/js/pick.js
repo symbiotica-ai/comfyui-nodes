@@ -9,7 +9,8 @@ import { el, emptyState, errorLine } from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaPick";
 const MIN_NODE_W = 340;
-const PANEL_MAX = 720;      // past this the grid scrolls instead of growing the node
+const PANEL_MIN = 44;        // an empty picker still shows its own message
+const DEFAULT_NODE_H = 460;  // only for a node that has never been given a height
 const SIZES = { S: 64, M: 108, L: 184 };
 const DEFAULT_SIZE = "S";
 
@@ -71,12 +72,17 @@ function pickPanel(node) {
     container.appendChild(list);
     container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
 
-    // How tall the panel asks to be: its content, floored so an empty picker
-    // still shows its message, capped so a folder of fifty renders scrolls
-    // inside the node instead of growing it past the screen.
+    // THE NODE'S HEIGHT IS HIS. The panel fills whatever is left below where
+    // it was laid out and scrolls the rest — it never asks to be as tall as
+    // its content. Asking for the content is what made a folder of fifty
+    // images re-grow the node on every render: dragging it shorter lasted
+    // until the next list, and the only way to make it short was to make it
+    // wide enough for the grid to need fewer rows.
+    const ABOVE_FALLBACK = 150;   // first layout runs before last_y exists
     const panelHeight = () => {
-        const h = list.scrollHeight;
-        return Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX);
+        const top = typeof panelW?.last_y === "number" && panelW.last_y > 0
+            ? panelW.last_y : ABOVE_FALLBACK;
+        return Math.max(PANEL_MIN, node.size[1] - top - 12);
     };
 
     const panelW = node.addDOMWidget("pick_panel", "sym_pick", container, {
@@ -89,18 +95,26 @@ function pickPanel(node) {
         // and drew outside the node, a grid of fifty tiles spilling across the
         // canvas. `computeSize` below is the OLD contract and is ignored
         // there; it stays for older builds, where it is the only one read.
-        getMinHeight: () => 44,
-        getMaxHeight: () => PANEL_MAX,
+        getMinHeight: () => PANEL_MIN,
         getHeight: () => `${panelHeight()}px`,
     });
     panelW.computeSize = function (width) {
         return [width, panelHeight()];
     };
+    // Redraw, never resize. The only thing this may change is a node so narrow
+    // that a tile cannot fit, and a node that has never been given a height.
     const refit = () => requestAnimationFrame(() => {
-        node.setSize?.([Math.max(node.size[0], MIN_NODE_W), node.computeSize()[1]]);
+        if (node.size[0] < MIN_NODE_W) {
+            node.setSize?.([MIN_NODE_W, node.size[1]]);
+        }
         node.setDirtyCanvas?.(true, true);
     });
     node.size[0] = Math.max(node.size[0], MIN_NODE_W);
+    // A default only for a node that arrives shorter than the panel's floor —
+    // a graph reopening at the size he left it keeps that size.
+    if (node.size[1] < ABOVE_FALLBACK + PANEL_MIN) {
+        node.size[1] = DEFAULT_NODE_H;
+    }
 
     let images = [];
     let folder = "";
