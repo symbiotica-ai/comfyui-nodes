@@ -53,9 +53,6 @@ ModelPresetWire = io.Custom("SYMBIOTICA_MODEL_PRESET")
 # Template Builder/Editor sheet bundle) — different shape, different producer.
 PackTemplateWire = io.Custom("SYMBIOTICA_PACK_TEMPLATE")
 
-# The passes a Pick node can be pinned to. Blank first so a node that has not
-# been assigned one keeps showing everything rather than silently nothing.
-_PICK_PHASES = ["", "base", "edit", "export"]
 # A step takes a set of images, or the one being worked on.
 _PICK_MODES = ["multiple", "single"]
 
@@ -3615,19 +3612,6 @@ def _as_list(value):
     return list(value) if isinstance(value, list) else [value]
 
 
-def _at_or_first(seq, index, default=""):
-    """Item `index`, falling back to the first value rather than to nothing.
-
-    A lane that fans out gives one label per image; a single batch of variants
-    of one asset gives one label for all of them. Repeating the first value
-    covers the second case, where indexing past the end would silently leave
-    every candidate after the first untagged.
-    """
-    if not seq:
-        return default
-    return str(seq[index] if index < len(seq) else seq[0])
-
-
 def _pil_to_tensor_keep_alpha(img):
     """A stored candidate back on the wire, with its transparency intact.
 
@@ -3641,36 +3625,6 @@ def _pil_to_tensor_keep_alpha(img):
         img = img.convert("RGB")
     arr = np.asarray(img, dtype=np.float32) / 255.0
     return torch.from_numpy(arr)[None, ...]
-
-
-def _derived_pick_folder(tag, order=None):
-    """Where this asset's renders are already filed, from what the node knows.
-
-    `save_paths` builds `month/feature/category/asset` from the same values the
-    picker is already handed on its own wires, so asking for that path to be
-    typed in — or wired a second time — is asking for something already
-    present. Built through `order_assets._segment` so it matches the folder a
-    save node actually wrote, separator-for-separator.
-
-    The event level has to come through `event_label`, exactly as `save_paths`
-    takes it: the order's `feature` is "Mini 1" while the folder on disk is
-    "Mini 1 — Ghostly Goodies". Deriving from the bare feature named a path
-    that has never existed, which is a silent miss — a folder that is not
-    there reads the same as a folder with nothing in it.
-
-    Returns "" when there is nothing specific enough to point at: reading a
-    whole month because only the month is known would pull in every asset of
-    every event.
-    """
-    from .order_assets import _segment, event_label
-    labelled = dict(tag)
-    if order:
-        labelled["feature"] = event_label(order) or tag.get("feature", "")
-    parts = [_segment(labelled.get(key, ""))
-             for key in ("month", "feature", "category", "asset")]
-    if not parts[-1] and not parts[-2]:
-        return ""
-    return "/".join(p for p in parts if p)
 
 
 def _segment_or_blank(value):
@@ -3740,11 +3694,10 @@ class SymbioticaPick(io.ComfyNode):
                         "save node put them, so a new render appears by "
                         "queueing this node again and looking at the work can "
                         "never cost a generation. "
-                        "The folder comes from the asset, category and order "
-                        "already wired in; `stage` names a step under it "
-                        "(`edits` reads `…/<asset>/edits_00001_.png`), and "
-                        "`folder` overrides the lot to browse elsewhere. Wire "
-                        "the `folder` output into the Save Image that fills "
+                        "The folder is one wire: Asset Focus's `save_path` "
+                        "into `save_path`. `stage` names a step under it "
+                        "(`edits` reads `…/<asset>/edits_00001_.png`). Wire "
+                        "the `save_path` output into the Save Image that fills "
                         "that stage and this node lists exactly what that node "
                         "wrote, by construction. "
                         "Chain them: a picker wired to another picker's "
@@ -3767,44 +3720,21 @@ class SymbioticaPick(io.ComfyNode):
                                        "is listed the same queue it was made. "
                                        "Wired to another Pick, this node lists "
                                        "exactly what that one ticked."),
-                # Kept only so the widget positions of graphs saved before
-                # this node stopped fetching still line up; it does nothing.
-                # The web extension hides it.
-                io.Boolean.Input("get_new", default=False,
-                                 tooltip="Unused, and hidden on the canvas. "
-                                         "Kept only so older saved workflows "
-                                         "keep their widget positions."),
-                io.String.Input("asset", default="", optional=True,
-                                tooltip="The asset being worked on — half of "
-                                        "the folder the node lists."),
-                io.String.Input("category", default="", optional=True),
-                Order.Input("order", optional=True,
-                            tooltip="The order, for the month and event the "
-                                    "renders were filed under."),
+                io.String.Input("save_path", default="", optional=True,
+                                tooltip="Wire Asset Focus's `save_path` here "
+                                        "— the same string the save nodes "
+                                        "take, so this node lists exactly "
+                                        "where they write, and `stage` names "
+                                        "a step under it. A relative path "
+                                        "resolves under ComfyUI's output "
+                                        "directory; a save node's own prefix "
+                                        "works too (`…/Food - 3 stages/"
+                                        "Spookies` lists that asset's "
+                                        "`Spookies_*` files)."),
                 # Canvas state, hidden by the web extension: the ticks live on
                 # the node so they are saved with the workflow.
                 io.String.Input("selection", default="", optional=True),
                 io.String.Input("view", default="", optional=True),
-                io.String.Input("role", default="", optional=True,
-                                tooltip="Unused, and hidden on the canvas. "
-                                        "Kept only so older saved workflows "
-                                        "keep their widget positions."),
-                io.String.Input("folder", default="", optional=True,
-                                tooltip="Usually leave this empty — the node "
-                                        "works the folder out from the asset, "
-                                        "category and order it is wired to. "
-                                        "Set it to browse a different one; a "
-                                        "relative path resolves under "
-                                        "ComfyUI's output directory. Naming a "
-                                        "save node's own prefix works too "
-                                        "(`…/Food - 3 stages/Spookies` lists "
-                                        "that asset's `Spookies_*` files)."),
-                io.Combo.Input("phase", options=_PICK_PHASES, default="",
-                               optional=True,
-                               tooltip="Unused, and hidden on the canvas — "
-                                       "`stage` replaced it. Kept only so "
-                                       "older saved workflows keep their "
-                                       "widget positions."),
                 io.Combo.Input("mode", options=_PICK_MODES, default="multiple",
                                optional=True,
                                tooltip="Whether this step takes a set or one "
@@ -3819,14 +3749,14 @@ class SymbioticaPick(io.ComfyNode):
                                         "`…/<asset>/edits_00001_.png`. Empty "
                                         "lists the asset's own renders, which "
                                         "is where a save node writes them "
-                                        "first. Wire the `folder` output into "
-                                        "the Save Image that fills this stage "
-                                        "and the two cannot disagree."),
+                                        "first. Wire the `save_path` output "
+                                        "into the Save Image that fills this "
+                                        "stage and the two cannot disagree."),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
-                io.String.Output(display_name="folder",
-                                 tooltip="The folder this node lists, ready "
+                io.String.Output(display_name="save_path",
+                                 tooltip="The path this node lists, ready "
                                          "for a Save Image node's "
                                          "`filename_prefix` — so the node that "
                                          "WRITES this stage and the node that "
@@ -3843,30 +3773,49 @@ class SymbioticaPick(io.ComfyNode):
         )
 
     @classmethod
-    def fingerprint_inputs(cls, images=None, get_new=True, asset="",
-                           category="", role="", order=None, selection="",
-                           view="", folder="", phase="", mode="multiple",
-                           stage=""):
-        """Always stale, because the folder changes without the inputs doing.
+    def fingerprint_inputs(cls, images=None, save_path="", selection="",
+                           view="", mode="multiple", stage=""):
+        """Change only when what LEAVES the node could have.
 
-        Found live: "i created a new image i want to select in the pick 518
-        node, the generated images do not show up". The renders were on disk
-        and the save node above had run — but every queue reported
-        `execution_cached: ['518']`. Nothing this node is wired to changes when
-        a render is written, so ComfyUI had no reason to run it, and a picker
-        that does not run does not list.
+        The first version returned NaN — always changed — so the panel would
+        re-list. But an always-changed node marks its output fresh on every
+        queue, and everything downstream of `picked` re-ran with it: the edit
+        model re-rendered the same tick, at full price, once per queue. The
+        panel's freshness now comes from the canvas — pick.js re-lists when a
+        queue finishes — so this only has to answer for the emission.
 
-        NaN is never equal to itself, which is how a node says "assume I
-        changed". Cheap to honour: this node's whole execution is a directory
-        listing.
+        Wired inputs read as unset here (this runs before upstream outputs
+        exist), so the folder comes from what the last execution registered. A
+        node that has not run yet, or whose files cannot be statted, says NaN
+        and runs once: that run registers the folder, and from there the stamp
+        holds until a tick, the mode, the stage, or a ticked file's bytes
+        change. A file replaced under the same name changes mtime and size,
+        which is why the stat is part of the stamp rather than just the name.
         """
-        return float("nan")
+        from .pick_folder import listing_for, picked_paths, resolved
+
+        one = SymbioticaCategoryPrompts._one
+        node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
+        node_id = one(node_id, None) if isinstance(node_id, list) else node_id
+        target, only = resolved(node_id) if node_id else ("", None)
+        if not target:
+            return float("nan")
+        picked_one = str(one(mode, "multiple") or "multiple") == "single"
+        ticks = _pick_ids(str(one(selection, "")))
+        stamp = [target, sorted(only) if only is not None else None,
+                 picked_one, str(one(stage, "")), ticks]
+        try:
+            paths = picked_paths(listing_for(target, only=only), ticks)
+            for path in paths[:1] if picked_one else paths:
+                st = os.stat(path)
+                stamp.append([path, st.st_mtime_ns, st.st_size])
+        except OSError:
+            return float("nan")
+        return json.dumps(stamp)
 
     @classmethod
-    def check_lazy_status(cls, images=None, get_new=True, asset="",
-                          category="", role="", order=None, selection="",
-                          view="", folder="", phase="", mode="multiple",
-                          stage=""):
+    def check_lazy_status(cls, images=None, save_path="", selection="",
+                          view="", mode="multiple", stage=""):
         """Ask for the wire when there is one — for its ORDER, not its value.
 
         The images are read off disk, and `execute` ignores whatever arrives
@@ -3944,9 +3893,8 @@ class SymbioticaPick(io.ComfyNode):
             else ""
 
     @classmethod
-    def execute(cls, images=None, get_new=True, asset="", category="",
-                role="", order=None, selection="", view="", folder="",
-                phase="", mode="multiple", stage="") -> io.NodeOutput:
+    def execute(cls, images=None, save_path="", selection="", view="",
+                mode="multiple", stage="") -> io.NodeOutput:
         from PIL import Image
 
         from .pick_folder import listing_for, picked_paths, remember, resolved
@@ -3954,26 +3902,19 @@ class SymbioticaPick(io.ComfyNode):
         one = SymbioticaCategoryPrompts._one
         node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
         node_id = one(node_id, None) if isinstance(node_id, list) else node_id
-        ord_dict = one(order, {}) or {}
-        if not isinstance(ord_dict, dict):
-            ord_dict = {}
         step = _segment_or_blank(one(stage, ""))
 
-        # Where this asset's work is, worked out from the wires the node
-        # already has rather than from a path typed in beside them. `stage` is
-        # a step under the asset: `…/<asset>/edits` names the files the edit
-        # lane writes, the same way `…/<asset>` names its first renders.
-        context = {"month": str(ord_dict.get("month", "")),
-                   "feature": str(ord_dict.get("feature", "")),
-                   "category": _at_or_first(_as_list(category), 0),
-                   "asset": _at_or_first(_as_list(asset), 0)}
-        home = _pick_folders([_derived_pick_folder(context, ord_dict)])
-        home = home[0] if home else ""
+        # One wire names the asset's folder: Asset Focus's `save_path` into
+        # `folder` is the same string the save nodes take, so the picker and
+        # the savers cannot disagree. `stage` is a step under the asset:
+        # `…/<asset>/edits` names the files the edit lane writes, the same
+        # way `…/<asset>` names its first renders.
+        typed = _pick_folders(_as_list(save_path))
+        home = typed[0] if typed else ""
         # The folder this asset's `stage` step lives in, whether or not this
         # node is the one listing it.
         stage_home = os.path.join(home, step) if (home and step) else home
-        typed = _pick_folders(_as_list(folder))
-        target = typed[0] if typed else stage_home
+        target = stage_home
 
         # Fed by another picker: list exactly what it approved. Its ticks are
         # on its own node in the prompt, and the folder they name is the one it

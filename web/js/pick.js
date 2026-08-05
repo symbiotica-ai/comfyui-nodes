@@ -11,7 +11,7 @@ const NODE_CLASS = "SymbioticaPick";
 const MIN_NODE_W = 340;
 const PANEL_MAX = 720;      // past this the grid scrolls instead of growing the node
 const SIZES = { S: 64, M: 108, L: 184 };
-const DEFAULT_SIZE = "M";
+const DEFAULT_SIZE = "S";
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
 
@@ -238,11 +238,18 @@ function pickPanel(node) {
     }
 
     // --- grid --------------------------------------------------------------
-    function renderGrid(ticks) {
+    // Files saved as `<asset>_<role>_00001_.png` carry their role in the
+    // name, so the grid can row itself by it — one row per role makes "one of
+    // each, none twice" readable at a glance. The group key is the stem minus
+    // ComfyUI's counter; the label is what the keys do not share.
+    const groupOf = (name) =>
+        name.replace(/\.[^.]+$/, "").replace(/_\d+_?$/, "");
+
+    function renderRow(ticks, rowImages) {
         const px = SIZES[thumbSize(node)];
         const grid = el("div", "display:flex;flex-wrap:wrap;gap:4px;"
             + "width:100%;box-sizing:border-box;");
-        for (const image of images) {
+        for (const image of rowImages) {
             const on = ticks.has(image.id);
             const cell = el("div",
                 `position:relative;width:${px}px;height:${px}px;flex:none;`
@@ -277,6 +284,37 @@ function pickPanel(node) {
             grid.appendChild(cell);
         }
         return grid;
+    }
+
+    function renderGrid(ticks) {
+        const groups = new Map();
+        for (const image of images) {
+            const key = groupOf(image.name);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(image);
+        }
+        if (groups.size <= 1) return renderRow(ticks, images);
+
+        // The shared start of every key is the asset's own name — the label
+        // is the part that differs, which is the role.
+        const keys = [...groups.keys()];
+        let shared = keys[0];
+        for (const key of keys) {
+            while (shared && !key.startsWith(shared)) {
+                shared = shared.slice(0, -1);
+            }
+        }
+        const wrap = el("div", "width:100%;box-sizing:border-box;");
+        for (const [key, rowImages] of groups) {
+            const label = key.slice(shared.length).replace(/^_/, "") || "base";
+            const here = rowImages.filter((i) => ticks.has(i.id)).length;
+            wrap.appendChild(el("div",
+                `padding:5px 3px 2px;font:10px ${HUB.font};`
+                + `color:${here ? HUB.ink : HUB.inkSubtle};`,
+                `${label} · ${rowImages.length}${here ? ` · ${here} ✓` : ""}`));
+            wrap.appendChild(renderRow(ticks, rowImages));
+        }
+        return wrap;
     }
 
     function render() {
@@ -317,33 +355,6 @@ function pickPanel(node) {
         refit();
     }
 
-    // Browsing a folder other than this asset's own. The node lists its own
-    // folder by itself on every run, so this is only for looking elsewhere.
-    let reading = false;
-    const readBtn = node.addWidget("button", "📁 Read folder", null, async () => {
-        if (reading) return;
-        const typed = widgetOf(node, "folder")?.value?.trim?.();
-        if (!typed) {
-            notice = "leave `folder` empty and queue this node — it lists this "
-                + "asset's own renders. Set `folder` only to browse another one.";
-            error = "";
-            render();
-            return;
-        }
-        reading = true;
-        readBtn.name = "⏳ Reading…";
-        node.setDirtyCanvas?.(true, true);
-        try {
-            await load(typed);
-            notice = images.length ? "" : "no images in that folder";
-        } finally {
-            reading = false;
-            readBtn.name = "📁 Read folder";
-            node.setDirtyCanvas?.(true, true);
-        }
-    });
-    readBtn.serialize = false;
-
     render();
     load();
 }
@@ -356,10 +367,9 @@ registerSymbioticaExtension(app, {
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             onNodeCreated?.apply(this, arguments);
-            // Canvas state and dead widgets kept for their positions: collapse
-            // them (a bare .hidden is ignored by the classic canvas widgets).
-            for (const name of ["selection", "view", "get_new", "role",
-                                "phase"]) {
+            // Canvas state: collapse it (a bare .hidden is ignored by the
+            // classic canvas widgets).
+            for (const name of ["selection", "view"]) {
                 const w = widgetOf(this, name);
                 if (w) { w.hidden = true; w.computeSize = () => [0, -4]; }
             }
@@ -369,8 +379,23 @@ registerSymbioticaExtension(app, {
         // A saved workflow restores the ticks AFTER creation, and the node id
         // the listing is keyed by is only final once the graph is configured.
         const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function () {
+        nodeType.prototype.onConfigure = function (info) {
             onConfigure?.apply(this, arguments);
+            // Graphs saved before the node was stripped to one wire carry ten
+            // widget values, applied positionally onto the five widgets that
+            // remain — which lands the ticks on `mode` and the stage nowhere.
+            // Put each surviving value back on its own widget, by the position
+            // it held in the old layout: [get_new, asset, category, selection,
+            // view, role, folder, phase, mode, stage].
+            const v = info?.widgets_values;
+            if (Array.isArray(v) && v.length >= 10) {
+                for (const [name, i] of [["save_path", 6], ["selection", 3],
+                                         ["view", 4], ["mode", 8],
+                                         ["stage", 9]]) {
+                    const w = widgetOf(this, name);
+                    if (w) w.value = v[i];
+                }
+            }
             queueMicrotask(() => this._symReloadPick?.());
         };
     },
@@ -385,4 +410,12 @@ api.addEventListener("symbiotica.pick", (event) => {
         ?? app.graph?.getNodeById?.(detail.node_id);
     if (!node) return;
     node._symReloadPick?.();
+});
+
+// A cached picker does not execute, and its change-check only answers for
+// what it EMITS — so a queue that wrote new renders can finish without the
+// node running at all. The re-list comes from here instead: every picker on
+// the canvas refreshes when a queue ends.
+api.addEventListener("execution_success", () => {
+    for (const node of app.graph?._nodes ?? []) node._symReloadPick?.();
 });

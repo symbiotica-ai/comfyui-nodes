@@ -30,8 +30,7 @@ function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) 
 }
 
 const WIDGET_DEFAULTS = {
-    get_new: false, asset: "", category: "", selection: "", view: "",
-    role: "", folder: "", phase: "", mode: "multiple", stage: "",
+    save_path: "", selection: "", view: "", mode: "multiple", stage: "",
 };
 
 async function panelNode(seen = [], images = [], values = {},
@@ -250,24 +249,6 @@ test("the thumb size buttons change the tile size", async () => {
     assert.match(cells(node)[0].style.cssText, /width:184px/);
 });
 
-test("Read folder with no folder explains that it is not needed", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [], { folder: "" });
-    const before = seen.length;
-    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
-    assert.equal(seen.length, before);
-    assert.match(textOf(node), /leave `folder` empty/);
-});
-
-test("Read folder asks the server for the folder that was typed", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [ONE], { folder: "/out/elsewhere" });
-    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
-    const asked = seen.filter((c) => c.route.includes("folder="));
-    assert.equal(asked.length, 1);
-    assert.ok(asked[0].route.includes(encodeURIComponent("/out/elsewhere")));
-});
-
 test("a run re-lists the folder, so a new render appears", async () => {
     const seen = [];
     const node = await panelNode(seen, [ONE]);
@@ -278,15 +259,62 @@ test("a run re-lists the folder, so a new render appears", async () => {
     assert.ok(after > before);
 });
 
-test("the state widgets are hidden, dead ones included", async () => {
-    // `get_new` and `role` do nothing and are kept only so the positions of
-    // widgets saved in someone's workflow still line up.
+test("the state widgets are hidden", async () => {
     const node = await panelNode([], [ONE]);
-    for (const name of ["selection", "view", "get_new", "role"]) {
+    for (const name of ["selection", "view"]) {
         assert.equal(widgetOf(node, name).hidden, true, name);
     }
 });
 
+test("a graph saved before the one-wire layout keeps its values", async () => {
+    // Ten-plus positional values from the old layout [get_new, asset,
+    // category, selection, view, role, folder, phase, mode, stage] land on
+    // the five surviving widgets by position unless onConfigure puts each
+    // back on its own widget.
+    const node = await panelNode([], [ONE]);
+    node.onConfigure?.call(node, { widgets_values: [
+        false, "Spookies", "Food", '["a.png"]', "", "", "October/Ev/Food",
+        "edit", "single", "edits", "",
+    ] });
+    assert.equal(widgetOf(node, "save_path").value, "October/Ev/Food");
+    assert.equal(widgetOf(node, "selection").value, '["a.png"]');
+    assert.equal(widgetOf(node, "mode").value, "single");
+    assert.equal(widgetOf(node, "stage").value, "edits");
+});
+
 test("it registers under one extension name", async () => {
     assert.ok(app.extensions.some((e) => e.name === "symbiotica.pick"));
+});
+
+test("role-named files row themselves with the role as the label", async () => {
+    // `<asset>_<role>_00001_.png` groups by stem-minus-counter; the label is
+    // what the keys do not share, so the asset's own name stays out of it.
+    const node = await panelNode([], [
+        shot("Spookies_prep_00001_.png", 1),
+        shot("Spookies_ready_00001_.png", 2),
+        shot("Spookies_serving_00001_.png", 3),
+    ]);
+    const text = textOf(node);
+    for (const label of ["prep · 1", "ready · 1", "serving · 1"]) {
+        assert.ok(text.includes(label), label);
+    }
+});
+
+test("a single group renders flat, with no row label", async () => {
+    const node = await panelNode([], [ONE, TWO]);
+    assert.ok(!textOf(node).includes("base"));
+});
+
+test("a finished queue re-lists even a picker that did not run", async () => {
+    // The picker's change-check answers only for its emission, so a cached
+    // picker skips execution entirely — the fresh renders a queue wrote have
+    // to reach the panel from the queue ending, not from the node running.
+    const seen = [];
+    const node = await panelNode(seen, [ONE]);
+    const count = () => seen.filter(
+        (c) => c.route.startsWith("/symbiotica/pick-list")).length;
+    const before = count();
+    emit("execution_success", {});
+    for (let i = 0; i < 5; i++) await tick();
+    assert.ok(count() > before);
 });
