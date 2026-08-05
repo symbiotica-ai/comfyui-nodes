@@ -4,7 +4,7 @@ import os
 
 from PIL import Image
 
-from pipeline.pick_folder import (images_in, keep_picks, listing, listing_for,
+from pipeline.pick_folder import (images_in, listing, listing_for,
                                   name_matches_prefix, picked_paths,
                                   read_folders, remember, resolved)
 
@@ -124,84 +124,83 @@ class TestWhatLeavesTheNode:
         assert picked_paths(listing(str(tmp_path)), []) == []
 
 
-class TestKeepingWhatWasGood:
-    """"images picked should land in …/Spookies/Base so we only keep what was
-    good in these folders"."""
-
-    def test_a_pick_is_copied_under_its_own_name(self, tmp_path):
-        renders(str(tmp_path / "src"), ("Spookies_00007_.png",))
-        dest = str(tmp_path / "src" / "Spookies" / "Base")
-        written = keep_picks(
-            [str(tmp_path / "src" / "Spookies_00007_.png")], dest)
-        assert [os.path.basename(p) for p in written] == ["Spookies_00007_.png"]
-
-    def test_keeping_twice_writes_once(self, tmp_path):
-        """Every queue emits the same ticks; rewriting them each time would
-        churn the delivery folder and whatever syncs it."""
-        renders(str(tmp_path / "src"), ("a.png",))
-        paths = [str(tmp_path / "src" / "a.png")]
-        assert len(keep_picks(paths, str(tmp_path / "keep"))) == 1
-        assert keep_picks(paths, str(tmp_path / "keep")) == []
-
-    def test_the_rejects_stay_where_they_are(self, tmp_path):
-        """Copied, never moved: deleting what was not picked is a different
-        decision, and not one a node makes on its own."""
-        renders(str(tmp_path / "src"), ("a.png", "b.png"))
-        keep_picks([str(tmp_path / "src" / "a.png")], str(tmp_path / "keep"))
-        assert sorted(os.listdir(str(tmp_path / "src"))) == ["a.png", "b.png"]
-
-    def test_an_unwritable_destination_does_not_raise(self, tmp_path):
-        """The picks are still on the wire, which is what the run is for."""
-        renders(str(tmp_path / "src"), ("a.png",))
-        blocker = tmp_path / "afile"
-        blocker.write_text("not a directory")
-        assert keep_picks([str(tmp_path / "src" / "a.png")],
-                          str(blocker / "Base")) == []
-
-
 class TestThePanelListsWhatTheNodeRead:
     """Asset and category arrive on wires, and a wired input has no value on
     the canvas — so the panel cannot work the folder out for itself."""
 
-    def test_a_run_records_the_asset_it_resolved(self):
+    def test_a_run_records_the_path_it_resolved(self):
         remember("7", "/out/Oct/Ev/Food/Spookies")
-        assert resolved("7") == "/out/Oct/Ev/Food/Spookies"
+        assert resolved("7") == ("/out/Oct/Ev/Food/Spookies", None)
 
     def test_a_node_that_has_never_run_has_no_folder(self):
-        assert resolved("no-such-node") == ""
+        assert resolved("no-such-node") == ("", None)
 
     def test_an_integer_and_its_string_are_the_same_node(self):
         remember(9, "/out/x")
-        assert resolved("9") == "/out/x"
+        assert resolved("9") == ("/out/x", None)
+
+    def test_a_shortlist_is_recorded_with_the_path(self):
+        """A picker fed by another lists what that one approved, and the panel
+        has to be able to ask for the same narrowed set."""
+        remember("8", "/out/x", ["a.png", "b.png"])
+        assert resolved("8") == ("/out/x", ["a.png", "b.png"])
 
 
-class TestBothLayoutsAtOnce:
-    """The moment approved picks are kept, `…/Spookies/` exists as a directory
-    — and listing that instead of the prefixed files hid every new render
-    behind the folder its own picks created."""
+class TestListingAShortlist:
+    """"521 reads the indexed 3 images from 518" — the approved set is the
+    upstream picker's ticks, so no folder of copies has to exist for it."""
 
-    def test_the_prefixed_files_survive_the_folder_appearing(self, tmp_path):
-        renders(str(tmp_path / "Food"), ("Spookies_00001_.png",))
-        renders(str(tmp_path / "Food" / "Spookies" / "Base"), ("kept.png",),
-                colour=90)
-        names = [e["name"] for e in listing_for(str(tmp_path / "Food" / "Spookies"))]
-        assert names == ["Spookies_00001_.png"]
+    def test_only_the_named_files_are_listed(self, tmp_path):
+        renders(str(tmp_path), ("a.png", "b.png", "c.png"))
+        names = [e["name"] for e in
+                 listing_for(str(tmp_path), only=["a.png", "c.png"])]
+        assert names == ["a.png", "c.png"]
 
-    def test_a_folder_of_its_own_is_listed_too(self, tmp_path):
-        renders(str(tmp_path / "Food"), ("Spookies_00001_.png",))
-        renders(str(tmp_path / "Food" / "Spookies"), ("older.png",), colour=90)
-        entries = listing_for(str(tmp_path / "Food" / "Spookies"))
-        assert [e["name"] for e in entries] == ["Spookies_00001_.png",
-                                                "older.png"]
+    def test_the_numbering_is_of_the_shortlist(self, tmp_path):
+        """1 and 2, not 1 and 3: the number is what is read off the screen."""
+        renders(str(tmp_path), ("a.png", "b.png", "c.png"))
+        entries = listing_for(str(tmp_path), only=["a.png", "c.png"])
         assert [e["index"] for e in entries] == [1, 2]
 
-    def test_the_same_name_from_both_layouts_is_one_tile(self, tmp_path):
-        """`id` is the file name, which is what a tick records — two tiles
-        with one identity would tick each other."""
+    def test_an_empty_shortlist_lists_nothing(self, tmp_path):
+        """Nothing approved upstream is not the same as no narrowing at all."""
+        renders(str(tmp_path), ("a.png",))
+        assert listing_for(str(tmp_path), only=[]) == []
+
+    def test_a_name_that_is_gone_is_simply_absent(self, tmp_path):
+        renders(str(tmp_path), ("a.png",))
+        assert len(listing_for(str(tmp_path), only=["a.png", "gone.png"])) == 1
+
+
+class TestWhichLayoutANameMeans:
+    """A name is both a filename prefix and a directory at once, and only one
+    of them is ever the answer."""
+
+    def test_files_named_after_it_are_what_it_means(self, tmp_path):
         renders(str(tmp_path / "Food"), ("Spookies_00001_.png",))
-        renders(str(tmp_path / "Food" / "Spookies"), ("Spookies_00001_.png",),
+        renders(str(tmp_path / "Food" / "Spookies"), ("edits_00001_.png",),
                 colour=90)
-        assert len(listing_for(str(tmp_path / "Food" / "Spookies"))) == 1
+        names = [e["name"] for e in listing_for(str(tmp_path / "Food" / "Spookies"))]
+        # Not the edits inside `Spookies/` — those are a later step, and
+        # merging them put every edit in the list of renders to choose a base
+        # from, moving the numbering every time a stage was saved.
+        assert names == ["Spookies_00001_.png"]
+
+    def test_the_directory_is_meant_when_nothing_is_named_after_it(self,
+                                                                    tmp_path):
+        """Work saved a folder-per-asset still reads."""
+        renders(str(tmp_path / "Food" / "Spookies"), ("one.png", "two.png"))
+        names = [e["name"] for e in listing_for(str(tmp_path / "Food" / "Spookies"))]
+        assert names == ["one.png", "two.png"]
+
+    def test_a_stage_is_a_prefix_inside_the_assets_folder(self, tmp_path):
+        renders(str(tmp_path / "Food"), ("Spookies_00001_.png",))
+        renders(str(tmp_path / "Food" / "Spookies"),
+                ("edits_00001_.png", "edits_00002_.png"), colour=90)
+        entries = listing_for(str(tmp_path / "Food" / "Spookies" / "edits"))
+        assert [e["name"] for e in entries] == ["edits_00001_.png",
+                                                "edits_00002_.png"]
+        assert [e["index"] for e in entries] == [1, 2]
 
     def test_read_folders_names_what_will_be_read(self, tmp_path):
         renders(str(tmp_path / "Food"), ("Spookies_00001_.png",))

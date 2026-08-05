@@ -29,6 +29,11 @@ async function fetchJson(url, options) {
     return res.json();
 }
 
+// `single` is for editing: you edit the image you are working on, so ticking
+// replaces the previous pick instead of adding to it.
+const isSingle = (node) =>
+    (widgetOf(node, "mode")?.value?.trim?.() || "multiple") === "single";
+
 // The ticks live on the `selection` widget as a JSON array of FILE NAMES, so
 // they are saved with the workflow: reopening a graph shows the same picks the
 // run was queued with. Names rather than positions, because a new render
@@ -80,6 +85,8 @@ function pickPanel(node) {
 
     let images = [];
     let folder = "";
+    // Listing another picker's approvals rather than a folder of its own.
+    let shortlist = false;
     let error = "";
     let notice = "";
     let loading = false;
@@ -100,6 +107,7 @@ function pickPanel(node) {
             const data = await fetchJson(`/symbiotica/pick-list?${q.toString()}`);
             images = Array.isArray(data.images) ? data.images : [];
             folder = data.folder || "";
+            shortlist = Boolean(data.shortlist);
             loadedOk = images.length > 0;
             error = "";
         } catch (e) {
@@ -115,10 +123,8 @@ function pickPanel(node) {
     node._symReloadPick = load;
     node._symPickNote = (text) => { notice = String(text || ""); render(); };
 
-    // Editing is done to ONE image: "i am EDITING so it has to be the one i am
-    // working on". Every other pass chooses a set.
-    const phaseOf = () => widgetOf(node, "phase")?.value?.trim?.() || "";
-    const oneAtATime = () => phaseOf() === "edit";
+    const stageOf = () => widgetOf(node, "stage")?.value?.trim?.() || "";
+    const oneAtATime = () => isSingle(node);
 
     function toggle(name) {
         const ticks = readTicks(node);
@@ -167,20 +173,22 @@ function pickPanel(node) {
             bar.appendChild(drop);
         }
 
-        const phase = phaseOf();
-        if (phase) {
-            const chip = el("div",
-                `flex:none;padding:1px 6px;border-radius:3px;font:10px ${HUB.font};`
-                + `background:${HUB.surface1};color:${HUB.inkSubtle};`
-                + `border:1px solid ${HUB.hairline};`,
-                oneAtATime() ? `${phase} · one` : phase);
-            chip.title = `ticked images are kept in …/${phase} under this asset`
-                + (oneAtATime()
-                    ? "\nediting is done to one image, so ticking replaces the "
-                      + "previous pick"
-                    : "");
-            bar.appendChild(chip);
-        }
+        // What this picker is looking at, and how many it takes. Both are
+        // widgets, but a widget is a thing to read; a chip is a thing you see.
+        const label = shortlist ? "shortlist" : (stageOf() || "renders");
+        const chip = el("div",
+            `flex:none;padding:1px 6px;border-radius:3px;font:10px ${HUB.font};`
+            + `background:${HUB.surface1};color:${HUB.inkSubtle};`
+            + `border:1px solid ${HUB.hairline};`,
+            oneAtATime() ? `${label} · one` : label);
+        chip.title = (shortlist
+            ? "listing exactly what the picker upstream approved"
+            : `listing ${stageOf() ? `this asset's \`${stageOf()}\` step`
+                                   : "this asset's own renders"}`)
+            + (oneAtATime()
+                ? "\nsingle: ticking replaces the previous pick"
+                : "");
+        bar.appendChild(chip);
 
         for (const key of Object.keys(SIZES)) {
             const b = el("button", ghostButtonCss + "padding:1px 6px;flex:none;"
@@ -287,9 +295,12 @@ function pickPanel(node) {
         if (loading && !images.length) {
             list.appendChild(emptyState("reading…"));
         } else if (!images.length) {
-            list.appendChild(emptyState(
-                "queue this node once — it works out which folder this asset's "
-                + "renders are in from the wires, then lists them here"));
+            list.appendChild(emptyState(shortlist
+                ? "the picker above has nothing ticked yet — approve some "
+                  + "there and they appear here"
+                : "queue this node once — it works out which folder this "
+                  + "asset's images are in from the wires, then lists them "
+                  + "here"));
         } else {
             list.appendChild(renderGrid(ticks));
         }
@@ -337,7 +348,8 @@ registerSymbioticaExtension(app, {
             onNodeCreated?.apply(this, arguments);
             // Canvas state and dead widgets kept for their positions: collapse
             // them (a bare .hidden is ignored by the classic canvas widgets).
-            for (const name of ["selection", "view", "get_new", "role"]) {
+            for (const name of ["selection", "view", "get_new", "role",
+                                "phase"]) {
                 const w = widgetOf(this, name);
                 if (w) { w.hidden = true; w.computeSize = () => [0, -4]; }
             }
@@ -362,11 +374,5 @@ api.addEventListener("symbiotica.pick", (event) => {
     const node = app.graph?.getNodeById?.(Number(detail.node_id))
         ?? app.graph?.getNodeById?.(detail.node_id);
     if (!node) return;
-    // Ticked images are copied to the delivery folder, which is not somewhere
-    // the node can show — so it says where they went rather than leaving it to
-    // be discovered in a file browser.
-    node._symPickNote?.(detail.kept
-        ? `kept ${detail.kept} in ${detail.kept_in || "the asset's folder"}`
-        : "");
     node._symReloadPick?.();
 });

@@ -19,11 +19,11 @@ const ONE = shot("Spookies_00001_.png", 1);
 const TWO = shot("Spookies_00002_.png", 2);
 const THREE = shot("Spookies_00003_.png", 3);
 
-function router(seen, images, folder = `${FOLDER}/Spookies`) {
+function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) {
     return (route, _n, init) => {
         seen.push({ route, init });
         if (route.startsWith("/symbiotica/pick-list")) {
-            return { ok: true, body: { ok: true, folder, images } };
+            return { ok: true, body: { ok: true, folder, images, shortlist } };
         }
         return { ok: false, status: 404, body: { error: "no such route" } };
     };
@@ -31,12 +31,13 @@ function router(seen, images, folder = `${FOLDER}/Spookies`) {
 
 const WIDGET_DEFAULTS = {
     get_new: false, asset: "", category: "", selection: "", view: "",
-    role: "", folder: "", phase: "",
+    role: "", folder: "", phase: "", mode: "multiple", stage: "",
 };
 
-async function panelNode(seen = [], images = [], values = {}) {
+async function panelNode(seen = [], images = [], values = {},
+                         shortlist = false) {
     reset();
-    setResponder(router(seen, images));
+    setResponder(router(seen, images, `${FOLDER}/Spookies`, shortlist));
     const node = await create("SymbioticaPick",
                               { ...WIDGET_DEFAULTS, ...values });
     await node.onNodeCreated?.call(node);
@@ -154,7 +155,7 @@ test("with nothing ticked there is nothing to untick", async () => {
 test("an edit picker replaces the tick instead of adding one", async () => {
     // "in edit mode i want to only be able to select one image. i am EDITING
     // so it has to be the one i am working on".
-    const node = await panelNode([], [ONE, TWO, THREE], { phase: "edit" });
+    const node = await panelNode([], [ONE, TWO, THREE], { mode: "single" });
     fire(cells(node)[1], "click");
     fire(cells(node)[2], "click");
     assert.deepEqual(JSON.parse(widgetOf(node, "selection").value),
@@ -162,7 +163,7 @@ test("an edit picker replaces the tick instead of adding one", async () => {
 });
 
 test("an edit picker still lets you untick the one you chose", async () => {
-    const node = await panelNode([], [ONE, TWO], { phase: "edit" });
+    const node = await panelNode([], [ONE, TWO], { mode: "single" });
     fire(cells(node)[0], "click");
     fire(cells(node)[0], "click");
     assert.deepEqual(JSON.parse(widgetOf(node, "selection").value), []);
@@ -172,7 +173,7 @@ test("editing drops ticks left over from another asset too", async () => {
     // They are not travelling anywhere either, and "1 ticked · 3 missing" on
     // a node that emits exactly one image is noise.
     const node = await panelNode([], [ONE, TWO], {
-        phase: "edit",
+        mode: "single",
         selection: JSON.stringify(["gone_a.png", "gone_b.png"]),
     });
     fire(cells(node)[0], "click");
@@ -180,16 +181,35 @@ test("editing drops ticks left over from another asset too", async () => {
                      ["Spookies_00001_.png"]);
 });
 
-test("every other pass still takes a set", async () => {
-    const node = await panelNode([], [ONE, TWO, THREE], { phase: "export" });
+test("multiple takes a set", async () => {
+    const node = await panelNode([], [ONE, TWO, THREE], { mode: "multiple" });
     fire(cells(node)[0], "click");
     fire(cells(node)[2], "click");
     assert.equal(JSON.parse(widgetOf(node, "selection").value).length, 2);
 });
 
-test("the chip says the edit picker takes one", async () => {
-    const node = await panelNode([], [ONE], { phase: "edit" });
-    assert.match(textOf(node), /edit · one/);
+test("the chip says what is listed and how many it takes", async () => {
+    const node = await panelNode([], [ONE], { mode: "single", stage: "edits" });
+    assert.match(textOf(node), /edits · one/);
+});
+
+test("with no stage the chip says it is the asset's own renders", async () => {
+    const node = await panelNode([], [ONE]);
+    assert.match(textOf(node), /renders/);
+});
+
+test("a picker fed by another says it is showing a shortlist", async () => {
+    // "521 reads the indexed 3 images from 518" — the approved set is the
+    // upstream picker's ticks, not a folder of copies.
+    const node = await panelNode([], [ONE], {}, true);
+    assert.match(textOf(node), /shortlist/);
+});
+
+test("an empty shortlist points upstream, not at this node", async () => {
+    // Queueing this node again cannot help: what is missing is a tick on the
+    // picker above.
+    const node = await panelNode([], [], {}, true);
+    assert.match(textOf(node), /picker above/);
 });
 
 test("an empty folder says what to do about it", async () => {
@@ -230,11 +250,6 @@ test("the thumb size buttons change the tile size", async () => {
     assert.match(cells(node)[0].style.cssText, /width:184px/);
 });
 
-test("the pass is shown as a chip, because it names the keep folder", async () => {
-    const node = await panelNode([], [ONE], { phase: "export" });
-    assert.match(textOf(node), /export/);
-});
-
 test("Read folder with no folder explains that it is not needed", async () => {
     const seen = [];
     const node = await panelNode(seen, [], { folder: "" });
@@ -251,25 +266,6 @@ test("Read folder asks the server for the folder that was typed", async () => {
     const asked = seen.filter((c) => c.route.includes("folder="));
     assert.equal(asked.length, 1);
     assert.ok(asked[0].route.includes(encodeURIComponent("/out/elsewhere")));
-});
-
-test("a run that kept picks says where they went", async () => {
-    // Ticked images are copied to the delivery folder, which is not somewhere
-    // the node can show — so it says rather than leaving it to be discovered.
-    const node = await panelNode([], [ONE]);
-    emit("symbiotica.pick", {
-        node_id: String(node.id), count: 1, picked: 2, kept: 2,
-        kept_in: "October/Mini 1 — Ghostly Goodies/Food/Spookies/Base",
-    });
-    await tick();
-    assert.match(textOf(node), /kept 2 in October\/Mini 1/);
-});
-
-test("a run that kept nothing says nothing", async () => {
-    const node = await panelNode([], [ONE]);
-    emit("symbiotica.pick", { node_id: String(node.id), count: 1, kept: 0 });
-    await tick();
-    assert.doesNotMatch(textOf(node), /kept/);
 });
 
 test("a run re-lists the folder, so a new render appears", async () => {

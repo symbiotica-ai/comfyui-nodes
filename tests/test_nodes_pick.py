@@ -57,6 +57,12 @@ def spookies(nodes, tmp_path, **kw):
 
 
 class TestSchema:
+    def test_the_mode_is_a_selector_of_the_two_shapes(self, nodes_mod):
+        schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
+        mode = next(i for i in schema.inputs if i.id == "mode")
+        assert mode.options == ["multiple", "single"]
+        assert mode.default == "multiple"
+
     def test_the_widget_order_is_append_only(self, nodes_mod):
         """ComfyUI serialises widget values POSITIONALLY as `widgets_values`,
         so inserting a widget before an existing one shifts every value after
@@ -69,7 +75,7 @@ class TestSchema:
         wires = {"images", "order"}
         widgets = [i.id for i in schema.inputs if i.id not in wires]
         assert widgets == ["get_new", "asset", "category", "selection",
-                           "view", "role", "folder", "phase"]
+                           "view", "role", "folder", "phase", "mode", "stage"]
 
     def test_the_picked_output_is_a_list(self, nodes_mod):
         """A list, not a batch: two picks of different sizes cannot stack into
@@ -169,8 +175,8 @@ class TestWhichFolderItLists:
                 ("Spookies_00001_.png", "Spookies_00002_.png",
                  "Ghosts_00001_.png"))
         spookies(nodes_mod, tmp_path)
-        assert nodes_mod_resolved(nodes_mod, "7") == str(
-            tmp_path / "output" / EVENT_DIR / "Food" / "Spookies")
+        assert nodes_mod_resolved(nodes_mod, "7") == (
+            str(tmp_path / "output" / EVENT_DIR / "Food" / "Spookies"), None)
 
     def test_the_event_folder_is_the_one_the_save_node_wrote(self, nodes_mod,
                                                              tmp_path):
@@ -184,8 +190,8 @@ class TestWhichFolderItLists:
         assert len(out.args[0]) == 1
 
     def test_a_folder_of_its_own_is_listed_as_itself(self, nodes_mod, tmp_path):
-        """Both layouts are real: some assets have a directory, most are a
-        filename prefix."""
+        """Both layouts are real: most assets are a filename prefix, but work
+        saved a folder-per-asset still reads."""
         renders(tmp_path, f"{EVENT_DIR}/Food/Spookies", ("one.png", "two.png"))
         out = spookies(nodes_mod, tmp_path,
                        selection=[json.dumps(["one.png", "two.png"])])
@@ -260,7 +266,7 @@ class TestWhatLeavesTheNode:
         assert float(out.args[0][0][..., 3].max()) == 0.0
 
 
-class TestEditingIsOneImage:
+class TestSingleMode:
     """"in edit mode i want to only be able to select one image. i am EDITING
     so it has to be the one i am working on"."""
 
@@ -272,7 +278,7 @@ class TestEditingIsOneImage:
         renders(tmp_path, f"{EVENT_DIR}/Food",
                 ("Spookies_00001_.png", "Spookies_00002_.png",
                  "Spookies_00003_.png"))
-        out = spookies(nodes_mod, tmp_path, phase=["edit"],
+        out = spookies(nodes_mod, tmp_path, mode=["single"],
                        selection=[json.dumps(["Spookies_00002_.png",
                                               "Spookies_00003_.png"])])
         assert len(out.args[0]) == 1
@@ -282,69 +288,149 @@ class TestEditingIsOneImage:
         readable off the node rather than a matter of click history."""
         renders(tmp_path, f"{EVENT_DIR}/Food",
                 ("Spookies_00001_.png", "Spookies_00002_.png"))
-        spookies(nodes_mod, tmp_path, phase=["edit"],
-                 selection=[json.dumps(["Spookies_00002_.png",
-                                        "Spookies_00001_.png"])])
-        kept = tmp_path / "output" / EVENT_DIR / "Food" / "Spookies" / "Edit"
-        assert [p.name for p in kept.iterdir()] == ["Spookies_00001_.png"]
+        out = spookies(nodes_mod, tmp_path, mode=["single"],
+                       selection=[json.dumps(["Spookies_00002_.png",
+                                              "Spookies_00001_.png"])])
+        assert len(out.args[0]) == 1
+        assert float(out.args[0][0].max()) == pytest.approx(10 / 255, abs=1e-3)
 
-    def test_every_other_pass_still_takes_a_set(self, nodes_mod, tmp_path):
-        """Base is a shortlist and export is a batch; only editing is one."""
+    def test_multiple_is_the_default_and_takes_a_set(self, nodes_mod, tmp_path):
+        """Choosing what to keep is a set; only the edit step is one."""
         renders(tmp_path, f"{EVENT_DIR}/Food",
                 ("Spookies_00001_.png", "Spookies_00002_.png"))
-        out = spookies(nodes_mod, tmp_path, phase=["export"],
+        out = spookies(nodes_mod, tmp_path,
                        selection=[json.dumps(["Spookies_00001_.png",
                                               "Spookies_00002_.png"])])
         assert len(out.args[0]) == 2
 
     def test_nothing_ticked_is_still_nothing(self, nodes_mod, tmp_path):
         renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
-        assert spookies(nodes_mod, tmp_path, phase=["edit"],
+        assert spookies(nodes_mod, tmp_path, mode=["single"],
                         selection=["[]"]).args[0] == []
 
 
-class TestKeepingWhatWasGood:
-    """"images picked should land in 'October/Mini 1 — Ghostly Goodies/Food -
-    3 stages/Spookies/Base' so we only keep what was good in these folders"."""
+class TestItWritesNothing:
+    """"this node should basically list and index those images and nothing
+    more". Copying approved files into a Base/Edit/Export tree made a second
+    source of truth for something the graph already states — which save node
+    wrote the file."""
 
-    def kept_dir(self, tmp_path, name="Base"):
-        return tmp_path / "output" / EVENT_DIR / "Food" / "Spookies" / name
-
-    def test_a_tick_is_copied_into_the_assets_own_folder(self, nodes_mod,
-                                                         tmp_path):
-        renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
+    def test_emitting_picks_creates_no_folders(self, nodes_mod, tmp_path):
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png"))
         spookies(nodes_mod, tmp_path,
                  selection=[json.dumps(["Spookies_00001_.png"])])
-        assert [p.name for p in self.kept_dir(tmp_path).iterdir()] == [
-            "Spookies_00001_.png"]
+        category = tmp_path / "output" / EVENT_DIR / "Food"
+        assert sorted(p.name for p in category.iterdir()) == [
+            "Spookies_00001_.png", "Spookies_00002_.png"]
 
-    def test_the_pass_names_the_folder(self, nodes_mod, tmp_path):
+
+class TestTheFolderItListsIsAnOutput:
+    """One string names the folder a save node WRITES and the folder this node
+    READS, so the two cannot disagree."""
+
+    def test_it_hands_out_the_folder_it_listed(self, nodes_mod, tmp_path):
         renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
-        spookies(nodes_mod, tmp_path, phase=["export"],
-                 selection=[json.dumps(["Spookies_00001_.png"])])
-        assert self.kept_dir(tmp_path, "Export").is_dir()
+        out = spookies(nodes_mod, tmp_path)
+        assert out.args[1] == f"{EVENT_DIR}/Food/Spookies"
 
-    def test_nothing_ticked_writes_nothing(self, nodes_mod, tmp_path):
+    def test_it_is_relative_so_a_save_node_can_take_it(self, nodes_mod,
+                                                       tmp_path):
+        """`filename_prefix` resolves under the output directory, which is what
+        makes this string usable without any conversion."""
         renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
-        spookies(nodes_mod, tmp_path, selection=["[]"])
-        assert not self.kept_dir(tmp_path).exists()
+        assert not os.path.isabs(spookies(nodes_mod, tmp_path).args[1])
 
-    def test_a_folder_to_browse_is_not_a_folder_to_write_to(self, nodes_mod,
-                                                             tmp_path):
-        """`folder` names something to look at — pointing a picker at last
-        month's work must not file this month's picks into it."""
-        browsed = renders(tmp_path, "elsewhere", ("x.png",))
-        spookies(nodes_mod, tmp_path, folder=[str(browsed)],
-                 selection=[json.dumps(["x.png"])])
-        assert sorted(p.name for p in browsed.iterdir()) == ["x.png"]
-        assert self.kept_dir(tmp_path).is_dir()
+    def test_a_stage_is_part_of_it(self, nodes_mod, tmp_path):
+        out = spookies(nodes_mod, tmp_path, stage=["edits"])
+        assert out.args[1] == f"{EVENT_DIR}/Food/Spookies/edits"
 
-    def test_what_was_kept_is_not_listed_as_a_candidate(self, nodes_mod,
-                                                        tmp_path):
-        """The kept copies live under the asset, and the listing does not
-        descend — or every pick would come back as a new image to pick."""
+
+class TestAStageOfTheAsset:
+    """"531 should read from the folder where the edited images are saved" —
+    a step under the asset, listed the same way its first renders are."""
+
+    def test_a_stage_lists_the_step_not_the_renders(self, nodes_mod, tmp_path):
         renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
-        pick = [json.dumps(["Spookies_00001_.png"])]
-        spookies(nodes_mod, tmp_path, selection=pick)
-        out = spookies(nodes_mod, tmp_path, selection=pick)
+        renders(tmp_path, f"{EVENT_DIR}/Food/Spookies",
+                ("edits_00001_.png", "edits_00002_.png"), colour=90)
+        out = spookies(nodes_mod, tmp_path, stage=["edits"],
+                       selection=[json.dumps(["edits_00001_.png",
+                                              "edits_00002_.png",
+                                              "Spookies_00001_.png"])])
+        assert len(out.args[0]) == 2
+
+    def test_no_stage_lists_the_assets_own_renders(self, nodes_mod, tmp_path):
+        renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
+        renders(tmp_path, f"{EVENT_DIR}/Food/Spookies", ("edits_00001_.png",),
+                colour=90)
+        out = spookies(nodes_mod, tmp_path,
+                       selection=[json.dumps(["Spookies_00001_.png",
+                                              "edits_00001_.png"])])
         assert len(out.args[0]) == 1
+
+    def test_a_stage_cannot_deepen_the_tree(self, nodes_mod, tmp_path):
+        """Typed by hand beside a folder it becomes part of, so a slash in it
+        would silently put the files somewhere else entirely."""
+        out = spookies(nodes_mod, tmp_path, stage=["../../elsewhere"])
+        assert ".." not in out.args[1]
+
+
+class TestAPickerFedByAnotherPicker:
+    """"521 reads the indexed 3 images from 518". The approved set is the
+    upstream picker's ticks — no folder of copies has to exist for it."""
+
+    def wire(self, nodes_mod, source_selection, source_id="9", node_id="7"):
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id=node_id,
+            prompt={node_id: {"inputs": {"images": [source_id, 0]}},
+                    source_id: {"class_type": "SymbioticaPick",
+                                "inputs": {"selection": source_selection}}})
+
+    def test_it_lists_only_what_the_picker_above_approved(self, nodes_mod,
+                                                          tmp_path):
+        from pipeline.pick_folder import remember
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png",
+                 "Spookies_00003_.png"))
+        remember("9", str(tmp_path / "output" / EVENT_DIR / "Food" / "Spookies"))
+        self.wire(nodes_mod, json.dumps(["Spookies_00002_.png",
+                                         "Spookies_00003_.png"]))
+        out = nodes_mod.SymbioticaPick.execute(
+            asset=["Spookies"], category=["Food"], order=[ORDER],
+            selection=[json.dumps(["Spookies_00001_.png",
+                                   "Spookies_00002_.png"])])
+        # Its own tick on an image the picker above did not approve is not a
+        # choice it may make.
+        assert len(out.args[0]) == 1
+
+    def test_a_shortlist_of_a_shortlist_narrows_further(self, nodes_mod,
+                                                         tmp_path):
+        from pipeline.pick_folder import remember
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png"))
+        remember("9", str(tmp_path / "output" / EVENT_DIR / "Food" / "Spookies"),
+                 ["Spookies_00002_.png"])
+        self.wire(nodes_mod, json.dumps(["Spookies_00001_.png",
+                                         "Spookies_00002_.png"]))
+        out = nodes_mod.SymbioticaPick.execute(
+            asset=["Spookies"], category=["Food"], order=[ORDER],
+            selection=[json.dumps(["Spookies_00001_.png",
+                                   "Spookies_00002_.png"])])
+        assert len(out.args[0]) == 1
+
+    def test_a_save_node_upstream_is_not_a_shortlist(self, nodes_mod,
+                                                      tmp_path):
+        """Only another picker publishes an approved set; everything else is
+        just the wire that puts this node after it."""
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png"))
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id="7",
+            prompt={"7": {"inputs": {"images": ["9", 0]}},
+                    "9": {"class_type": "SaveImage"}})
+        out = nodes_mod.SymbioticaPick.execute(
+            asset=["Spookies"], category=["Food"], order=[ORDER],
+            selection=[json.dumps(["Spookies_00001_.png",
+                                   "Spookies_00002_.png"])])
+        assert len(out.args[0]) == 2

@@ -694,7 +694,7 @@ async def prompt_write(request):
     return web.json_response({"ok": True, **saved})
 
 
-def _pick_target(node_id: str, folder: str = "") -> str:
+def _pick_target(node_id: str, folder: str = "") -> tuple[str, object]:
     """The asset path a Pick node's panel should list, resolved server-side.
 
     Without an explicit folder this is whatever the node itself resolved when
@@ -712,6 +712,8 @@ def _pick_target(node_id: str, folder: str = "") -> str:
     named = str(folder or "").strip()
     if not named:
         return resolved(node_id)
+    # Browsing by name is browsing a whole folder; a shortlist belongs to the
+    # picker that made it, not to a path someone typed.
     if not os.path.isabs(named):
         try:
             import folder_paths
@@ -722,10 +724,11 @@ def _pick_target(node_id: str, folder: str = "") -> str:
     named = _expand_project(named)
     real = resolve_within(declared_roots(), named, kind="dir")
     if real is not None:
-        return real
+        return real, None
     parent = resolve_within(declared_roots(), os.path.dirname(named),
                             kind="dir")
-    return os.path.join(parent, os.path.basename(named)) if parent else ""
+    return (os.path.join(parent, os.path.basename(named)), None) if parent \
+        else ("", None)
 
 
 @PromptServer.instance.routes.get("/symbiotica/pick-list")
@@ -736,10 +739,10 @@ async def pick_list(request):
     which is why a picker shows a new generation the moment it is queued and
     why looking at one costs nothing.
     """
-    from .pick_folder import listing_for, read_folders
+    from .pick_folder import LISTING_LIMIT, listing_for, read_folders
 
     named = str(request.query.get("folder", "") or "").strip()
-    target = _pick_target(request.query.get("node_id", ""), named)
+    target, only = _pick_target(request.query.get("node_id", ""), named)
     if not target:
         # A folder that was asked for by name and could not be resolved is a
         # refusal and has to say so. Silence is only right for a picker that
@@ -760,9 +763,9 @@ async def pick_list(request):
         return web.json_response(
             {"error": f"{target} is not inside a folder this install serves"},
             status=403)
-    entries = await asyncio.to_thread(listing_for, target)
+    entries = await asyncio.to_thread(listing_for, target, LISTING_LIMIT, only)
     return web.json_response({
-        "ok": True, "folder": target,
+        "ok": True, "folder": target, "shortlist": only is not None,
         "images": [{"id": e["id"], "name": e["name"], "index": e["index"],
                     "path": e["path"], "w": e["w"], "h": e["h"],
                     "at": e["at"]} for e in entries],

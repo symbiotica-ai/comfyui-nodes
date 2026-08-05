@@ -191,12 +191,48 @@ class TestServingTheThumbnails:
         assert res["status"] == 400
 
 
-class TestBothLayoutsAtOnce:
-    def test_the_prefixed_files_and_the_assets_own_folder_are_one_grid(self,
-                                                                       env):
+class TestWhichLayoutANameMeans:
+    def test_files_named_after_it_win_over_the_folder_of_that_name(self, env):
+        """The directory of the same name holds the steps that come after —
+        listing both put every edit among the renders to choose a base from."""
         renders(str(env.out / "Food"), ("Spookies_00001_.png",))
-        renders(str(env.out / "Food" / "Spookies"), ("older.png",), colour=90)
+        renders(str(env.out / "Food" / "Spookies"), ("edits_00001_.png",),
+                colour=90)
         env.pick.remember("7", str(env.out / "Food" / "Spookies"))
         body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
-        assert [i["name"] for i in body["images"]] == ["Spookies_00001_.png",
-                                                       "older.png"]
+        assert [i["name"] for i in body["images"]] == ["Spookies_00001_.png"]
+
+    def test_a_stage_reads_inside_the_assets_folder(self, env):
+        renders(str(env.out / "Food"), ("Spookies_00001_.png",))
+        renders(str(env.out / "Food" / "Spookies"), ("edits_00001_.png",),
+                colour=90)
+        env.pick.remember("7", str(env.out / "Food" / "Spookies" / "edits"))
+        body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
+        assert [i["name"] for i in body["images"]] == ["edits_00001_.png"]
+
+
+class TestListingAShortlist:
+    """A picker fed by another lists exactly what that one approved, so the
+    panel has to be able to ask for the same narrowed set."""
+
+    def test_only_the_approved_names_come_back(self, env):
+        renders(str(env.out / "Food"), ("a.png", "b.png", "c.png"))
+        env.pick.remember("7", str(env.out / "Food"), ["a.png", "c.png"])
+        body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
+        assert [i["name"] for i in body["images"]] == ["a.png", "c.png"]
+        assert body["shortlist"] is True
+
+    def test_a_folder_read_is_not_a_shortlist(self, env):
+        renders(str(env.out / "Food"), ("a.png",))
+        env.pick.remember("7", str(env.out / "Food"))
+        body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
+        assert body["shortlist"] is False
+
+    def test_browsing_by_name_ignores_any_shortlist(self, env):
+        """Browsing a folder is browsing a whole folder; a shortlist belongs to
+        the picker that made it."""
+        renders(str(env.out / "Food"), ("a.png", "b.png"))
+        env.pick.remember("7", str(env.out / "Food"), ["a.png"])
+        body = _run(env.routes.pick_list(
+            _Req(node_id="7", folder=str(env.out / "Food"))))["body"]
+        assert len(body["images"]) == 2

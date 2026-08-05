@@ -89,38 +89,50 @@ def listing(folder: str, name_prefix: str = "",
 
 
 def read_folders(target: str) -> list[tuple[str, str]]:
-    """The (folder, prefix) pairs that together are one asset's renders.
+    """The (folder, prefix) pairs to read for one name. The prefix layout wins.
 
-    Both layouts, always, because both are real at once. A Save Image node
-    given `…/Food - 3 stages/Spookies` writes `Spookies_00001_.png` one level
-    up, so the asset is usually a filename prefix — but the moment its
-    approved picks are kept, `…/Spookies/` exists as a directory too. Listing
-    only the directory then would hide every new render behind the folder its
-    own picks created; listing only the prefix would hide work filed the other
-    way. Prefixed files come first: that is where the new renders land.
+    A name is both things at once and only one of them is ever the answer. A
+    Save Image node given `…/Food - 3 stages/Spookies` writes
+    `Spookies_00001_.png` one level UP — the last segment of a filename prefix
+    names the file — while `…/Spookies/` is also a real directory, holding the
+    steps that come after: `…/Spookies/edits_00001_.png`.
+
+    So when files named after it sit beside it, those ARE it, and the directory
+    of the same name belongs to the stages within. Reading both merged them
+    together, which put every edit in the list of renders to choose a base
+    from, and moved the numbering under someone every time a stage was saved.
+    Only when nothing is named after it is the directory the thing meant —
+    which is how work saved a folder-per-asset still reads.
     """
     if not target:
         return []
-    out = []
     parent, own = os.path.dirname(target), os.path.basename(target)
-    if own and os.path.isdir(parent):
-        out.append((parent, own))
+    if own and os.path.isdir(parent) and images_in(parent, own):
+        return [(parent, own)]
     if os.path.isdir(target):
-        out.append((target, ""))
-    return out
+        return [(target, "")]
+    return []
 
 
-def listing_for(target: str, limit: int = LISTING_LIMIT) -> list[dict]:
-    """One asset's renders, numbered across both layouts as a single grid."""
+def listing_for(target: str, limit: int = LISTING_LIMIT, only=None) -> list[dict]:
+    """One stage's images, numbered across both layouts as a single grid.
+
+    `only` narrows to a set of file names, which is how a picker fed by another
+    picker shows exactly what that one approved — no folder of copies in
+    between, and nothing to keep in sync.
+    """
+    wanted = None if only is None else {str(name) for name in only}
     entries: list[dict] = []
     for folder, prefix in read_folders(target):
         entries.extend(listing(folder, prefix, limit))
     # `id` is the file name, which is what a tick records, so the same name
     # arriving from both layouts must not become two tiles with one identity.
     seen, unique = set(), []
-    for entry in entries[:limit]:
-        if entry["id"] in seen:
+    for entry in entries:
+        if entry["id"] in seen or (wanted is not None and entry["id"] not in wanted):
             continue
+        if len(unique) >= limit:
+            break
         seen.add(entry["id"])
         unique.append({**entry, "index": len(unique) + 1})
     return unique
@@ -139,49 +151,22 @@ def picked_paths(entries, selection) -> list[str]:
             if e.get("id") in wanted and os.path.isfile(e.get("path", ""))]
 
 
-def keep_picks(paths, dest_dir: str) -> list[str]:
-    """Copy the ticked files into the folder the good work is kept in.
-
-    "images picked should land in …/Spookies/Base so we only keep what was good
-    in these folders". They keep the name they were rendered under, so a copy
-    can still be matched to its original by eye.
-
-    Copied, never moved: the rejects stay where they are. Deleting what was not
-    picked is a different decision, and not one a node should make on its own.
-    An existing file of the same name is left alone, so re-queueing a picker
-    whose ticks have not changed writes nothing at all.
-    """
-    written: list[str] = []
-    if not dest_dir:
-        return written
-    for source in paths or ():
-        if not source or not os.path.isfile(source):
-            continue
-        target = os.path.join(dest_dir, os.path.basename(source))
-        if os.path.exists(target):
-            continue
-        try:
-            os.makedirs(dest_dir, exist_ok=True)
-            shutil.copy2(source, target)
-        except OSError:
-            # A delivery folder that cannot be written must not fail the graph:
-            # the picks are still on the wire, which is what the run is for.
-            continue
-        written.append(target)
-    return written
-
-
-# Which asset each picker resolved, so the panel can list the same thing the
-# node read. In memory on purpose: it is derived from the node's own wires
-# every run, and writing it down would be another file in someone's tree for
+# What each picker resolved, so the panel can list the same thing the node
+# read. In memory on purpose: it is derived from the node's own wires every
+# run, and writing it down would be another file in someone's tree for
 # something a single queue rebuilds.
-_resolved: dict[str, str] = {}
+_resolved: dict[str, tuple[str, object]] = {}
 
 
-def remember(node_id, target: str) -> None:
-    _resolved[str(node_id)] = target or ""
+def remember(node_id, target: str, only=None) -> None:
+    _resolved[str(node_id)] = (target or "",
+                               None if only is None else [str(n) for n in only])
 
 
-def resolved(node_id) -> str:
-    """The asset path this picker last read, or "" before it has ever run."""
-    return _resolved.get(str(node_id), "")
+def resolved(node_id) -> tuple[str, object]:
+    """(path, only) this picker last read. ("", None) before it has ever run.
+
+    `only` is None for a picker reading a folder, and the list of names for one
+    reading another picker's approvals.
+    """
+    return _resolved.get(str(node_id), ("", None))
