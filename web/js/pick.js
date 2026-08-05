@@ -317,33 +317,6 @@ function pickPanel(node) {
         refit();
     }
 
-    // Browsing a folder other than this asset's own. The node lists its own
-    // folder by itself on every run, so this is only for looking elsewhere.
-    let reading = false;
-    const readBtn = node.addWidget("button", "📁 Read folder", null, async () => {
-        if (reading) return;
-        const typed = widgetOf(node, "folder")?.value?.trim?.();
-        if (!typed) {
-            notice = "leave `folder` empty and queue this node — it lists this "
-                + "asset's own renders. Set `folder` only to browse another one.";
-            error = "";
-            render();
-            return;
-        }
-        reading = true;
-        readBtn.name = "⏳ Reading…";
-        node.setDirtyCanvas?.(true, true);
-        try {
-            await load(typed);
-            notice = images.length ? "" : "no images in that folder";
-        } finally {
-            reading = false;
-            readBtn.name = "📁 Read folder";
-            node.setDirtyCanvas?.(true, true);
-        }
-    });
-    readBtn.serialize = false;
-
     render();
     load();
 }
@@ -356,10 +329,9 @@ registerSymbioticaExtension(app, {
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             onNodeCreated?.apply(this, arguments);
-            // Canvas state and dead widgets kept for their positions: collapse
-            // them (a bare .hidden is ignored by the classic canvas widgets).
-            for (const name of ["selection", "view", "get_new", "role",
-                                "phase"]) {
+            // Canvas state: collapse it (a bare .hidden is ignored by the
+            // classic canvas widgets).
+            for (const name of ["selection", "view"]) {
                 const w = widgetOf(this, name);
                 if (w) { w.hidden = true; w.computeSize = () => [0, -4]; }
             }
@@ -369,8 +341,23 @@ registerSymbioticaExtension(app, {
         // A saved workflow restores the ticks AFTER creation, and the node id
         // the listing is keyed by is only final once the graph is configured.
         const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function () {
+        nodeType.prototype.onConfigure = function (info) {
             onConfigure?.apply(this, arguments);
+            // Graphs saved before the node was stripped to one wire carry ten
+            // widget values, applied positionally onto the five widgets that
+            // remain — which lands the ticks on `mode` and the stage nowhere.
+            // Put each surviving value back on its own widget, by the position
+            // it held in the old layout: [get_new, asset, category, selection,
+            // view, role, folder, phase, mode, stage].
+            const v = info?.widgets_values;
+            if (Array.isArray(v) && v.length >= 10) {
+                for (const [name, i] of [["folder", 6], ["selection", 3],
+                                         ["view", 4], ["mode", 8],
+                                         ["stage", 9]]) {
+                    const w = widgetOf(this, name);
+                    if (w) w.value = v[i];
+                }
+            }
             queueMicrotask(() => this._symReloadPick?.());
         };
     },

@@ -30,8 +30,7 @@ function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) 
 }
 
 const WIDGET_DEFAULTS = {
-    get_new: false, asset: "", category: "", selection: "", view: "",
-    role: "", folder: "", phase: "", mode: "multiple", stage: "",
+    folder: "", selection: "", view: "", mode: "multiple", stage: "",
 };
 
 async function panelNode(seen = [], images = [], values = {},
@@ -250,24 +249,6 @@ test("the thumb size buttons change the tile size", async () => {
     assert.match(cells(node)[0].style.cssText, /width:184px/);
 });
 
-test("Read folder with no folder explains that it is not needed", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [], { folder: "" });
-    const before = seen.length;
-    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
-    assert.equal(seen.length, before);
-    assert.match(textOf(node), /leave `folder` empty/);
-});
-
-test("Read folder asks the server for the folder that was typed", async () => {
-    const seen = [];
-    const node = await panelNode(seen, [ONE], { folder: "/out/elsewhere" });
-    await node.widgets.find((w) => w.name === "📁 Read folder").callback();
-    const asked = seen.filter((c) => c.route.includes("folder="));
-    assert.equal(asked.length, 1);
-    assert.ok(asked[0].route.includes(encodeURIComponent("/out/elsewhere")));
-});
-
 test("a run re-lists the folder, so a new render appears", async () => {
     const seen = [];
     const node = await panelNode(seen, [ONE]);
@@ -278,13 +259,27 @@ test("a run re-lists the folder, so a new render appears", async () => {
     assert.ok(after > before);
 });
 
-test("the state widgets are hidden, dead ones included", async () => {
-    // `get_new` and `role` do nothing and are kept only so the positions of
-    // widgets saved in someone's workflow still line up.
+test("the state widgets are hidden", async () => {
     const node = await panelNode([], [ONE]);
-    for (const name of ["selection", "view", "get_new", "role"]) {
+    for (const name of ["selection", "view"]) {
         assert.equal(widgetOf(node, name).hidden, true, name);
     }
+});
+
+test("a graph saved before the one-wire layout keeps its values", async () => {
+    // Ten-plus positional values from the old layout [get_new, asset,
+    // category, selection, view, role, folder, phase, mode, stage] land on
+    // the five surviving widgets by position unless onConfigure puts each
+    // back on its own widget.
+    const node = await panelNode([], [ONE]);
+    node.onConfigure?.call(node, { widgets_values: [
+        false, "Spookies", "Food", '["a.png"]', "", "", "October/Ev/Food",
+        "edit", "single", "edits", "",
+    ] });
+    assert.equal(widgetOf(node, "folder").value, "October/Ev/Food");
+    assert.equal(widgetOf(node, "selection").value, '["a.png"]');
+    assert.equal(widgetOf(node, "mode").value, "single");
+    assert.equal(widgetOf(node, "stage").value, "edits");
 });
 
 test("it registers under one extension name", async () => {
