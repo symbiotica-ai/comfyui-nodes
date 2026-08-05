@@ -3663,6 +3663,14 @@ class SymbioticaPick(io.ComfyNode):
         # simply runs nothing downstream, where raising would paint a run red
         # for having worked correctly.
         paths = picked_paths(entries, _pick_ids(one(selection, "")))
+        # Editing is done to ONE image — "i am EDITING so it has to be the one
+        # i am working on" — so an edit picker emits at most one however many
+        # ticks it is carrying. The panel already replaces rather than adds
+        # under this pass; this is for the graph that was saved with several,
+        # or pinned to `edit` after the picks were made. First in listing
+        # order, which is the one numbered lowest on screen.
+        if pass_name == "edit":
+            paths = paths[:1]
 
         # What was good, kept together: `…/<asset>/<Pass>`. Always under the
         # asset's own folder, never under a folder typed into `folder` — that

@@ -115,10 +115,25 @@ function pickPanel(node) {
     node._symReloadPick = load;
     node._symPickNote = (text) => { notice = String(text || ""); render(); };
 
+    // Editing is done to ONE image: "i am EDITING so it has to be the one i am
+    // working on". Every other pass chooses a set.
+    const phaseOf = () => widgetOf(node, "phase")?.value?.trim?.() || "";
+    const oneAtATime = () => phaseOf() === "edit";
+
     function toggle(name) {
         const ticks = readTicks(node);
-        if (ticks.has(name)) ticks.delete(name);
-        else ticks.add(name);
+        if (ticks.has(name)) {
+            // Clicking the chosen one clears it, which is how you change your
+            // mind without having to pick something else first.
+            ticks.delete(name);
+        } else if (oneAtATime()) {
+            // Replace rather than add — including ticks left over from another
+            // asset, which are not travelling anywhere either.
+            ticks.clear();
+            ticks.add(name);
+        } else {
+            ticks.add(name);
+        }
         writeTicks(node, ticks);
         render();
     }
@@ -152,13 +167,18 @@ function pickPanel(node) {
             bar.appendChild(drop);
         }
 
-        const phase = widgetOf(node, "phase")?.value?.trim?.() || "";
+        const phase = phaseOf();
         if (phase) {
             const chip = el("div",
                 `flex:none;padding:1px 6px;border-radius:3px;font:10px ${HUB.font};`
                 + `background:${HUB.surface1};color:${HUB.inkSubtle};`
-                + `border:1px solid ${HUB.hairline};`, phase);
-            chip.title = `ticked images are kept in …/${phase} under this asset`;
+                + `border:1px solid ${HUB.hairline};`,
+                oneAtATime() ? `${phase} · one` : phase);
+            chip.title = `ticked images are kept in …/${phase} under this asset`
+                + (oneAtATime()
+                    ? "\nediting is done to one image, so ticking replaces the "
+                      + "previous pick"
+                    : "");
             bar.appendChild(chip);
         }
 

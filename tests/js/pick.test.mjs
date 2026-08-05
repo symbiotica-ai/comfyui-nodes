@@ -151,6 +151,47 @@ test("with nothing ticked there is nothing to untick", async () => {
     assert.equal(buttonsSaying(node, "untick all").length, 0);
 });
 
+test("an edit picker replaces the tick instead of adding one", async () => {
+    // "in edit mode i want to only be able to select one image. i am EDITING
+    // so it has to be the one i am working on".
+    const node = await panelNode([], [ONE, TWO, THREE], { phase: "edit" });
+    fire(cells(node)[1], "click");
+    fire(cells(node)[2], "click");
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value),
+                     ["Spookies_00003_.png"]);
+});
+
+test("an edit picker still lets you untick the one you chose", async () => {
+    const node = await panelNode([], [ONE, TWO], { phase: "edit" });
+    fire(cells(node)[0], "click");
+    fire(cells(node)[0], "click");
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value), []);
+});
+
+test("editing drops ticks left over from another asset too", async () => {
+    // They are not travelling anywhere either, and "1 ticked · 3 missing" on
+    // a node that emits exactly one image is noise.
+    const node = await panelNode([], [ONE, TWO], {
+        phase: "edit",
+        selection: JSON.stringify(["gone_a.png", "gone_b.png"]),
+    });
+    fire(cells(node)[0], "click");
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value),
+                     ["Spookies_00001_.png"]);
+});
+
+test("every other pass still takes a set", async () => {
+    const node = await panelNode([], [ONE, TWO, THREE], { phase: "export" });
+    fire(cells(node)[0], "click");
+    fire(cells(node)[2], "click");
+    assert.equal(JSON.parse(widgetOf(node, "selection").value).length, 2);
+});
+
+test("the chip says the edit picker takes one", async () => {
+    const node = await panelNode([], [ONE], { phase: "edit" });
+    assert.match(textOf(node), /edit · one/);
+});
+
 test("an empty folder says what to do about it", async () => {
     const node = await panelNode([], []);
     assert.match(textOf(node), /queue this node/);

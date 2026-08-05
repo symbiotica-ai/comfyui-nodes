@@ -260,6 +260,49 @@ class TestWhatLeavesTheNode:
         assert float(out.args[0][0][..., 3].max()) == 0.0
 
 
+class TestEditingIsOneImage:
+    """"in edit mode i want to only be able to select one image. i am EDITING
+    so it has to be the one i am working on"."""
+
+    def test_an_edit_picker_emits_one_however_many_are_ticked(self, nodes_mod,
+                                                               tmp_path):
+        """For the graph saved with several ticks, or pinned to `edit` after
+        the picks were made — the panel replaces rather than adds, but the node
+        cannot rely on having been the one to record them."""
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png",
+                 "Spookies_00003_.png"))
+        out = spookies(nodes_mod, tmp_path, phase=["edit"],
+                       selection=[json.dumps(["Spookies_00002_.png",
+                                              "Spookies_00003_.png"])])
+        assert len(out.args[0]) == 1
+
+    def test_it_is_the_first_in_listing_order(self, nodes_mod, tmp_path):
+        """The one numbered lowest on screen, so which image travels is
+        readable off the node rather than a matter of click history."""
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png"))
+        spookies(nodes_mod, tmp_path, phase=["edit"],
+                 selection=[json.dumps(["Spookies_00002_.png",
+                                        "Spookies_00001_.png"])])
+        kept = tmp_path / "output" / EVENT_DIR / "Food" / "Spookies" / "Edit"
+        assert [p.name for p in kept.iterdir()] == ["Spookies_00001_.png"]
+
+    def test_every_other_pass_still_takes_a_set(self, nodes_mod, tmp_path):
+        """Base is a shortlist and export is a batch; only editing is one."""
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png"))
+        out = spookies(nodes_mod, tmp_path, phase=["export"],
+                       selection=[json.dumps(["Spookies_00001_.png",
+                                              "Spookies_00002_.png"])])
+        assert len(out.args[0]) == 2
+
+    def test_nothing_ticked_is_still_nothing(self, nodes_mod, tmp_path):
+        renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
+        assert spookies(nodes_mod, tmp_path, phase=["edit"],
+                        selection=["[]"]).args[0] == []
+
+
 class TestKeepingWhatWasGood:
     """"images picked should land in 'October/Mini 1 — Ghostly Goodies/Food -
     3 stages/Spookies/Base' so we only keep what was good in these folders"."""
