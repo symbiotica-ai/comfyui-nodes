@@ -141,10 +141,14 @@ function panelChrome(node, widgetName, { save = true } = {}) {
     // laid-out position (`last_y`), not guessed, so no grey band is left at
     // the bottom whatever the node's slot count is.
     const ABOVE_FALLBACK = 110;   // first layout runs before last_y exists
-    w.computeSize = (width) => {
+    w.computeSize = () => {
         const top = typeof w.last_y === "number" && w.last_y > 0
             ? w.last_y : ABOVE_FALLBACK;
-        return [width, Math.max(60, node.size[1] - top - 12)];
+        // Width is a MINIMUM here, not the actual width — echoing the node's
+        // current width back made the minimum track the node and the width
+        // could only ever grow. A small constant frees the drag both ways;
+        // the wrapper is pinned to the real node width by syncWidth.
+        return [200, Math.max(60, node.size[1] - top - 12)];
     };
     // The first draw measures last_y; redraw once so the height computed from
     // the fallback is corrected before the user notices it.
