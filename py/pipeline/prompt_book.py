@@ -24,6 +24,7 @@ def prompts_dir(project_path):
 
 
 RULES_DIR = "_rules"
+IMAGE_DIR = "_image"
 
 
 def rules_dir(project_path):
@@ -31,30 +32,56 @@ def rules_dir(project_path):
     return os.path.join(prompts_dir(project_path), RULES_DIR)
 
 
-def read_rule_blocks(project_path):
-    """The shared rule blocks, in filename order, blanks dropped.
+def image_dir(project_path):
+    """The system prompt handed to the IMAGE model, not to the architect.
 
-    Ordered by filename so the numeric prefixes (`01-`, `02-`) decide the order
-    of the composed prompt without anything in code knowing the rule names. A
-    missing directory is not an error: it means this project has not been split
-    into blocks yet, and composing then yields the type's own file exactly as
-    before.
+    A second document, kept in the book beside the rules so one panel edits
+    both: the architect writes what the asset is, this one fixes how it is
+    drawn. Blocks rather than a single file, so the same numeric-prefix
+    ordering works here the day it needs splitting.
     """
-    root = rules_dir(project_path)
+    return os.path.join(prompts_dir(project_path), IMAGE_DIR)
+
+
+def read_named_blocks(directory):
+    """The `.md` blocks of one folder as (filename, text), in filename order.
+
+    Filename order so the numeric prefixes (`01-`, `02-`) decide composition
+    order without anything in code knowing the block names. Blank files are
+    dropped, and a missing directory yields nothing rather than raising: an
+    absent folder means this project has not been split into blocks yet.
+    """
     try:
-        names = sorted(n for n in os.listdir(root) if n.endswith(".md"))
+        names = sorted(n for n in os.listdir(directory) if n.endswith(".md"))
     except OSError:
         return []
     blocks = []
     for name in names:
         try:
-            with open(os.path.join(root, name), encoding="utf-8") as fh:
+            with open(os.path.join(directory, name), encoding="utf-8") as fh:
                 text = fh.read()
         except OSError:
             continue
         if text.strip():
-            blocks.append(text.strip())
+            blocks.append((name, text.strip()))
     return blocks
+
+
+def read_rule_blocks(project_path):
+    """The shared rule blocks, in filename order, blanks dropped."""
+    return [text for _, text in read_named_blocks(rules_dir(project_path))]
+
+
+def compose_image_prompt(project_path):
+    """The image model's system prompt: every `_image/` block, in order.
+
+    Empty when the folder is absent, because the node carrying this output is
+    also the editor that creates the folder — it has to load before the blocks
+    it edits exist. The architect prompts raise on absence instead; they are
+    read by a node that can do nothing without them.
+    """
+    return "\n\n".join(
+        text for _, text in read_named_blocks(image_dir(project_path)))
 
 
 def compose_prompt(rule_blocks, type_block):
@@ -67,6 +94,33 @@ def compose_prompt(rule_blocks, type_block):
     parts = [b.strip() for b in rule_blocks if b and b.strip()]
     parts.append(type_block.strip())
     return "\n\n".join(parts)
+
+
+def compose_detail(project_path, category):
+    """One asset type's composed prompt, plus the blocks that built it.
+
+    The text comes out of the same `read_named_blocks` + `compose_prompt` pair
+    the queue runs, and is returned verbatim — no separators, no headings. A
+    preview that reassembled the prompt its own way would be trusted and wrong
+    on the day the two drifted, which is exactly the day it would be consulted.
+    The block list is metadata alongside the text, not markers inside it.
+    """
+    cat = str(category or "").strip()
+    if not cat:
+        raise ValueError("no asset type to compose — pick one")
+    rules = read_named_blocks(rules_dir(project_path))
+    path = os.path.join(prompts_dir(project_path), f"{cat}.md")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            type_text = fh.read()
+    except OSError:
+        type_text = ""
+    if not type_text.strip():
+        raise MissingPromptsError([(cat, path)])
+    text = compose_prompt([t for _, t in rules], type_text)
+    blocks = [{"name": f"{RULES_DIR}/{n}", "chars": len(t)} for n, t in rules]
+    blocks.append({"name": f"{cat}.md", "chars": len(type_text.strip())})
+    return {"text": text, "blocks": blocks}
 
 
 def resolve_category_prompts(project_path, categories):

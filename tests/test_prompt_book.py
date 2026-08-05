@@ -3,7 +3,8 @@
 # ABOUTME: <project>/prompts/<Exact Category Name>.md.
 import pytest
 
-from pipeline.prompt_book import (MissingPromptsError, prompts_dir,
+from pipeline.prompt_book import (MissingPromptsError, compose_detail,
+                                  compose_image_prompt, prompts_dir,
                                   resolve_category_prompts)
 
 
@@ -127,3 +128,62 @@ def test_non_markdown_files_in_rules_are_ignored(tmp_path):
     p = _with_rules(tmp_path, {"01-a": "A"}, **{"Decoration": "D"})
     (tmp_path / "prompts" / "_rules" / "notes.txt").write_text("NOT A RULE")
     assert resolve_category_prompts(p, ["Decoration"]) == ["A\n\nD"]
+
+
+def _with_image(tmp_path, image, rules=None, **types):
+    p = _with_rules(tmp_path, rules or {}, **types)
+    d = tmp_path / "prompts" / "_image"
+    d.mkdir()
+    for name, text in image.items():
+        (d / f"{name}.md").write_text(text)
+    return p
+
+
+def test_image_prompt_joins_its_blocks_in_filename_order(tmp_path):
+    p = _with_image(tmp_path, {"02-light": "LIGHT", "01-style": "STYLE"},
+                    **{"Decoration": "D"})
+    assert compose_image_prompt(p) == "STYLE\n\nLIGHT"
+
+
+def test_image_prompt_is_empty_before_the_folder_exists(tmp_path):
+    # The node carrying this output is the editor that creates the folder, so
+    # absence has to load rather than raise.
+    p = _book(tmp_path, **{"Decoration": "D"})
+    assert compose_image_prompt(p) == ""
+
+
+def test_image_blocks_stay_out_of_the_architect_prompt(tmp_path):
+    # Two documents in one book: what the asset IS goes to the LLM, how it is
+    # DRAWN goes to the image model. Leaking either way doubles a rule.
+    p = _with_image(tmp_path, {"01-style": "IMAGE STYLE"},
+                    rules={"01-a": "RULE"}, **{"Decoration": "DECO"})
+    assert resolve_category_prompts(p, ["Decoration"]) == ["RULE\n\nDECO"]
+
+
+def test_composed_detail_is_byte_identical_to_what_the_queue_resolves(tmp_path):
+    # The point of the preview: if these two ever differ, the preview lies at
+    # exactly the moment it is consulted.
+    p = _with_rules(tmp_path, {"01-a": "A", "02-b": "B"}, **{"Chair": "CHAIR"})
+    detail = compose_detail(p, "Chair")
+    assert detail["text"] == resolve_category_prompts(p, ["Chair"])[0]
+
+
+def test_composed_detail_names_its_blocks_in_order_with_sizes(tmp_path):
+    p = _with_rules(tmp_path, {"01-a": "AAA", "02-b": "B"}, **{"Chair": "CH"})
+    assert compose_detail(p, "Chair")["blocks"] == [
+        {"name": "_rules/01-a.md", "chars": 3},
+        {"name": "_rules/02-b.md", "chars": 1},
+        {"name": "Chair.md", "chars": 2},
+    ]
+
+
+def test_composed_detail_of_a_missing_type_raises(tmp_path):
+    p = _with_rules(tmp_path, {"01-a": "A"}, **{"Chair": "C"})
+    with pytest.raises(MissingPromptsError, match="Signage.md"):
+        compose_detail(p, "Signage")
+
+
+def test_composed_detail_needs_a_type(tmp_path):
+    p = _book(tmp_path, **{"Chair": "C"})
+    with pytest.raises(ValueError, match="no asset type"):
+        compose_detail(p, "  ")

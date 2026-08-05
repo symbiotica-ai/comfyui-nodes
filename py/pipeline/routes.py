@@ -16,6 +16,7 @@ from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
 from .paths import parse_roots, resolve_within
+from .prompt_book import MissingPromptsError, compose_detail
 from .prompt_store import (PromptPathError, list_book, read_block,
                            write_block)
 from .pack_library import (
@@ -673,6 +674,24 @@ async def prompt_read(request):
     except PromptPathError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     return web.json_response({"ok": True, "text": text})
+
+
+@PromptServer.instance.routes.get("/symbiotica/prompt-compose")
+async def prompt_compose(request):
+    """One asset type's prompt as the LLM will receive it, plus its blocks.
+
+    Read-only on purpose: this is the answer to "did my edit reach the model",
+    and the panel that shows it must not be able to save a composed document
+    back over the blocks it was assembled from.
+    """
+    project = _expand_project(request.query.get("project", ""))
+    if not project:
+        return web.json_response({"error": "project required"}, status=400)
+    try:
+        detail = compose_detail(project, request.query.get("category", ""))
+    except (MissingPromptsError, ValueError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response({"ok": True, **detail})
 
 
 @PromptServer.instance.routes.post("/symbiotica/prompt-write")
