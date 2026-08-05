@@ -3529,20 +3529,43 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def fingerprint_inputs(cls, images=None, save_path="", selection="",
                            view="", mode="multiple", stage=""):
-        """Always stale, because the folder changes without the inputs doing.
+        """Change only when what LEAVES the node could have.
 
-        Found live: "i created a new image i want to select in the pick 518
-        node, the generated images do not show up". The renders were on disk
-        and the save node above had run — but every queue reported
-        `execution_cached: ['518']`. Nothing this node is wired to changes when
-        a render is written, so ComfyUI had no reason to run it, and a picker
-        that does not run does not list.
+        The first version returned NaN — always changed — so the panel would
+        re-list. But an always-changed node marks its output fresh on every
+        queue, and everything downstream of `picked` re-ran with it: the edit
+        model re-rendered the same tick, at full price, once per queue. The
+        panel's freshness now comes from the canvas — pick.js re-lists when a
+        queue finishes — so this only has to answer for the emission.
 
-        NaN is never equal to itself, which is how a node says "assume I
-        changed". Cheap to honour: this node's whole execution is a directory
-        listing.
+        Wired inputs read as unset here (this runs before upstream outputs
+        exist), so the folder comes from what the last execution registered. A
+        node that has not run yet, or whose files cannot be statted, says NaN
+        and runs once: that run registers the folder, and from there the stamp
+        holds until a tick, the mode, the stage, or a ticked file's bytes
+        change. A file replaced under the same name changes mtime and size,
+        which is why the stat is part of the stamp rather than just the name.
         """
-        return float("nan")
+        from .pick_folder import listing_for, picked_paths, resolved
+
+        one = SymbioticaCategoryPrompts._one
+        node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
+        node_id = one(node_id, None) if isinstance(node_id, list) else node_id
+        target, only = resolved(node_id) if node_id else ("", None)
+        if not target:
+            return float("nan")
+        picked_one = str(one(mode, "multiple") or "multiple") == "single"
+        ticks = _pick_ids(str(one(selection, "")))
+        stamp = [target, sorted(only) if only is not None else None,
+                 picked_one, str(one(stage, "")), ticks]
+        try:
+            paths = picked_paths(listing_for(target, only=only), ticks)
+            for path in paths[:1] if picked_one else paths:
+                st = os.stat(path)
+                stamp.append([path, st.st_mtime_ns, st.st_size])
+        except OSError:
+            return float("nan")
+        return json.dumps(stamp)
 
     @classmethod
     def check_lazy_status(cls, images=None, save_path="", selection="",

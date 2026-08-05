@@ -373,3 +373,11 @@ api.addEventListener("symbiotica.pick", (event) => {
     if (!node) return;
     node._symReloadPick?.();
 });
+
+// A cached picker does not execute, and its change-check only answers for
+// what it EMITS — so a queue that wrote new renders can finish without the
+// node running at all. The re-list comes from here instead: every picker on
+// the canvas refreshes when a queue ends.
+api.addEventListener("execution_success", () => {
+    for (const node of app.graph?._nodes ?? []) node._symReloadPick?.();
+});

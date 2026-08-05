@@ -285,3 +285,17 @@ test("a graph saved before the one-wire layout keeps its values", async () => {
 test("it registers under one extension name", async () => {
     assert.ok(app.extensions.some((e) => e.name === "symbiotica.pick"));
 });
+
+test("a finished queue re-lists even a picker that did not run", async () => {
+    // The picker's change-check answers only for its emission, so a cached
+    // picker skips execution entirely — the fresh renders a queue wrote have
+    // to reach the panel from the queue ending, not from the node running.
+    const seen = [];
+    const node = await panelNode(seen, [ONE]);
+    const count = () => seen.filter(
+        (c) => c.route.startsWith("/symbiotica/pick-list")).length;
+    const before = count();
+    emit("execution_success", {});
+    for (let i = 0; i < 5; i++) await tick();
+    assert.ok(count() > before);
+});

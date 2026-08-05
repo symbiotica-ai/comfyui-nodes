@@ -93,11 +93,47 @@ class TestItListsAgainOnEveryQueue:
     the picker is wired to changes when a render is written, so ComfyUI had no
     reason to run it, and a picker that does not run does not list."""
 
-    def test_it_reports_itself_as_always_changed(self, nodes_mod):
-        """NaN is never equal to itself, which is how a node says "assume I
-        changed". Cheap to honour — the whole execution is a listing."""
+    def test_before_any_run_it_reports_changed(self, nodes_mod):
+        """No execution has registered a folder yet, so the only honest answer
+        is NaN — never equal to itself — and the one run that follows is what
+        registers it."""
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(unique_id="7")
         first = nodes_mod.SymbioticaPick.fingerprint_inputs()
         assert first != first
+
+    def test_an_unchanged_tick_reports_unchanged(self, nodes_mod, tmp_path):
+        """The whole point: a queue where nothing about the emission moved
+        must NOT re-run the picker, or everything downstream re-renders the
+        same pick at full price — once per queue."""
+        renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
+        sel = [json.dumps(["Spookies_00001_.png"])]
+        spookies(nodes_mod, tmp_path, selection=sel)
+        a = nodes_mod.SymbioticaPick.fingerprint_inputs(selection=sel)
+        b = nodes_mod.SymbioticaPick.fingerprint_inputs(selection=sel)
+        assert a == b
+
+    def test_a_changed_tick_reports_changed(self, nodes_mod, tmp_path):
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png"))
+        spookies(nodes_mod, tmp_path,
+                 selection=[json.dumps(["Spookies_00001_.png"])])
+        a = nodes_mod.SymbioticaPick.fingerprint_inputs(
+            selection=[json.dumps(["Spookies_00001_.png"])])
+        b = nodes_mod.SymbioticaPick.fingerprint_inputs(
+            selection=[json.dumps(["Spookies_00002_.png"])])
+        assert a != b
+
+    def test_a_replaced_file_reports_changed(self, nodes_mod, tmp_path):
+        """Same name, new bytes — a re-render over the old file must reach
+        the edit downstream, which is why the stat is in the stamp."""
+        folder = renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
+        sel = [json.dumps(["Spookies_00001_.png"])]
+        spookies(nodes_mod, tmp_path, selection=sel)
+        a = nodes_mod.SymbioticaPick.fingerprint_inputs(selection=sel)
+        path = folder / "Spookies_00001_.png"
+        os.utime(path, ns=(1, 1))
+        b = nodes_mod.SymbioticaPick.fingerprint_inputs(selection=sel)
+        assert a != b
 
     def test_the_wire_is_asked_for_so_the_save_node_goes_first(self, nodes_mod):
         """For its ORDER, not its value: `execute` ignores what arrives. With
