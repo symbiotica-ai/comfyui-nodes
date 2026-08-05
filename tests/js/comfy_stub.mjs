@@ -13,6 +13,9 @@ export function reset() {
     latencyMs = 0;  // a test that fails mid-way must not slow the next one
     calls.length = 0;
     repaints.count = 0;
+    canvasCalls.select.length = 0;
+    canvasCalls.center.length = 0;
+    canvasCalls.dirty = 0;
     nodes.clear();
     app.graph.links = {};
 }
@@ -100,10 +103,23 @@ export const repaints = { count: 0 };
 let nextLink = 1;
 let nextId = 1;
 
+// What the canvas was asked to do, recorded rather than simulated: a command
+// that moves the view is judged on WHICH node it selected and centred, not on
+// where the viewport ended up.
+export const canvasCalls = { select: [], center: [], dirty: 0 };
+
 export const app = {
     extensions: [],
     registerExtension(ext) { this.extensions.push(ext); },
     graph: { links: {}, getNodeById: (id) => nodes.get(id) ?? null },
+    canvas: {
+        // LiteGraph's canvas holds the graph being drawn, which is the subgraph
+        // once you have stepped into one — not always `app.graph`.
+        get graph() { return app.graph; },
+        selectNode(node) { canvasCalls.select.push(node?.id ?? null); },
+        centerOnNode(node) { canvasCalls.center.push(node?.id ?? null); },
+        setDirty() { canvasCalls.dirty += 1; },
+    },
 };
 
 function makeNode(comfyClass, widgets) {
