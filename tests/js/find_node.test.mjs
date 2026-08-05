@@ -170,7 +170,7 @@ test("a click outside closes it, a click inside does not", () => {
     const layer = open();
     const panel = layer.children[0];
 
-    fire(panel, "pointerdown", { stopPropagation() {} });
+    fire(panel, "pointerdown", pointerAt(panel));
     assert.ok(overlay(), "a click on the box itself closed it");
 
     fire(layer, "pointerdown");
@@ -264,4 +264,37 @@ test("the menu row shows the shortcut, the command label does not", () => {
     // The command keeps its bare name — Settings → Keybindings renders the combo
     // in its own column, so a suffix here would print the keys twice.
     assert.equal(spec().commands[0].label, "Find node by ID");
+});
+
+// A pointerdown the code can inspect: which element it landed on, and whether
+// the handler consumed it. press() records the same way for keys.
+function pointerAt(target) {
+    return {
+        target,
+        prevented: false,
+        stopped: false,
+        preventDefault() { this.prevented = true; },
+        stopPropagation() { this.stopped = true; },
+    };
+}
+
+test("clicking the box's chrome does not take focus off the input", () => {
+    reset();
+    const layer = open();
+    const panel = layer.children[0];
+
+    // Escape and the key-swallowing guard are both bound to the input. Let the
+    // padding or the hint take focus and the box stops closing on Escape while
+    // every digit typed into it reaches the canvas instead.
+    const onChrome = pointerAt(panel);
+    fire(panel, "pointerdown", onChrome);
+    assert.ok(onChrome.stopped, "a click inside was treated as a click outside");
+    assert.ok(onChrome.prevented, "the chrome was allowed to move focus off the input");
+
+    // The input still has to take the caret where you clicked it.
+    const onInput = pointerAt(inputEl());
+    fire(panel, "pointerdown", onInput);
+    assert.equal(onInput.prevented, false, "clicking the input could not place the caret");
+
+    press("Escape");
 });

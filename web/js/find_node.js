@@ -123,8 +123,6 @@ function openBox() {
         + `width:300px;box-sizing:border-box;padding:10px;background:${HUB.surface2};`
         + `border:1px solid ${HUB.hairlineStrong};border-radius:${HUB.radius.lg};`
         + "box-shadow:0 12px 32px rgba(0,0,0,.5);");
-    // Clicks inside are not "outside".
-    panel.addEventListener("pointerdown", (e) => e.stopPropagation());
 
     const input = el("input",
         `width:100%;box-sizing:border-box;padding:7px 10px;background:${HUB.surface1};`
@@ -181,6 +179,17 @@ function openBox() {
         const digits = input.value.replace(/\D+/g, "");
         if (digits !== input.value) input.value = digits;
         render();
+    });
+
+    // Clicks inside are not "outside". Default-prevented everywhere except on
+    // the input, so the box's own chrome cannot take focus off it: Escape and
+    // the key guard are both bound to the input, and once it is blurred the box
+    // stops closing on Escape while the digits typed at it reach the canvas.
+    // The input is exempt because preventing its default is what would stop the
+    // click placing the caret.
+    panel.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        if (e.target !== input) e.preventDefault();
     });
 
     layer.addEventListener("pointerdown", () => closeBox());
