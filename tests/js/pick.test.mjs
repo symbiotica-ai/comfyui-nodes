@@ -318,3 +318,30 @@ test("a finished queue re-lists even a picker that did not run", async () => {
     for (let i = 0; i < 5; i++) await tick();
     assert.ok(count() > before);
 });
+
+test("a folder of unrelated names draws one grid, not one row each", async () => {
+    // A dataset reference folder is 57 differently-named files. Rowing by role
+    // gave each its own row, labelled with its own name — a list pretending to
+    // be a grid. Names that merely start alike do not make an asset.
+    const node = await panelNode([], [
+        shot("Art Student.png", 1),
+        shot("Baking Class.png", 2),
+        shot("Baking With Mom Statue.png", 3),
+    ]);
+    const text = textOf(node);
+    for (const label of ["Art Student", "Baking Class", "base"]) {
+        assert.ok(!text.includes(label), `row label leaked: ${label}`);
+    }
+});
+
+test("roles still row when one of them is the bare asset name", async () => {
+    // `<asset>_00001_.png` beside `<asset>_prep_00001_.png`: the stem IS one of
+    // the keys, and that pair is still one asset's roles.
+    const node = await panelNode([], [
+        shot("Spookies_00001_.png", 1),
+        shot("Spookies_prep_00001_.png", 2),
+    ]);
+    const text = textOf(node);
+    assert.ok(text.includes("base · 1"), text);
+    assert.ok(text.includes("prep · 1"), text);
+});

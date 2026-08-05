@@ -304,9 +304,22 @@ function pickPanel(node) {
                 shared = shared.slice(0, -1);
             }
         }
+        // Rows are for the ROLES OF ONE ASSET — `<asset>_<role>_00001_.png`.
+        // A folder of unrelated names has no asset in common, so every file
+        // became its own row: a dataset folder of 57 references drew as 57
+        // one-tile rows labelled with their own filenames, which is a list
+        // pretending to be a grid. Row only when every key is the shared stem
+        // or a `_`-suffixed extension of it; otherwise the names merely start
+        // alike ("Baking Class", "Baking With Mom Statue") and the grid is the
+        // honest layout.
+        const stem = shared.replace(/_+$/, "");
+        const rowed = stem && keys.every(
+            (key) => key === stem || key.startsWith(`${stem}_`));
+        if (!rowed) return renderRow(ticks, images);
+
         const wrap = el("div", "width:100%;box-sizing:border-box;");
         for (const [key, rowImages] of groups) {
-            const label = key.slice(shared.length).replace(/^_/, "") || "base";
+            const label = key.slice(stem.length).replace(/^_/, "") || "base";
             const here = rowImages.filter((i) => ticks.has(i.id)).length;
             wrap.appendChild(el("div",
                 `padding:5px 3px 2px;font:10px ${HUB.font};`
