@@ -226,6 +226,30 @@ function announceSaved(project) {
     window.dispatchEvent(new CustomEvent(SAVED_EVT, { detail: { project } }));
 }
 
+// ComfyUI's own dialogs and toasts where available (see the frontend skill),
+// falling back to the native ones so the panel still works on older frontends.
+async function askText(message) {
+    const dlg = app.extensionManager?.dialog;
+    if (dlg?.prompt) {
+        return await dlg.prompt({ title: "Prompt book", message });
+    }
+    return prompt(message);
+}
+
+async function askConfirm(message) {
+    const dlg = app.extensionManager?.dialog;
+    if (dlg?.confirm) {
+        return await dlg.confirm({ title: "Prompt book", message });
+    }
+    return confirm(message);
+}
+
+function toastSaved(detail) {
+    app.extensionManager?.toast?.add?.({
+        severity: "success", summary: "Prompt saved", detail, life: 2500,
+    });
+}
+
 // --- the Prompt Book node: the whole book in one panel -----------------------
 function bookPanel(node) {
     const ui = panelChrome(node, "prompt_book");
@@ -329,11 +353,11 @@ function bookPanel(node) {
         }
     }
 
-    picker.addEventListener("change", () => {
+    picker.addEventListener("change", async () => {
         // An unsaved edit is a tuned rule the user would have to retype; ask
         // rather than silently discard it on a stray click.
-        if (dirty() && !confirm(
-            `Discard your unsaved changes to ${loaded.name}?`)) {
+        if (dirty() && !(await askConfirm(
+            `Discard your unsaved changes to ${loaded.name}?`))) {
             picker.value = loaded.name;
             return;
         }
@@ -351,6 +375,7 @@ function bookPanel(node) {
             });
             loaded = { name: picker.value, text: editor.value };
             setStatus(`saved — ${res.chars} chars (.bak kept)`);
+            toastSaved(`${picker.value} — ${res.chars} chars`);
             announceSaved(project);
             await refresh();
         } catch (err) {
@@ -449,14 +474,14 @@ function blockPanel(node) {
         }
     }
 
-    picker.addEventListener("change", () => {
-        if (dirty() && !confirm(
-            `Discard your unsaved changes to ${loaded.name}?`)) {
+    picker.addEventListener("change", async () => {
+        if (dirty() && !(await askConfirm(
+            `Discard your unsaved changes to ${loaded.name}?`))) {
             picker.value = loaded.name;
             return;
         }
         if (picker.value === NEW_BLOCK) {
-            const typed = prompt(
+            const typed = await askText(
                 "New block name — a shared rule (_rules/01-style.md), an image "
                 + "block (_image/01-image-model.md), or an asset type exactly "
                 + "as the order sheet spells it (Food - 3 stages.md):");
@@ -487,6 +512,7 @@ function blockPanel(node) {
             });
             loaded = { name: picker.value, text: editor.value };
             setStatus(`saved — ${res.chars} chars (.bak kept)`);
+            toastSaved(`${picker.value} — ${res.chars} chars`);
             announceSaved(project);
         } catch (err) {
             setStatus(String(err.message || err), true);
