@@ -124,6 +124,16 @@ function pickPanel(node) {
     node._symPickNote = (text) => { notice = String(text || ""); render(); };
 
     const stageOf = () => widgetOf(node, "stage")?.value?.trim?.() || "";
+
+    // A stage names a different folder, so the list has to be fetched again.
+    const stageWidget = widgetOf(node, "stage");
+    if (stageWidget) {
+        const previous = stageWidget.callback;
+        stageWidget.callback = function () {
+            previous?.apply(this, arguments);
+            load();
+        };
+    }
     const oneAtATime = () => isSingle(node);
 
     function toggle(name) {

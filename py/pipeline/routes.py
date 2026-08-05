@@ -760,9 +760,24 @@ async def pick_list(request):
     allowed = [folder for folder, _ in read_folders(target)
                if register_root_within(folder)]
     if not allowed:
-        return web.json_response(
-            {"error": f"{target} is not inside a folder this install serves"},
-            status=403)
+        # A stage folder before its first save has nothing to read and nothing
+        # to register — which is not a refusal. Check the nearest directory
+        # that DOES exist above it: entitlement is a question about the tree,
+        # not about whether the leaf has been created yet. Refusing here told
+        # the user their own asset folder "is not inside a folder this install
+        # serves", which is both alarming and untrue.
+        probe = target
+        while probe and not os.path.isdir(probe):
+            parent = os.path.dirname(probe)
+            if parent == probe:
+                break
+            probe = parent
+        if not (probe and register_root_within(probe)):
+            return web.json_response(
+                {"error": f"{target} is not inside a folder this install serves"},
+                status=403)
+        return web.json_response({"ok": True, "folder": target, "images": [],
+                                  "shortlist": only is not None})
     entries = await asyncio.to_thread(listing_for, target, LISTING_LIMIT, only)
     return web.json_response({
         "ok": True, "folder": target, "shortlist": only is not None,

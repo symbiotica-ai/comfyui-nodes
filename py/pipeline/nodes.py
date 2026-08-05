@@ -3723,10 +3723,11 @@ class SymbioticaPick(io.ComfyNode):
                    "asset": _at_or_first(_as_list(asset), 0)}
         home = _pick_folders([_derived_pick_folder(context, ord_dict)])
         home = home[0] if home else ""
-        if home and step:
-            home = os.path.join(home, step)
+        # The folder this asset's `stage` step lives in, whether or not this
+        # node is the one listing it.
+        stage_home = os.path.join(home, step) if (home and step) else home
         typed = _pick_folders(_as_list(folder))
-        target = typed[0] if typed else home
+        target = typed[0] if typed else stage_home
 
         # Fed by another picker: list exactly what it approved. Its ticks are
         # on its own node in the prompt, and the folder they name is the one it
@@ -3779,7 +3780,15 @@ class SymbioticaPick(io.ComfyNode):
             except ValueError:
                 return path
 
-        listed = _shown(target) if target else ""
+        # What this node LISTS is not always what it hands out. A picker fed by
+        # another lists that one's approvals — the base renders — while its
+        # `stage` says which step the images it sends are on their way to. So
+        # the folder output follows the stage, and the save node in between
+        # takes it from the picker BEFORE it. Wiring the reader's folder into
+        # that save node instead is a dependency cycle: it feeds this node's
+        # images, so it cannot also wait for this node.
+        out_folder = stage_home if step else target
+        listed = _shown(out_folder) if out_folder else ""
         _push("symbiotica.pick", {
             "node_id": str(node_id), "count": len(entries),
             "folder": listed, "picked": len(paths),
