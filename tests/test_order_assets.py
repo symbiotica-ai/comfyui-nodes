@@ -188,3 +188,28 @@ def test_missing_segments_are_dropped_not_left_empty():
     from pipeline.order_assets import save_paths
     order = {"feature": "Mini 1", "assets": [_asset("Cake", "")]}
     assert save_paths(order, assets_by_category(order)) == ["Mini 1/Cake"]
+
+
+def test_a_type_folder_may_be_the_plural_of_the_order_s_word(tmp_path):
+    # The order sheet says "Appliance"; the dataset folder is "Appliances".
+    # One spelling failed the whole run.
+    from pipeline.order_assets import category_dir, pick_reference_per_category
+    root = tmp_path / "bakery" / "dataset"
+    (root / "Appliances").mkdir(parents=True)
+    Image.new("RGB", (8, 8)).save(root / "Appliances" / "Oven.png")
+    assert category_dir(str(root), "Appliance") == str(root / "Appliances")
+    paths, names = pick_reference_per_category(
+        str(tmp_path / "bakery"), ["Appliance"], 1)
+    assert names == ["Oven.png"] and paths[0].endswith("Appliances/Oven.png")
+
+
+def test_an_exact_folder_always_wins_over_the_loose_match(tmp_path):
+    from pipeline.order_assets import category_dir
+    root = tmp_path / "dataset"
+    (root / "Chair").mkdir(parents=True)
+    (root / "Chairs").mkdir(parents=True)
+    assert category_dir(str(root), "Chair") == str(root / "Chair")
+    assert category_dir(str(root), "Chairs ") == str(root / "Chairs")
+    # Neither is "the" folder for a word that matches both only loosely —
+    # guessing would reference the wrong art in silence.
+    assert category_dir(str(root), "Chairss") == ""
