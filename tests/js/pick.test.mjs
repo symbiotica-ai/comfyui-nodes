@@ -166,6 +166,22 @@ test("a failing list shows the server's reason", async () => {
     assert.match(textOf(node), /not inside a folder/);
 });
 
+test("the controls and the folder stay put while the grid scrolls", async () => {
+    // With 85 thumbnails the size buttons are otherwise a scroll away from the
+    // images they act on, and the folder scrolls out of sight entirely.
+    const node = await panelNode([], [ONE, TWO, THREE]);
+    const top = listOf(node).children[0];
+    assert.match(top.style.cssText, /position:sticky/);
+    assert.match(top.style.cssText, /top:0/);
+    // Opaque, or the thumbnails show through the counts as they pass under.
+    assert.match(top.style.cssText, /background:#/);
+    const stuck = walk(top).map((e) => e.textContent).join(" ");
+    assert.match(stuck, /3 in folder/);
+    assert.match(stuck, /Food - 3 stages\/Spookies/);
+    // The tiles are NOT in the pinned part — they are what moves.
+    assert.equal(walk(top).filter((e) => "src" in e).length, 0);
+});
+
 test("the thumb size buttons change the tile size", async () => {
     const node = await panelNode([], [ONE]);
     fire(buttonsSaying(node, "L")[0], "click");

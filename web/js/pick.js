@@ -244,19 +244,26 @@ function pickPanel(node) {
     function render() {
         const ticks = readTicks(node);
         list.replaceChildren();
-        list.appendChild(renderHead(ticks));
+        // The counts, the sizes and the folder stay put while the grid moves
+        // under them: with 85 thumbnails the controls are otherwise a scroll
+        // away from the images they act on, and the folder a picker landed on
+        // is the thing worth being able to read at any time.
+        const top = el("div", "position:sticky;top:0;z-index:2;"
+            + `background:${HUB.surface1};padding-bottom:2px;`);
+        top.appendChild(renderHead(ticks));
         if (folder) {
-            list.appendChild(el("div",
+            top.appendChild(el("div",
                 `color:${HUB.inkTertiary};font:10px ${HUB.font};padding:0 3px 3px;`
                 + "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
                 folder));
         }
-        if (error) list.appendChild(errorLine(error));
+        if (error) top.appendChild(errorLine(error));
         if (notice) {
-            list.appendChild(el("div",
+            top.appendChild(el("div",
                 `color:${HUB.inkTertiary};font:10px ${HUB.font};padding:0 3px 3px;`,
                 notice));
         }
+        list.appendChild(top);
         if (loading && !images.length) {
             list.appendChild(emptyState("reading…"));
         } else if (!images.length) {
