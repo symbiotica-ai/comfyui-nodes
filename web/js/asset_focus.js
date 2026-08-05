@@ -135,11 +135,23 @@ function focusPanel(node) {
     container.appendChild(list);
     container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
 
-    const panelW = node.addDOMWidget("focus_panel", "sym_focus", container,
-                                     { serialize: false, hideOnZoom: true });
-    panelW.computeSize = function (width) {
+    const panelHeight = () => {
         const h = list.scrollHeight;
-        return [width, Math.min(Math.max(h ? h + 8 : 34, 34), PANEL_MAX)];
+        return Math.min(Math.max(h ? h + 8 : 34, 34), PANEL_MAX);
+    };
+    // The frontend he runs (1.4x) lays a DOM widget out from `computeLayoutSize`,
+    // which reads these three options and nothing else — `computeSize` below is
+    // the pre-1.4 contract and is ignored there. Without them the widget reports
+    // a 50px minimum and NO maximum, so nothing bounds the element and it draws
+    // its full content over the canvas, outside the node.
+    const panelW = node.addDOMWidget("focus_panel", "sym_focus", container, {
+        serialize: false, hideOnZoom: true,
+        getMinHeight: () => 34,
+        getMaxHeight: () => PANEL_MAX,
+        getHeight: () => `${panelHeight()}px`,
+    });
+    panelW.computeSize = function (width) {
+        return [width, panelHeight()];
     };
     const refit = () => requestAnimationFrame(() => {
         node.setSize?.([Math.max(node.size[0], MIN_NODE_W), node.computeSize()[1]]);

@@ -71,11 +71,30 @@ function pickPanel(node) {
     container.appendChild(list);
     container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
 
-    const panelW = node.addDOMWidget("pick_panel", "sym_pick", container,
-                                     { serialize: false, hideOnZoom: true });
-    panelW.computeSize = function (width) {
+    // How tall the panel asks to be: its content, floored so an empty picker
+    // still shows its message, capped so a folder of fifty renders scrolls
+    // inside the node instead of growing it past the screen.
+    const panelHeight = () => {
         const h = list.scrollHeight;
-        return [width, Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX)];
+        return Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX);
+    };
+
+    const panelW = node.addDOMWidget("pick_panel", "sym_pick", container, {
+        serialize: false,
+        hideOnZoom: true,
+        // THE sizing contract of the frontend he runs (1.45): a DOM widget is
+        // laid out by `computeLayoutSize`, which reads these three and nothing
+        // else. Without them the widget reports a 50px minimum and no maximum,
+        // so the layout never bounds the element — it kept its content size
+        // and drew outside the node, a grid of fifty tiles spilling across the
+        // canvas. `computeSize` below is the OLD contract and is ignored
+        // there; it stays for older builds, where it is the only one read.
+        getMinHeight: () => 44,
+        getMaxHeight: () => PANEL_MAX,
+        getHeight: () => `${panelHeight()}px`,
+    });
+    panelW.computeSize = function (width) {
+        return [width, panelHeight()];
     };
     const refit = () => requestAnimationFrame(() => {
         node.setSize?.([Math.max(node.size[0], MIN_NODE_W), node.computeSize()[1]]);

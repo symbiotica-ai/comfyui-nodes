@@ -371,3 +371,25 @@ test("discard is offered only once something ticked is on screen", async () => {
     const node = await panelNode([], [ONE, TWO]);
     assert.equal(buttonsSaying(node, "discard").length, 0);
 });
+
+test("the panel declares its height the way the frontend actually asks", async () => {
+    // ComfyUI 1.4x lays a DOM widget out through `computeLayoutSize`, which
+    // reads ONLY these options. The legacy `computeSize` is ignored there, so
+    // a panel that sets nothing else reports a 50px minimum and no maximum:
+    // the element keeps its content size and draws outside the node, which is
+    // fifty tiles spilling across his canvas.
+    const node = await panelNode([], [ONE, TWO]);
+    const panel = node.widgets.find((w) => w.name === "pick_panel");
+    const o = panel.options;
+    assert.equal(typeof o.getMinHeight, "function");
+    assert.equal(typeof o.getMaxHeight, "function");
+    assert.equal(typeof o.getHeight, "function");
+
+    // A tall grid is capped — past the cap the panel scrolls inside the node.
+    const list = panel.element.children[0];
+    list.scrollHeight = 5000;
+    assert.equal(o.getHeight(), `${o.getMaxHeight()}px`);
+    // A short one asks for what it needs, never below the floor.
+    list.scrollHeight = 0;
+    assert.equal(o.getHeight(), `${o.getMinHeight()}px`);
+});

@@ -132,24 +132,32 @@ function panelChrome(node, widgetName, { save = true } = {}) {
     keepEvents(picker);
 
     container.append(bar, blocksBar, status, editor);
-    const w = node.addDOMWidget(widgetName, `sym_${widgetName}`, container,
-                                { serialize: false, hideOnZoom: true });
     // The editor follows the NODE, like a string literal's textarea: drag the
     // corner, the text grows — and shrinks all the way down to a literal-sized
-    // strip, so a saved block can be parked small on the canvas. The panel
-    // takes everything below its own start — measured from the widget's
-    // laid-out position (`last_y`), not guessed, so no grey band is left at
-    // the bottom whatever the node's slot count is.
+    // strip, so a saved block can be parked small on the canvas. It takes
+    // everything below its own start, measured from the widget's laid-out
+    // position (`last_y`) rather than guessed, so no grey band is left at the
+    // bottom whatever the node's slot count is.
+    //
+    // The 1.4x frontend reads these options in `computeLayoutSize` and ignores
+    // `computeSize` (kept below for older builds) — a panel that declares
+    // neither height nor maximum is never bounded and paints outside the node.
     const ABOVE_FALLBACK = 110;   // first layout runs before last_y exists
-    w.computeSize = () => {
-        const top = typeof w.last_y === "number" && w.last_y > 0
+    const panelHeight = () => {
+        const top = typeof w?.last_y === "number" && w.last_y > 0
             ? w.last_y : ABOVE_FALLBACK;
-        // Width is a MINIMUM here, not the actual width — echoing the node's
-        // current width back made the minimum track the node and the width
-        // could only ever grow. A small constant frees the drag both ways;
-        // the wrapper is pinned to the real node width by syncWidth.
-        return [200, Math.max(60, node.size[1] - top - 12)];
+        return Math.max(60, node.size[1] - top - 12);
     };
+    const w = node.addDOMWidget(widgetName, `sym_${widgetName}`, container, {
+        serialize: false, hideOnZoom: true,
+        getMinHeight: () => 60,
+        getHeight: () => `${panelHeight()}px`,
+    });
+    // Width is a MINIMUM here, not the actual width — echoing the node's
+    // current width back made the minimum track the node and the width could
+    // only ever grow. A small constant frees the drag both ways; the wrapper
+    // is pinned to the real node width by syncWidth.
+    w.computeSize = () => [200, panelHeight()];
     // The first draw measures last_y; redraw once so the height computed from
     // the fallback is corrected before the user notices it.
     requestAnimationFrame(() => node.setDirtyCanvas?.(true, true));

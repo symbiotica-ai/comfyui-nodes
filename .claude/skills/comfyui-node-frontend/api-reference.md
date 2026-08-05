@@ -247,6 +247,28 @@ node.addDOMWidget(name, type, element, options);
 - `hideOnZoom` — hide when zoomed out
 - `selectOn` — event array for selection (e.g., `["focus", "click"]`)
 - `beforeResize()` / `afterResize()` — resize hooks
+- **`getMinHeight()` / `getMaxHeight()` / `getHeight()` — how the widget is
+  SIZED.** Read `getHeight()` as a number, a `"320px"` string, or a `"50%"`
+  string (percent of the node's height).
+
+**Sizing a DOM widget (frontend ≥ 1.4, verified against 1.45.20).** The layout
+calls `DOMWidgetImpl.computeLayoutSize(node)`, which reads *only* the three
+options above, falling back to the CSS variables `--comfy-widget-min-height`,
+`--comfy-widget-max-height`, `--comfy-widget-height` on the element:
+
+```javascript
+const widget = node.addDOMWidget("panel", "my_panel", container, {
+    getMinHeight: () => 44,
+    getMaxHeight: () => 720,
+    getHeight: () => `${Math.min(content.scrollHeight + 8, 720)}px`,
+});
+```
+
+**`widget.computeSize = () => [w, h]` is the OLD contract and is IGNORED by
+these builds.** A widget that sets only `computeSize` reports the default
+minimum (50px) and *no* maximum, so nothing bounds the element: it keeps its
+content size and draws outside the node, over the canvas. Set the options;
+keep `computeSize` only if you also support pre-1.4 builds.
 
 ### ComponentWidgetImpl
 

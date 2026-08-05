@@ -479,15 +479,26 @@ function assetsPanel(node) {
     list.style.cssText = "padding:2px 2px 4px;";
     container.appendChild(list);
     stopWheel(container);
-    const panelW = node.addDOMWidget("assets_panel", "sym_assets", container,
-                                     { serialize: false, hideOnZoom: true });
     // Height fits the CONTENT (the selected event's asset rows) so the node
     // auto-grows to fit the assets and shrinks for a smaller category, capped so
     // a huge event scrolls instead of running off the canvas.
     const PANEL_MAX = 760;
-    panelW.computeSize = function (width) {
+    const panelHeight = () => {
         const h = list.scrollHeight;
-        return [width, Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX)];
+        return Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX);
+    };
+    // The 1.4x frontend lays a DOM widget out from `computeLayoutSize`, which
+    // reads these three and ignores `computeSize` — and a widget that declares
+    // neither a height nor a maximum is never bounded, so the element paints
+    // its whole content outside the node.
+    const panelW = node.addDOMWidget("assets_panel", "sym_assets", container, {
+        serialize: false, hideOnZoom: true,
+        getMinHeight: () => 44,
+        getMaxHeight: () => PANEL_MAX,
+        getHeight: () => `${panelHeight()}px`,
+    });
+    panelW.computeSize = function (width) {
+        return [width, panelHeight()];
     };
     // ComfyUI sizes the DOM wrapper from the node width on its own layout pass,
     // and that pass follows a WIDENING immediately but lags a SHRINK — it only
