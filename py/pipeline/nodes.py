@@ -3524,7 +3524,13 @@ class SymbioticaPick(io.ComfyNode):
                 # Kept only so the widget positions of graphs saved before
                 # this node stopped fetching still line up; it does nothing.
                 # The web extension hides it.
-                io.Boolean.Input("get_new", default=False,
+                #
+                # Optional for the same reason it exists at all: a graph saved
+                # before this widget did cannot carry it, and ComfyUI answers a
+                # required input that is absent from the prompt with "Required
+                # input is missing" rather than reaching for the default — so
+                # requiring it drops the very workflows it was kept for.
+                io.Boolean.Input("get_new", default=False, optional=True,
                                  tooltip="Unused, and hidden on the canvas. "
                                          "Kept only so older saved workflows "
                                          "keep their widget positions."),
