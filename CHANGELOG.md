@@ -6,6 +6,40 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.9
+
+**No node change.** No node is added, removed or renamed, and no input or output
+changed position or meaning. A saved workflow needs nothing — what this adds is a
+canvas command, and there is nothing to put in a graph.
+
+### Added
+
+- **Find node by ID.** An error message, a log line and a node's own badge all
+  name a node by its id, and on a graph of two hundred nodes there was no way to
+  get from that number to the node except panning around looking for it. The
+  frontend has the jump itself and uses it when you click an error, but never
+  exposes it — there was no command, so there was nothing to bind a key to.
+
+  Press `Ctrl+Shift+0`, or take the first row of the canvas right-click menu,
+  and type the number on the node's ID badge. The canvas centres on that node
+  with it selected, at the zoom you were already at: you asked to be taken to a
+  node, not to have your view of the graph rescaled. A number that matches
+  nothing says so and leaves the box open holding what you typed.
+
+  It searches the graph you are looking at rather than the root graph, so inside
+  a subgraph it finds that subgraph's ids. The shortcut is a modified combo on
+  purpose — installed packs claim bare letters without anyone being able to see
+  it from here, and the frontend refuses a binding outright when one collides.
+  Rebind or clear it in Settings → Keybindings.
+
+### Fixed
+
+- **The finder's box no longer loses focus to its own chrome.** Clicking the
+  panel's padding or its hint line moved focus off the input. Escape and the
+  guard that keeps typed digits away from the canvas are both bound to that
+  input, so from there the box stopped closing on Escape and every digit typed
+  at it reached the graph instead, firing whatever that key does there.
+
 ## 2026.8.8
 
 **No node change.** No node is added, removed or renamed, and no input or output
