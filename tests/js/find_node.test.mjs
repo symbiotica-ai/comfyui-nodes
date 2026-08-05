@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 
 import { app, canvasCalls, create, fire, reset } from "./comfy_stub.mjs";
 import "../../web/js/find_node.js";
-import { describe as describeNode, lookup } from "../../web/js/find_node.js";
+import { comboLabel, describe as describeNode, lookup } from "../../web/js/find_node.js";
 
 const OVERLAY_ID = "symbiotica-find-node";
 
@@ -184,4 +184,84 @@ test("typing in the box does not reach the canvas", () => {
     // document, and bare keys are how its own commands are bound.
     assert.ok(press("4").stopped);
     press("Escape");
+});
+
+// A stand-in for the frontend's canvas class. Extensions reach it as a global
+// and patch its prototype; each test gets a fresh one so the module's
+// don't-patch-twice guard is exercised where it is meant to be and nowhere else.
+function canvasClass(coreOptions) {
+    globalThis.LGraphCanvas = {
+        prototype: { getCanvasMenuOptions() { return [...coreOptions]; } },
+    };
+    return globalThis.LGraphCanvas;
+}
+
+const menuContents = (LGraphCanvas) =>
+    LGraphCanvas.prototype.getCanvasMenuOptions.call({}).map((o) => o?.content ?? null);
+
+// Spelled out rather than rebuilt from the module's own pieces: a row assembled
+// the same way the code assembles it would agree with any spelling it produced.
+const MENU_ROW = "Find node by ID (Ctrl+Shift+0)";
+
+test("the canvas menu entry comes before what the core offers", () => {
+    const LGraphCanvas = canvasClass([{ content: "Add Node" }, { content: "Add Group" }]);
+    spec().setup();
+
+    // First, because that is the whole point of prepending rather than using
+    // the supported hook — which appends and cannot say where it lands.
+    assert.deepEqual(menuContents(LGraphCanvas),
+                     [MENU_ROW, "Add Node", "Add Group"]);
+});
+
+test("the menu entry opens the same box the key does", () => {
+    reset();
+    const LGraphCanvas = canvasClass([]);
+    spec().setup();
+
+    LGraphCanvas.prototype.getCanvasMenuOptions.call({})[0].callback();
+    assert.ok(overlay(), "the menu entry did not open the box");
+    press("Escape");
+});
+
+test("loading the pack twice does not list the entry twice", () => {
+    // Not hypothetical: a stale duplicate of a pack .js served alongside the
+    // current one is the incident register.js exists for. Two registrations
+    // would otherwise prepend two identical rows.
+    const LGraphCanvas = canvasClass([{ content: "Add Node" }]);
+    spec().setup();
+    spec().setup();
+
+    assert.deepEqual(menuContents(LGraphCanvas), [MENU_ROW, "Add Node"]);
+});
+
+test("a frontend without the old menu hook is left alone", () => {
+    // The hook is deprecated. When it goes, install nothing rather than a
+    // replacement that calls an original which is no longer there.
+    globalThis.LGraphCanvas = { prototype: {} };
+    spec().setup();
+    assert.equal(globalThis.LGraphCanvas.prototype.getCanvasMenuOptions, undefined);
+
+    delete globalThis.LGraphCanvas;
+    assert.doesNotThrow(() => spec().setup());
+});
+
+test("comboLabel names the keys the way the settings page does", () => {
+    assert.equal(comboLabel({ key: "0", ctrl: true, alt: false, shift: true }),
+                 "Ctrl+Shift+0");
+    assert.equal(comboLabel({ key: "0", ctrl: true, alt: true, shift: true }),
+                 "Ctrl+Alt+Shift+0");
+    assert.equal(comboLabel({ key: "f" }), "F");
+    assert.equal(comboLabel(null), "");
+});
+
+test("the menu row shows the shortcut, the command label does not", () => {
+    const LGraphCanvas = canvasClass([{ content: "Add Node" }]);
+    spec().setup();
+
+    // The row is where the shortcut has to be readable: it is the only place a
+    // staffer meets this feature without already knowing it exists.
+    assert.equal(menuContents(LGraphCanvas)[0], MENU_ROW);
+    // The command keeps its bare name — Settings → Keybindings renders the combo
+    // in its own column, so a suffix here would print the keys twice.
+    assert.equal(spec().commands[0].label, "Find node by ID");
 });

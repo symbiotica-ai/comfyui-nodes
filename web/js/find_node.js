@@ -15,6 +15,30 @@ import { el } from "./browser_chrome.js";
 
 const COMMAND_ID = "Symbiotica.FindNodeById";
 const OVERLAY_ID = "symbiotica-find-node";
+// One string for the command palette, the keybinding list and the canvas menu,
+// so a row nobody can find is not a row whose name drifted from the others.
+const LABEL = "Find node by ID";
+
+// Not a bare letter. The core defaults leave most of the alphabet free, but
+// installed packs take them without anyone being able to see it from here —
+// `f` is KJNodes' `fillConnectSelected`, and the frontend refuses the whole
+// binding with "Keybinding on f already exists on …". A modified combo is
+// out of that contested space. Rebind or clear it in Settings → Keybindings.
+const COMBO = { key: "0", ctrl: true, alt: false, shift: true };
+
+// The shortcut as the settings page writes it: modifiers in a fixed order, then
+// the key. Built from the combo this pack registers rather than read back from
+// the frontend, so what the menu row promises is what the pack asked for — a
+// staffer who rebinds it in Settings is the one person who already knows.
+export function comboLabel(combo) {
+    if (!combo?.key) return "";
+    const parts = [];
+    if (combo.ctrl) parts.push("Ctrl");
+    if (combo.alt) parts.push("Alt");
+    if (combo.shift) parts.push("Shift");
+    parts.push(combo.key.length === 1 ? combo.key.toUpperCase() : combo.key);
+    return parts.join("+");
+}
 
 // The graph on screen, which is not `app.graph` once you have stepped into a
 // subgraph. Ids are scoped to their own graph, so searching the one being
@@ -169,21 +193,51 @@ function openBox() {
     input.focus?.();
 }
 
+// Marks the function this module installed, so a second registration finds its
+// own work rather than the core's. Not hypothetical: a stale duplicate of a
+// pack's .js served alongside the current one is the incident register.js exists
+// for, and two registrations would otherwise put two identical rows in the menu.
+const PATCHED = "symbioticaFindNode";
+
+// The canvas right-click menu, ahead of everything the core offers.
+//
+// `getCanvasMenuOptions` is deprecated in favour of the `getCanvasMenuItems`
+// extension hook, and that hook is the reason this is not written with it: it
+// returns items for the frontend to merge and has no way to say WHERE they go,
+// so an entry added through it lands under the core's own. Prepending is the
+// only way to be first, and being first is the request.
+//
+// Two consequences worth knowing. Other packs prepend the same way — whoever
+// registers last ends up on top, so "first" is first among ours, not a claim on
+// the row. And when the deprecated hook is finally removed this stops being
+// called rather than failing, so the entry will go missing quietly; the item to
+// look at then is `getCanvasMenuItems`.
+function prependCanvasMenuItem(canvasClass) {
+    const proto = canvasClass?.prototype;
+    const original = proto?.getCanvasMenuOptions;
+    if (typeof original !== "function" || original[PATCHED]) return false;
+    function withFinder() {
+        const options = original.apply(this, arguments) ?? [];
+        // The shortcut rides the row here and nowhere else: this is the only
+        // place the feature is met by someone not already looking for it.
+        options.unshift({ content: `${LABEL} (${comboLabel(COMBO)})`, callback: openBox });
+        return options;
+    }
+    withFinder[PATCHED] = true;
+    proto.getCanvasMenuOptions = withFinder;
+    return true;
+}
+
 registerSymbioticaExtension(app, {
     name: "symbiotica.find_node",
+    // The canvas class is a global the frontend puts there, not something this
+    // pack can import: litegraph is not on the public module surface.
+    setup() { prependCanvasMenuItem(globalThis.LGraphCanvas); },
     commands: [{
         id: COMMAND_ID,
-        label: "Find node by ID",
+        label: LABEL,
         icon: "pi pi-search",
         function: openBox,
     }],
-    // Not a bare letter. The core defaults leave most of the alphabet free, but
-    // installed packs take them without anyone being able to see it from here —
-    // `f` is KJNodes' `fillConnectSelected`, and the frontend refuses the whole
-    // binding with "Keybinding on f already exists on …". A modified combo is
-    // out of that contested space. Rebind or clear it in Settings → Keybindings.
-    keybindings: [{
-        commandId: COMMAND_ID,
-        combo: { key: "0", ctrl: true, alt: false, shift: true },
-    }],
+    keybindings: [{ commandId: COMMAND_ID, combo: COMBO }],
 });

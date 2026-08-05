@@ -115,8 +115,9 @@ Wrappers around Wavespeed's hosted endpoints.
   emitting the same `(prompts, names, count)` contract as `NS Prompt List`
 
 ### Canvas
-- **Find node by ID** — press `Ctrl+Shift+0`, type the number on the node's ID
-  badge, press Enter: the canvas centres on that node with it selected, at the
+- **Find node by ID** — press `Ctrl+Shift+0`, or pick **Find node by ID** at the
+  top of the canvas right-click menu. Type the number on the node's ID badge,
+  press Enter: the canvas centres on that node with it selected, at the
   zoom you were already at. A number that matches nothing says so and leaves the
   box open. It searches the graph you are looking at, so inside a subgraph it
   finds that subgraph's ids. Rebind or clear the key in **Settings →
