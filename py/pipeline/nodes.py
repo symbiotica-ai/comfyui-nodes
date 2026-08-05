@@ -1094,6 +1094,89 @@ class SymbioticaOrderAssets(io.ComfyNode):
                              save_paths(order, items))
 
 
+class SymbioticaClientExamples(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaClientExamples",
+            display_name="Symbiotica Client Examples",
+            category="symbiotica/pipeline",
+            description="Several of the client's own briefs as ONE text "
+                        "block, for showing an LLM what a client prompt for "
+                        "this asset type looks like. Order Assets emits the "
+                        "same records as lists, which fans the graph out and "
+                        "runs the lane once per asset; this collapses them "
+                        "into a single string, so an LLM node downstream runs "
+                        "ONCE and sees every example at the same time.",
+            inputs=[
+                Order.Input("order"),
+                io.String.Input("category", default="",
+                                tooltip="One asset type, or empty for every "
+                                        "type. Narrow it to the type you are "
+                                        "writing a prompt block for."),
+                io.Int.Input("limit", default=0, min=0, max=50,
+                             tooltip="How many briefs to include. 0 keeps "
+                                     "every asset of the type; a smaller "
+                                     "number keeps the first N and says so in "
+                                     "the header."),
+            ],
+            outputs=[
+                io.String.Output(display_name="examples",
+                                 tooltip="A header naming the type and how "
+                                         "many briefs follow, then the briefs "
+                                         "themselves, numbered, verbatim from "
+                                         "the order sheet."),
+                io.Int.Output(display_name="count",
+                              tooltip="How many briefs the text holds."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, order=None, category="", limit=0) -> io.NodeOutput:
+        if not isinstance(order, dict) or "assets" not in order:
+            raise ValueError("wire an Order Specs (or a Reference Browser) "
+                             "into 'order'")
+        want = (category or "All").strip() or "All"
+        items = assets_by_category(order, category)
+        # An asset with no brief teaches an LLM nothing about the shape of a
+        # client prompt, and a blank numbered entry reads as a missing example
+        # rather than an empty one. Drop them, and count what is left.
+        briefed = [a for a in items if str(a.get("prompt", "") or "").strip()]
+        if not briefed:
+            present = sorted({str(a.get("category", "") or "").strip()
+                              for a in order.get("assets", []) or []
+                              if str(a.get("prompt", "") or "").strip()})
+            if want != "All" and present:
+                raise ValueError(
+                    f"no {want!r} asset in {order.get('feature', '')!r} "
+                    f"carries a client brief — briefs exist for: "
+                    f"{', '.join(present)}")
+            raise ValueError(
+                f"no asset in {order.get('feature', '')!r} carries a client "
+                "brief, so there is no example to show — check the order "
+                "sheet's prompt column")
+        total = len(briefed)
+        kept = briefed[:limit] if limit else briefed
+        # Never a silent cap: a text that shows three of eight briefs must say
+        # so, or the LLM reading it treats three as the whole population.
+        span = (f"the first {len(kept)} of {total}" if len(kept) < total
+                else f"all {total}")
+        noun = "asset" if want == "All" else f"{want!r} asset"
+        if len(kept) != 1:
+            noun += "s"
+        head = (f"CLIENT EXAMPLES — {span} {noun} the client ordered for "
+                f"{order.get('feature', '')!r}, each brief as the client "
+                f"wrote it")
+        parts = [head]
+        for i, a in enumerate(kept, 1):
+            name = str(a.get("assetName", "") or "").strip() or "unnamed"
+            cat = str(a.get("category", "") or "").strip()
+            label = f"{i}. {name}" + (f" — {cat}" if cat and want == "All"
+                                      else "")
+            parts.append(f"{label}\n{str(a['prompt']).strip()}")
+        return io.NodeOutput("\n\n".join(parts), len(kept))
+
+
 class SymbioticaAssetFocus(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -3997,6 +4080,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaAutoPacker,
     SymbioticaCategoryPrompts,
     SymbioticaOrderAssets,
+    SymbioticaClientExamples,
     SymbioticaPromptBook,
     SymbioticaPromptBlock,
     SymbioticaPromptCompose,
