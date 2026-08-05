@@ -6,7 +6,7 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
-## 2026.8.9
+## 2026.8.11
 
 **Node change, and saved workflows keep working.** `Symbiotica Prompt Book`
 gains a second output, `image_system_prompt`, appended after `project`. Nothing
@@ -45,6 +45,89 @@ is removed, renamed or reordered, so existing links still land where they did.
   the preview stays exactly what the model sees. It is read-only — a composed
   document saved back would bake every shared rule into the type block, and the
   next compose would then state each rule twice.
+
+- **The book is editable as canvas nodes.** `Symbiotica Prompt Block` pins one
+  block per node — picker, editable text, Save writes the file — and blocks
+  chain through `text_in`/`text` so a row combines like Join String Multi, in
+  wire order. A "+ new block…" entry creates blocks from an empty book.
+  `Symbiotica Prompt Compose` shows one asset type's composed architect prompt
+  byte-exact and outputs it as `system_prompt` for testing against a live LLM
+  call. Panels resize with the node in both axes, and use ComfyUI's dialogs
+  and toasts.
+
+### Fixed
+
+- **Prompt edits now always reach the next queue.** The prompts/ fingerprint
+  walk hashed `renders.jsonl` and `.bak` churn (re-billing the LLM on every
+  run with the prompts untouched) and, with the project arriving on a wire,
+  hashed nothing at all — so an edit was served from cache. `.md`-only
+  hashing plus the executed-projects fallback fix both, on Category Prompts,
+  Prompt Book, and the new nodes.
+
+## 2026.8.10
+
+**Two nodes added, none changed.** Symbiotica Pick and Symbiotica Asset Focus
+are new; no existing node's inputs, outputs or id changed, so saved workflows
+load as they are.
+
+### Added
+
+- **Symbiotica Pick** — the triage step between stages: lists the images a
+  stage of an asset has produced, numbered on the node, and sends on the ticked
+  ones. It writes and copies nothing — files stay where the save node put them,
+  so looking never costs a generation. `stage` names a step under the asset
+  (`edits`); the `folder` output feeds the save node's `filename_prefix` so the
+  node that writes a stage and the node that reads it are named in one place; a
+  picker wired to another picker lists exactly what that one approved; `single`
+  mode for edit steps replaces the tick instead of adding to it.
+- **Symbiotica Asset Focus** — one asset out of the order, chosen on the node:
+  emits its name, category, client prompt and save path; category is a dropdown
+  of what the order holds; re-lists when the order's event changes upstream.
+
+### Fixed
+
+- The picker can no longer be cached out of listing, and a fresh render appears
+  in the same queue that made it.
+- Looking at thumbnails no longer re-runs the render lane or the generator that
+  made a pick.
+- Asset Focus's "all" emits all; a chosen asset the event no longer holds is
+  dropped.
+- Order Specs parses when queued holding nothing; the order wire is followed
+  further than one hop.
+
+## 2026.8.9
+
+**No node change.** No node is added, removed or renamed, and no input or output
+changed position or meaning. A saved workflow needs nothing — what this adds is a
+canvas command, and there is nothing to put in a graph.
+
+### Added
+
+- **Find node by ID.** An error message, a log line and a node's own badge all
+  name a node by its id, and on a graph of two hundred nodes there was no way to
+  get from that number to the node except panning around looking for it. The
+  frontend has the jump itself and uses it when you click an error, but never
+  exposes it — there was no command, so there was nothing to bind a key to.
+
+  Press `Ctrl+Shift+0`, or take the first row of the canvas right-click menu,
+  and type the number on the node's ID badge. The canvas centres on that node
+  with it selected, at the zoom you were already at: you asked to be taken to a
+  node, not to have your view of the graph rescaled. A number that matches
+  nothing says so and leaves the box open holding what you typed.
+
+  It searches the graph you are looking at rather than the root graph, so inside
+  a subgraph it finds that subgraph's ids. The shortcut is a modified combo on
+  purpose — installed packs claim bare letters without anyone being able to see
+  it from here, and the frontend refuses a binding outright when one collides.
+  Rebind or clear it in Settings → Keybindings.
+
+### Fixed
+
+- **The finder's box no longer loses focus to its own chrome.** Clicking the
+  panel's padding or its hint line moved focus off the input. Escape and the
+  guard that keeps typed digits away from the canvas are both bound to that
+  input, so from there the box stopped closing on Escape and every digit typed
+  at it reached the graph instead, firing whatever that key does there.
 
 ## 2026.8.8
 

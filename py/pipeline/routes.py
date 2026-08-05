@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import os
 import threading
@@ -31,6 +32,13 @@ from .pack_library import (
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 _roots: set[str] = set()
+# A strict subset of `_roots`: the folders that hold SOURCE artwork — a month's
+# client references, a sprite catalog. Every root is servable; only these are
+# things a node's output can go stale against, and a change-check must watch
+# nothing else. The pipeline writes into plenty of servable folders (a picker's
+# thumbnail buffer, a template save destination), and watching those made every
+# write look like a new reference. See `reference_roots`.
+_refs_roots: set[str] = set()
 _projects: set[str] = set()
 _lock = threading.Lock()
 
@@ -45,6 +53,17 @@ def register_root(path: str) -> None:
     if os.path.isdir(real):
         with _lock:
             _roots.add(real)
+
+
+def register_refs_root(path: str) -> None:
+    """Serve this folder AND watch it: it holds reference artwork a node reads.
+    Only for folders whose contents are input to the graph — never a folder the
+    graph writes into."""
+    real = os.path.realpath(path)
+    if os.path.isdir(real):
+        with _lock:
+            _roots.add(real)
+            _refs_roots.add(real)
 
 
 def _operator_roots() -> list[str]:
@@ -93,11 +112,21 @@ def executed_projects() -> list[str]:
 
 
 def executed_roots() -> list[str]:
-    """The folders graph executions have registered, same purpose and same
-    caveat as `executed_projects` — a reference folder reaches the graph on a
-    wire, so a change-check cannot see it either."""
+    """Every folder this process has made servable — registered by a node's
+    execution or by a browse route. Access, not provenance: see
+    `reference_roots` for the ones a change-check may watch."""
     with _lock:
         return sorted(_roots)
+
+
+def reference_roots() -> list[str]:
+    """The registered folders that hold reference artwork, same purpose and
+    same caveat as `executed_projects` — a reference folder reaches the graph on
+    a wire, so a change-check cannot see it either.
+
+    Sorted so a hash built from this is stable across calls."""
+    with _lock:
+        return sorted(_refs_roots)
 
 
 def register_root_within(path: str) -> bool:
@@ -682,3 +711,139 @@ async def prompt_write(request):
     except OSError as exc:
         return web.json_response({"error": f"cannot save: {exc}"}, status=500)
     return web.json_response({"ok": True, **saved})
+
+
+def _pick_target(node_id: str, folder: str = "") -> tuple[str, object]:
+    """The asset path a Pick node's panel should list, resolved server-side.
+
+    Without an explicit folder this is whatever the node itself resolved when
+    it last ran, from the asset and category on its wires — the panel cannot
+    work that out, because a wired input has no value on the canvas.
+
+    An explicitly named folder is checked against the declared roots like every
+    other path a request names: naming a folder is not what grants access to
+    it. A save node's own prefix is accepted too, since that is the string
+    people have to hand — `…/Food - 3 stages/Spookies` names the `Spookies_*`
+    files one level up rather than a directory.
+    """
+    from .pick_folder import resolved
+
+    named = str(folder or "").strip()
+    if not named:
+        return resolved(node_id)
+    # Browsing by name is browsing a whole folder; a shortlist belongs to the
+    # picker that made it, not to a path someone typed.
+    if not os.path.isabs(named):
+        try:
+            import folder_paths
+            named = os.path.normpath(
+                os.path.join(folder_paths.get_output_directory(), named))
+        except Exception:
+            pass
+    named = _expand_project(named)
+    real = resolve_within(declared_roots(), named, kind="dir")
+    if real is not None:
+        return real, None
+    parent = resolve_within(declared_roots(), os.path.dirname(named),
+                            kind="dir")
+    return (os.path.join(parent, os.path.basename(named)), None) if parent \
+        else ("", None)
+
+
+@PromptServer.instance.routes.get("/symbiotica/pick-list")
+async def pick_list(request):
+    """The images in the folder a Pick node is looking at, numbered.
+
+    No buffer, no copies: this lists the renders where the save node put them,
+    which is why a picker shows a new generation the moment it is queued and
+    why looking at one costs nothing.
+    """
+    from .pick_folder import LISTING_LIMIT, listing_for, read_folders
+
+    named = str(request.query.get("folder", "") or "").strip()
+    target, only = _pick_target(request.query.get("node_id", ""), named)
+    if not target:
+        # A folder that was asked for by name and could not be resolved is a
+        # refusal and has to say so. Silence is only right for a picker that
+        # has not run yet, which is every picker on a freshly opened graph.
+        if named:
+            return web.json_response(
+                {"error": f"{named} is not inside a folder this install serves"},
+                status=403)
+        return web.json_response({"ok": True, "images": [], "folder": ""})
+    # `is_allowed` consults only the folders an execution or a browse route
+    # registered, never `declared_roots()`, so listing without this hands back
+    # paths whose every thumbnail then 403s — a grid of broken images with the
+    # right count. `register_root_within` refuses anything outside a declared
+    # root, so this grants nothing that was not already entitled.
+    allowed = [folder for folder, _ in read_folders(target)
+               if register_root_within(folder)]
+    if not allowed:
+        # A stage folder before its first save has nothing to read and nothing
+        # to register — which is not a refusal. Check the nearest directory
+        # that DOES exist above it: entitlement is a question about the tree,
+        # not about whether the leaf has been created yet. Refusing here told
+        # the user their own asset folder "is not inside a folder this install
+        # serves", which is both alarming and untrue.
+        probe = target
+        while probe and not os.path.isdir(probe):
+            parent = os.path.dirname(probe)
+            if parent == probe:
+                break
+            probe = parent
+        if not (probe and register_root_within(probe)):
+            return web.json_response(
+                {"error": f"{target} is not inside a folder this install serves"},
+                status=403)
+        return web.json_response({"ok": True, "folder": target, "images": [],
+                                  "shortlist": only is not None})
+    entries = await asyncio.to_thread(listing_for, target, LISTING_LIMIT, only)
+    return web.json_response({
+        "ok": True, "folder": target, "shortlist": only is not None,
+        "images": [{"id": e["id"], "name": e["name"], "index": e["index"],
+                    "path": e["path"], "w": e["w"], "h": e["h"],
+                    "at": e["at"]} for e in entries],
+    })
+
+
+@PromptServer.instance.routes.get("/symbiotica/pick-thumb")
+async def pick_thumb(request):
+    """One listed image, shrunk to grid size, never written to disk.
+
+    The node draws every image in a folder at once, and serving full-size
+    renders into a strip of 128px tiles makes it feel broken. Resizing per
+    request rather than keeping a thumbnail folder is the whole point of this
+    node holding nothing: the browser caches the result, so the work happens
+    once per image per session and leaves nothing behind.
+    """
+    from PIL import Image, UnidentifiedImageError
+
+    resolved_path = is_allowed(request.query.get("path", ""))
+    if resolved_path is None:
+        return web.json_response({"error": "not an allowed image path"},
+                                 status=403)
+    try:
+        px = max(32, min(1024, int(request.query.get("px", "320"))))
+    except ValueError:
+        px = 320
+
+    def _shrink():
+        buffer = io.BytesIO()
+        with Image.open(resolved_path) as img:
+            img.load()
+            # Alpha survives: a background-removed render judged on a black
+            # rectangle is not the image that was approved.
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGBA" if "transparency" in img.info
+                                  else "RGB")
+            img.thumbnail((px, px))
+            img.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    try:
+        body = await asyncio.to_thread(_shrink)
+    except (OSError, UnidentifiedImageError, ValueError):
+        return web.json_response({"error": "could not read that image"},
+                                 status=400)
+    return web.Response(body=body, content_type="image/png",
+                        headers={"Cache-Control": "private, max-age=600"})

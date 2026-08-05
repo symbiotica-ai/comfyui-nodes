@@ -436,3 +436,43 @@ test("narrowing the packer pulls the assets panel in with it", async () => {
     assert.equal(wrap.style.width, "305px",
                  "narrow node must pull the panel in, not leave it at 580");
 });
+
+test("a change of feature is announced to everything that reads the order", async () => {
+    // "why doesn't the asset focus node change the category when i change it
+    // in order specs?" — LiteGraph has no event for "a widget upstream
+    // changed", and looking one hop down misses anything behind a reroute, so
+    // the source announces to the graph and each reader decides if it cares.
+    reset();
+    setLatency(1);
+    setResponder(() => ({ ok: true, body: { ok: true, events: [ONE_EVENT] } }));
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
+    const listener = await create("SymbioticaAssetFocus", {});
+    const heard = [];
+    listener._symOrderChanged = (source) => heard.push(source);
+
+    specs.onNodeCreated();
+    for (let f = 0; f < 20; f++) { repaint(specs); await tick(); }
+    heard.length = 0;
+
+    const feature = specs.widgets.find((w) => w.name === "feature");
+    feature.value = "Mini 2";
+    feature.callback?.call(specs, "Mini 2");
+    for (let f = 0; f < 20; f++) { repaint(specs); await tick(); }
+
+    assert.ok(heard.includes(specs),
+              "the order source never told the graph its feature changed");
+});
+
+test("the source does not announce to itself", async () => {
+    reset();
+    setLatency(1);
+    setResponder(() => ({ ok: true, body: { ok: true, events: [ONE_EVENT] } }));
+    const specs = await create("SymbioticaOrderSpecs",
+        { project_path: ABSENT_PROJECT(), month: "October", feature: "Mini 1" });
+    let heard = 0;
+    specs._symOrderChanged = () => { heard += 1; };
+    specs.onNodeCreated();
+    for (let f = 0; f < 20; f++) { repaint(specs); await tick(); }
+    assert.equal(heard, 0);
+});
