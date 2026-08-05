@@ -150,3 +150,25 @@ def test_category_prompts_fingerprint_ignores_render_churn(nodes_mod,
     before = fp(project_path=[str(proj)])
     (proj / "prompts" / "renders.jsonl").write_text("{}\n")
     assert fp(project_path=[str(proj)]) == before
+
+
+def test_blocks_chain_like_join_multi(nodes_mod, tmp_path):
+    # GAME -> INPUTS chained by wire: the second node's text output carries
+    # both, blank-line joined, same separator the book compose uses.
+    proj = _project(tmp_path, **{"_rules__01-game.md": "GAME\n",
+                                 "_rules__02-inputs.md": "INPUTS\n"})
+    first = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), block="_rules/01-game.md")
+    second = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=first.args[0], block="_rules/02-inputs.md",
+        text_in=first.args[1])
+    assert second.args[1] == "GAME\n\nINPUTS"
+
+
+def test_block_chain_skips_an_empty_link(nodes_mod, tmp_path):
+    # A not-yet-saved block must not inject a blank segment mid-chain.
+    proj = _project(tmp_path, **{"_rules__01-game.md": "GAME"})
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), block="_image/01-image-model.md",
+        text_in="GAME")
+    assert out.args[1] == "GAME"

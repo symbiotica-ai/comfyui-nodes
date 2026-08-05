@@ -1299,6 +1299,12 @@ class SymbioticaPromptBlock(io.ComfyNode):
                                         "(_rules/02-inputs.md) or an image "
                                         "block (_image/01-image-model.md). "
                                         "The panel's picker fills this in."),
+                io.String.Input("text_in", force_input=True, optional=True,
+                                tooltip="Chain input: wire the PREVIOUS "
+                                        "block's `text` output here and this "
+                                        "node appends its own block — a row "
+                                        "of Blocks combines like Join String "
+                                        "Multi, in wire order."),
             ],
             outputs=[
                 io.String.Output(display_name="project",
@@ -1307,17 +1313,16 @@ class SymbioticaPromptBlock(io.ComfyNode):
                                          "fanning every node back to the "
                                          "book."),
                 io.String.Output(display_name="text",
-                                 tooltip="This block's text as saved on disk "
-                                         "— for wiring a single block "
-                                         "somewhere directly. The ARCHITECT "
-                                         "prompt is the composed set, not one "
-                                         "block: wire Category Prompts or "
-                                         "Prompt Compose for that."),
+                                 tooltip="Everything chained so far: text_in "
+                                         "plus this node's block, blank-line "
+                                         "separated. The LAST block in a row "
+                                         "carries the full combined prompt — "
+                                         "wire that into the LLM."),
             ],
         )
 
     @classmethod
-    def fingerprint_inputs(cls, project_path="", block=""):
+    def fingerprint_inputs(cls, project_path="", block="", text_in=None):
         # Widgets only — a linked project reads as None here (see Category
         # Prompts), so fall back to the projects executions registered. Hash
         # the one file this node edits; never raise — a raise becomes NaN and
@@ -1339,7 +1344,7 @@ class SymbioticaPromptBlock(io.ComfyNode):
         return h.hexdigest()
 
     @classmethod
-    def execute(cls, project_path="", block="") -> io.NodeOutput:
+    def execute(cls, project_path="", block="", text_in=None) -> io.NodeOutput:
         project = _prompt_node_project(project_path)
         if not project:
             raise ValueError(
@@ -1353,10 +1358,14 @@ class SymbioticaPromptBlock(io.ComfyNode):
         # first save. The composed architect prompts still raise on absence —
         # they are read by nodes that can do nothing without them.
         try:
-            text = read_block(project, name)
+            text = read_block(project, name).strip()
         except PromptPathError:
             text = ""
-        return io.NodeOutput(project, text.strip())
+        # Chained: this node's output is everything so far. The join is the
+        # same blank line compose_prompt uses, so a hand-chained row reads the
+        # same as the book-composed prompt.
+        parts = [p for p in (str(text_in or "").strip(), text) if p]
+        return io.NodeOutput(project, "\n\n".join(parts))
 
 
 class SymbioticaPromptCompose(io.ComfyNode):
