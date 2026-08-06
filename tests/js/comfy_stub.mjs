@@ -58,6 +58,14 @@ function element() {
             cs.forEach((c) => { c.parent = this; });
         },
         setAttribute() {},
+        // Where the element is ON SCREEN — a hover preview is placed against
+        // it, so a test that cannot set this cannot tell "beside the tile"
+        // from "off the window". `_rect` is the element's own answer; the
+        // default is the origin, as an unlaid-out element reports in a browser.
+        getBoundingClientRect() {
+            return this._rect
+                ?? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+        },
         get parentElement() { return this.parent; },
         remove() {
             if (this.parent) {
@@ -74,7 +82,14 @@ globalThis.document = {
     createTextNode: (t) => ({ text: t }),
     body: element(),
 };
-globalThis.window = { addEventListener() {}, devicePixelRatio: 1 };
+globalThis.window = {
+    addEventListener() {},
+    devicePixelRatio: 1,
+    // A window size, because anything that floats over the canvas is sized and
+    // clamped against one.
+    innerWidth: 1440,
+    innerHeight: 900,
+};
 globalThis.requestAnimationFrame = (cb) => cb();
 
 // --- api ---------------------------------------------------------------------

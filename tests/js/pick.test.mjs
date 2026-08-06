@@ -407,3 +407,118 @@ test("the panel never pins the node's minimum height", async () => {
     node.size[1] = 200;
     assert.equal(panel.options.getMinHeight(), floor);
 });
+
+// --- hover preview -----------------------------------------------------------
+// A 64px tile cannot be judged, and opening a tab per render loses the grid.
+const frames = () => globalThis.document.body.children.filter(
+    (c) => (c.children ?? []).some((k) => "src" in k));
+const shown = () => frames().find((f) => f.style.display === "block");
+// The hover is deliberately delayed so sweeping across a grid does not flash a
+// preview per tile; the tests have to outwait that.
+const rest = () => new Promise((r) => setTimeout(r, 220));
+
+async function hover(cell, rect = { left: 100, top: 400, right: 164,
+                                    bottom: 464, width: 64, height: 64 }) {
+    cell._rect = rect;
+    fire(cell, "pointerenter");
+    await rest();
+}
+
+test("resting on a tile floats a bigger copy of it", async () => {
+    const node = await panelNode([], [ONE, TWO]);
+    assert.equal(shown(), undefined, "nothing floats before a hover");
+    await hover(cells(node)[1]);
+
+    const frame = shown();
+    assert.ok(frame, "hovering a tile shows no preview");
+    const img = frame.children[0];
+    assert.ok(img.src.includes(encodeURIComponent(TWO.path)),
+              "the preview is not the image being hovered");
+    // Big enough to judge by: the grid tiles are 64–184px.
+    const px = Number(new URLSearchParams(img.src.split("?")[1]).get("px"));
+    assert.ok(px >= 512, `preview asked for ${px}px, which is still a thumbnail`);
+    assert.match(frame.children[1].textContent, /Spookies_00002_\.png/);
+});
+
+test("the preview is a resize, never the full render", async () => {
+    // Same rule as the grid: /symbiotica/local-image on hover would pull a
+    // 20MB PNG per tile the pointer crosses.
+    const node = await panelNode([], [ONE]);
+    await hover(cells(node)[0]);
+    const img = shown().children[0];
+    assert.ok(img.src.includes("/symbiotica/pick-thumb"));
+    assert.ok(!img.src.includes("/symbiotica/local-image"));
+});
+
+test("the thumbnail already on screen fills the frame while the big one loads",
+     async () => {
+    const node = await panelNode([], [ONE]);
+    const tileSrc = tiles(node)[0].src;
+    await hover(cells(node)[0]);
+    assert.ok(shown().style.backgroundImage.includes(tileSrc),
+              "the frame is empty until the full-size image lands");
+});
+
+test("the frame is drawn beside the tile, and flips when there is no room",
+     async () => {
+    const node = await panelNode([], [ONE]);
+    await hover(cells(node)[0]);
+    const right = Number.parseInt(shown().style.left, 10);
+    assert.ok(right > 164, `frame at ${right} overlaps the tile it came from`);
+
+    fire(cells(node)[0], "pointerleave");
+    // Hard against the right edge of a 1440px window: beside it would be off
+    // the screen, so it goes to the other side.
+    await hover(cells(node)[0], { left: 1400, top: 400, right: 1430,
+                                  bottom: 464, width: 30, height: 64 });
+    const flipped = Number.parseInt(shown().style.left, 10);
+    assert.ok(flipped >= 8 && flipped < 1400,
+              `frame at ${flipped} is off the right of the window`);
+});
+
+test("the frame never draws off the window", async () => {
+    const node = await panelNode([], [ONE]);
+    await hover(cells(node)[0], { left: 100, top: 880, right: 164,
+                                  bottom: 900, width: 64, height: 20 });
+    const frame = shown();
+    const top = Number.parseInt(frame.style.top, 10);
+    const height = Number.parseInt(frame.style.height, 10);
+    assert.ok(top >= 8, `frame top ${top} is above the window`);
+    assert.ok(top + height <= 900 - 8 || height >= 900 - 16,
+              `frame bottom ${top + height} is below the window`);
+});
+
+test("leaving the tile takes the preview away", async () => {
+    const node = await panelNode([], [ONE]);
+    await hover(cells(node)[0]);
+    assert.ok(shown());
+    fire(cells(node)[0], "pointerleave");
+    assert.equal(shown(), undefined);
+});
+
+test("ticking takes the preview away with the tile it belonged to", async () => {
+    // The click re-renders the grid, so the tile under the frame is thrown
+    // away — the frame would be left floating beside nothing.
+    const node = await panelNode([], [ONE]);
+    await hover(cells(node)[0]);
+    fire(cells(node)[0], "click");
+    assert.equal(shown(), undefined);
+});
+
+test("a preview is not shown until the pointer rests", async () => {
+    const node = await panelNode([], [ONE, TWO, THREE]);
+    for (const cell of cells(node)) fire(cell, "pointerenter");
+    assert.equal(shown(), undefined, "sweeping the grid flashed a preview");
+    await rest();
+});
+
+test("one frame is reused, however many tiles are hovered", async () => {
+    // Every tile attaching its own body-level node is how a grid leaks a
+    // hundred orphans onto the page.
+    const node = await panelNode([], [ONE, TWO, THREE]);
+    for (const cell of cells(node)) {
+        await hover(cell);
+        fire(cell, "pointerleave");
+    }
+    assert.equal(frames().length, 1);
+});
