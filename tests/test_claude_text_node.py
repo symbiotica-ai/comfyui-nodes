@@ -475,6 +475,10 @@ def test_which_inputs_a_stored_payload_must_carry_is_pinned(node_module):
                       if not getattr(i, "optional", False))
     # `model.temperature` and `model.reasoning_effort` appear only on the models
     # that accept them, so this is the union across options, not one model's set.
+    # That is why the node reads them with `.get(default)` while the Gemini image
+    # node brackets its own: here an absent one means the chosen model has no
+    # such setting, not that the payload is malformed. `nodes_anthropic.py` makes
+    # the same split, with the same defaults.
     assert required == [
         "model", "model.images", "model.max_tokens", "model.reasoning_effort",
         "model.temperature", "prompt", "seed",

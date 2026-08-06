@@ -546,6 +546,14 @@ def test_which_inputs_a_stored_payload_must_carry_is_pinned(node_module):
     template. This list is the same rule applied here: it may shrink freely,
     and it may only GROW with a deliberate edit that accepts breaking stored
     payloads. A new input belongs outside it.
+
+    The per-model half is ComfyUI's own shape, not ours: `nodes_gemini.py`
+    declares aspect_ratio, resolution and thinking_level on EVERY model option
+    with no `optional`, and reads them as `model["resolution"]`, reserving
+    `.get()` for the optional media collections. Absent means the payload is
+    malformed, not that the model lacks the setting — so making these optional
+    would answer a malformed payload with a render at a resolution nobody
+    picked.
     """
     _, inputs = by_id(node_module)
     required = sorted(k for k, i in inputs.items()
