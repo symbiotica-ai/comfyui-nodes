@@ -3,9 +3,50 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+# What an edit was made FROM, carried in the file's own name.
+#
+# An edit is a NEW file: the save node gives it a fresh counter name that was
+# never among the ticks of the render it came from, so no set of names can ever
+# connect the two. The link has to be written at save time, and the filename is
+# the one channel that travels with the picture — through a restart, a re-queue
+# and a workflow re-open.
+#
+# The marker FOLLOWS the stage rather than leading the name because a picker
+# lists that folder by the stage prefix (`name_matches_prefix`), and a file that
+# stopped matching it would vanish from the very grid it was saved for.
+FROM_MARKER = "_from."
+_SAVE_COUNTER = re.compile(r"_\d+_$")
+
+
+def edit_prefix(stage: str, parent: str) -> str:
+    """The `filename_prefix` for saving work derived from `parent`.
+
+    Naming no parent marks nothing: the prefix stays the plain stage and what it
+    writes simply has no parent, which is the only honest answer when there is
+    no single render to point at.
+    """
+    step = str(stage or "")
+    stem = os.path.splitext(os.path.basename(str(parent or "")))[0]
+    return f"{step}{FROM_MARKER}{stem}" if step and stem else step
+
+
+def parent_of(name: str) -> str | None:
+    """The render an edit was made from, or None when the file does not say.
+
+    Only a marked name answers. Everything written before the marker existed
+    carries none, and so does ComfyUI's own default — so an unmarked file has no
+    parent rather than a wrong one, and nothing already on disk needs renaming.
+    """
+    stem = os.path.splitext(os.path.basename(str(name or "")))[0]
+    marker = stem.find(FROM_MARKER)
+    if marker < 0:
+        return None
+    return _SAVE_COUNTER.sub("", stem[marker + len(FROM_MARKER):]) or None
 
 # One wrong folder must not try to list a whole output volume into a node body.
 LISTING_LIMIT = 400
@@ -114,14 +155,38 @@ def read_folders(target: str) -> list[tuple[str, str]]:
     return []
 
 
-def listing_for(target: str, limit: int = LISTING_LIMIT, only=None) -> list[dict]:
+def _parent_stems(derived_from):
+    """The parent names to match against, or None for "no such question".
+
+    None and an empty list are different answers, exactly as they are for
+    `only`: nothing approved upstream means there are no edits to show, while
+    asking about no parent at all means the whole folder.
+    """
+    if derived_from is None:
+        return None
+    names = [derived_from] if isinstance(derived_from, str) else derived_from
+    return {os.path.splitext(os.path.basename(str(n)))[0]
+            for n in names if str(n).strip()}
+
+
+def listing_for(target: str, limit: int = LISTING_LIMIT, only=None,
+                derived_from=None) -> list[dict]:
     """One stage's images, numbered across both layouts as a single grid.
 
     `only` narrows to a set of file names, which is how a picker fed by another
     picker shows exactly what that one approved — no folder of copies in
     between, and nothing to keep in sync.
+
+    `derived_from` narrows to the edits OF one render instead, read off each
+    file's own mark. It is the other question a second picker can ask, and the
+    two cannot be the same one: an edit is a file the approving picker never
+    saw, so its name can never be in that picker's ticks.
+
+    Asking about no parent at all means the whole folder; asking about an empty
+    set of them means nothing, because nothing approved upstream has no edits.
     """
     wanted = None if only is None else {str(name) for name in only}
+    parents = _parent_stems(derived_from)
     entries: list[dict] = []
     for folder, prefix in read_folders(target):
         entries.extend(listing(folder, prefix, limit))
@@ -130,6 +195,8 @@ def listing_for(target: str, limit: int = LISTING_LIMIT, only=None) -> list[dict
     seen, unique = set(), []
     for entry in entries:
         if entry["id"] in seen or (wanted is not None and entry["id"] not in wanted):
+            continue
+        if parents is not None and parent_of(entry["id"]) not in parents:
             continue
         if len(unique) >= limit:
             break
@@ -198,18 +265,24 @@ def picked_paths(entries, selection) -> list[str]:
 # read. In memory on purpose: it is derived from the node's own wires every
 # run, and writing it down would be another file in someone's tree for
 # something a single queue rebuilds.
-_resolved: dict[str, tuple[str, object]] = {}
+_resolved: dict[str, tuple[str, object, object]] = {}
 
 
-def remember(node_id, target: str, only=None) -> None:
-    _resolved[str(node_id)] = (target or "",
-                               None if only is None else [str(n) for n in only])
+def remember(node_id, target: str, only=None, derived_from=None) -> None:
+    _resolved[str(node_id)] = (
+        target or "",
+        None if only is None else [str(n) for n in only],
+        None if derived_from is None else [str(n) for n in derived_from])
 
 
-def resolved(node_id) -> tuple[str, object]:
-    """(path, only) this picker last read. ("", None) before it has ever run.
+def resolved(node_id) -> tuple[str, object, object]:
+    """(path, only, derived_from) this picker last read.
+
+    ("", None, None) before it has ever run.
 
     `only` is None for a picker reading a folder, and the list of names for one
-    reading another picker's approvals.
+    reading another picker's approvals. `derived_from` is the list of renders
+    whose edits it is showing instead — the panel has to ask the same question
+    the node did, or it lists a folder the run never offered.
     """
-    return _resolved.get(str(node_id), ("", None))
+    return _resolved.get(str(node_id), ("", None, None))

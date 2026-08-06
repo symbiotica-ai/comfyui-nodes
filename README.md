@@ -233,6 +233,14 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   `ref_names` to tick only the references the client sent for this asset — and
   resting on a thumbnail floats it big beside the grid, so a render can be
   judged without opening it in a tab.
+  To review the EDITS of one approval rather than the approval itself, wire this
+  node's `edit_save_path` into the Save Image that writes them and set the next
+  picker's `shortlist` to `edits`. `edit_save_path` is `save_path` marked with
+  the render that was picked, so each edit records what it came from in its own
+  name — which is the only place that link can live, since an edit is named by
+  the save node long after the tick was made and can never appear in a set of
+  ticks. A file written without the mark simply has no parent, so nothing
+  already on disk needs renaming.
 - **Symbiotica Asset Refs** — the client's own reference art for one asset, in
   the order the order sheet pairs it, so the index that picks a cell picks the
   reference belonging to it. References with transparency are composited onto a
