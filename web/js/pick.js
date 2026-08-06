@@ -503,6 +503,16 @@ registerSymbioticaExtension(app, {
                     const w = widgetOf(this, name);
                     if (w) w.value = v[i];
                 }
+                // A widget appended since that layout has no value in it, and
+                // the positional apply has already landed someone else's on it
+                // — the old folder path reaches `shortlist` here. ComfyUI
+                // validates a combo against its options and refuses the whole
+                // queue over a value that is not in the list, so each one goes
+                // back to its own default.
+                for (const [name, value] of [["shortlist", "approved"]]) {
+                    const w = widgetOf(this, name);
+                    if (w) w.value = value;
+                }
             }
             queueMicrotask(() => this._symReloadPick?.());
         };

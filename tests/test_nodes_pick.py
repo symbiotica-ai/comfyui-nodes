@@ -70,7 +70,7 @@ class TestSchema:
         schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
         widgets = [i.id for i in schema.inputs if i.id != "images"]
         assert widgets == ["save_path", "selection", "view", "mode", "stage",
-                           "names"]
+                           "names", "shortlist"]
 
     def test_every_input_is_optional(self, nodes_mod):
         """The other half of surviving a saved workflow: `optional`, not order.
@@ -473,3 +473,123 @@ class TestAPickerFedByAnotherPicker:
             selection=[json.dumps(["Spookies_00001_.png",
                                    "Spookies_00002_.png"])])
         assert len(out.args[0]) == 2
+
+
+class TestSayingWhereAnEditCameFrom:
+    """An edit is a file the approving picker never saw: the save node names it
+    long after the tick was made, so no set of ticks can ever reach it. The link
+    is written into the edit's own name instead, at the moment it is saved."""
+
+    def one_render(self, tmp_path):
+        renders(tmp_path, f"{EVENT_DIR}/Food/Spookies",
+                ("edits_00001_.png", "edits_00002_.png"))
+        return [f"{EVENT_DIR}/Food/Spookies"]
+
+    def test_the_edit_prefix_names_the_render_that_was_picked(self, nodes_mod,
+                                                              tmp_path):
+        folder = self.one_render(tmp_path)
+        out = run(nodes_mod, save_path=folder, stage=["edits"], mode=["single"],
+                  selection=[json.dumps(["edits_00001_.png"])])
+        assert out.args[2] == (
+            f"{EVENT_DIR}/Food/Spookies/edits_from.edits_00001_")
+
+    def test_the_plain_save_path_is_unchanged_beside_it(self, nodes_mod,
+                                                        tmp_path):
+        """The mark rides on a SECOND output; the one saved workflows already
+        wire keeps saying exactly what it said."""
+        folder = self.one_render(tmp_path)
+        out = run(nodes_mod, save_path=folder, stage=["edits"], mode=["single"],
+                  selection=[json.dumps(["edits_00001_.png"])])
+        assert out.args[1] == f"{EVENT_DIR}/Food/Spookies/edits"
+
+    def test_no_single_pick_marks_nothing(self, nodes_mod, tmp_path):
+        """Two ticks name no one parent, so the prefix stays the plain step and
+        what it writes has no parent — never a wrong one."""
+        folder = self.one_render(tmp_path)
+        out = run(nodes_mod, save_path=folder, stage=["edits"],
+                  selection=[json.dumps(["edits_00001_.png",
+                                         "edits_00002_.png"])])
+        assert out.args[2] == f"{EVENT_DIR}/Food/Spookies/edits"
+
+    def test_a_picker_with_no_step_still_names_a_real_place(self, nodes_mod,
+                                                            tmp_path):
+        """A blank is the one answer that must never leave here. Save Image
+        turns a blank prefix into a hidden `._00001_.png` at the output root,
+        which no listing shows and every later save overwrites — paid renders
+        destroyed under a green run. Without a step the mark rides on the
+        asset's own prefix instead, which is a real place.
+        """
+        renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
+        out = spookies(nodes_mod, tmp_path, mode=["single"],
+                       selection=[json.dumps(["Spookies_00001_.png"])])
+        assert out.args[2] == (
+            f"{EVENT_DIR}/Food/Spookies_from.Spookies_00001_")
+
+    def test_an_unconfigured_picker_names_nothing_at_all(self, nodes_mod):
+        """The one case where blank is right: it is what `save_path` already
+        says, and there is no folder to write into either way."""
+        out = run(nodes_mod, save_path=[""])
+        assert out.args[1] == "" and out.args[2] == ""
+
+
+class TestShowingTheEditsOfAnApproval:
+    """The second half: a picker fed by another can ask for the edits OF what
+    that one approved, instead of the approvals themselves."""
+
+    def wire(self, nodes_mod, source_selection, source_id="9", node_id="7"):
+        nodes_mod.SymbioticaPick.hidden = types.SimpleNamespace(
+            unique_id=node_id,
+            prompt={node_id: {"inputs": {"images": [source_id, 0]}},
+                    source_id: {"class_type": "SymbioticaPick",
+                                "inputs": {"selection": source_selection}}})
+
+    def lane(self, tmp_path):
+        """A base render approved upstream, and edits of two different bases."""
+        renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",
+                                                "Spookies_00002_.png"))
+        renders(tmp_path, f"{EVENT_DIR}/Food/Spookies",
+                ("edits_from.Spookies_00001__00001_.png",
+                 "edits_from.Spookies_00002__00001_.png",
+                 "edits_00003_.png"))
+
+    def test_it_lists_the_edits_of_the_approved_render(self, nodes_mod,
+                                                       tmp_path):
+        from pipeline.pick_folder import remember, resolved
+        self.lane(tmp_path)
+        remember("9", str(tmp_path / "output" / EVENT_DIR / "Food" / "Spookies"))
+        self.wire(nodes_mod, json.dumps(["Spookies_00001_.png"]))
+        nodes_mod.SymbioticaPick.execute(
+            save_path=[f"{EVENT_DIR}/Food/Spookies"], stage=["edits"],
+            shortlist=["edits"])
+        # What the run resolved is what the panel will list, so assert on that
+        # rather than on the ticks — nothing is ticked on a first look.
+        assert resolved("7")[2] == ["Spookies_00001_.png"]
+
+    def test_the_edits_of_another_approval_are_not_offered(self, nodes_mod,
+                                                           tmp_path):
+        from pipeline.pick_folder import listing_for, remember, resolved
+        self.lane(tmp_path)
+        remember("9", str(tmp_path / "output" / EVENT_DIR / "Food" / "Spookies"))
+        self.wire(nodes_mod, json.dumps(["Spookies_00001_.png"]))
+        nodes_mod.SymbioticaPick.execute(
+            save_path=[f"{EVENT_DIR}/Food/Spookies"], stage=["edits"],
+            shortlist=["edits"])
+        target, only, derived = resolved("7")
+        shown = [e["name"] for e in
+                 listing_for(target, only=only, derived_from=derived)]
+        assert shown == ["edits_from.Spookies_00001__00001_.png"]
+
+    def test_by_default_it_still_lists_what_was_approved(self, nodes_mod,
+                                                         tmp_path):
+        """The reading every saved workflow already has. Without this the
+        widget's arrival would change what an untouched graph shows."""
+        from pipeline.pick_folder import remember, resolved
+        self.lane(tmp_path)
+        remember("9", str(tmp_path / "output" / EVENT_DIR / "Food" / "Spookies"))
+        self.wire(nodes_mod, json.dumps(["Spookies_00001_.png"]))
+        nodes_mod.SymbioticaPick.execute(
+            save_path=[f"{EVENT_DIR}/Food/Spookies"], stage=["edits"])
+        target, only, derived = resolved("7")
+        assert derived is None
+        assert only == ["Spookies_00001_.png"]
+        assert target.endswith("Spookies")

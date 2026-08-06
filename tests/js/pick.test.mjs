@@ -33,8 +33,12 @@ function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) 
     };
 }
 
+// The node's widgets, in the order define_schema declares them — the order is
+// what a saved workflow's values are applied by, so this list is the one thing
+// here that has to track the Python schema exactly.
 const WIDGET_DEFAULTS = {
     save_path: "", selection: "", view: "", mode: "multiple", stage: "",
+    names: "", shortlist: "approved",
 };
 
 async function panelNode(seen = [], images = [], values = {},
@@ -284,6 +288,20 @@ test("a graph saved before the one-wire layout keeps its values", async () => {
     assert.equal(widgetOf(node, "selection").value, '["a.png"]');
     assert.equal(widgetOf(node, "mode").value, "single");
     assert.equal(widgetOf(node, "stage").value, "edits");
+});
+
+test("a widget added after that layout goes back to its own default", async () => {
+    // The old values are applied positionally BEFORE onConfigure runs, so a
+    // widget appended since then is holding one of them — here the 7th value,
+    // the old folder path, lands on the `shortlist` combo. ComfyUI validates a
+    // combo against its option list and refuses the whole queue over a value
+    // that is not in it, so a graph nobody touched would stop running.
+    const node = await panelNode([], [ONE]);
+    node.onConfigure?.call(node, { widgets_values: [
+        false, "Spookies", "Food", '["a.png"]', "", "", "October/Ev/Food",
+        "edit", "single", "edits", "",
+    ] });
+    assert.equal(widgetOf(node, "shortlist").value, "approved");
 });
 
 test("it registers under one extension name", async () => {
