@@ -2161,7 +2161,7 @@ class SymbioticaAssetRefs(io.ComfyNode):
                                  tooltip="The folder these references were "
                                          "read from — the order's own "
                                          "references root. Wire it into a "
-                                         "Pick node's `folder` to tick the "
+                                         "Pick node's `save_path` to tick the "
                                          "client's references by eye instead "
                                          "of taking every one of them."),
             ],

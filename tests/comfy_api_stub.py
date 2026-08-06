@@ -51,6 +51,17 @@ class NodeOutput:
         # canvas without that showing up as an output.
         self.ui = ui
 
+    @property
+    def result(self):
+        """The wire values, under the name the real NodeOutput gives them.
+
+        `args` is this stub's own spelling and most tests read it; the real
+        class calls the same tuple `result`, so a test written against the
+        documented API found no attribute here and got the NodeOutput itself
+        back — which fails at the unpack, several frames from the cause.
+        """
+        return self.args
+
 
 class _DynamicCombo(_IOType):
     """A combo whose chosen option carries its own inputs.

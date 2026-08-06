@@ -69,7 +69,10 @@ def test_limit_says_it_truncated(nodes_mod):
                       category="Food - 3 stages", limit=2)
     assert count == 2
     assert "the first 2 of 3" in text
-    assert "C" not in text.split("\n")[0]
+    # The dropped asset is absent from the ENTRIES. Looking for "C" in the
+    # header instead can never pass — the header starts "CLIENT EXAMPLES".
+    entries = [block.split("\n")[0] for block in text.split("\n\n")[1:]]
+    assert entries == ["1. A", "2. B"]
 
 
 def test_all_types_labels_each_asset_with_its_type(nodes_mod):

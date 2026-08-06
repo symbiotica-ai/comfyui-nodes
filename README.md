@@ -221,10 +221,21 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   the asset and category being worked on and candidates are tagged with it; the
   node then opens on that asset rather than on everything ever generated. Drop
   one after each stage — generate → pick → edit → pick → background removal.
+  `names` narrows the listing to exactly those filenames — wire Asset Refs'
+  `ref_names` to tick only the references the client sent for this asset — and
+  resting on a thumbnail floats it big beside the grid, so a render can be
+  judged without opening it in a tab.
 - **Symbiotica Asset Refs** — the client's own reference art for one asset, in
   the order the order sheet pairs it, so the index that picks a cell picks the
   reference belonging to it. References with transparency are composited onto a
   chosen background rather than flattened, and their alpha comes out as `masks`.
+  It also emits `folder`, the references root they were read from, which a Pick
+  node takes as its `save_path` to tick the client's references by eye.
+- **Symbiotica Client Examples** — every client brief of one type in a feature,
+  numbered, as ONE string, so an LLM downstream runs once and sees the whole
+  set rather than a brief at a time. `limit` truncates and the header says so,
+  because a text showing three of eight examples that does not admit it reads
+  as the whole population.
 - **Symbiotica Reconstruct Cells** — the inverse of Slice Cells: edited cells go
   back onto the grid they were cut from, on the same `cell_boxes`, so a sheet
   survives a per-asset edit intact. The canvas is measured from the boxes, which
@@ -241,7 +252,13 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
 - **Symbiotica Prompt Book** — reads and writes those prompt blocks from the
   canvas; every render records which blocks composed its prompt, per block
   rather than one hash of the whole, so a lighting change is distinguishable
-  from a negatives change.
+  from a negatives change. A block file may hold up to three versions, split by
+  `<!-- version: name -->` markers; the top of the file stays the default.
+- **Symbiotica Prompt Recipe** — composes the architect (`system_prompt`) and
+  image (`image_prompt`) prompts in one node, with a version slot (1–3) per
+  rules / image / type block, so two phrasings of the same block can be
+  compared without editing the file between runs. A slot with no such version
+  falls back to the top of its file.
 
 The web extension adds an events browser on Order Read and populates the
 feature/group dropdowns after the first queue. On a fully cached run the
