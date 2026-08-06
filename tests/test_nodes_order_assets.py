@@ -86,7 +86,7 @@ def test_dataset_reference_declares_whole_list_input(nodes_mod):
     # slot index, so a new slot anywhere but the end re-points every saved
     # workflow.
     assert [o.display_name for o in schema.outputs] == [
-        "images", "reference_names", "cell_boxes", "dataset_path"]
+        "images", "names", "cell_boxes", "save_path"]
 
 
 def test_dataset_reference_gives_one_image_per_asset(nodes_mod, tmp_path):

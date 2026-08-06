@@ -152,8 +152,8 @@ def test_output_size_offers_the_sizes_worth_sending(nodes_mod):
 
 def test_outputs_are_lists_so_the_lane_fans_out(nodes_mod):
     schema = nodes_mod.SymbioticaAssetRefs.define_schema()
-    assert [o.display_name for o in schema.outputs] == ["images", "ref_names",
-                                                        "masks", "folder"]
+    assert [o.display_name for o in schema.outputs] == ["images", "names",
+                                                        "masks", "save_path"]
     assert all(o.is_output_list for o in schema.outputs[:3])
     # Widgets are APPENDED — ComfyUI restores widgets_values positionally, so a
     # new one in the middle loads a saved pick onto the wrong widget.

@@ -486,7 +486,7 @@ class SymbioticaRefsFolder(io.ComfyNode):
                 io.Image.Output(display_name="images", is_output_list=True,
                                 tooltip="One image per file, in filename "
                                         "order"),
-                io.String.Output(display_name="filenames",
+                io.String.Output(display_name="names",
                                  is_output_list=True,
                                  tooltip="Filename of image i — index-aligned "
                                          "with images"),
@@ -1416,17 +1416,19 @@ class SymbioticaPromptBook(io.ComfyNode):
                 Order.Input("order", optional=True),
             ],
             outputs=[
-                io.String.Output(display_name="project",
+                io.String.Output(display_name="project_path",
                                  tooltip="The project whose book this panel is "
-                                         "editing — wire into Category Prompts "
-                                         "so both read the same one."),
-                io.String.Output(display_name="image_system_prompt",
+                                         "editing — wire into any node's "
+                                         "project_path so both read the same "
+                                         "one."),
+                io.String.Output(display_name="image_prompt",
                                  tooltip="The blocks in <project>/prompts/"
                                          "_image/, joined in filename order — "
                                          "the style, light and camera rules the "
-                                         "IMAGE model needs. Wire into the "
-                                         "image node's system prompt. Empty "
-                                         "until the book has an image block."),
+                                         "IMAGE model needs. Prefer Prompt "
+                                         "Recipe's image_prompt, which is the "
+                                         "same text with version picks; this "
+                                         "output stays for older graphs."),
             ],
         )
 
@@ -1477,7 +1479,7 @@ class SymbioticaPromptBook(io.ComfyNode):
 def _prompt_node_project(project_path):
     """The project a prompt-book canvas node reads: its own value — typed or
     delivered on the wire — nothing else. These nodes sit downstream of the
-    Prompt Book's `project` output, which is already resolved, so there is no
+    Prompt Book's `project_path` output, which is already resolved, so there is no
     order to walk the way Category Prompts must."""
     cand = str(project_path or "").strip()
     return cand if cand and os.path.isdir(cand) else ""
@@ -1496,7 +1498,7 @@ class SymbioticaPromptBlock(io.ComfyNode):
                         "laid out like the string-literal graphs they replace, "
                         "except a save here lands in "
                         "<project>/prompts/ where every queue reads it. Wire "
-                        "the Prompt Book's `project` output in, and chain "
+                        "the Prompt Book's `project_path` output in, and chain "
                         "block to block through `project` so one wire feeds "
                         "the row.",
             inputs=[
@@ -1519,7 +1521,7 @@ class SymbioticaPromptBlock(io.ComfyNode):
                                         "Multi, in wire order."),
             ],
             outputs=[
-                io.String.Output(display_name="project",
+                io.String.Output(display_name="project_path",
                                  tooltip="Passthrough of the project, so "
                                          "blocks chain on one wire instead of "
                                          "fanning every node back to the "
@@ -1561,7 +1563,7 @@ class SymbioticaPromptBlock(io.ComfyNode):
         if not project:
             raise ValueError(
                 "no project folder to read the prompt book from — wire the "
-                "Prompt Book's `project` output, or set project_path")
+                "Prompt Book's `project_path` output, or set project_path")
         name = str(block or "").strip()
         if not name:
             raise ValueError("no block picked — choose one in the panel")
@@ -1650,7 +1652,7 @@ class SymbioticaPromptCompose(io.ComfyNode):
         if not project:
             raise ValueError(
                 "no project folder to read the prompt book from — wire the "
-                "Prompt Book's `project` output, or set project_path")
+                "Prompt Book's `project_path` output, or set project_path")
         cat = str(category or "").strip()
         if not cat:
             raise ValueError("no asset type to compose — pick one in the "
@@ -1697,7 +1699,7 @@ class SymbioticaDatasetReference(io.ComfyNode):
                                 tooltip="The reference for asset i — index-"
                                         "aligned with Order Assets. Wire into "
                                         "the LLM/Gemini image input."),
-                io.String.Output(display_name="reference_names",
+                io.String.Output(display_name="names",
                                  is_output_list=True,
                                  tooltip="Filename of the reference drawn for "
                                          "asset i, so a good draw can be "
@@ -1714,7 +1716,7 @@ class SymbioticaDatasetReference(io.ComfyNode):
                                          "the reference was drawn from, so it "
                                          "describes the grid the render was "
                                          "asked to reproduce."),
-                io.String.Output(display_name="dataset_path",
+                io.String.Output(display_name="save_path",
                                  is_output_list=True,
                                  tooltip="The type folder asset i's reference "
                                          "was drawn from. Wire it into a Pick "
@@ -2147,9 +2149,11 @@ class SymbioticaAssetRefs(io.ComfyNode):
                                 tooltip="One image per reference the client "
                                         "sent for this asset, in the order the "
                                         "order sheet pairs them."),
-                io.String.Output(display_name="ref_names", is_output_list=True,
+                io.String.Output(display_name="names", is_output_list=True,
                                  tooltip="Filename of each reference, so a "
-                                         "wrong pick is traceable to its file."),
+                                         "wrong pick is traceable to its file. "
+                                         "Wire into a Pick node's `names` to "
+                                         "list only this asset's files."),
                 # Appended: links address an output by slot index.
                 io.Mask.Output(display_name="masks", is_output_list=True,
                                tooltip="Each reference's alpha, opaque where "
@@ -2157,11 +2161,11 @@ class SymbioticaAssetRefs(io.ComfyNode):
                                        "transparency is kept, so a reference "
                                        "can always be composited onto "
                                        "something else downstream."),
-                io.String.Output(display_name="folder",
+                io.String.Output(display_name="save_path",
                                  tooltip="The folder these references were "
                                          "read from — the order's own "
                                          "references root. Wire it into a "
-                                         "Pick node's `folder` to tick the "
+                                         "Pick node's `save_path` to tick the "
                                          "client's references by eye instead "
                                          "of taking every one of them."),
             ],
@@ -3878,7 +3882,7 @@ class SymbioticaPick(io.ComfyNode):
                                         "stage and the two cannot disagree."),
                 io.String.Input("names", default="", optional=True,
                                 tooltip="Filenames to list, and nothing else "
-                                        "— wire Asset Refs' ref_names to see "
+                                        "— wire Asset Refs' names to see "
                                         "only the references the client sent "
                                         "for THIS asset. Empty lists the "
                                         "whole folder."),
@@ -4214,7 +4218,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         if not project:
             raise ValueError(
                 "no project folder to read the prompt book from — wire the "
-                "Prompt Book's `project` output")
+                "Prompt Book's `project_path` output")
         cat = str(category or "").strip()
         # Widgets map to blocks by position: rules in filename order carry the
         # numeric prefixes, so slot order IS composition order.
