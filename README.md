@@ -141,7 +141,12 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
 
 - **Symbiotica Order Read** — parses a monthly order `.xlsx` (Feature / Asset
   Name / Canvas / Prompt columns) plus a folder of reference images
-  (`AssetName.png`, `AssetName_2.png`, ...) into events.
+  (`AssetName.png`, `AssetName_2.png`, ...) into events. A blank `month` means
+  "whichever this project has" and reads the first one; a NAMED month the
+  project holds no order for raises, rather than reading the first one under
+  the name that was asked for. The same split applies to `feature` on Order
+  Specs and the Template Editor — over the API a substituted answer renders,
+  bills, and reports success indistinguishably from the one requested.
 - **Symbiotica Event Specs** — picks one event (feature) and emits its spec:
   template groups by category + canvas with per-asset prompts and refs.
 - **Symbiotica Template Builder** — composes a template sheet: either

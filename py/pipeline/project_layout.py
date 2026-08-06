@@ -152,3 +152,43 @@ def resolve_month(project_path: str, month: str) -> dict:
         "assets_root": ad,
         "month": picked["month"] or picked["label"],
     }
+
+
+class MonthNotFound(ValueError):
+    """A named month that this project has no order for."""
+
+
+def _answers_to(resolved: dict, wanted: str) -> bool:
+    """Whether a resolution is the one `wanted` asked for.
+
+    The aliases `resolve_month` itself matches on are the filename, the month
+    and the label — and the label collapses onto the other two: with a month in
+    the filename it is that month capitalized, without one it IS the resolved
+    `month`. Admitting fewer than resolve_month accepts would refuse a correct
+    resolution."""
+    return wanted in {
+        os.path.basename(resolved.get("order_path") or "").lower(),
+        (resolved.get("month") or "").lower(),
+    }
+
+
+def require_month(project_path: str, month: str) -> dict:
+    """`resolve_month`, minus its substitution: a NAMED month this project has
+    no order for is refused instead of answered with the project's first one.
+
+    The substitution is hospitable on a canvas, where the month came from a
+    live listing and a wrong guess is one click from being seen. Headless it is
+    the worst case: the wrong sheet renders, bills, and reports success, and
+    the images it yields are indistinguishable from correct ones.
+
+    A BLANK month is not a substitution — it means "whichever this project
+    has", and the first order is the answer. Neither is an orderless project:
+    nothing was substituted because there was nothing to substitute, and the
+    caller's own "no order file" message is the useful one."""
+    resolved = resolve_month(project_path, month)
+    wanted = (month or "").strip().lower()
+    if wanted and resolved["order_path"] and not _answers_to(resolved, wanted):
+        have = ", ".join(o["label"] for o in list_order_months(project_path))
+        raise MonthNotFound(
+            f'"{month}" is not an order this project holds (it has: {have})')
+    return resolved
