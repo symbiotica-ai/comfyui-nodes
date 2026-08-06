@@ -530,3 +530,27 @@ def test_no_sketch_still_yields_an_image_the_next_node_can_read(node_module,
     thought = output.args[2]
     assert thought is not None
     assert len(tuple(thought.shape)) == 4
+
+
+def test_which_inputs_a_stored_payload_must_carry_is_pinned(node_module):
+    """Adding a REQUIRED input drops every workflow saved before it existed.
+
+    ComfyUI validates a prompt against the CURRENT schema and answers an absent
+    required input with "Required input is missing"; the declared default never
+    applies. So a required input is not a default with a nudge, it is a demand
+    on every payload already stored elsewhere — including the pinned order
+    templates the platform dispatches, which are authored once and replayed.
+
+    Found live on 2026.8.10 on the picker, when `get_new` shipped without
+    `optional=True` and dropped all three pickers out of the pinned flow4
+    template. This list is the same rule applied here: it may shrink freely,
+    and it may only GROW with a deliberate edit that accepts breaking stored
+    payloads. A new input belongs outside it.
+    """
+    _, inputs = by_id(node_module)
+    required = sorted(k for k, i in inputs.items()
+                      if not getattr(i, "optional", False))
+    assert required == [
+        "model", "model.aspect_ratio", "model.images", "model.resolution",
+        "model.thinking_level", "prompt", "response_modalities", "seed",
+    ]
