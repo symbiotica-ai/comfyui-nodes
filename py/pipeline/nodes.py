@@ -1714,6 +1714,21 @@ class SymbioticaDatasetReference(io.ComfyNode):
                                          "the reference was drawn from, so it "
                                          "describes the grid the render was "
                                          "asked to reproduce."),
+                io.String.Output(display_name="dataset_path",
+                                 is_output_list=True,
+                                 tooltip="The type folder asset i's reference "
+                                         "was drawn from. Wire it into a Pick "
+                                         "node's `save_path` to see every "
+                                         "reference of that type in a grid and "
+                                         "tick the ones you want, instead of "
+                                         "taking the seeded draw — leave the "
+                                         "picker's `stage` empty, since these "
+                                         "are source art with no steps under "
+                                         "them. A picker reads the first "
+                                         "folder handed to it, so focus one "
+                                         "asset (Asset Focus's `category`) "
+                                         "when the order carries several "
+                                         "types."),
             ],
         )
 
@@ -1790,7 +1805,19 @@ class SymbioticaDatasetReference(io.ComfyNode):
             if key not in per_type:
                 per_type[key] = json.dumps(boxes_for_category(project, key))
             boxes.append(per_type[key])
-        return io.NodeOutput(images, names, boxes)
+        # The folder each reference came OUT of, so a Pick node can list it and
+        # the reference can be chosen by eye rather than by seed. Taken from
+        # the chosen file rather than re-joined from project/folder/category:
+        # one derivation, and it cannot drift from the draw.
+        folders = [os.path.dirname(p) for p in paths]
+        # Servable so the picker's grid can fetch thumbnails from a project
+        # that lives outside the studio volume — servable ONLY. A dataset
+        # folder in the refs set would enter Asset Refs' change-check, and a
+        # new reference file would then re-run the LLM and the image model
+        # under it.
+        for folder_path in dict.fromkeys(folders):
+            _register_served_root(folder_path)
+        return io.NodeOutput(images, names, boxes, folders)
 
 
 class SymbioticaReconstructCells(io.ComfyNode):
@@ -3849,6 +3876,12 @@ class SymbioticaPick(io.ComfyNode):
                                         "first. Wire the `save_path` output "
                                         "into the Save Image that fills this "
                                         "stage and the two cannot disagree."),
+                io.String.Input("names", default="", optional=True,
+                                tooltip="Filenames to list, and nothing else "
+                                        "— wire Asset Refs' ref_names to see "
+                                        "only the references the client sent "
+                                        "for THIS asset. Empty lists the "
+                                        "whole folder."),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
@@ -3871,7 +3904,7 @@ class SymbioticaPick(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, images=None, save_path="", selection="",
-                           view="", mode="multiple", stage=""):
+                           view="", mode="multiple", stage="", names=""):
         """Change only when what LEAVES the node could have.
 
         The first version returned NaN — always changed — so the panel would
@@ -3912,7 +3945,7 @@ class SymbioticaPick(io.ComfyNode):
 
     @classmethod
     def check_lazy_status(cls, images=None, save_path="", selection="",
-                          view="", mode="multiple", stage=""):
+                          view="", mode="multiple", stage="", names=""):
         """Ask for the wire when there is one — for its ORDER, not its value.
 
         The images are read off disk, and `execute` ignores whatever arrives
@@ -3991,7 +4024,7 @@ class SymbioticaPick(io.ComfyNode):
 
     @classmethod
     def execute(cls, images=None, save_path="", selection="", view="",
-                mode="multiple", stage="") -> io.NodeOutput:
+                mode="multiple", stage="", names="") -> io.NodeOutput:
         from PIL import Image
 
         from .pick_folder import listing_for, picked_paths, remember, resolved
@@ -4030,6 +4063,13 @@ class SymbioticaPick(io.ComfyNode):
                 # not something this node may offer.
                 only = [name for name in only if name in set(source_only)]
 
+        # A name filter narrows the folder to one asset's files. Order
+        # references live FLAT in the order's folder, so a path cannot say
+        # which asset a file belongs to — only its name can.
+        wanted = [str(n).strip() for n in _as_list(names) if str(n).strip()]
+        if wanted:
+            only = wanted if only is None else [n for n in only
+                                                if n in set(wanted)]
         entries = listing_for(target, only=only)
         # The panel lists the same thing this run resolved; it cannot work it
         # out for itself, because asset and category arrive on wires and a
@@ -4082,6 +4122,119 @@ class SymbioticaPick(io.ComfyNode):
         return io.NodeOutput(picked, listed)
 
 
+class SymbioticaPromptRecipe(io.ComfyNode):
+    # The book's fixed shape, one native widget per slot: the four shared
+    # rules in filename order, the image block, and the ACTIVE type's block.
+    # Native Int widgets on purpose — no panel, no route, no custom JS.
+    _SLOTS = ("game", "inputs", "your_job", "overwrite", "image_model",
+              "asset_type")
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        def slot(name, what):
+            return io.Combo.Input(name, options=[1, 2, 3], default=1,
+                                  tooltip=f"Which version of {what} to "
+                                          "compose: 1 is the top of the "
+                                          "file; a block with fewer versions "
+                                          "falls back to its top.")
+        return io.Schema(
+            node_id="SymbioticaPromptRecipe",
+            display_name="Symbiotica Prompt Recipe",
+            category="symbiotica/pipeline",
+            description="Composes the architect and image prompts, picking "
+                        "one version per block. Versions live inside each "
+                        "block file, split by `<!-- version: name -->` lines: "
+                        "top of the file is 1, the next marker 2, then 3. "
+                        "All widgets at 1 = the book exactly as it stands.",
+            inputs=[
+                io.String.Input("project_path", default="",
+                                tooltip="Client project folder holding the "
+                                        "prompt book. Wire the Prompt Book's "
+                                        "`project` output."),
+                io.String.Input("category", default="",
+                                tooltip="The asset type to compose — wire "
+                                        "Asset Focus's `category` output. "
+                                        "`asset_type` picks the version of "
+                                        "THIS type's block."),
+                slot("game", "the 1st rules block (01-game)"),
+                slot("inputs", "the 2nd rules block (02-inputs)"),
+                slot("your_job", "the 3rd rules block (03-your-job)"),
+                slot("overwrite", "the 4th rules block (04-overwrite)"),
+                slot("image_model", "the image-model block (_image)"),
+                slot("asset_type", "the wired category's own block"),
+            ],
+            outputs=[
+                io.String.Output(display_name="system_prompt",
+                                 tooltip="The composed architect prompt for "
+                                         "this type at the picked versions."),
+                io.String.Output(display_name="image_prompt",
+                                 tooltip="The image model's system prompt at "
+                                         "the picked versions."),
+            ],
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", category="", game=1,
+                           inputs=1, your_job=1, overwrite=1,
+                           image_model=1, asset_type=1):
+        # Same contract as Prompt Compose: widgets plus the book's file
+        # mtimes, never raise.
+        picks = (game, inputs, your_job, overwrite, image_model, asset_type)
+        h = hashlib.sha256(
+            f"recipe:{str(category or '').strip()}:{picks}".encode())
+        candidates = [str(project_path or "").strip()]
+        if not candidates[0]:
+            candidates = _executed_projects()
+        for project in candidates:
+            if not project:
+                continue
+            h.update(project.encode())
+            try:
+                for where, dirs, files in os.walk(prompts_dir(project)):
+                    dirs.sort()
+                    for name in sorted(files):
+                        if not name.endswith(".md"):
+                            continue
+                        p = os.path.join(where, name)
+                        st = os.stat(p)
+                        rel = os.path.relpath(p, prompts_dir(project))
+                        h.update(
+                            f"{rel}:{st.st_mtime_ns}:{st.st_size}".encode())
+            except OSError:
+                pass
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, project_path="", category="", game=1, inputs=1,
+                your_job=1, overwrite=1, image_model=1,
+                asset_type=1) -> io.NodeOutput:
+        from .prompt_book import (IMAGE_DIR, RULES_DIR, compose_recipe,
+                                  list_versions)
+        project = _prompt_node_project(project_path)
+        if not project:
+            raise ValueError(
+                "no project folder to read the prompt book from — wire the "
+                "Prompt Book's `project` output")
+        cat = str(category or "").strip()
+        # Widgets map to blocks by position: rules in filename order carry the
+        # numeric prefixes, so slot order IS composition order.
+        versions = {b["name"]: b["versions"] for b in list_versions(project)}
+        rules = sorted(n for n in versions if n.startswith(f"{RULES_DIR}/"))
+        images = sorted(n for n in versions if n.startswith(f"{IMAGE_DIR}/"))
+        wanted = {}
+        for name, pick in (list(zip(rules, (game, inputs, your_job,
+                                            overwrite)))
+                           + [(n, image_model) for n in images]
+                           + ([(f"{cat}.md", asset_type)] if cat else [])):
+            names = versions.get(name, [])
+            pick = int(pick or 1)
+            if pick > 1 and pick <= len(names):
+                wanted[name] = names[pick - 1]
+        composed = compose_recipe(project, cat, wanted)
+        return io.NodeOutput(composed["system_prompt"],
+                             composed["image_prompt"])
+
+
 PIPELINE_NODE_CLASSES = [
     SymbioticaPick,
     SymbioticaAssetFocus,
@@ -4098,6 +4251,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaPromptBook,
     SymbioticaPromptBlock,
     SymbioticaPromptCompose,
+    SymbioticaPromptRecipe,
     SymbioticaSaveRender,
     SymbioticaDatasetReference,
     SymbioticaSliceCells,
