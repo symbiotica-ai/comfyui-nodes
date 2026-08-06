@@ -6,6 +6,80 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.15
+
+**Node changes, and one of them can stop a saved graph that used to run.**
+
+- **Symbiotica Order Read, Order Specs and Template Editor now refuse a month or
+  an event this project no longer holds.** They used to answer with the
+  project's first order, or the order's first event. A saved workflow naming a
+  month or feature that has since been renamed or dropped will now raise, naming
+  what the project does hold, where before it rendered something else and
+  reported success. Blank still means "whichever this project leads with" — that
+  is not a stale value and nothing about it changed.
+- **Symbiotica Pick** gains a `shortlist` input and an `edit_save_path` output.
+- **Symbiotica Asset Refs** gains a `dataset_path` output.
+- Two new nodes: **Symbiotica Client Examples** and **Symbiotica Prompt Recipe**.
+
+Every added input and output is appended and optional, so saved graphs keep
+their widget values and their links.
+
+### Features
+
+- **An edit can say which render it came from.** `edit_save_path` is `save_path`
+  marked with the render that was picked; set a later picker's `shortlist` to
+  `edits` and it lists only the edits of that approval. An edit is a file the
+  approving picker never saw — the save node names it long after the tick was
+  made — so its own name is the only place that link can live. A file written
+  without the mark simply has no parent, so nothing already on disk needs
+  renaming.
+- **Save Render declares what it wrote as the run's output images.** Only what a
+  node declares reaches `/history`, which is the one path an API caller has to
+  the images — so a headless run used to finish green with no renders to show,
+  and an edit of one had no parent it could name.
+- **Symbiotica Client Examples** — several client briefs as one string.
+- **Symbiotica Prompt Recipe** — composes the architect and image prompts,
+  picking one version per block.
+- **Asset Refs emits the folder its references came from**, so a picker can list
+  that dataset type directly.
+- The picker can throw a bad generation out of its grid, rows its grid by role
+  read from the filename, and floats a tile big beside the grid so a render can
+  be judged without opening it in a tab.
+
+### Fixes
+
+- **A blank edit prefix could destroy renders.** Save Image treats a blank
+  `filename_prefix` as a real one: ComfyUI resolves it to a hidden
+  `._00001_.png` at the output root that no listing shows and every later save
+  overwrites. The prefix is never blank where a folder is known.
+- **A graph saved before the picker's one-wire layout could stop queueing.** Old
+  widget values are applied positionally before the migration runs, so an
+  appended combo received a stray path and ComfyUI refused the whole queue over
+  it. Appended widgets now go back to their own defaults.
+- **A folder at the listing cap answered a narrowed request with an empty grid**
+  while the files sat on disk — the cap ran before the narrowing. True of the
+  approved-set shortlist for as long as it has existed; fixed for both.
+- **The template editor's panel and the queue disagreed about which event was
+  selected**, so the run could refuse a feature the panel never showed.
+- The pack pins which inputs a stored payload must carry for the Gemini and
+  Claude nodes, so a required input can no longer be added without noticing that
+  it drops every workflow saved before it existed.
+- Node panels stop pinning their own minimum height, and the picker stops
+  resizing itself.
+
+### Docs
+
+- The README covers the edit lineage wiring, the month and feature refusals, and
+  why a node panel stops being resizable.
+
+### Notes on this release
+
+- It ships everything merged since `v2026.8.12`: PRs #58, #59, #60, #62 and #63.
+  `2026.8.13` and `2026.8.14` were bumped but never tagged or published.
+- PRs #62 and #63 were reviewed by a multi-lens adversarial pass that found and
+  fixed five defects. #58, #59 and #60 carry no recorded second review; their
+  schema surface was checked for this release and only appends an output.
+
 ## 2026.8.12
 
 **Node change, and a saved graph using Symbiotica Pick must be rewired.** The
