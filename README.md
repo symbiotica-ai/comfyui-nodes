@@ -196,7 +196,10 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   fan-out runs a single render lane once per asset instead of eight duplicated
   groups.
 - **Symbiotica Save Render** — files each result under
-  month/feature/category/asset.
+  month/feature/category/asset, and declares what it wrote as the run's output
+  images. An API caller reads a run's renders from `/history`, and only what a
+  node declares gets there — a save that declares nothing finishes green with
+  nothing to show for it.
 - **Symbiotica Dataset Reference** — picks a reference per category, seeded per
   `(seed, category)` so adding a type does not reshuffle a pick already
   approved. Also reports `cell_boxes`: where each asset sits inside its type's
