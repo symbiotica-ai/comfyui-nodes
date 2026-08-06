@@ -22,6 +22,10 @@ const THREE = shot("Spookies_00003_.png", 3);
 function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) {
     return (route, _n, init) => {
         seen.push({ route, init });
+        if (route.startsWith("/symbiotica/pick-discard")) {
+            return { ok: true, body: { ok: true,
+                discarded: JSON.parse(init?.body ?? "{}").names ?? [] } };
+        }
         if (route.startsWith("/symbiotica/pick-list")) {
             return { ok: true, body: { ok: true, folder, images, shortlist } };
         }
@@ -317,4 +321,89 @@ test("a finished queue re-lists even a picker that did not run", async () => {
     emit("execution_success", {});
     for (let i = 0; i < 5; i++) await tick();
     assert.ok(count() > before);
+});
+
+test("a folder of unrelated names draws one grid, not one row each", async () => {
+    // A dataset reference folder is 57 differently-named files. Rowing by role
+    // gave each its own row, labelled with its own name — a list pretending to
+    // be a grid. Names that merely start alike do not make an asset.
+    const node = await panelNode([], [
+        shot("Art Student.png", 1),
+        shot("Baking Class.png", 2),
+        shot("Baking With Mom Statue.png", 3),
+    ]);
+    const text = textOf(node);
+    for (const label of ["Art Student", "Baking Class", "base"]) {
+        assert.ok(!text.includes(label), `row label leaked: ${label}`);
+    }
+});
+
+test("roles still row when one of them is the bare asset name", async () => {
+    // `<asset>_00001_.png` beside `<asset>_prep_00001_.png`: the stem IS one of
+    // the keys, and that pair is still one asset's roles.
+    const node = await panelNode([], [
+        shot("Spookies_00001_.png", 1),
+        shot("Spookies_prep_00001_.png", 2),
+    ]);
+    const text = textOf(node);
+    assert.ok(text.includes("base · 1"), text);
+    assert.ok(text.includes("prep · 1"), text);
+});
+
+test("discard takes two clicks and posts the ticked names", async () => {
+    const seen = [];
+    const node = await panelNode(seen, [ONE, TWO]);
+    fire(cells(node)[0], "click");
+    fire(buttonsSaying(node, "discard")[0], "click");
+    await tick();
+    // Armed, not fired: nothing has touched the disk yet.
+    assert.equal(seen.filter((c) => c.route.includes("pick-discard")).length, 0);
+    fire(buttonsSaying(node, "discard 1?")[0], "click");
+    for (let i = 0; i < 10; i++) await tick();
+    const call = seen.find((c) => c.route.includes("pick-discard"));
+    assert.ok(call, "no discard call");
+    assert.deepEqual(JSON.parse(call.init.body).names, [ONE.name]);
+    // A discarded file must not stay ticked — it would read as missing.
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value), []);
+});
+
+test("discard is offered only once something ticked is on screen", async () => {
+    const node = await panelNode([], [ONE, TWO]);
+    assert.equal(buttonsSaying(node, "discard").length, 0);
+});
+
+test("the panel declares its height the way the frontend actually asks", async () => {
+    // ComfyUI 1.4x lays a DOM widget out through `computeLayoutSize`, which
+    // reads ONLY these options. The legacy `computeSize` is ignored there, so
+    // a panel that sets nothing else reports a 50px minimum and no maximum:
+    // the element keeps its content size and draws outside the node, which is
+    // fifty tiles spilling across his canvas.
+    const node = await panelNode([], [ONE, TWO]);
+    const panel = node.widgets.find((w) => w.name === "pick_panel");
+    assert.equal(typeof panel.options.getMinHeight, "function");
+});
+
+test("the panel never pins the node's minimum height", async () => {
+    // LiteGraph builds a node's MINIMUM height by summing its widgets, and per
+    // widget it prefers `computeSize` over `computeLayoutSize`:
+    //     if (w.computeSize) t += w.computeSize(width)[1]
+    //     else if (w.computeLayoutSize) t += computeLayoutSize(node).minHeight
+    // So a DOM panel that answers computeSize with its content — or with the
+    // space below itself — makes the minimum equal what is on screen, and the
+    // corner drags taller but never shorter. It must declare a small constant
+    // floor and no computeSize at all.
+    const node = await panelNode([], [ONE, TWO, THREE]);
+    const panel = node.widgets.find((w) => w.name === "pick_panel");
+    const list = panel.element.children[0];
+    list.scrollHeight = 5000;              // a folder of fifty images
+
+    assert.equal(panel.computeSize, undefined,
+                 "computeSize overrides the layout and pins the minimum");
+    const floor = panel.options.getMinHeight();
+    assert.ok(floor <= 60, `floor ${floor} is not a small constant`);
+    // …and it stays the floor whatever the node or the listing does.
+    node.size[1] = 900;
+    assert.equal(panel.options.getMinHeight(), floor);
+    node.size[1] = 200;
+    assert.equal(panel.options.getMinHeight(), floor);
 });

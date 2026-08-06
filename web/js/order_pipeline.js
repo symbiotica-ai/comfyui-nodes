@@ -473,22 +473,22 @@ function assetsPanel(node) {
     // box-sizing/width:100%/overflow-x:hidden keep the panel inside the node
     // width; the flex children get min-width:0 so long names ellipsis.
     const container = document.createElement("div");
-    container.style.cssText = "box-sizing:border-box;width:100%;"
+    container.style.cssText = "box-sizing:border-box;width:100%;height:100%;"
         + "overflow-y:auto;overflow-x:hidden;font-size:11px;";
     const list = document.createElement("div");
     list.style.cssText = "padding:2px 2px 4px;";
     container.appendChild(list);
     stopWheel(container);
-    const panelW = node.addDOMWidget("assets_panel", "sym_assets", container,
-                                     { serialize: false, hideOnZoom: true });
-    // Height fits the CONTENT (the selected event's asset rows) so the node
-    // auto-grows to fit the assets and shrinks for a smaller category, capped so
-    // a huge event scrolls instead of running off the canvas.
-    const PANEL_MAX = 760;
-    panelW.computeSize = function (width) {
-        const h = list.scrollHeight;
-        return [width, Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX)];
-    };
+    // LiteGraph sums its widgets for the node's MINIMUM height and prefers
+    // `computeSize` over `computeLayoutSize`. A computeSize answering with the
+    // content therefore pins the minimum to whatever is listed, and the corner
+    // will not drag shorter than the rows. A constant floor and no
+    // computeSize: the layout hands this widget the rest of the node's body,
+    // the element fills it, and the rows scroll inside.
+    node.addDOMWidget("assets_panel", "sym_assets", container, {
+        serialize: false, hideOnZoom: true,
+        getMinHeight: () => 44,
+    });
     // ComfyUI sizes the DOM wrapper from the node width on its own layout pass,
     // and that pass follows a WIDENING immediately but lags a SHRINK — it only
     // catches up when something else re-lays-out the node. Narrow a packer whose
@@ -503,10 +503,9 @@ function assetsPanel(node) {
         const want = Math.max(0, node.size[0] - PANEL_INSET);
         if (parseFloat(wrap.style.width) !== want) wrap.style.width = `${want}px`;
     };
-    // Re-fit the node to the new content after each render (scrollHeight is only
-    // valid once the rows are in the DOM).
+    // Redraw and re-pin the width after each render. NOT the height: the node
+    // is his to size, and re-listing must never move the corner he dragged.
     const refit = () => requestAnimationFrame(() => {
-        node.setSize?.([node.size[0], node.computeSize()[1]]);
         syncPanelWidth();
         node.setDirtyCanvas?.(true, true);
     });

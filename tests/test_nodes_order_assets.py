@@ -82,28 +82,50 @@ def test_dataset_reference_declares_whole_list_input(nodes_mod):
     # the draw per TYPE — every asset would get its own random reference.
     schema = nodes_mod.SymbioticaDatasetReference.define_schema()
     assert schema.is_input_list is True
-    # cell_boxes is APPENDED — links address an output by slot index, so a new
-    # slot anywhere but the end re-points every saved workflow.
+    # cell_boxes and dataset_path are APPENDED — links address an output by
+    # slot index, so a new slot anywhere but the end re-points every saved
+    # workflow.
     assert [o.display_name for o in schema.outputs] == [
-        "images", "reference_names", "cell_boxes"]
+        "images", "reference_names", "cell_boxes", "dataset_path"]
 
 
 def test_dataset_reference_gives_one_image_per_asset(nodes_mod, tmp_path):
     proj = _project(tmp_path, **{"Decoration": 4, "Food - 3 stages": 4})
     cats = ["Decoration"] * 3 + ["Food - 3 stages"] * 3
-    images, names, boxes = nodes_mod.SymbioticaDatasetReference.execute(
-        categories=cats, seed=[7], project_path=[str(proj)]).args
+    images, names, boxes, _folders = \
+        nodes_mod.SymbioticaDatasetReference.execute(
+            categories=cats, seed=[7], project_path=[str(proj)]).args
     assert len(images) == 6 and len(names) == 6 and len(boxes) == 6
     assert len(set(names[:3])) == 1, "one reference shared by all decorations"
     assert len(set(names[3:])) == 1, "one reference shared by all food"
     assert names[0] != names[3]
 
 
+def test_dataset_reference_hands_out_the_folder_it_drew_from(nodes_mod,
+                                                             tmp_path):
+    # The seeded draw is one image out of a folder of them; a Pick node wired
+    # to this output lists that same folder, so the reference can be chosen by
+    # eye instead of by seed. Per asset, index-aligned like everything else, so
+    # a lane focused on one asset takes the folder for its own type.
+    proj = _project(tmp_path, **{"Decoration": 4, "Food - 3 stages": 4})
+    cats = ["Decoration", "Food - 3 stages", "Decoration"]
+    images, names, _boxes, folders = \
+        nodes_mod.SymbioticaDatasetReference.execute(
+            categories=cats, seed=[7], project_path=[str(proj)]).args
+    assert len(folders) == len(images) == len(names) == 3
+    assert folders == [str(proj / "dataset" / c) for c in cats]
+    # The folder the picker lists must be the one the draw came out of, not a
+    # second derivation of it that could drift.
+    for folder, name in zip(folders, names):
+        assert os.path.isfile(os.path.join(folder, name))
+
+
 def test_dataset_reference_reads_the_project_from_the_order(nodes_mod, tmp_path):
     proj = _project(tmp_path, **{"Decoration": 2})
-    _images, names, _boxes = nodes_mod.SymbioticaDatasetReference.execute(
-        categories=["Decoration"], seed=[1], project_path=[""],
-        order=[{"project_path": str(proj)}]).args
+    _images, names, _boxes, _folders = \
+        nodes_mod.SymbioticaDatasetReference.execute(
+            categories=["Decoration"], seed=[1], project_path=[""],
+            order=[{"project_path": str(proj)}]).args
     assert names[0].startswith("Decoration-")
 
 

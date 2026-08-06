@@ -9,7 +9,6 @@ import { el, emptyState } from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaAssetFocus";
 const MIN_NODE_W = 300;
-const PANEL_MAX = 460;
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
 
@@ -124,7 +123,7 @@ function categoriesOf(node) {
 function focusPanel(node) {
     injectHubStyles();
 
-    const container = el("div", "box-sizing:border-box;width:100%;"
+    const container = el("div", "box-sizing:border-box;width:100%;height:100%;"
         + "overflow-y:auto;overflow-x:hidden;");
     // Every level gets an explicit width and border-box sizing. A flex row
     // whose content is wider than the node otherwise resolves its width
@@ -135,14 +134,21 @@ function focusPanel(node) {
     container.appendChild(list);
     container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
 
-    const panelW = node.addDOMWidget("focus_panel", "sym_focus", container,
-                                     { serialize: false, hideOnZoom: true });
-    panelW.computeSize = function (width) {
-        const h = list.scrollHeight;
-        return [width, Math.min(Math.max(h ? h + 8 : 34, 34), PANEL_MAX)];
-    };
+    // LiteGraph sums widgets for the node's MINIMUM height and prefers
+    // `computeSize` over `computeLayoutSize` — so a computeSize that answers
+    // with the content, or with the space below itself, pins the minimum to
+    // whatever is on screen and the corner will not drag shorter. A constant
+    // floor and no computeSize: the layout hands this widget the rest of the
+    // node's body, the element fills it, and the list scrolls inside.
+    node.addDOMWidget("focus_panel", "sym_focus", container, {
+        serialize: false, hideOnZoom: true,
+        getMinHeight: () => 34,
+    });
+    // Redraw, never resize: with the panel's height now decided by the layout,
+    // re-listing must not push the node back to any height of its own — his
+    // drag is the only thing that sets it.
     const refit = () => requestAnimationFrame(() => {
-        node.setSize?.([Math.max(node.size[0], MIN_NODE_W), node.computeSize()[1]]);
+        if (node.size[0] < MIN_NODE_W) node.setSize?.([MIN_NODE_W, node.size[1]]);
         node.setDirtyCanvas?.(true, true);
     });
     node.size[0] = Math.max(node.size[0], MIN_NODE_W);

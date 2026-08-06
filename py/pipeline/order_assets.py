@@ -94,6 +94,40 @@ def dataset_dir(project_path, folder="dataset"):
     return os.path.join(project_path, folder)
 
 
+def _folder_key(name):
+    """A type name reduced to what a folder and an order can agree on.
+
+    Case and a trailing plural are the two ways the same type gets written
+    twice: the order sheet says "Appliance" and the dataset folder is called
+    "Appliances", which failed the whole run for a spelling.
+    """
+    return " ".join(str(name or "").strip().lower().split()).rstrip("s")
+
+
+def category_dir(root, category):
+    """The dataset folder for one asset type, or "" when none names it.
+
+    Exact first — a folder called exactly what the order says is always the
+    answer. Only when nothing matches exactly does it fall back to the loose
+    key, and an ambiguous fallback (both "Chair" and "Chairs" on disk) is
+    treated as no match: guessing between two real folders would silently
+    reference the wrong art, and the caller's error names the path it wanted.
+    """
+    exact = os.path.join(root, str(category or "").strip())
+    if os.path.isdir(exact):
+        return exact
+    key = _folder_key(category)
+    if not key:
+        return ""
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return ""
+    hits = [n for n in names
+            if _folder_key(n) == key and os.path.isdir(os.path.join(root, n))]
+    return os.path.join(root, hits[0]) if len(hits) == 1 else ""
+
+
 class MissingDatasetsError(Exception):
     """Asset types with no usable reference folder. `missing` is
     [(category, path)], sorted, so one failure names every offender instead of
@@ -140,7 +174,7 @@ def pick_reference_per_category(project_path, categories, seed,
     root = dataset_dir(project_path, folder)
     chosen, missing = {}, []
     for cat in dict.fromkeys(c.strip() for c in categories):
-        d = os.path.join(root, cat)
+        d = category_dir(root, cat) or os.path.join(root, cat)
         imgs = list_dataset_images(d)
         if not imgs:
             missing.append((cat, d))

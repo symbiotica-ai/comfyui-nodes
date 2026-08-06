@@ -247,6 +247,90 @@ node.addDOMWidget(name, type, element, options);
 - `hideOnZoom` — hide when zoomed out
 - `selectOn` — event array for selection (e.g., `["focus", "click"]`)
 - `beforeResize()` / `afterResize()` — resize hooks
+- **`getMinHeight()` / `getMaxHeight()` / `getHeight()` — how the widget is
+  SIZED.** Read `getHeight()` as a number, a `"320px"` string, or a `"50%"`
+  string (percent of the node's height).
+
+## Sizing a DOM widget, and keeping the node RESIZABLE
+
+Verified by reading ComfyUI's shipped bundles (frontend 1.45.20). Get this
+wrong and the node cannot be dragged smaller — the single most expensive bug
+in this pack's history, three failed attempts before the cause was found.
+
+### The rule
+
+**Never define `computeSize` on a DOM-widget panel.** Declare a small constant
+floor with `getMinHeight` and let the layout hand the widget the rest of the
+node's body:
+
+```javascript
+const container = document.createElement("div");
+// Fill the box the layout gives you. Do NOT size to content.
+container.style.cssText = "box-sizing:border-box;width:100%;height:100%;"
+    + "overflow-y:auto;overflow-x:hidden;";
+
+node.addDOMWidget("my_panel", "my_panel_type", container, {
+    serialize: false,
+    hideOnZoom: true,
+    getMinHeight: () => 44,   // a CONSTANT. Never derived from node.size.
+});
+
+// Re-render may redraw. It must never call setSize on the height.
+const refit = () => requestAnimationFrame(() => node.setDirtyCanvas(true, true));
+```
+
+### Why — the two functions, and which one wins
+
+`LGraphNode.computeSize()` builds the node's **minimum** height by summing its
+widgets, and per widget it prefers `computeSize`:
+
+```javascript
+if (w.computeSize)            t += w.computeSize(width)[1];
+else if (w.computeLayoutSize) t += w.computeLayoutSize(node).minHeight;
+else                          t += NODE_WIDGET_HEIGHT;
+```
+
+So **`computeSize` overrides everything below it**, and whatever it returns
+becomes a floor the user cannot drag past:
+
+| `computeSize` returns | What the user experiences |
+|---|---|
+| content height (`list.scrollHeight`) | node cannot be shorter than its content; the only way to shrink it is to widen it until the content needs fewer rows |
+| `node.size[1] - last_y - 12` ("fill below me") | minimum == current height: the corner grows the node and **never** shrinks it |
+| *(not defined)* | minimum comes from `getMinHeight` — the node drags freely both ways |
+
+`DOMWidgetImpl.computeLayoutSize(node)` is the modern path, and it reads only:
+
+```javascript
+minHeight = options.getMinHeight?.() ?? parseInt(css --comfy-widget-min-height)
+maxHeight = options.getMaxHeight?.() ?? parseInt(css --comfy-widget-max-height)
+height    = options.getHeight?.()    ?? css --comfy-widget-height
+// `height` is used ONLY when minHeight is NaN; "50%" means 50% of node.size[1]
+return { minHeight: isNaN(minHeight) ? 50 : minHeight, maxHeight, minWidth: 0 }
+```
+
+Two consequences worth knowing: `getHeight` is **ignored whenever
+`getMinHeight` is supplied**, and a widget supplying none of them reports a
+50px minimum with no maximum, so nothing bounds the element — it keeps its
+content size and paints outside the node, over the canvas.
+
+### Checklist for a resizable node
+
+1. No `computeSize` on the DOM widget. (`w.computeSize = () => [0, -4]` on a
+   *classic* widget is a different thing and is fine — that collapses a hidden
+   widget.)
+2. `getMinHeight` returns a constant. Nothing that reads `node.size`,
+   `scrollHeight`, or `last_y`.
+3. The element fills its box: `height:100%` plus `overflow:auto`.
+4. Nothing in a render/refresh path calls `node.setSize` with a height.
+5. Set a starting height once, only when the node has none — a saved workflow
+   must reopen at the size it was saved at.
+
+**Debugging note.** When a layout bug survives a fix, read the CONSUMER — the
+code that computes node size — not the API you are calling. The precedence
+line above is the whole bug and it was found in minutes by grepping
+`site-packages/comfyui_frontend_package/static/assets/*.js` for
+`computeLayoutSize`.
 
 ### ComponentWidgetImpl
 

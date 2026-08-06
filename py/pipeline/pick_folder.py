@@ -138,6 +138,49 @@ def listing_for(target: str, limit: int = LISTING_LIMIT, only=None) -> list[dict
     return unique
 
 
+# Where a rejected render goes. A subfolder of what the node lists, because
+# both layouts read one level only — so anything in here is out of every
+# listing without being out of the tree.
+DISCARD_DIR = "discarded"
+
+
+def discard(target: str, names) -> list[str]:
+    """Move `names` out of the listing for `target`. Returns the new paths.
+
+    Never deletes. Several of these renders cost real money and cannot be made
+    again, and the node exists to choose between them — so the worst a wrong
+    click may do is file a picture one folder deeper, where dragging it back
+    undoes it.
+
+    A name is only ever taken from the folders `target` itself reads, matched
+    against the listing rather than joined onto a path: that is what stops
+    `../` and what stops a request naming a file the node never showed.
+    """
+    listed = {entry["name"]: entry["path"] for entry in listing_for(target)}
+    home = os.path.join(target, DISCARD_DIR)
+    moved = []
+    for name in names or ():
+        source = listed.get(str(name))
+        if not source or not os.path.isfile(source):
+            continue
+        os.makedirs(home, exist_ok=True)
+        stem, ext = os.path.splitext(os.path.basename(source))
+        destination = os.path.join(home, stem + ext)
+        # The save counter restarts whenever a node is pointed at a fresh
+        # folder, so the same name arriving twice is ordinary — and the second
+        # one must not overwrite the first discard.
+        attempt = 1
+        while os.path.exists(destination):
+            attempt += 1
+            destination = os.path.join(home, f"{stem}-{attempt}{ext}")
+        try:
+            shutil.move(source, destination)
+        except OSError:
+            continue
+        moved.append(destination)
+    return moved
+
+
 def picked_paths(entries, selection) -> list[str]:
     """The ticked files, in the order the grid shows them.
 

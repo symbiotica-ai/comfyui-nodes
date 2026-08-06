@@ -9,7 +9,8 @@ import { el, emptyState, errorLine } from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaPick";
 const MIN_NODE_W = 340;
-const PANEL_MAX = 720;      // past this the grid scrolls instead of growing the node
+const PANEL_MIN = 44;        // an empty picker still shows its own message
+const DEFAULT_NODE_H = 460;  // only for a node that has never been given a height
 const SIZES = { S: 64, M: 108, L: 184 };
 const DEFAULT_SIZE = "S";
 
@@ -62,7 +63,10 @@ function thumbSize(node) {
 function pickPanel(node) {
     injectHubStyles();
 
-    const container = el("div", "box-sizing:border-box;width:100%;"
+    // height:100% — the layout gives the widget a box, this fills it, and the
+    // grid scrolls inside. Sizing to content instead is what used to drive the
+    // node's height.
+    const container = el("div", "box-sizing:border-box;width:100%;height:100%;"
         + "overflow-y:auto;overflow-x:hidden;");
     // ComfyUI sizes the container from computeSize, so its scrollHeight only
     // echoes its own box. Measure this inner list — its natural height IS the
@@ -71,17 +75,42 @@ function pickPanel(node) {
     container.appendChild(list);
     container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
 
-    const panelW = node.addDOMWidget("pick_panel", "sym_pick", container,
-                                     { serialize: false, hideOnZoom: true });
-    panelW.computeSize = function (width) {
-        const h = list.scrollHeight;
-        return [width, Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX)];
-    };
+    // THE NODE'S HEIGHT IS HIS, AND IT MUST BE DRAGGABLE BOTH WAYS.
+    //
+    // LiteGraph derives a node's MINIMUM height by summing its widgets, and
+    // for each widget it prefers `computeSize` over `computeLayoutSize`:
+    //
+    //     if (w.computeSize) t += w.computeSize(width)[1]
+    //     else if (w.computeLayoutSize) t += w.computeLayoutSize(node).minHeight
+    //
+    // So a `computeSize` that answers with the space currently below the panel
+    // makes the minimum equal the current height, and the node can be dragged
+    // taller but never shorter. That is what "i am pulling on the corner and
+    // it cannot be made smaller" was, here and in the prompt editor.
+    //
+    // The panel therefore declares a small CONSTANT floor and no computeSize
+    // at all: the layout hands it whatever is left of the node's body, the
+    // element fills that box, and the grid scrolls inside it.
+    node.addDOMWidget("pick_panel", "sym_pick", container, {
+        serialize: false,
+        hideOnZoom: true,
+        getMinHeight: () => PANEL_MIN,
+    });
+    // Redraw, never resize. The only thing this may change is a node so narrow
+    // that a tile cannot fit, and a node that has never been given a height.
     const refit = () => requestAnimationFrame(() => {
-        node.setSize?.([Math.max(node.size[0], MIN_NODE_W), node.computeSize()[1]]);
+        if (node.size[0] < MIN_NODE_W) {
+            node.setSize?.([MIN_NODE_W, node.size[1]]);
+        }
         node.setDirtyCanvas?.(true, true);
     });
     node.size[0] = Math.max(node.size[0], MIN_NODE_W);
+    // A starting height for a node that has never had one. Never a floor: a
+    // graph reopening keeps whatever height it was saved at, and dragging goes
+    // all the way down to the widgets plus PANEL_MIN.
+    if (!node.size[1] || node.size[1] < PANEL_MIN) {
+        node.size[1] = DEFAULT_NODE_H;
+    }
 
     let images = [];
     let folder = "";
@@ -222,10 +251,58 @@ function pickPanel(node) {
         reload.addEventListener("click", () => load());
         bar.appendChild(reload);
 
+        if (here) {
+            // Never delete: the tiles ARE the renders, several of them paid
+            // for and unrepeatable, so the worst this button may do is file
+            // them one folder deeper. Two clicks, because it is the only
+            // control here that touches the disk at all.
+            const armed = node._symDiscardArmed;
+            const bin = el("button", ghostButtonCss + "padding:1px 8px;flex:none;"
+                + (armed ? `border-color:${HUB.accent};color:${HUB.ink};` : ""),
+                           armed ? `discard ${here}?` : "discard");
+            bin.className = "sym-btn";
+            bin.title = `Move the ${here} ticked file(s) into \`discarded/\` `
+                + "under this folder. They leave the grid, not the disk — drag "
+                + "them back to undo.";
+            bin.addEventListener("pointerdown", (e) => e.stopPropagation());
+            bin.addEventListener("click", async () => {
+                if (!node._symDiscardArmed) {
+                    node._symDiscardArmed = true;
+                    render();
+                    setTimeout(() => {
+                        if (node._symDiscardArmed) {
+                            node._symDiscardArmed = false;
+                            render();
+                        }
+                    }, 4000);
+                    return;
+                }
+                node._symDiscardArmed = false;
+                const gone = images.filter((i) => ticks.has(i.id))
+                                   .map((i) => i.id);
+                try {
+                    const res = await fetchJson("/symbiotica/pick-discard", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ node_id: String(node.id),
+                                               names: gone }),
+                    });
+                    // A discarded file must not stay ticked: the tick would
+                    // read as "missing" forever and never travel anywhere.
+                    const dropped = new Set(gone);
+                    writeTicks(node, new Set([...readTicks(node)]
+                        .filter((t) => !dropped.has(t))));
+                    notice = `${(res.discarded || []).length} moved to `
+                        + "discarded/";
+                } catch (e) {
+                    error = e.message || "could not discard those";
+                }
+                await load();
+            });
+            bar.appendChild(bin);
+        }
+
         if (ticks.size) {
-            // Untick, never delete. The tiles are the renders themselves, so a
-            // node that could delete them would be a node that can destroy the
-            // work it exists to choose between.
             const clear = el("button", ghostButtonCss + "padding:1px 8px;flex:none;",
                              "untick all");
             clear.className = "sym-btn";
@@ -304,9 +381,22 @@ function pickPanel(node) {
                 shared = shared.slice(0, -1);
             }
         }
+        // Rows are for the ROLES OF ONE ASSET — `<asset>_<role>_00001_.png`.
+        // A folder of unrelated names has no asset in common, so every file
+        // became its own row: a dataset folder of 57 references drew as 57
+        // one-tile rows labelled with their own filenames, which is a list
+        // pretending to be a grid. Row only when every key is the shared stem
+        // or a `_`-suffixed extension of it; otherwise the names merely start
+        // alike ("Baking Class", "Baking With Mom Statue") and the grid is the
+        // honest layout.
+        const stem = shared.replace(/_+$/, "");
+        const rowed = stem && keys.every(
+            (key) => key === stem || key.startsWith(`${stem}_`));
+        if (!rowed) return renderRow(ticks, images);
+
         const wrap = el("div", "width:100%;box-sizing:border-box;");
         for (const [key, rowImages] of groups) {
-            const label = key.slice(shared.length).replace(/^_/, "") || "base";
+            const label = key.slice(stem.length).replace(/^_/, "") || "base";
             const here = rowImages.filter((i) => ticks.has(i.id)).length;
             wrap.appendChild(el("div",
                 `padding:5px 3px 2px;font:10px ${HUB.font};`

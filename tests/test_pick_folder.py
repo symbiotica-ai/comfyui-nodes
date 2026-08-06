@@ -209,3 +209,73 @@ class TestWhichLayoutANameMeans:
 
     def test_nothing_to_read_is_no_folders(self):
         assert read_folders("") == []
+
+
+def test_discarding_moves_files_under_the_listing_and_out_of_it(tmp_path):
+    """A bad render leaves the grid without leaving the disk.
+
+    Deleting is the one thing a picker must not do — it exists to choose
+    between renders, several of which cost real money and cannot be made
+    again. Moving them into `discarded/` under what the node lists takes them
+    out of every listing (both layouts read one level only) and leaves the
+    files where a human can drag them back."""
+    from pipeline.pick_folder import discard, listing_for
+
+    folder = tmp_path / "Skull Rose Cupcake"
+    folder.mkdir()
+    for i in (1, 2, 3):
+        Image.new("RGB", (8, 8)).save(folder / f"render_0000{i}_.png")
+
+    moved = discard(str(folder), ["render_00002_.png", "render_00003_.png"])
+
+    assert sorted(os.path.basename(p) for p in moved) == [
+        "render_00002_.png", "render_00003_.png"]
+    assert [e["name"] for e in listing_for(str(folder))] == ["render_00001_.png"]
+    kept = sorted(os.listdir(folder / "discarded"))
+    assert kept == ["render_00002_.png", "render_00003_.png"]
+
+
+def test_discarding_never_leaves_the_folder_it_lists(tmp_path):
+    from pipeline.pick_folder import discard
+
+    folder = tmp_path / "asset"
+    folder.mkdir()
+    Image.new("RGB", (8, 8)).save(folder / "keep.png")
+    Image.new("RGB", (8, 8)).save(tmp_path / "outside.png")
+
+    assert discard(str(folder), ["../outside.png", "nope.png"]) == []
+    assert (tmp_path / "outside.png").is_file()
+
+
+def test_a_second_discard_of_the_same_name_does_not_overwrite(tmp_path):
+    # The counter restarts whenever a save node is pointed at a fresh folder,
+    # so the same file name reaching `discarded/` twice is ordinary.
+    from pipeline.pick_folder import discard
+
+    folder = tmp_path / "asset"
+    folder.mkdir()
+    Image.new("RGB", (8, 8)).save(folder / "shot.png")
+    discard(str(folder), ["shot.png"])
+    Image.new("RGB", (8, 8), (9, 9, 9)).save(folder / "shot.png")
+    discard(str(folder), ["shot.png"])
+
+    assert sorted(os.listdir(folder / "discarded")) == ["shot-2.png", "shot.png"]
+
+
+def test_discarding_a_prefixed_render_files_it_under_the_asset(tmp_path):
+    # `…/Food - 3 stages/Spookies` names `Spookies_*` files one level up; the
+    # discards belong under the asset's own folder, the way a stage does.
+    from pipeline.pick_folder import discard, listing_for
+
+    category = tmp_path / "Food - 3 stages"
+    category.mkdir()
+    Image.new("RGB", (8, 8)).save(category / "Spookies_00001_.png")
+    Image.new("RGB", (8, 8)).save(category / "Spookies_00002_.png")
+    target = str(category / "Spookies")
+
+    moved = discard(target, ["Spookies_00002_.png"])
+
+    assert [os.path.basename(p) for p in moved] == ["Spookies_00002_.png"]
+    assert [e["name"] for e in listing_for(target)] == ["Spookies_00001_.png"]
+    assert os.path.isfile(category / "Spookies" / "discarded"
+                          / "Spookies_00002_.png")

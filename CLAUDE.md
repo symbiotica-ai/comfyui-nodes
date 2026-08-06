@@ -21,6 +21,29 @@ One skill load per area per session is enough. Repo-specific patterns
 `py/pipeline/nodes.py`) take precedence over skill examples when they
 conflict — the repo has already solved ComfyUI's traps its own way.
 
+## Node panels must stay resizable — read this before touching `web/js`
+
+A DOM-widget panel (`node.addDOMWidget`) **must not define `computeSize`**.
+LiteGraph builds a node's MINIMUM height by summing its widgets and prefers
+`computeSize` over `computeLayoutSize`, so anything `computeSize` returns
+becomes a floor the user cannot drag past — answer it with the content and the
+node will not shrink below its content; answer it with "the space below me"
+and the node can never shrink at all. Both shipped here, and both cost days.
+
+The shape that works, in every panel in this pack (`pick.js`, `prompt_book.js`,
+`asset_focus.js`, `order_pipeline.js`):
+
+- no `computeSize` on the DOM widget
+- `getMinHeight: () => <small constant>` — never reads `node.size`,
+  `scrollHeight` or `last_y`
+- the element fills its box: `height:100%` + `overflow:auto`, content scrolls
+- no render/refresh path calls `node.setSize` with a height; a starting height
+  is set once, only for a node that has none
+
+Full mechanism, the layout functions and a checklist:
+`.claude/skills/comfyui-node-frontend/api-reference.md` → "Sizing a DOM widget,
+and keeping the node RESIZABLE".
+
 ## Repo ground rules
 
 - Tests: run `pytest` from the repo root (tests stub `comfy_api`; see
