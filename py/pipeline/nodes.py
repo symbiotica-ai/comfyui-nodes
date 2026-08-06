@@ -1216,11 +1216,18 @@ class SymbioticaAssetFocus(io.ComfyNode):
                 io.String.Output(display_name="save_path", is_output_list=True,
                                  tooltip="month/feature/category/asset — the "
                                          "same value Order Assets emits, so a "
-                                         "save node and a Pick node's folder "
-                                         "both take it."),
-                io.Int.Output(display_name="index", is_output_list=True,
-                              tooltip="Where each asset sits in the run, for "
-                                      "anything that still wants a position."),
+                                         "save node and a Pick node's "
+                                         "save_path both take it."),
+                # Replaces `index` (tail slot, wired nowhere): the order
+                # itself, narrowed to each focused asset. One wire feeds
+                # Dataset Reference, Asset Refs and Prompt Recipe everything
+                # the string fan-out used to carry.
+                Order.Output(display_name="order", is_output_list=True,
+                             tooltip="The incoming order narrowed to each "
+                                     "focused asset — same event, same "
+                                     "project, a one-asset assets list. One "
+                                     "of these per focused asset, so "
+                                     "downstream still runs once per asset."),
             ],
             hidden=[io.Hidden.unique_id],
             # An output node so it can be queued on its own. Without that there
@@ -1277,11 +1284,19 @@ class SymbioticaAssetFocus(io.ComfyNode):
         # says: a button that reads "all" and emits one asset is lying about
         # what the node is going to do.
         picked = [item for _, item in chosen]
+        # A narrowed order per asset: the whole record on ONE wire, in the
+        # shape every order consumer already reads. The RAW asset record goes
+        # in — assets_by_category strips refFiles, and Asset Refs downstream
+        # reads references off exactly that key.
+        raw = {str(a.get("assetName", "") or "").strip(): a
+               for a in order.get("assets", []) or []}
+        narrowed = [{**order,
+                     "assets": [raw.get(i["assetName"], i)]} for i in picked]
         return io.NodeOutput([i["assetName"] for i in picked],
                              [i["category"] for i in picked],
                              [i["prompt"] for i in picked],
                              save_paths(order, picked),
-                             [index for index, _ in chosen])
+                             narrowed)
 
 
 class SymbioticaSaveRender(io.ComfyNode):
@@ -1677,9 +1692,13 @@ class SymbioticaDatasetReference(io.ComfyNode):
             # decided from one asset's category in isolation.
             is_input_list=True,
             inputs=[
-                io.String.Input("categories", force_input=True,
-                                tooltip="Asset type per asset — the Order "
-                                        "Assets node's `categories` output."),
+                io.String.Input("categories", force_input=True, optional=True,
+                                tooltip="Asset type per asset — Order Assets' "
+                                        "`categories` or Asset Focus's "
+                                        "`category`. Leave unwired when the "
+                                        "order comes from Asset Focus: the "
+                                        "focused order carries each asset's "
+                                        "type already."),
                 io.Int.Input("seed", default=0, min=0, max=0xFFFFFFFFFFFFFFF,
                              control_after_generate=True,
                              tooltip="Which reference each type draws. Same "
@@ -1780,10 +1799,20 @@ class SymbioticaDatasetReference(io.ComfyNode):
     def execute(cls, categories=None, seed=0, subfolder="dataset",
                 project_path="", order=None) -> io.NodeOutput:
         one = SymbioticaCategoryPrompts._one
-        cats = list(categories or [])
+        cats = [c for c in (categories or []) if str(c or "").strip()]
         if not cats:
-            raise ValueError("no assets to reference — wire the Order Assets "
-                             "node's `categories` output into this node")
+            # No categories wire: read each wired order's own assets. Index
+            # alignment holds — Asset Focus emits one narrowed order per
+            # asset, in the same order as its string outputs.
+            orders = order if isinstance(order, list) else [order]
+            for o in orders:
+                if isinstance(o, dict):
+                    cats.extend(str(a.get("category", "") or "").strip()
+                                for a in o.get("assets", []) or [])
+            cats = [c for c in cats if c]
+        if not cats:
+            raise ValueError("no assets to reference — wire Asset Focus's "
+                             "`order` output, or Order Assets' `categories`")
         project = SymbioticaCategoryPrompts._project(project_path, order)
         if not project:
             raise ValueError(
@@ -2118,9 +2147,13 @@ class SymbioticaAssetRefs(io.ComfyNode):
                         "the reference that belongs to it.",
             inputs=[
                 Order.Input("order"),
-                io.String.Input("asset_name", force_input=True,
-                                tooltip="The Order Assets node's "
-                                        "`asset_names` output."),
+                io.String.Input("asset_name", force_input=True, optional=True,
+                                tooltip="Which asset, by name — Order Assets' "
+                                        "asset_names or Asset Focus's "
+                                        "asset_name. Leave unwired when the "
+                                        "order comes from Asset Focus: a "
+                                        "focused order names one asset "
+                                        "already."),
                 io.String.Input("background", default=DEFAULT_BACKGROUND,
                                 tooltip="What a reference with transparency "
                                         "sits on. Grey by default, matching "
@@ -2219,7 +2252,21 @@ class SymbioticaAssetRefs(io.ComfyNode):
         from .sheet_cells import boxes_for_category
         if not isinstance(order, dict) or "assets" not in order:
             raise ValueError("wire an Order Specs into 'order'")
-        paths, names = reference_files(order, asset_name)
+        wanted = str(asset_name or "").strip()
+        if not wanted:
+            # A focused order names its asset; a whole event does not, and
+            # guessing one would pair the wrong art in silence.
+            named = [str(a.get("assetName", "") or "").strip()
+                     for a in order.get("assets", []) or []]
+            named = [n for n in named if n]
+            if len(named) == 1:
+                wanted = named[0]
+            else:
+                raise ValueError(
+                    "asset_name is unwired and this order holds "
+                    f"{len(named)} assets — wire Asset Focus's `order` "
+                    "output (one asset), or wire asset_name")
+        paths, names = reference_files(order, wanted)
 
         from PIL import Image
         size = 0 if str(output_size) == "native" else int(output_size)
@@ -2258,11 +2305,11 @@ class SymbioticaAssetRefs(io.ComfyNode):
         # once the images are on the wire.
         asset = next((a for a in order["assets"]
                       if str(a.get("assetName", "")).strip()
-                      == str(asset_name).strip()), {})
+                      == wanted), {})
         cells = boxes_for_category(
             str(order.get("project_path", "") or "").strip(),
             str(asset.get("category", "") or "").strip())
-        note = pairing_note(order, asset_name, names, cells)
+        note = pairing_note(order, wanted, names, cells)
         # The folder, not the files: a Pick node lists a directory and lets him
         # tick what he wants out of it, so handing it the paths would be the
         # wrong shape and handing it one file's dirname would break the moment
@@ -4155,19 +4202,26 @@ class SymbioticaPromptRecipe(io.ComfyNode):
             inputs=[
                 io.String.Input("project_path", default="",
                                 tooltip="Client project folder holding the "
-                                        "prompt book. Wire the Prompt Book's "
-                                        "`project` output."),
+                                        "prompt book. Unneeded when `order` "
+                                        "is wired; otherwise wire the Prompt "
+                                        "Book's `project_path` output."),
                 io.String.Input("category", default="",
-                                tooltip="The asset type to compose — wire "
-                                        "Asset Focus's `category` output. "
-                                        "`asset_type` picks the version of "
-                                        "THIS type's block."),
+                                tooltip="The asset type to compose. Unneeded "
+                                        "when `order` is wired to a focused "
+                                        "order. `asset_type` picks the "
+                                        "version of THIS type's block."),
                 slot("game", "the 1st rules block (01-game)"),
                 slot("inputs", "the 2nd rules block (02-inputs)"),
                 slot("your_job", "the 3rd rules block (03-your-job)"),
                 slot("overwrite", "the 4th rules block (04-overwrite)"),
                 slot("image_model", "the image-model block (_image)"),
                 slot("asset_type", "the wired category's own block"),
+                # Appended: widgets restore positionally in saved graphs.
+                Order.Input("order", optional=True,
+                            tooltip="Asset Focus's `order` output. A focused "
+                                    "order carries the project AND the "
+                                    "asset's type, so project_path and "
+                                    "category can stay unwired."),
             ],
             outputs=[
                 io.String.Output(display_name="system_prompt",
@@ -4182,7 +4236,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
     @classmethod
     def fingerprint_inputs(cls, project_path="", category="", game=1,
                            inputs=1, your_job=1, overwrite=1,
-                           image_model=1, asset_type=1):
+                           image_model=1, asset_type=1, order=None):
         # Same contract as Prompt Compose: widgets plus the book's file
         # mtimes, never raise.
         picks = (game, inputs, your_job, overwrite, image_model, asset_type)
@@ -4213,15 +4267,34 @@ class SymbioticaPromptRecipe(io.ComfyNode):
     @classmethod
     def execute(cls, project_path="", category="", game=1, inputs=1,
                 your_job=1, overwrite=1, image_model=1,
-                asset_type=1) -> io.NodeOutput:
+                asset_type=1, order=None) -> io.NodeOutput:
         from .prompt_book import (IMAGE_DIR, RULES_DIR, compose_recipe,
                                   list_versions)
         project = _prompt_node_project(project_path)
+        if not project and isinstance(order, dict):
+            cand = str(order.get("project_path", "") or "").strip()
+            if cand and os.path.isdir(cand):
+                project = cand
         if not project:
             raise ValueError(
-                "no project folder to read the prompt book from — wire the "
-                "Prompt Book's `project_path` output")
+                "no project folder to read the prompt book from — wire "
+                "Asset Focus's `order` output, or the Prompt Book's "
+                "`project_path` output")
         cat = str(category or "").strip()
+        if not cat and isinstance(order, dict):
+            # A focused order names each asset's type; several distinct types
+            # cannot compose ONE prompt, so that stays an error rather than a
+            # silent first-pick.
+            types = sorted({str(a.get("category", "") or "").strip()
+                            for a in order.get("assets", []) or []
+                            if str(a.get("category", "") or "").strip()})
+            if len(types) == 1:
+                cat = types[0]
+            elif len(types) > 1:
+                raise ValueError(
+                    "category is unwired and this order holds several types "
+                    f"({', '.join(types)}) — wire Asset Focus's `order` "
+                    "with one asset focused, or wire category")
         # Widgets map to blocks by position: rules in filename order carry the
         # numeric prefixes, so slot order IS composition order.
         versions = {b["name"]: b["versions"] for b in list_versions(project)}

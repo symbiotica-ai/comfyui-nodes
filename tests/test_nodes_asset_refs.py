@@ -104,6 +104,25 @@ def test_returns_one_image_per_reference_in_order(nodes_mod, tmp_path):
                                                      (32, 32)]
 
 
+def test_unwired_asset_name_reads_a_focused_orders_one_asset(nodes_mod,
+                                                             tmp_path):
+    """Asset Focus's `order` output names one asset, so the asset_name wire
+    becomes redundant on that lane: one wire instead of two."""
+    out = nodes_mod.SymbioticaAssetRefs.execute(order=make_order(tmp_path))
+    _images, names, _masks, _folder = out.args
+    assert names == ["Spookies.png", "Spookies_1.png", "Spookies_2.png"]
+
+
+def test_unwired_asset_name_refuses_a_whole_event(nodes_mod, tmp_path):
+    """Guessing one asset out of several would pair the wrong art in
+    silence; the error names the wire that fixes it."""
+    order = make_order(tmp_path)
+    order["assets"].append({"assetName": "Other",
+                            "category": "Decoration", "refFiles": []})
+    with pytest.raises(ValueError, match="Asset Focus"):
+        nodes_mod.SymbioticaAssetRefs.execute(order=order)
+
+
 def test_canvas_note_warns_when_refs_do_not_match_the_cells(nodes_mod,
                                                             tmp_path):
     # Two references against a three-cell type: an index picks unrelated things

@@ -129,6 +129,33 @@ def test_dataset_reference_reads_the_project_from_the_order(nodes_mod, tmp_path)
     assert names[0].startswith("Decoration-")
 
 
+def test_dataset_reference_reads_categories_from_focused_orders(nodes_mod,
+                                                                tmp_path):
+    """Asset Focus's `order` output carries each asset's type, so the
+    categories wire becomes redundant: one wire instead of two, and the
+    index alignment is the narrowed orders' own order."""
+    proj = _project(tmp_path, **{"Decoration": 3, "Food - 3 stages": 3})
+    orders = [
+        {"project_path": str(proj),
+         "assets": [{"assetName": "A", "category": "Decoration"}]},
+        {"project_path": str(proj),
+         "assets": [{"assetName": "B", "category": "Food - 3 stages"}]},
+    ]
+    images, names, _boxes, folders = \
+        nodes_mod.SymbioticaDatasetReference.execute(
+            categories=None, seed=[5], project_path=[""], order=orders).args
+    assert len(images) == len(names) == 2
+    assert folders == [str(proj / "dataset" / "Decoration"),
+                       str(proj / "dataset" / "Food - 3 stages")]
+
+
+def test_dataset_reference_without_categories_or_order_names_both_wires(
+        nodes_mod):
+    with pytest.raises(ValueError, match="Asset Focus"):
+        nodes_mod.SymbioticaDatasetReference.execute(
+            categories=None, seed=[1], project_path=[""], order=None)
+
+
 def test_dataset_reference_names_a_missing_type_folder(nodes_mod, tmp_path):
     proj = _project(tmp_path, **{"Decoration": 2})
     with pytest.raises(Exception, match="Signage"):
