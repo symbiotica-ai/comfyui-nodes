@@ -196,19 +196,20 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   `(seed, category)` so adding a type does not reshuffle a pick already
   approved. Also reports `cell_boxes`: where each asset sits inside its type's
   packed sheet, so a render of that sheet can be cut back up on the grid it was
-  packed to — and `dataset_path`, the type folder the reference was drawn from.
+  packed to — and `save_path`, the type folder the reference was drawn from.
   Wire that into a Pick node's `save_path` to see every reference of that type
-  in a grid and choose by eye instead of by seed.
+  in a grid and choose by eye instead of by seed. Wire Asset Focus's `order`
+  output in and the `categories` wire is unneeded.
 - **Symbiotica Slice Cells** — cuts a generated sheet into one image per asset
   on those boxes, each named by its role, so an edit addresses "serving" rather
   than "the third one" and a run that switches asset type re-cuts itself with
   no rewiring.
 - **Symbiotica Asset Focus** — one asset out of the order, chosen on the
   node, with its whole record on separate outputs: name, category, client
-  prompt, save path and index. Order Assets emits four index-aligned lists and
-  Dataset Reference three more, so working on a single asset meant an index
-  node per list, all held at the same position by hand. The index is applied
-  once, here, and nothing downstream has a list left to index. Order Assets is
+  prompt, save path — and `order`, the incoming order narrowed to each focused
+  asset. That one wire feeds Dataset Reference, Asset Refs and Prompt Recipe
+  everything the string outputs carry, so the strings are left for core nodes
+  (a save's filename_prefix, string joins). Order Assets is
   still the node for rendering a whole event in one press; this is the one for
   iterating on one asset.
 - **Symbiotica Pick** — the triage step between two stages: every image wired

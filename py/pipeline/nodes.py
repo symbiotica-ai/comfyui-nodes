@@ -1602,7 +1602,8 @@ class SymbioticaPromptCompose(io.ComfyNode):
     def define_schema(cls) -> io.Schema:
         return io.Schema(
             node_id="SymbioticaPromptCompose",
-            display_name="Symbiotica Prompt Compose",
+            display_name="Symbiotica Prompt Compose (deprecated — use "
+                         "Prompt Recipe)",
             category="symbiotica/pipeline",
             description="One asset type's ARCHITECT prompt, composed exactly "
                         "as the queue composes it: shared _rules/ blocks "
