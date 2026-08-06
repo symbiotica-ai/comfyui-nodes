@@ -656,23 +656,73 @@ function recipePanel(node) {
     let book = { rules: [], image: [], types: [] };
     const dirty = () => editor.value !== loaded.text;
 
-    // The type whose block fills the asset_type slot: the node's own widget,
-    // else the category the wired Asset Focus is set to, else the first type
-    // in the book. The wire can still override at queue time — this mirrors
-    // it for the preview rather than pretending to know better.
+    // The category widget of whatever upstream node feeds one of our inputs —
+    // Asset Focus, in every graph that has one.
+    const upstreamCategory = (input) => {
+        const link = node.inputs?.find((i) => i.name === input)?.link;
+        if (link == null) return null;
+        const origin = app.graph.getNodeById(app.graph.links[link]?.origin_id);
+        return (origin && widgetOf(origin, "category")) || null;
+    };
+
+    // The type whose block fills the asset_type slot, in execute()'s own
+    // precedence: a wired category beats the node's widget, which beats the
+    // type the wired order is focused on. Reading it the same way the queue
+    // does is what keeps the preview from claiming a type the run will not use.
     const activeCategory = () => {
+        const wired = upstreamCategory("category")?.value?.trim();
+        if (wired) return wired;
         const own = widgetOf(node, "category")?.value?.trim();
         if (own) return own;
-        const link = node.inputs?.find((i) => i.name === "order")?.link;
-        if (link != null) {
-            const origin = app.graph.getNodeById(
-                app.graph.links[link]?.origin_id);
-            const focused = origin
-                && widgetOf(origin, "category")?.value?.trim();
-            if (focused) return focused;
-        }
-        return book.types?.[0]?.title || "";
+        return upstreamCategory("order")?.value?.trim()
+            || book.types?.[0]?.title || "";
     };
+
+    // Whichever widget the answer above actually came from — the one whose
+    // changes this panel has to follow.
+    const categorySource = () => {
+        const wired = upstreamCategory("category");
+        if (wired?.value?.trim()) return wired;
+        if (widgetOf(node, "category")?.value?.trim()) return null;
+        return upstreamCategory("order");
+    };
+
+    // Retarget a composed preview when the upstream type changes. An open
+    // block FILE is left alone — switching type must not discard an edit in
+    // progress — but the status line says where the queue has moved.
+    async function onActiveCategoryChanged() {
+        const want = COMPOSED + activeCategory();
+        if (![...picker.options].some((o) => o.value === want)) return;
+        if (!loaded.name || loaded.name.startsWith(COMPOSED)) {
+            picker.value = want;
+            await load(want);
+        } else {
+            setStatus(`the queue now composes ${activeCategory()} — pick it `
+                      + "under “Composed” to read it");
+        }
+    }
+
+    // Follow that widget by wrapping its callback, one node at a time: rewire
+    // the input and the old wrapper is unhooked, delete this node and the
+    // wrapper unhooks itself on its next call.
+    let followed = null;
+    function followCategory() {
+        const w = categorySource();
+        if (w === (followed?.w ?? null)) return;
+        if (followed) followed.w.callback = followed.orig;
+        followed = null;
+        if (!w) return;
+        const orig = w.callback;
+        w.callback = function () {
+            orig?.apply(this, arguments);
+            if (!app.graph.getNodeById(node.id)) {
+                w.callback = orig;
+                return;
+            }
+            queueMicrotask(onActiveCategoryChanged);
+        };
+        followed = { w, orig };
+    }
 
     // {block name: version name} from the six combo widgets — the exact
     // recipe execute() composes, so the preview cannot drift from the run.
@@ -770,8 +820,15 @@ function recipePanel(node) {
         renderChips();
         blocksBar.textContent = blocks
             .map((b) => `${b.name} (${b.chars})`).join("  +  ");
-        setStatus(`${text.length} chars at [${recipeSummary()}] — read-only, `
-                  + "this is what the queue composes");
+        // Naming the type in the status is the difference between "the node is
+        // broken" and "you are previewing a type the run will not compose":
+        // the picker can show any type, the queue only ever composes this one.
+        const active = activeCategory();
+        const off = category !== active;
+        setStatus(`${text.length} chars at [${recipeSummary()}] — read-only; `
+                  + (off ? `the queue composes ${active}, not this`
+                         : `this is what the queue composes for ${active}`),
+                  off);
     }
 
     async function load(name) {
@@ -830,7 +887,13 @@ function recipePanel(node) {
                                ...(book.types ?? [])]) {
                 row.versions = vmap.get(row.name) ?? ["1"];
             }
-            const keep = picker.value;
+            // A composed selection is a view of "what the queue composes", so
+            // it follows the active type instead of sticking to the one it was
+            // opened on. A block file stays put — that one is being edited.
+            const cur = picker.value ?? "";
+            const keep = cur.startsWith(COMPOSED)
+                ? COMPOSED + activeCategory()
+                : cur;
             picker.replaceChildren();
             groupInto(picker, "Game rules — apply to every type", book.rules);
             const image = book.image ?? [];
@@ -860,6 +923,7 @@ function recipePanel(node) {
                           + "first one", true);
                 return;
             }
+            followCategory();
             if (!(dirty() && loaded.name === picker.value)) {
                 await load(picker.value);
             }
