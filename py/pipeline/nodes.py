@@ -1686,9 +1686,11 @@ class SymbioticaDatasetReference(io.ComfyNode):
                                      "seed = same references; bump it to draw "
                                      "again. A type keeps its own pick when "
                                      "another type joins the order."),
-                io.String.Input("folder", default="dataset",
-                                tooltip="Folder under the project holding the "
-                                        "per-type reference folders."),
+                io.String.Input("subfolder", default="dataset",
+                                tooltip="Subfolder under the project holding "
+                                        "the per-type reference folders — the "
+                                        "same sense as Save Render's "
+                                        "subfolder."),
                 io.String.Input("project_path", default="",
                                 tooltip="Client project folder. Filled in from "
                                         "the order when one is wired."),
@@ -1735,14 +1737,14 @@ class SymbioticaDatasetReference(io.ComfyNode):
         )
 
     @classmethod
-    def fingerprint_inputs(cls, categories=None, seed=0, folder="dataset",
+    def fingerprint_inputs(cls, categories=None, seed=0, subfolder="dataset",
                            project_path="", order=None):
         # Widgets only — linked inputs arrive as None here (see Category
         # Prompts). Hash the folder listing so adding or removing a reference
         # redraws, and never raise: a raise becomes NaN and re-bills every
         # descendant on each queue press.
         one = SymbioticaCategoryPrompts._one
-        sub_folder = str(one(folder, "dataset")).strip() or "dataset"
+        sub_folder = str(one(subfolder, "dataset")).strip() or "dataset"
         h = hashlib.sha256(f"{sub_folder}:{one(seed, 0)}".encode())
         # The project usually arrives on the ORDER wire, and a linked input
         # reads as unset here — so the widget alone left this hashing a
@@ -1775,7 +1777,7 @@ class SymbioticaDatasetReference(io.ComfyNode):
         return h.hexdigest()
 
     @classmethod
-    def execute(cls, categories=None, seed=0, folder="dataset",
+    def execute(cls, categories=None, seed=0, subfolder="dataset",
                 project_path="", order=None) -> io.NodeOutput:
         one = SymbioticaCategoryPrompts._one
         cats = list(categories or [])
@@ -1789,7 +1791,7 @@ class SymbioticaDatasetReference(io.ComfyNode):
                 "read the dataset from — set project_path on this node")
         paths, names = pick_reference_per_category(
             project, cats, int(one(seed, 0) or 0),
-            str(one(folder, "dataset")).strip() or "dataset")
+            str(one(subfolder, "dataset")).strip() or "dataset")
         from PIL import Image
         images = []
         for p in paths:
