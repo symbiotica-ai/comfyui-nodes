@@ -141,7 +141,12 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
 
 - **Symbiotica Order Read** — parses a monthly order `.xlsx` (Feature / Asset
   Name / Canvas / Prompt columns) plus a folder of reference images
-  (`AssetName.png`, `AssetName_2.png`, ...) into events.
+  (`AssetName.png`, `AssetName_2.png`, ...) into events. A blank `month` means
+  "whichever this project has" and reads the first one; a NAMED month the
+  project holds no order for raises, rather than reading the first one under
+  the name that was asked for. The same split applies to `feature` on Order
+  Specs and the Template Editor — over the API a substituted answer renders,
+  bills, and reports success indistinguishably from the one requested.
 - **Symbiotica Event Specs** — picks one event (feature) and emits its spec:
   template groups by category + canvas with per-asset prompts and refs.
 - **Symbiotica Template Builder** — composes a template sheet: either
@@ -191,7 +196,10 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   fan-out runs a single render lane once per asset instead of eight duplicated
   groups.
 - **Symbiotica Save Render** — files each result under
-  month/feature/category/asset.
+  month/feature/category/asset, and declares what it wrote as the run's output
+  images. An API caller reads a run's renders from `/history`, and only what a
+  node declares gets there — a save that declares nothing finishes green with
+  nothing to show for it.
 - **Symbiotica Dataset Reference** — picks a reference per category, seeded per
   `(seed, category)` so adding a type does not reshuffle a pick already
   approved. Also reports `cell_boxes`: where each asset sits inside its type's

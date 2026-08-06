@@ -1,6 +1,39 @@
 # ABOUTME: Factory for a minimal comfy_api.latest stub. build_modules() returns
 # ABOUTME: fresh module objects for a test's own monkeypatch.setitem install.
+import enum
 import types
+
+
+class FolderType(str, enum.Enum):
+    input = "input"
+    output = "output"
+    temp = "temp"
+
+
+class SavedResult(dict):
+    """Mirrors the real one down to being a DICT whose `type` is the enum's
+    VALUE, not the enum: this is what lands in /history for a client to fetch,
+    and a stub that kept the enum would pass a node whose outputs no harvest
+    can read."""
+
+    def __init__(self, filename: str, subfolder: str, type: FolderType):
+        super().__init__(filename=filename, subfolder=subfolder,
+                         type=type.value)
+
+
+class SavedImages:
+    """Files a node saved ITSELF, declared so ComfyUI lists them as outputs —
+    unlike a preview, which ComfyUI writes to temp on the node's behalf."""
+
+    def __init__(self, results, is_animated=False):
+        self.results = results
+        self.is_animated = is_animated
+
+    def as_dict(self) -> dict:
+        data = {"images": self.results}
+        if self.is_animated:
+            data["animated"] = (True,)
+        return data
 
 
 class _IOValue:
@@ -119,7 +152,7 @@ def build_modules():
     io_ns = _IONamespace(
         ComfyNode=ComfyNode, Schema=Schema, NodeOutput=NodeOutput,
         String=_IOType, Boolean=_IOType, Custom=lambda name: _IOType,
-        DynamicCombo=_DynamicCombo, Autogrow=_Autogrow,
+        DynamicCombo=_DynamicCombo, Autogrow=_Autogrow, FolderType=FolderType,
         # Named values a schema lists rather than a type it builds from.
         # Every hidden a node may declare belongs here: a missing one raises
         # from define_schema, which reads as the node being broken rather than
@@ -133,7 +166,8 @@ def build_modules():
     # Keeps the text the node meant to show, so a test can assert on what lands
     # on the canvas rather than only on the wire.
     latest.ui = types.SimpleNamespace(
-        PreviewText=lambda value, **kw: types.SimpleNamespace(value=value))
+        PreviewText=lambda value, **kw: types.SimpleNamespace(value=value),
+        SavedResult=SavedResult, SavedImages=SavedImages)
     pkg = types.ModuleType("comfy_api")
     pkg.latest = latest
     return pkg, latest

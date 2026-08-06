@@ -202,8 +202,8 @@ class SymbioticaOrderRead(io.ComfyNode):
         project_path = (project_path or "").strip()
         op = rp = assets_root = ""
         if project_path:
-            from .project_layout import resolve_month
-            r = resolve_month(project_path, (month or "").strip())
+            from .project_layout import require_month
+            r = require_month(project_path, (month or "").strip())
             op = r["order_path"]
             rp = r["refs_path"]
             assets_root = r["assets_root"]
@@ -280,8 +280,8 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         project_path = (project_path or "").strip()
         op = rp = assets_root = ""
         if project_path:
-            from .project_layout import resolve_month
-            r = resolve_month(project_path, (month or "").strip())
+            from .project_layout import require_month
+            r = require_month(project_path, (month or "").strip())
             op, rp, assets_root = r["order_path"], r["refs_path"], r["assets_root"]
         return op, rp, assets_root
 
@@ -1358,12 +1358,11 @@ class SymbioticaSaveRender(io.ComfyNode):
             # surviving: a missing label must not lose the image.
             return seq[i] if i < len(seq) else default
 
-        out_root = os.path.join(folder_paths.get_output_directory(),
-                                str(one(subfolder, "renders")).strip()
-                                or "renders")
+        out_dir = str(one(subfolder, "renders")).strip() or "renders"
+        out_root = os.path.join(folder_paths.get_output_directory(), out_dir)
         os.makedirs(out_root, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        files, shas, records = [], [], []
+        files, shas, records, saved = [], [], [], []
         for i, tensor in enumerate(imgs):
             name = str(at(names, i, f"render-{i + 1}")).strip() or f"render-{i + 1}"
             cat = str(at(cats, i))
@@ -1387,11 +1386,18 @@ class SymbioticaSaveRender(io.ComfyNode):
                 (arr.cpu().numpy() * 255).clip(0, 255).astype(np.uint8))
             img.save(os.path.join(out_root, fname), pnginfo=meta)
             files.append(fname)
+            saved.append(ui.SavedResult(fname, out_dir, io.FolderType.output))
             shas.append(rec["prompt_sha"])
             records.append(rec)
         if project:
             append_records(project, records, timestamp=stamp)
-        return io.NodeOutput(files, shas)
+        # Declared as SAVED, not previewed: the files are already on disk under
+        # the output folder, and a preview would write them a second time into
+        # temp. Only what a node declares reaches /history, which is the one
+        # path a caller outside this machine has to the images — an API client
+        # sees a run with no renders at all otherwise, and an edit of one has no
+        # parent it can name.
+        return io.NodeOutput(files, shas, ui=ui.SavedImages(saved))
 
 
 class SymbioticaPromptBook(io.ComfyNode):
@@ -2881,13 +2887,17 @@ class SymbioticaTemplateEditor(io.ComfyNode):
 
     @staticmethod
     def _event_spec_of(events_list, refs_root, feature):
+        """One event's spec plus the client-refs root.
+
+        A blank feature means "whichever this order leads with". A NAMED one the
+        order does not hold is a stale request — a saved workflow keeps the
+        feature it was built with, and the order it names can be re-issued
+        without it. `event_spec` refuses it and lists what the order does hold;
+        building the first event instead spends a render on artwork nobody asked
+        for and reports it as the one that was requested."""
         feat = (feature or "").strip() or (
             events_list[0].get("feature", "") if events_list else "")
-        try:
-            resolved = event_spec(events_list, feat)
-        except ValueError:
-            resolved = event_spec(events_list, events_list[0].get("feature", ""))
-        return {**resolved, "refsRoot": refs_root}
+        return {**event_spec(events_list, feat), "refsRoot": refs_root}
 
     @classmethod
     def _resolve_spec(cls, spec, events, project_path, month, feature):
@@ -2895,8 +2905,8 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         itself from project+month; a wired spec/events still works; with none of
         them it's an empty spec for a from-scratch template."""
         if project_path and project_path.strip():
-            from .project_layout import resolve_month
-            r = resolve_month(project_path.strip(), (month or "").strip())
+            from .project_layout import require_month
+            r = require_month(project_path.strip(), (month or "").strip())
             if r["order_path"]:
                 loaded = load_order(r["order_path"], r["refs_path"])
                 return (cls._event_spec_of(loaded["events"], r["refs_path"], feature),

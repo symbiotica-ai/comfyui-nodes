@@ -447,3 +447,39 @@ def test_reference_slots_reach_the_wire_the_way_the_canvas_filled_them(
     greys = [_Image.open(_io.BytesIO(b64.b64decode(b["source"]["data"])))
              .convert("RGB").getpixel((0, 0))[0] for b in blocks]
     assert greys == [0, 128, 255], f"slots arrived out of order: {greys}"
+
+
+def test_which_inputs_a_stored_payload_must_carry_is_pinned(node_module):
+    """Adding a REQUIRED input drops every workflow saved before it existed.
+
+    ComfyUI validates a prompt against the CURRENT schema and answers an absent
+    required input with "Required input is missing"; the declared default never
+    applies. So a required input is not a default with a nudge, it is a demand
+    on every payload already stored elsewhere — including the pinned order
+    templates the platform dispatches, which are authored once and replayed.
+
+    Found live on 2026.8.10 on the picker, when `get_new` shipped without
+    `optional=True` and dropped all three pickers out of the pinned flow4
+    template. This list is the same rule applied here: it may shrink freely,
+    and it may only GROW with a deliberate edit that accepts breaking stored
+    payloads. A new input belongs outside it.
+    """
+    schema = node_module.SymbioticaClaude.define_schema()
+    inputs = {i.id: i for i in schema.inputs}
+    # The per-model inputs ride inside the combo, and reach the payload under
+    # the same dotted names the canvas shows, so they are pinned alongside.
+    for option in inputs["model"].options:
+        for inner in option.inputs:
+            inputs.setdefault(f"model.{inner.id}", inner)
+    required = sorted(k for k, i in inputs.items()
+                      if not getattr(i, "optional", False))
+    # `model.temperature` and `model.reasoning_effort` appear only on the models
+    # that accept them, so this is the union across options, not one model's set.
+    # That is why the node reads them with `.get(default)` while the Gemini image
+    # node brackets its own: here an absent one means the chosen model has no
+    # such setting, not that the payload is malformed. `nodes_anthropic.py` makes
+    # the same split, with the same defaults.
+    assert required == [
+        "model", "model.images", "model.max_tokens", "model.reasoning_effort",
+        "model.temperature", "prompt", "seed",
+    ]
