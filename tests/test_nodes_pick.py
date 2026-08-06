@@ -69,7 +69,8 @@ class TestSchema:
         """
         schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
         widgets = [i.id for i in schema.inputs if i.id != "images"]
-        assert widgets == ["save_path", "selection", "view", "mode", "stage"]
+        assert widgets == ["save_path", "selection", "view", "mode", "stage",
+                           "names"]
 
     def test_the_picked_output_is_a_list(self, nodes_mod):
         """A list, not a batch: two picks of different sizes cannot stack into
