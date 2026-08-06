@@ -336,9 +336,9 @@ function pickPanel(node) {
                 + `background:${HUB.surface1};box-sizing:border-box;`);
             const caption = `${image.index} · ${image.name}`
                 + (image.w ? ` · ${image.w}×${image.h}` : "");
-            cell.title = caption
-                + "\nclick to tick · hover to see it big · double-click to "
-                + "open full size";
+            // No `title`: the browser's own tooltip lands a second later, on
+            // top of the render being judged, saying what the preview's own
+            // caption already says. The frame is the tooltip.
 
             const img = el("img", "width:100%;height:100%;object-fit:cover;"
                 + "display:block;pointer-events:none;");
@@ -362,6 +362,7 @@ function pickPanel(node) {
                 w: image.w,
                 h: image.h,
                 label: caption,
+                hint: "click to tick · double-click to open full size",
                 placeholder: img.src,   // already fetched: the frame fills now
                 src: (zoomPx) => thumbUrl(image.path, zoomPx),
             }));

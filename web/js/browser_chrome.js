@@ -108,11 +108,19 @@ function zoomBox() {
         + "box-shadow:0 10px 30px rgba(0,0,0,.55);");
     zoomFrame.appendChild(el("img", "display:block;width:100%;height:100%;"
         + "object-fit:contain;"));
-    zoomFrame.appendChild(el("div",
-        `position:absolute;left:0;right:0;bottom:0;padding:3px 6px;`
-        + `font:10px ${HUB.font};color:${HUB.ink};`
-        + "background:rgba(0,0,0,.62);overflow:hidden;"
-        + "text-overflow:ellipsis;white-space:nowrap;"));
+    // The caption IS the tooltip: the frame beats the browser's own title box
+    // to the screen by most of a second, and that box would land on top of the
+    // image being judged. Centred under it, so it reads as part of the frame
+    // rather than a label stuck in a corner.
+    const caption = el("div",
+        "position:absolute;left:0;right:0;bottom:0;padding:4px 8px;"
+        + "background:rgba(0,0,0,.62);text-align:center;");
+    const oneLine = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    caption.appendChild(el("div",
+        `font:11px ${HUB.font};color:${HUB.ink};${oneLine}`));
+    caption.appendChild(el("div",
+        `font:10px ${HUB.font};color:${HUB.inkTertiary};${oneLine}`));
+    zoomFrame.appendChild(caption);
     document.body.appendChild(zoomFrame);
     return zoomFrame;
 }
@@ -161,7 +169,8 @@ function zoomPlace(rect, box) {
  * Show `spec()` big while the pointer rests on `anchor`.
  *
  * `spec()` is read at hover time and returns
- * `{ w, h, label, placeholder, src(px) }`: `w`/`h` are the image's own pixel
+ * `{ w, h, label, hint, placeholder, src(px) }`: `label` and the dimmer `hint`
+ * are the two centred lines under the image, `w`/`h` are the image's own pixel
  * size (the frame takes its aspect), `src(px)` is asked for the frame's longest
  * side in device pixels, and `placeholder` is the grid thumbnail the browser
  * already holds — it fills the frame instantly, soft, so the hover answers at
@@ -195,7 +204,8 @@ export function attachHoverZoom(anchor, spec) {
             frame.style.backgroundRepeat = "no-repeat,repeat,repeat,repeat,repeat";
             frame.style.backgroundColor = HUB.surface1;
             frame.children[0].src = src;
-            frame.children[1].textContent = detail.label ?? "";
+            frame.children[1].children[0].textContent = detail.label ?? "";
+            frame.children[1].children[1].textContent = detail.hint ?? "";
             frame.style.display = "block";
         }, ZOOM_DELAY_MS);
     });

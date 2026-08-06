@@ -437,7 +437,14 @@ test("resting on a tile floats a bigger copy of it", async () => {
     // Big enough to judge by: the grid tiles are 64–184px.
     const px = Number(new URLSearchParams(img.src.split("?")[1]).get("px"));
     assert.ok(px >= 512, `preview asked for ${px}px, which is still a thumbnail`);
-    assert.match(frame.children[1].textContent, /Spookies_00002_\.png/);
+    // The caption is the tooltip, centred under the image: the browser's own
+    // title box arrives a second later and lands ON the render being judged.
+    const caption = frame.children[1];
+    assert.match(caption.style.cssText, /text-align:center/);
+    assert.match(caption.children[0].textContent, /Spookies_00002_\.png/);
+    assert.match(caption.children[1].textContent, /double-click to open full size/);
+    assert.equal(cells(node)[1].title, undefined,
+                 "a title tooltip would cover the preview it duplicates");
 });
 
 test("the preview is a resize, never the full render", async () => {
