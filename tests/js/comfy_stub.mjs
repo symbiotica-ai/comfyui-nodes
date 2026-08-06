@@ -48,8 +48,16 @@ function element() {
         children: [],
         parent: null,
         textContent: "",
-        appendChild(c) { this.children.push(c); c.parent = this; return c; },
-        append(...cs) { this.children.push(...cs); cs.forEach((c) => { c.parent = this; }); },
+        appendChild(c) { this.children.push(c); c.parent = this; c.parentNode = this; return c; },
+        append(...cs) { this.children.push(...cs); cs.forEach((c) => { c.parent = this; c.parentNode = this; }); },
+        insertBefore(c, ref) {
+            const at = this.children.indexOf(ref);
+            if (at < 0) this.children.push(c);
+            else this.children.splice(at, 0, c);
+            c.parent = this;
+            c.parentNode = this;
+            return c;
+        },
         // As in the DOM, this drops every child including any text set through
         // textContent — so a placeholder string does not survive a re-render.
         replaceChildren(...cs) {
