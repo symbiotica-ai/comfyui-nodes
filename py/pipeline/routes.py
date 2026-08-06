@@ -16,7 +16,8 @@ from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
 from .paths import parse_roots, resolve_within
-from .prompt_book import MissingPromptsError, compose_detail
+from .prompt_book import (MissingPromptsError, compose_detail, list_versions,
+                          parse_recipe)
 from .prompt_store import (PromptPathError, list_book, read_block,
                            write_block)
 from .pack_library import (
@@ -688,10 +689,25 @@ async def prompt_compose(request):
     if not project:
         return web.json_response({"error": "project required"}, status=400)
     try:
-        detail = compose_detail(project, request.query.get("category", ""))
+        # `recipe` pins versions per block ({name: version} JSON, or
+        # `block = version` lines) — the Recipe panel previews exactly what
+        # its widget picks will compose. Absent, the top versions compose,
+        # which is the book as it stands.
+        detail = compose_detail(project, request.query.get("category", ""),
+                                parse_recipe(request.query.get("recipe", "")))
     except (MissingPromptsError, ValueError) as exc:
         return web.json_response({"error": str(exc)}, status=400)
     return web.json_response({"ok": True, **detail})
+
+
+@PromptServer.instance.routes.get("/symbiotica/prompt-versions")
+async def prompt_versions(request):
+    """Every block's version names, in composition order — what the Recipe
+    panel needs to map its six slots onto the book's files."""
+    project = _expand_project(request.query.get("project", ""))
+    if not project:
+        return web.json_response({"error": "project required"}, status=400)
+    return web.json_response({"ok": True, "blocks": list_versions(project)})
 
 
 @PromptServer.instance.routes.post("/symbiotica/prompt-write")

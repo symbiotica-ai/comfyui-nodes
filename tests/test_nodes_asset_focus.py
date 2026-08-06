@@ -53,14 +53,14 @@ class TestOneAssetsWholeRecord:
         downstream has a list left to index. The outputs are lists of one,
         which runs downstream exactly once — the same as a scalar."""
         out = run(nodes_mod, order=ORDER, asset="Frankenstein Pops")
-        assert out.args == (["Frankenstein Pops"], ["Food - 3 stages"],
-                            ["cake pops"],
-                            ["October/Mini 3 — Franken-Feast/Food - 3 stages/"
-                             "Frankenstein Pops"], [1])
+        assert out.args[:4] == (["Frankenstein Pops"], ["Food - 3 stages"],
+                                ["cake pops"],
+                                ["October/Mini 3 — Franken-Feast/"
+                                 "Food - 3 stages/Frankenstein Pops"])
 
     def test_the_save_path_matches_what_order_assets_emits(self, nodes_mod):
-        """A save node and a Pick node's folder both take this value, so the
-        two nodes disagreeing would file the same asset in two places."""
+        """A save node and a Pick node's save_path both take this value, so
+        the two nodes disagreeing would file the same asset in two places."""
         from pipeline.order_assets import assets_by_category, save_paths
         items = assets_by_category(ORDER, "")
         expected = save_paths(ORDER, items)
@@ -73,7 +73,6 @@ class TestOneAssetsWholeRecord:
         the node is going to do."""
         out = run(nodes_mod, order=ORDER)
         assert out.args[0] == ["Frankencrisps", "Frankenstein Pops", "Bunting"]
-        assert out.args[4] == [0, 1, 2]
 
     def test_choosing_nothing_still_files_each_asset_under_its_own_path(
             self, nodes_mod):
@@ -84,12 +83,28 @@ class TestOneAssetsWholeRecord:
         out = run(nodes_mod, order=ORDER, category="Decoration")
         assert (out.args[0], out.args[1]) == (["Bunting"], ["Decoration"])
 
-    def test_the_index_is_within_the_narrowed_run(self, nodes_mod):
-        """It addresses the list this node was choosing from, not the raw
-        order — anything still handed a list gets that one."""
-        out = run(nodes_mod, order=ORDER, category="Decoration",
-                  asset="Bunting")
-        assert out.args[4] == [0]
+
+class TestTheFocusedOrder:
+    def test_one_narrowed_order_per_focused_asset(self, nodes_mod):
+        """The whole record on ONE wire: same event, same project, an assets
+        list of exactly the focused asset — the shape every order consumer
+        already reads."""
+        out = run(nodes_mod, order=ORDER, asset="Frankenstein Pops")
+        orders = out.args[4]
+        assert len(orders) == 1
+        assert orders[0]["assets"] == [ORDER["assets"][1]]
+        assert orders[0]["feature"] == ORDER["feature"]
+        assert orders[0]["month"] == ORDER["month"]
+
+    def test_no_choice_fans_one_order_out_per_asset(self, nodes_mod):
+        out = run(nodes_mod, order=ORDER)
+        orders = out.args[4]
+        assert [o["assets"][0]["assetName"] for o in orders] == \
+            ["Frankencrisps", "Frankenstein Pops", "Bunting"]
+
+    def test_the_incoming_order_is_not_mutated(self, nodes_mod):
+        run(nodes_mod, order=ORDER, asset="Bunting")
+        assert len(ORDER["assets"]) == 3
 
 
 class TestRefusals:
@@ -125,6 +140,13 @@ class TestSchema:
         while choosing none can fan out over the whole event."""
         schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
         assert all(o.is_output_list for o in schema.outputs)
+
+    def test_the_order_output_replaced_index_on_the_tail_slot(self, nodes_mod):
+        """`index` was wired nowhere in any live graph; the narrowed order
+        takes its tail slot, so no earlier slot moved for saved graphs."""
+        schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
+        assert [o.display_name for o in schema.outputs] == [
+            "asset_name", "category", "client_prompt", "save_path", "order"]
 
     def test_it_is_registered(self, nodes_mod):
         assert nodes_mod.SymbioticaAssetFocus in nodes_mod.PIPELINE_NODE_CLASSES

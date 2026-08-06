@@ -104,6 +104,25 @@ def test_returns_one_image_per_reference_in_order(nodes_mod, tmp_path):
                                                      (32, 32)]
 
 
+def test_unwired_asset_name_reads_a_focused_orders_one_asset(nodes_mod,
+                                                             tmp_path):
+    """Asset Focus's `order` output names one asset, so the asset_name wire
+    becomes redundant on that lane: one wire instead of two."""
+    out = nodes_mod.SymbioticaAssetRefs.execute(order=make_order(tmp_path))
+    _images, names, _masks, _folder = out.args
+    assert names == ["Spookies.png", "Spookies_1.png", "Spookies_2.png"]
+
+
+def test_unwired_asset_name_refuses_a_whole_event(nodes_mod, tmp_path):
+    """Guessing one asset out of several would pair the wrong art in
+    silence; the error names the wire that fixes it."""
+    order = make_order(tmp_path)
+    order["assets"].append({"assetName": "Other",
+                            "category": "Decoration", "refFiles": []})
+    with pytest.raises(ValueError, match="Asset Focus"):
+        nodes_mod.SymbioticaAssetRefs.execute(order=order)
+
+
 def test_canvas_note_warns_when_refs_do_not_match_the_cells(nodes_mod,
                                                             tmp_path):
     # Two references against a three-cell type: an index picks unrelated things
@@ -152,13 +171,13 @@ def test_output_size_offers_the_sizes_worth_sending(nodes_mod):
 
 def test_outputs_are_lists_so_the_lane_fans_out(nodes_mod):
     schema = nodes_mod.SymbioticaAssetRefs.define_schema()
-    assert [o.display_name for o in schema.outputs] == ["images", "ref_names",
-                                                        "masks", "folder"]
-    # The three that fan out are per-reference; `folder` is the one place they
-    # were all read from, so it is deliberately NOT a list — a picker takes a
-    # directory, not one directory per file.
+    assert [o.display_name for o in schema.outputs] == ["images", "names",
+                                                        "masks", "save_path"]
+    # The three that fan out are per-reference; `save_path` is the one place
+    # they were all read from, so it is deliberately NOT a list — a picker
+    # takes a directory, not one directory per file.
     # getattr, not attribute access: the stub keeps only the kwargs an output
-    # passes, and `folder` never mentions `is_output_list` at all.
+    # passes, and `save_path` never mentions `is_output_list` at all.
     assert all(o.is_output_list for o in schema.outputs[:3])
     assert not getattr(schema.outputs[3], "is_output_list", False)
     # Widgets are APPENDED — ComfyUI restores widgets_values positionally, so a
