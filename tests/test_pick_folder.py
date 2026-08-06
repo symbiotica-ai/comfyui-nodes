@@ -383,3 +383,31 @@ class TestListingWhatCameFromOnePick:
         renders(str(tmp_path), ("edits_from.Chair_00001__00001_.png",
                                 "edits_00002_.png"))
         assert len(listing_for(str(tmp_path), derived_from=None)) == 2
+
+
+class TestNarrowingBeforeTheCap:
+    """The cap exists so one wrong folder cannot list a whole volume into a
+    node body. Applied before the narrowing it does the opposite: it throws
+    away the very files that were asked for and hands back an empty grid while
+    they sit on disk."""
+
+    def test_a_marked_edit_survives_a_folder_at_the_cap(self, tmp_path):
+        from pipeline.pick_folder import LISTING_LIMIT
+        # Plain counter names sort before `edits_from.` ("0" < "f"), so every
+        # marked edit is at the far end of the listing — exactly where a cap
+        # applied first would cut them.
+        renders(str(tmp_path),
+                tuple(f"edits_{i:05d}_.png" for i in range(LISTING_LIMIT)))
+        renders(str(tmp_path), ("edits_from.Chair_00001__00001_.png",))
+        names = [e["name"] for e in
+                 listing_for(str(tmp_path), derived_from=["Chair_00001_.png"])]
+        assert names == ["edits_from.Chair_00001__00001_.png"]
+
+    def test_a_shortlisted_file_survives_a_folder_at_the_cap(self, tmp_path):
+        """The same cut, on the narrowing that shipped long before this one."""
+        from pipeline.pick_folder import LISTING_LIMIT
+        renders(str(tmp_path),
+                tuple(f"a{i:05d}.png" for i in range(LISTING_LIMIT)))
+        renders(str(tmp_path), ("zzz.png",))
+        names = [e["name"] for e in listing_for(str(tmp_path), only=["zzz.png"])]
+        assert names == ["zzz.png"]

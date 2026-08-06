@@ -97,7 +97,7 @@ def images_in(folder: str, name_prefix: str = "") -> list[str]:
 
 
 def listing(folder: str, name_prefix: str = "",
-            limit: int = LISTING_LIMIT) -> list[dict]:
+            limit: int = LISTING_LIMIT, keep=None) -> list[dict]:
     """The folder's images as the node's grid shows them: numbered, with paths.
 
     The number is the point — "selecting 3 images to go through the node should
@@ -108,11 +108,19 @@ def listing(folder: str, name_prefix: str = "",
     four hundred renders stays a directory walk rather than four hundred loads.
     A file that cannot be read is listed without its size instead of being
     hidden — it is on disk, so it belongs in a listing of what is on disk.
+
+    `keep` narrows by name BEFORE the cap. The cap is there so one wrong folder
+    cannot list a whole volume into a node body; applied to the unnarrowed set
+    it does the opposite, cutting the very files that were asked for and
+    answering with an empty grid while they sit on disk.
     """
     from PIL import Image, UnidentifiedImageError
 
+    names = images_in(folder, name_prefix)
+    if keep is not None:
+        names = [name for name in names if keep(name)]
     out = []
-    for index, name in enumerate(images_in(folder, name_prefix)[:limit], 1):
+    for index, name in enumerate(names[:limit], 1):
         path = os.path.join(folder, name)
         width = height = 0
         try:
@@ -187,16 +195,20 @@ def listing_for(target: str, limit: int = LISTING_LIMIT, only=None,
     """
     wanted = None if only is None else {str(name) for name in only}
     parents = _parent_stems(derived_from)
+
+    def keep(name: str) -> bool:
+        if wanted is not None and name not in wanted:
+            return False
+        return parents is None or parent_of(name) in parents
+
     entries: list[dict] = []
     for folder, prefix in read_folders(target):
-        entries.extend(listing(folder, prefix, limit))
+        entries.extend(listing(folder, prefix, limit, keep))
     # `id` is the file name, which is what a tick records, so the same name
     # arriving from both layouts must not become two tiles with one identity.
     seen, unique = set(), []
     for entry in entries:
-        if entry["id"] in seen or (wanted is not None and entry["id"] not in wanted):
-            continue
-        if parents is not None and parent_of(entry["id"]) not in parents:
+        if entry["id"] in seen:
             continue
         if len(unique) >= limit:
             break

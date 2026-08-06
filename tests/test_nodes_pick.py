@@ -511,15 +511,25 @@ class TestSayingWhereAnEditCameFrom:
                                          "edits_00002_.png"])])
         assert out.args[2] == f"{EVENT_DIR}/Food/Spookies/edits"
 
-    def test_a_picker_with_no_step_names_no_edit_destination(self, nodes_mod,
-                                                             tmp_path):
-        """Marking the asset's own prefix would file edits beside the base
-        renders, under a name the base grid still matches. Nothing is the only
-        honest answer."""
+    def test_a_picker_with_no_step_still_names_a_real_place(self, nodes_mod,
+                                                            tmp_path):
+        """A blank is the one answer that must never leave here. Save Image
+        turns a blank prefix into a hidden `._00001_.png` at the output root,
+        which no listing shows and every later save overwrites — paid renders
+        destroyed under a green run. Without a step the mark rides on the
+        asset's own prefix instead, which is a real place.
+        """
         renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
         out = spookies(nodes_mod, tmp_path, mode=["single"],
                        selection=[json.dumps(["Spookies_00001_.png"])])
-        assert out.args[2] == ""
+        assert out.args[2] == (
+            f"{EVENT_DIR}/Food/Spookies_from.Spookies_00001_")
+
+    def test_an_unconfigured_picker_names_nothing_at_all(self, nodes_mod):
+        """The one case where blank is right: it is what `save_path` already
+        says, and there is no folder to write into either way."""
+        out = run(nodes_mod, save_path=[""])
+        assert out.args[1] == "" and out.args[2] == ""
 
 
 class TestShowingTheEditsOfAnApproval:

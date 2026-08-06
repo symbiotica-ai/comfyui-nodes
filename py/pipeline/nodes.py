@@ -4175,16 +4175,27 @@ class SymbioticaPick(io.ComfyNode):
         # never saw, so its own name is the only place that link can live.
         # Nothing single to point at means no mark rather than a wrong one, and
         # the lane still works — the edit simply has no parent.
-        # Only a step can name where an edit goes. Without one this picker
-        # lists the asset's own renders, and marking THAT prefix would file
-        # edits beside the bases under a name the base grid still matches — so
-        # the answer is nothing rather than a path that writes to the wrong
-        # place. With a step but no single pick, it is the plain step and the
-        # edit carries no parent.
+        # Where an EDIT of this pick is saved: the prefix this node already
+        # hands out, with its last segment marked by the render the edit came
+        # from. An edit is a file the approving picker never saw, so its own
+        # name is the only place that link can live.
+        #
+        # Marking that prefix rather than requiring a step keeps this valid
+        # wherever `save_path` is. A blank is NOT the safe answer here: a blank
+        # reaches Save Image as a real filename_prefix, and ComfyUI resolves it
+        # to a hidden `._00001_.png` at the output root — which no listing
+        # shows, since dot-names are skipped, and which every later save
+        # overwrites because the counter never matches. That loses paid,
+        # unrepeatable renders and reports success.
+        #
+        # Nothing single to point at means no mark rather than a wrong one, and
+        # the prefix is then exactly `save_path`.
         marked = ""
-        if step and home:
+        if listed:
+            head, _, tail = listed.rpartition("/")
             parent = os.path.basename(paths[0]) if len(paths) == 1 else ""
-            marked = _shown(os.path.join(home, edit_prefix(step, parent)))
+            stem = edit_prefix(tail, parent)
+            marked = f"{head}/{stem}" if head else stem
         _push("symbiotica.pick", {
             "node_id": str(node_id), "count": len(entries),
             "folder": listed, "picked": len(paths),

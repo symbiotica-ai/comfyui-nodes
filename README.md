@@ -240,7 +240,9 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   name — which is the only place that link can live, since an edit is named by
   the save node long after the tick was made and can never appear in a set of
   ticks. A file written without the mark simply has no parent, so nothing
-  already on disk needs renaming.
+  already on disk needs renaming. The edits land wherever `save_path` points, so
+  give the picker a `stage` to keep them in their own step folder rather than
+  beside the renders they came from.
 - **Symbiotica Asset Refs** — the client's own reference art for one asset, in
   the order the order sheet pairs it, so the index that picks a cell picks the
   reference belonging to it. References with transparency are composited onto a
