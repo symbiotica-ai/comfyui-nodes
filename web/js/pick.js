@@ -5,7 +5,8 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
-import { el, emptyState, errorLine } from "./browser_chrome.js";
+import { attachHoverZoom, el, emptyState, errorLine, hideHoverZoom }
+    from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaPick";
 const MIN_NODE_W = 340;
@@ -333,9 +334,11 @@ function pickPanel(node) {
                 + `border:2px solid ${on ? HUB.accent : HUB.hairline};`
                 + `border-radius:4px;overflow:hidden;cursor:pointer;`
                 + `background:${HUB.surface1};box-sizing:border-box;`);
-            cell.title = `${image.index} · ${image.name}`
-                + (image.w ? ` · ${image.w}×${image.h}` : "")
-                + "\nclick to tick · double-click to open full size";
+            const caption = `${image.index} · ${image.name}`
+                + (image.w ? ` · ${image.w}×${image.h}` : "");
+            // No `title`: the browser's own tooltip lands a second later, on
+            // top of the render being judged, saying what the preview's own
+            // caption already says. The frame is the tooltip.
 
             const img = el("img", "width:100%;height:100%;object-fit:cover;"
                 + "display:block;pointer-events:none;");
@@ -351,6 +354,18 @@ function pickPanel(node) {
                 + `color:${on ? "#000" : HUB.ink};border-radius:0 0 4px 0;`,
                 String(image.index));
             cell.appendChild(badge);
+
+            // S tiles are 64px: too small to tell two renders apart, which is
+            // the whole job of this node. Resting on one floats it big beside
+            // the grid, off the same resize route the tile came from.
+            attachHoverZoom(cell, () => ({
+                w: image.w,
+                h: image.h,
+                label: caption,
+                hint: "click to tick · double-click to open full size",
+                placeholder: img.src,   // already fetched: the frame fills now
+                src: (zoomPx) => thumbUrl(image.path, zoomPx),
+            }));
 
             cell.addEventListener("pointerdown", (e) => e.stopPropagation());
             cell.addEventListener("click", () => toggle(image.id));
@@ -409,6 +424,9 @@ function pickPanel(node) {
 
     function render() {
         const ticks = readTicks(node);
+        // The tile a preview belongs to is about to be thrown away — a frame
+        // left up would be floating beside nothing.
+        hideHoverZoom();
         list.replaceChildren();
         // The counts, the sizes and the folder stay put while the grid moves
         // under them: with 85 thumbnails the controls are otherwise a scroll
