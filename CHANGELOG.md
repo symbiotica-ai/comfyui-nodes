@@ -6,6 +6,39 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.16
+
+**Node change: the picker's `shortlist` widget is now `show`.** Same position,
+same values (`approved` / `edits`), so a saved graph keeps its setting and needs
+no rewiring. `shortlist` named an internal idea; `show` reads as a sentence with
+its value.
+
+**This release repairs graphs that 2026.8.15 stopped being able to queue.** If
+you are on 2026.8.15 and a Symbiotica Pick refuses to run with
+`Value not in list: shortlist: '' not in ['approved','edits']`, this is the fix.
+
+### Fixes
+
+- **A saved workflow could not be queued after the picker gained a widget.** The
+  picker's panel was claiming a slot in `widgets_values` and writing an empty
+  string into it, so the widget added in 2026.8.15 took the position the panel
+  had held and inherited that empty string on load. An empty string is not one
+  of a combo's options, so ComfyUI refused the whole prompt.
+
+  The panel no longer claims a slot. `addDOMWidget` takes a `serialize` flag in
+  its options, but that one governs the API prompt; persistence in the workflow
+  is a separate flag on the widget itself, and the two are not connected. Graphs
+  already saved the other way are repaired as they load, so nothing has to be
+  re-saved by hand.
+- The JS test harness now restores a node the way ComfyUI does, walking the
+  widgets and taking the saved values in order, breaking past the end rather
+  than blanking what it did not reach. It previously applied them nowhere, which
+  is what let this ship: every test passed against a restore that cannot fail.
+
+### Docs
+
+- The README describes the picker's `show` widget and what each value lists.
+
 ## 2026.8.15
 
 **Node changes, and one of them can stop a saved graph that used to run.**
