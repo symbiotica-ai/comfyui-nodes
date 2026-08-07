@@ -9,6 +9,14 @@ import re
 # confinement root to the process CWD.
 STUDIO_ASSETS_DIR = (os.environ.get("STUDIO_ASSETS_DIR") or "").strip() or "/studio-assets"
 
+# The sub_path the studio-assets mount carries, when it carries one — the order
+# sandbox mounts sub_path=studios/<slug> (services/comfy-modal/app.py:1943), so its
+# mount point IS one studio's root. A selection is always written in VOLUME-ROOT
+# coordinates (that is what the browser stores and what a pinned graph freezes), so
+# under such a mount the scope is the part of the selection the mount already
+# supplies. Empty on the canvas, which mounts the whole Volume.
+STUDIO_ASSETS_SCOPE = (os.environ.get("STUDIO_ASSETS_SCOPE") or "").strip().strip("/")
+
 # Model kinds the editor already surfaces natively via /comfy-models; hidden from
 # the browse listing at the studio root. Source of truth (a cross-repo copy):
 # services/comfy-modal/canvas_entry.py:14-25 (the sym hub).
@@ -32,6 +40,20 @@ def _split_studio(rel):
     return parts[1], "/".join(parts[2:])
 
 
+def _within_scope(rel):
+    """`rel` with the part the mount already supplies removed, for a mount that
+    carries a sub_path. A selection naming anything outside it is refused rather
+    than joined on: under such a mount that path simply does not exist, so joining
+    it answers "not found" for a selection whose real problem is that it belongs to
+    another studio. The refusal is not itself the tenancy boundary — the mount is
+    (services/comfy-modal/control_plane.py:98) — it is how the miss reads."""
+    if rel == STUDIO_ASSETS_SCOPE:
+        return ""
+    if rel.startswith(STUDIO_ASSETS_SCOPE + "/"):
+        return rel[len(STUDIO_ASSETS_SCOPE) + 1:]
+    raise ValueError(f"outside this mount: {rel}")
+
+
 def _confined_root(base_dir):
     """realpath'd Volume root; raise ValueError if base_dir is not a usable
     absolute directory (an empty/relative env must not re-anchor to CWD)."""
@@ -51,8 +73,11 @@ def resolve_studio_path(base_dir, rel):
         raise ValueError("no selection")
     if _split_studio(rel) is None:
         raise ValueError(f"not a studio path: {rel!r}")
+    # `rel` itself is never rebound: both messages below name the selection the
+    # caller asked for, which is the one written on the node and in the pin.
+    within = _within_scope(rel) if STUDIO_ASSETS_SCOPE else rel
     root = _confined_root(base_dir)
-    path = os.path.realpath(os.path.join(root, rel))
+    path = os.path.realpath(os.path.join(root, within))
     if not (path == root or path.startswith(root + os.sep)):
         raise ValueError("outside the studio library")
     if not os.path.exists(path):
