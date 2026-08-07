@@ -6,6 +6,41 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.17
+
+**This release repairs order renders that carried a Studio Library Picker.** If a
+pinned order graph died with `not found: studios/<studio>/...` before producing
+any image, this is the fix. Canvas behaviour is unchanged, and no node's inputs,
+outputs or id changed.
+
+### Fixes
+
+- **A studio selection could not resolve inside an order sandbox.** A selection
+  is stored in volume-root coordinates — `studios/<slug>/...` — because that is
+  what the browser writes and what a pinned graph freezes. The order tiers mount
+  the studio-assets Volume with `sub_path=studios/<slug>`, so their mount point
+  *is* that studio's root, and the same string named a path one level too deep.
+  Every save downstream of the picker died with it, and no widget value could
+  have been right in both mount shapes.
+
+  The mount now declares the part of the path it already supplies, and a
+  selection is resolved against that. A selection naming a studio the mount does
+  not carry is refused by name rather than reported as a missing file, so it
+  reads as a studio that is somewhere else instead of one that is empty.
+
+- **Browsing a studio through such a mount returned an empty listing.** The
+  lister still built its paths from `studios/<slug>` unconditionally, so it
+  looked one level too deep and came back with nothing — indistinguishable from
+  the unprovisioned studio an empty listing is there to describe. Order
+  sandboxes serve no UI, so nothing reached this in practice.
+
+### Other
+
+- A test pins that every input a node's schema declares is one its `execute`,
+  `fingerprint_inputs` and `check_lazy_status` can accept, across the whole
+  pack. A node that offers an input it cannot take now fails the suite rather
+  than a queued prompt.
+
 ## 2026.8.16
 
 **Node change: the picker's `shortlist` widget is now `show`.** Same position,
