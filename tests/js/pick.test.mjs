@@ -39,7 +39,7 @@ function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) 
 // here that has to track the Python schema exactly.
 const WIDGET_DEFAULTS = {
     save_path: "", selection: "", view: "", mode: "multiple", stage: "",
-    names: "", shortlist: "approved",
+    names: "", show: "approved",
 };
 
 async function panelNode(seen = [], images = [], values = {},
@@ -302,7 +302,7 @@ test("a widget added after that layout goes back to its own default", async () =
         false, "Spookies", "Food", '["a.png"]', "", "", "October/Ev/Food",
         "edit", "single", "edits", "",
     ] });
-    assert.equal(widgetOf(node, "shortlist").value, "approved");
+    assert.equal(widgetOf(node, "show").value, "approved");
 });
 
 test("a workflow saved before the widget existed still gets its default", async () => {
@@ -315,7 +315,7 @@ test("a workflow saved before the widget existed still gets its default", async 
     configure(node, { widgets_values: [
         "Oct/Food/Spookies", "[]", "", "single", "edits", "",
     ] });
-    assert.equal(widgetOf(node, "shortlist").value, "approved");
+    assert.equal(widgetOf(node, "show").value, "approved");
 });
 
 test("an empty value is unset too, not a choice the widget offers", async () => {
@@ -327,7 +327,7 @@ test("an empty value is unset too, not a choice the widget offers", async () => 
     configure(node, { widgets_values: [
         "Oct/Food/Spookies", "[]", "", "single", "edits", "", "",
     ] });
-    assert.equal(widgetOf(node, "shortlist").value, "approved");
+    assert.equal(widgetOf(node, "show").value, "approved");
 });
 
 test("it registers under one extension name", async () => {

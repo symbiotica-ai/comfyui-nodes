@@ -235,7 +235,7 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   judged without opening it in a tab.
   To review the EDITS of one approval rather than the approval itself, wire this
   node's `edit_save_path` into the Save Image that writes them and set the next
-  picker's `shortlist` to `edits`. `edit_save_path` is `save_path` marked with
+  picker's `show` to `edits`. `edit_save_path` is `save_path` marked with
   the render that was picked, so each edit records what it came from in its own
   name — which is the only place that link can live, since an edit is named by
   the save node long after the tick was made and can never appear in a set of

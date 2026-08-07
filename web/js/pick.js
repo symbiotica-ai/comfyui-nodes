@@ -12,7 +12,7 @@ const NODE_CLASS = "SymbioticaPick";
 // Widgets this node gained after graphs were already saved, with the value each
 // falls back to. A saved workflow carries one value per widget it knew about,
 // applied by position, so anything appended since comes back unset.
-const APPENDED_WIDGETS = [["shortlist", "approved"]];
+const APPENDED_WIDGETS = [["show", "approved"]];
 const MIN_NODE_W = 340;
 const PANEL_MIN = 44;        // an empty picker still shows its own message
 const DEFAULT_NODE_H = 460;  // only for a node that has never been given a height
