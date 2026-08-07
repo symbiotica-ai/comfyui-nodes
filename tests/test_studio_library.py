@@ -220,6 +220,26 @@ def test_unscoped_mount_is_unchanged(vol, monkeypatch):
         os.path.realpath(str(vol / "studios" / "ggs" / "references" / "hero.png"))
 
 
+def test_scoped_mount_lists_the_studio_it_carries(scoped):
+    # An unprovisioned studio and a studio the lister looked for in the wrong place
+    # produce the same empty listing, so the listing has to reach the right place.
+    res = list_studio_dir(str(scoped), "imperia", "")
+    assert [e["name"] for e in res["entries"]] == ["bakery"]
+    # Entries stay in volume-root coordinates: that is what the browser stores back
+    # as a selection, and it has to name the same asset off this mount as on it.
+    assert res["entries"][0]["rel"] == "studios/imperia/bakery"
+
+
+def test_scoped_mount_lists_below_the_studio_root(scoped):
+    res = list_studio_dir(str(scoped), "imperia", "studios/imperia/bakery")
+    assert [e["name"] for e in res["entries"]] == ["October"]
+
+
+def test_scoped_mount_refuses_to_list_another_studio(scoped):
+    # Not an empty studio — a studio this mount does not carry at all.
+    assert "outside this mount" in list_studio_dir(str(scoped), "ggs", "").get("error", "")
+
+
 @pytest.fixture()
 def vol2(tmp_path):
     root = tmp_path

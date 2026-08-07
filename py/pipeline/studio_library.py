@@ -46,7 +46,12 @@ def _within_scope(rel):
     than joined on: under such a mount that path simply does not exist, so joining
     it answers "not found" for a selection whose real problem is that it belongs to
     another studio. The refusal is not itself the tenancy boundary — the mount is
-    (services/comfy-modal/control_plane.py:98) — it is how the miss reads."""
+    (services/comfy-modal/control_plane.py:98) — it is how the miss reads.
+
+    A mount carrying no sub_path supplies nothing, so `rel` is already relative
+    to it."""
+    if not STUDIO_ASSETS_SCOPE:
+        return rel
     if rel == STUDIO_ASSETS_SCOPE:
         return ""
     if rel.startswith(STUDIO_ASSETS_SCOPE + "/"):
@@ -75,7 +80,7 @@ def resolve_studio_path(base_dir, rel):
         raise ValueError(f"not a studio path: {rel!r}")
     # `rel` itself is never rebound: both messages below name the selection the
     # caller asked for, which is the one written on the node and in the pin.
-    within = _within_scope(rel) if STUDIO_ASSETS_SCOPE else rel
+    within = _within_scope(rel)
     root = _confined_root(base_dir)
     path = os.path.realpath(os.path.join(root, within))
     if not (path == root or path.startswith(root + os.sep)):
@@ -138,14 +143,19 @@ def list_studio_dir(base_dir, studio, rel="", show_model_kinds=False):
         if not _STUDIO_SLUG.fullmatch(studio):
             return {"error": "invalid studio"}
         root = _confined_root(base_dir)
-        studio_root = os.path.realpath(os.path.join(root, "studios", studio))
+        # Both joins take a volume-root-relative path, the coordinates the caller
+        # speaks and the entries below are reported in; the mount may already
+        # supply the head of it. A studio the mount does not carry raises here
+        # rather than reaching the empty-listing return below, which would answer
+        # "this studio has nothing" for a studio that is simply somewhere else.
+        studio_root = os.path.realpath(os.path.join(root, _within_scope(f"studios/{studio}")))
         if not os.path.isdir(studio_root):
             return {"studio": studio, "rel": f"studios/{studio}", "parent": None, "entries": []}
         rel = str(rel or "").strip() or f"studios/{studio}"
         parts = _split_studio(rel)
         if parts is None or parts[0] != studio:
             return {"error": "outside the studio library"}
-        target = os.path.realpath(os.path.join(root, rel))
+        target = os.path.realpath(os.path.join(root, _within_scope(rel)))
         if not (target == studio_root or target.startswith(studio_root + os.sep)):
             return {"error": "outside the studio library"}
         if not os.path.isdir(target):
