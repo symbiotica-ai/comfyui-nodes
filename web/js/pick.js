@@ -96,11 +96,20 @@ function pickPanel(node) {
     // The panel therefore declares a small CONSTANT floor and no computeSize
     // at all: the layout hands it whatever is left of the node's body, the
     // element fills that box, and the grid scrolls inside it.
-    node.addDOMWidget("pick_panel", "sym_pick", container, {
+    const panelWidget = node.addDOMWidget("pick_panel", "sym_pick", container, {
         serialize: false,
         hideOnZoom: true,
         getMinHeight: () => PANEL_MIN,
     });
+    // The `serialize` in those options is a DIFFERENT flag: it governs the API
+    // prompt. Persistence in the workflow is `serialize` ON THE WIDGET, which
+    // `LGraphNode.configure` and `.serialize` are the ones to read, and
+    // addDOMWidget never copies the option onto the widget. Left alone the
+    // panel takes a slot in `widgets_values` and contributes an empty string —
+    // a DOM widget with no `getValue` reads as "" — so the next widget added to
+    // this node inherits that empty string on load and its combo refuses the
+    // queue. Setting it here is what keeps the saved values to the real widgets.
+    if (panelWidget) panelWidget.serialize = false;
     // Redraw, never resize. The only thing this may change is a node so narrow
     // that a tile cannot fit, and a node that has never been given a height.
     const refit = () => requestAnimationFrame(() => {
@@ -514,13 +523,15 @@ registerSymbioticaExtension(app, {
                     if (w) w.value = value;
                 }
             }
-            // Whatever the layout, a widget added after a workflow was saved
-            // sits past the end of its `widgets_values` and comes back unset
-            // rather than holding its declared default. Unset arrives as an
-            // empty string as readily as as nothing at all, and neither is one
-            // of a combo's options, so ComfyUI refuses the whole queue over it
-            // — `Value not in list: shortlist: '' not in [...]`. Anything the
-            // widget does not actually offer goes back to its default.
+            // Repair for graphs already on disk. `LGraphNode.configure` walks
+            // the widgets and takes `widgets_values` in order, so a value saved
+            // against one widget lands on whichever widget now holds that
+            // position. Any save written while the panel still occupied a slot
+            // carries its empty string there, and it comes back on the widget
+            // that took the position since. An empty string is not one of a
+            // combo's options, so ComfyUI refuses the whole queue over it:
+            // `Value not in list: show: '' not in [...]`. Anything the widget
+            // does not actually offer goes back to its default.
             for (const [name, value] of APPENDED_WIDGETS) {
                 const w = widgetOf(this, name);
                 if (!w) continue;

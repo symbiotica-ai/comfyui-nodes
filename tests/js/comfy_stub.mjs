@@ -229,18 +229,34 @@ export async function create(comfyClass, widgets = {}) {
     return node;
 }
 
-// Restore a saved node the way ComfyUI does: `widgets_values` is applied
-// POSITIONALLY over the node's widgets, and only then is onConfigure called.
+// Restore a saved node the way ComfyUI does, then call onConfigure.
 //
-// The positional part is what a migration has to repair. A widget added since
-// the workflow was saved sits past the end of that array and comes back with
-// no value at all — not its declared default — and ComfyUI refuses to queue a
-// combo that holds no value. Driving onConfigure without this models a restore
-// that cannot fail, and a test written against it passes on a graph the real
-// frontend rejects.
+// This mirrors `LGraphNode.configure` exactly, because a migration is written
+// against its precise behaviour and an approximation here passes tests the real
+// frontend fails:
+//
+//     let i = 0
+//     for (const widget of this.widgets ?? []) {
+//       if (widget.serialize === false) continue
+//       if (i >= info.widgets_values.length) break
+//       widget.value = info.widgets_values[i++]
+//     }
+//
+// Two details carry all the weight. It BREAKS past the end of the array rather
+// than assigning undefined, so a widget the save did not reach keeps its
+// declared default. And the counter only advances for widgets that serialize,
+// so one that opts out shifts nothing — while one that does NOT opt out takes a
+// position, and every later widget reads the value saved one slot along.
 export function configure(node, info) {
-    const v = info?.widgets_values;
-    if (Array.isArray(v)) node.widgets.forEach((w, i) => { w.value = v[i]; });
+    const values = info?.widgets_values;
+    if (Array.isArray(values)) {
+        let i = 0;
+        for (const w of node.widgets ?? []) {
+            if (w.serialize === false) continue;
+            if (i >= values.length) break;
+            w.value = values[i++];
+        }
+    }
     node.onConfigure?.call(node, info);
     return node;
 }

@@ -305,17 +305,16 @@ test("a widget added after that layout goes back to its own default", async () =
     assert.equal(widgetOf(node, "show").value, "approved");
 });
 
-test("a workflow saved before the widget existed still gets its default", async () => {
-    // The common case, and the one that broke a live graph: a save from the
-    // CURRENT layout carries six values for seven widgets. The seventh is past
-    // the end of the array and comes back with no value at all, and ComfyUI
-    // refuses to queue a combo holding no value. The ten-value legacy repair
-    // never sees this one.
+test("the panel claims no slot in the saved values", async () => {
+    // What actually broke a live graph. `LGraphNode.configure` and `.serialize`
+    // read `serialize` ON THE WIDGET; the one passed in addDOMWidget's options
+    // is a different flag governing the API prompt, and is not copied across. A
+    // panel left serializing takes the last slot and contributes "" (a DOM
+    // widget with no getValue reads as that), so the next widget appended to
+    // this node takes the position the panel had and inherits its empty string.
     const node = await panelNode([], [ONE]);
-    configure(node, { widgets_values: [
-        "Oct/Food/Spookies", "[]", "", "single", "edits", "",
-    ] });
-    assert.equal(widgetOf(node, "show").value, "approved");
+    const panel = node.widgets.find((w) => w.name === "pick_panel");
+    assert.equal(panel.serialize, false);
 });
 
 test("an empty value is unset too, not a choice the widget offers", async () => {
