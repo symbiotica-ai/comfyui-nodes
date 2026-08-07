@@ -229,6 +229,22 @@ export async function create(comfyClass, widgets = {}) {
     return node;
 }
 
+// Restore a saved node the way ComfyUI does: `widgets_values` is applied
+// POSITIONALLY over the node's widgets, and only then is onConfigure called.
+//
+// The positional part is what a migration has to repair. A widget added since
+// the workflow was saved sits past the end of that array and comes back with
+// no value at all — not its declared default — and ComfyUI refuses to queue a
+// combo that holds no value. Driving onConfigure without this models a restore
+// that cannot fail, and a test written against it passes on a graph the real
+// frontend rejects.
+export function configure(node, info) {
+    const v = info?.widgets_values;
+    if (Array.isArray(v)) node.widgets.forEach((w, i) => { w.value = v[i]; });
+    node.onConfigure?.call(node, info);
+    return node;
+}
+
 // One LiteGraph repaint: every combo widget whose values is a function has it
 // invoked, exactly as ComboWidget._displayValue does per frame.
 export function repaint(...targets) {

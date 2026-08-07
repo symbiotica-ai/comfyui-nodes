@@ -9,6 +9,10 @@ import { attachHoverZoom, el, emptyState, errorLine, hideHoverZoom }
     from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaPick";
+// Widgets this node gained after graphs were already saved, with the value each
+// falls back to. A saved workflow carries one value per widget it knew about,
+// applied by position, so anything appended since comes back unset.
+const APPENDED_WIDGETS = [["shortlist", "approved"]];
 const MIN_NODE_W = 340;
 const PANEL_MIN = 44;        // an empty picker still shows its own message
 const DEFAULT_NODE_H = 460;  // only for a node that has never been given a height
@@ -503,15 +507,22 @@ registerSymbioticaExtension(app, {
                     const w = widgetOf(this, name);
                     if (w) w.value = v[i];
                 }
-                // A widget appended since that layout has no value in it, and
-                // the positional apply has already landed someone else's on it
-                // — the old folder path reaches `shortlist` here. ComfyUI
-                // validates a combo against its options and refuses the whole
-                // queue over a value that is not in the list, so each one goes
-                // back to its own default.
-                for (const [name, value] of [["shortlist", "approved"]]) {
+                // Every widget added since that layout is holding one of its
+                // values by now, so each goes back to its own default.
+                for (const [name, value] of APPENDED_WIDGETS) {
                     const w = widgetOf(this, name);
                     if (w) w.value = value;
+                }
+            }
+            // Whatever the layout, a widget added after a workflow was saved
+            // sits past the end of its `widgets_values` and comes back holding
+            // nothing at all, not its declared default. ComfyUI refuses to
+            // queue a combo with no value, so the graph stops running until
+            // someone finds the widget and sets it by hand.
+            for (const [name, value] of APPENDED_WIDGETS) {
+                const w = widgetOf(this, name);
+                if (w && (w.value === undefined || w.value === null)) {
+                    w.value = value;
                 }
             }
             queueMicrotask(() => this._symReloadPick?.());
