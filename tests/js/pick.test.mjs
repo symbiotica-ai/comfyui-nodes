@@ -318,6 +318,18 @@ test("a workflow saved before the widget existed still gets its default", async 
     assert.equal(widgetOf(node, "shortlist").value, "approved");
 });
 
+test("an empty value is unset too, not a choice the widget offers", async () => {
+    // What the live sandbox actually sent: `shortlist: '' not in
+    // ['approved','edits']`. The restore leaves the widget holding an empty
+    // string rather than nothing, and an empty string is not one of the
+    // options, so ComfyUI refuses the queue exactly as it does for no value.
+    const node = await panelNode([], [ONE]);
+    configure(node, { widgets_values: [
+        "Oct/Food/Spookies", "[]", "", "single", "edits", "", "",
+    ] });
+    assert.equal(widgetOf(node, "shortlist").value, "approved");
+});
+
 test("it registers under one extension name", async () => {
     assert.ok(app.extensions.some((e) => e.name === "symbiotica.pick"));
 });

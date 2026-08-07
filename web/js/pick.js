@@ -515,15 +515,20 @@ registerSymbioticaExtension(app, {
                 }
             }
             // Whatever the layout, a widget added after a workflow was saved
-            // sits past the end of its `widgets_values` and comes back holding
-            // nothing at all, not its declared default. ComfyUI refuses to
-            // queue a combo with no value, so the graph stops running until
-            // someone finds the widget and sets it by hand.
+            // sits past the end of its `widgets_values` and comes back unset
+            // rather than holding its declared default. Unset arrives as an
+            // empty string as readily as as nothing at all, and neither is one
+            // of a combo's options, so ComfyUI refuses the whole queue over it
+            // — `Value not in list: shortlist: '' not in [...]`. Anything the
+            // widget does not actually offer goes back to its default.
             for (const [name, value] of APPENDED_WIDGETS) {
                 const w = widgetOf(this, name);
-                if (w && (w.value === undefined || w.value === null)) {
-                    w.value = value;
-                }
+                if (!w) continue;
+                const offered = w.options?.values;
+                const known = Array.isArray(offered)
+                    ? offered.includes(w.value)
+                    : w.value !== undefined && w.value !== null && w.value !== "";
+                if (!known) w.value = value;
             }
             queueMicrotask(() => this._symReloadPick?.());
         };
