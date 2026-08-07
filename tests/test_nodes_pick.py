@@ -70,7 +70,7 @@ class TestSchema:
         schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
         widgets = [i.id for i in schema.inputs if i.id != "images"]
         assert widgets == ["save_path", "selection", "view", "mode", "stage",
-                           "names", "shortlist"]
+                           "names", "show"]
 
     def test_every_input_is_optional(self, nodes_mod):
         """The other half of surviving a saved workflow: `optional`, not order.
@@ -560,7 +560,7 @@ class TestShowingTheEditsOfAnApproval:
         self.wire(nodes_mod, json.dumps(["Spookies_00001_.png"]))
         nodes_mod.SymbioticaPick.execute(
             save_path=[f"{EVENT_DIR}/Food/Spookies"], stage=["edits"],
-            shortlist=["edits"])
+            show=["edits"])
         # What the run resolved is what the panel will list, so assert on that
         # rather than on the ticks — nothing is ticked on a first look.
         assert resolved("7")[2] == ["Spookies_00001_.png"]
@@ -573,7 +573,7 @@ class TestShowingTheEditsOfAnApproval:
         self.wire(nodes_mod, json.dumps(["Spookies_00001_.png"]))
         nodes_mod.SymbioticaPick.execute(
             save_path=[f"{EVENT_DIR}/Food/Spookies"], stage=["edits"],
-            shortlist=["edits"])
+            show=["edits"])
         target, only, derived = resolved("7")
         shown = [e["name"] for e in
                  listing_for(target, only=only, derived_from=derived)]

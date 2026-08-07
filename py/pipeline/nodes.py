@@ -58,7 +58,7 @@ _PICK_MODES = ["multiple", "single"]
 # What a picker fed by another picker shows: that one's approvals, or the files
 # saved FROM them. Two different questions — an edit is written after the tick
 # is made, so it can never be in the tick set that answers the first.
-_SHORTLIST_SHOWS = ["approved", "edits"]
+_SHOW_OPTIONS = ["approved", "edits"]
 
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
@@ -3900,16 +3900,19 @@ class SymbioticaPick(io.ComfyNode):
                 # widget values positionally, and a REQUIRED input is a demand
                 # on every payload already stored elsewhere — both of which
                 # this node has been bitten by before.
-                io.Combo.Input("shortlist", options=_SHORTLIST_SHOWS,
+                io.Combo.Input("show", options=_SHOW_OPTIONS,
                                default="approved", optional=True,
                                advanced=True,
-                               tooltip="What to show when another picker feeds "
-                                       "this one. `approved` lists exactly "
-                                       "what it ticked. `edits` lists the "
-                                       "files saved FROM those ticks — wire "
-                                       "that picker's `edit_save_path` into "
-                                       "the Save Image in between, so the "
-                                       "edits carry the mark this reads."),
+                               tooltip="Only matters when another picker feeds "
+                                       "this one, and does nothing otherwise. "
+                                       "`approved` lists exactly what that "
+                                       "picker ticked. `edits` lists the files "
+                                       "saved FROM those ticks instead, which "
+                                       "is how you review the edits of one "
+                                       "approval — wire that picker's "
+                                       "`edit_save_path` into the Save Image "
+                                       "in between, so each edit records the "
+                                       "render it came from."),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
@@ -3947,7 +3950,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def fingerprint_inputs(cls, images=None, save_path="", selection="",
                            view="", mode="multiple", stage="", names="",
-                           shortlist="approved"):
+                           show="approved"):
         """Change only when what LEAVES the node could have.
 
         The first version returned NaN — always changed — so the panel would
@@ -3991,7 +3994,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def check_lazy_status(cls, images=None, save_path="", selection="",
                           view="", mode="multiple", stage="", names="",
-                          shortlist="approved"):
+                          show="approved"):
         """Ask for the wire when there is one — for its ORDER, not its value.
 
         The images are read off disk, and `execute` ignores whatever arrives
@@ -4071,7 +4074,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def execute(cls, images=None, save_path="", selection="", view="",
                 mode="multiple", stage="", names="",
-                shortlist="approved") -> io.NodeOutput:
+                show="approved") -> io.NodeOutput:
         from PIL import Image
 
         from .pick_folder import (edit_prefix, listing_for, picked_paths,
@@ -4109,7 +4112,7 @@ class SymbioticaPick(io.ComfyNode):
                 # The upstream is itself narrowed; a tick it no longer shows is
                 # not something this node may offer.
                 ticks = [name for name in ticks if name in set(source_only)]
-            if str(one(shortlist, "approved") or "approved") == "edits":
+            if str(one(show, "approved") or "approved") == "edits":
                 # The edits OF those picks, which sit in THIS node's stage
                 # folder under names the picker above never saw — so its ticks
                 # cannot narrow them, and the mark each file carries does. The
