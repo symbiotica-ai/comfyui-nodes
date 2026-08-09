@@ -223,15 +223,20 @@ class TestWhichLayoutANameMeans:
     """A name is both a filename prefix and a directory at once, and only one
     of them is ever the answer."""
 
-    def test_files_named_after_it_are_what_it_means(self, tmp_path):
+    def test_both_layouts_are_listed_and_names_narrows(self, tmp_path):
+        """"that node should show everything from the folder if it's not
+        filtered with a name" — the files named after the target AND the
+        directory's own contents are one listing, prefix files first so a
+        pure-prefix folder keeps its numbering. One lane is a `names` tag.
+        """
         renders(str(tmp_path / "Food"), ("Spookies_00001_.png",))
         renders(str(tmp_path / "Food" / "Spookies"), ("edits_00001_.png",),
                 colour=90)
-        names = [e["name"] for e in listing_for(str(tmp_path / "Food" / "Spookies"))]
-        # Not the edits inside `Spookies/` — those are a later step, and
-        # merging them put every edit in the list of renders to choose a base
-        # from, moving the numbering every time a stage was saved.
-        assert names == ["Spookies_00001_.png"]
+        target = str(tmp_path / "Food" / "Spookies")
+        assert [e["name"] for e in listing_for(target)] == [
+            "Spookies_00001_.png", "edits_00001_.png"]
+        assert [e["name"] for e in listing_for(target, only=["edits"])] == [
+            "edits_00001_.png"]
 
     def test_the_directory_is_meant_when_nothing_is_named_after_it(self,
                                                                     tmp_path):
@@ -253,6 +258,11 @@ class TestWhichLayoutANameMeans:
         renders(str(tmp_path / "Food"), ("Spookies_00001_.png",))
         assert read_folders(str(tmp_path / "Food" / "Spookies")) == [
             (str(tmp_path / "Food"), "Spookies")]
+        # With a directory of the same name, both layouts are read.
+        renders(str(tmp_path / "Food" / "Spookies"), ("edits_00001_.png",))
+        assert read_folders(str(tmp_path / "Food" / "Spookies")) == [
+            (str(tmp_path / "Food"), "Spookies"),
+            (str(tmp_path / "Food" / "Spookies"), "")]
 
     def test_nothing_to_read_is_no_folders(self):
         assert read_folders("") == []

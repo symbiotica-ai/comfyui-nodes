@@ -148,29 +148,30 @@ def listing(folder: str, name_prefix: str = "",
 
 
 def read_folders(target: str) -> list[tuple[str, str]]:
-    """The (folder, prefix) pairs to read for one name. The prefix layout wins.
+    """The (folder, prefix) pairs to read for one name — BOTH layouts.
 
-    A name is both things at once and only one of them is ever the answer. A
-    Save Image node given `…/Food - 3 stages/Spookies` writes
-    `Spookies_00001_.png` one level UP — the last segment of a filename prefix
-    names the file — while `…/Spookies/` is also a real directory, holding the
-    steps that come after: `…/Spookies/edits_00001_.png`.
+    A name is two things at once. A Save Image node given
+    `…/Food - 3 stages/Spookies` writes `Spookies_00001_.png` one level UP —
+    the last segment of a filename prefix names the file — while `…/Spookies/`
+    is also a real directory, holding whatever later lanes saved into it.
 
-    So when files named after it sit beside it, those ARE it, and the directory
-    of the same name belongs to the stages within. Reading both merged them
-    together, which put every edit in the list of renders to choose a base
-    from, and moved the numbering under someone every time a stage was saved.
-    Only when nothing is named after it is the directory the thing meant —
-    which is how work saved a folder-per-asset still reads.
+    Both are it: "that node should show everything from the folder if it's
+    not filtered with a name". An earlier version made the prefix layout win
+    outright, which hid an entire directory of lane saves behind one stray
+    sibling file. Narrowing to one lane is `names`' job now — an entry
+    without an extension is a save prefix — so the listing's job is to show
+    everything the name could mean. Files named after the target come first,
+    keeping the numbering of pure-prefix folders exactly as it was.
     """
     if not target:
         return []
+    pairs = []
     parent, own = os.path.dirname(target), os.path.basename(target)
     if own and os.path.isdir(parent) and images_in(parent, own):
-        return [(parent, own)]
+        pairs.append((parent, own))
     if os.path.isdir(target):
-        return [(target, "")]
-    return []
+        pairs.append((target, ""))
+    return pairs
 
 
 def _parent_stems(derived_from):
