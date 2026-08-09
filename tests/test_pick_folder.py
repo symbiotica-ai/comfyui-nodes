@@ -34,6 +34,21 @@ class TestWhichFilesBelongToAnAsset:
         assert name_matches_prefix("Spookies Deluxe_00001_.png",
                                    "Spookies") is False
 
+    def test_another_lane_into_the_same_folder_is_not_claimed_either(self):
+        """Two save nodes writing one folder under different prefixes are two
+        listings: "i want the Pick node to read the path I attached to it".
+        Only ComfyUI's own counter may follow the prefix — anything else is a
+        different prefix that merely starts the same.
+        """
+        assert name_matches_prefix("Spookies_lora_00001_.png",
+                                   "Spookies") is False
+        assert name_matches_prefix("Spookies_lora_00001_.png",
+                                   "Spookies_lora") is True
+        assert name_matches_prefix("Spookies_lora.png",
+                                   "Spookies_lora") is True
+        # A bare counter with no trailing underscore still belongs.
+        assert name_matches_prefix("Spookies_7.png", "Spookies") is True
+
     def test_without_a_prefix_the_whole_folder_is_listed(self, tmp_path):
         renders(str(tmp_path), ("a.png", "b.png"))
         assert images_in(str(tmp_path)) == ["a.png", "b.png"]

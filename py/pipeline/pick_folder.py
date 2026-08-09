@@ -53,19 +53,29 @@ LISTING_LIMIT = 400
 
 
 def name_matches_prefix(name: str, prefix: str) -> bool:
-    """Whether a file was written under `prefix` by a Save Image node.
+    """Whether a file was written under EXACTLY `prefix` by a Save Image node.
 
-    ComfyUI appends `_00001_` to the prefix, so an underscore has to follow it
-    rather than merely the prefix matching: `Spookies` must not claim
-    `Spookies Deluxe_00001_.png`, a different asset filed in the same category
-    folder. Only the underscore counts, because a space or a dash is an
-    ordinary character in an asset name — "Black Cat Lollipop" — while the
-    underscore before the counter is ComfyUI's own convention.
+    ComfyUI appends `_00001_` to the prefix, so what follows the prefix must
+    be its counter and nothing else: digits between underscores. Anything
+    other than a counter is a DIFFERENT prefix that merely starts the same —
+    `Spookies` claims neither `Spookies Deluxe_00001_.png` (another asset)
+    nor `Spookies_lora_00001_.png` (another save lane into the same folder).
+    The picker lists the path it is handed, literally; two lanes stay two
+    listings because their save prefixes differ, with no convention beyond
+    what is already typed into the save nodes.
     """
     stem = os.path.splitext(name)[0]
     if stem == prefix:
         return True
-    return stem.startswith(prefix + "_")
+    # A marked derivative — `edits_from.<parent>_00001_` — is this stage's own
+    # file: the mark is written by edit_prefix ON TOP of the stage prefix,
+    # so it belongs to the stage the way a counter does.
+    if stem.startswith(prefix + FROM_MARKER):
+        return True
+    if not stem.startswith(prefix + "_"):
+        return False
+    tail = stem[len(prefix) + 1:].rstrip("_")
+    return tail.isdigit()
 
 
 def images_in(folder: str, name_prefix: str = "") -> list[str]:
