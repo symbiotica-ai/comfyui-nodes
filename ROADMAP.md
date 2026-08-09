@@ -1,9 +1,9 @@
 # Roadmap
 
-Ideas queued for the pack. One block per idea; move a block to the CHANGELOG
-when it ships.
+Ideas queued for the pack. One block per idea, numbered by its GitHub issue —
+refer to an entry as #N. Move a block to the CHANGELOG when it ships.
 
-## Order Tracker Node
+## [#65](https://github.com/symbiotica-ai/comfyui-nodes/issues/65) — Order Tracker Node
 
 Track the progression of the order, gamify it.
 
@@ -18,7 +18,7 @@ Track the progression of the order, gamify it.
   progression ticking up as assets get approved — the pitch artifact for the
   feature.
 
-## Asset Focus: reference thumbnails in the asset list
+## [#64](https://github.com/symbiotica-ai/comfyui-nodes/issues/64) — Asset Focus: reference thumbnails in the asset list
 
 Reuse the Auto Packer panel's row rendering for the Asset Focus list — the
 thumbnail machinery already exists (`order_pipeline.js`: `thumbUrl` over the
