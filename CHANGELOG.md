@@ -6,7 +6,7 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
-## Unreleased
+## 2026.8.18
 
 **Output labels unify — saved graphs load unchanged.** Every slot keeps its
 index; only the label shown at the socket changes. One name per concept now:
