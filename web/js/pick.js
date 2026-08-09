@@ -637,6 +637,15 @@ registerSymbioticaExtension(app, {
                 const w = widgetOf(this, name);
                 if (w) { w.hidden = true; w.computeSize = () => [0, -4]; }
             }
+            // Shown as `input_path`: this node READS that path — "it doesn't
+            // make any sense that an input path is called save when the node
+            // doesn't save". The id stays `save_path` so saved graphs, API
+            // payloads and the schema keep loading untouched; only what the
+            // canvas prints changes.
+            const sp = widgetOf(this, "save_path");
+            if (sp) sp.label = "input_path";
+            const spInput = this.inputs?.find((i) => i.name === "save_path");
+            if (spInput) spInput.localized_name = "input_path";
             // Deprecated, superseded by chaining pickers with `show` +
             // `edit_save_path`. The slot stays (values restore positionally);
             // an empty one just stops taking up a row. A graph that still
