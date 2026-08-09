@@ -141,7 +141,12 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
 
 - **Symbiotica Order Read** — parses a monthly order `.xlsx` (Feature / Asset
   Name / Canvas / Prompt columns) plus a folder of reference images
-  (`AssetName.png`, `AssetName_2.png`, ...) into events.
+  (`AssetName.png`, `AssetName_2.png`, ...) into events. A blank `month` means
+  "whichever this project has" and reads the first one; a NAMED month the
+  project holds no order for raises, rather than reading the first one under
+  the name that was asked for. The same split applies to `feature` on Order
+  Specs and the Template Editor — over the API a substituted answer renders,
+  bills, and reports success indistinguishably from the one requested.
 - **Symbiotica Event Specs** — picks one event (feature) and emits its spec:
   template groups by category + canvas with per-asset prompts and refs.
 - **Symbiotica Template Builder** — composes a template sheet: either
@@ -191,7 +196,10 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   fan-out runs a single render lane once per asset instead of eight duplicated
   groups.
 - **Symbiotica Save Render** — files each result under
-  month/feature/category/asset.
+  month/feature/category/asset, and declares what it wrote as the run's output
+  images. An API caller reads a run's renders from `/history`, and only what a
+  node declares gets there — a save that declares nothing finishes green with
+  nothing to show for it.
 - **Symbiotica Dataset Reference** — picks a reference per category, seeded per
   `(seed, category)` so adding a type does not reshuffle a pick already
   approved. Also reports `cell_boxes`: where each asset sits inside its type's
@@ -226,6 +234,16 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   `ref_names` to tick only the references the client sent for this asset — and
   resting on a thumbnail floats it big beside the grid, so a render can be
   judged without opening it in a tab.
+  To review the EDITS of one approval rather than the approval itself, wire this
+  node's `edit_save_path` into the Save Image that writes them and set the next
+  picker's `show` to `edits`. `edit_save_path` is `save_path` marked with
+  the render that was picked, so each edit records what it came from in its own
+  name — which is the only place that link can live, since an edit is named by
+  the save node long after the tick was made and can never appear in a set of
+  ticks. A file written without the mark simply has no parent, so nothing
+  already on disk needs renaming. The edits land wherever `save_path` points, so
+  give the picker a `stage` to keep them in their own step folder rather than
+  beside the renders they came from.
 - **Symbiotica Asset Refs** — the client's own reference art for one asset, in
   the order the order sheet pairs it, so the index that picks a cell picks the
   reference belonging to it. References with transparency are composited onto a

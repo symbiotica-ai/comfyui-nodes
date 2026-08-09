@@ -4,9 +4,9 @@ import os
 
 from PIL import Image
 
-from pipeline.pick_folder import (images_in, listing, listing_for,
+from pipeline.pick_folder import (edit_prefix, images_in, listing, listing_for,
                                   name_matches_prefix, picked_paths,
-                                  read_folders, remember, resolved)
+                                  parent_of, read_folders, remember, resolved)
 
 
 def renders(folder, names, colour=10):
@@ -130,20 +130,27 @@ class TestThePanelListsWhatTheNodeRead:
 
     def test_a_run_records_the_path_it_resolved(self):
         remember("7", "/out/Oct/Ev/Food/Spookies")
-        assert resolved("7") == ("/out/Oct/Ev/Food/Spookies", None)
+        assert resolved("7") == ("/out/Oct/Ev/Food/Spookies", None, None)
 
     def test_a_node_that_has_never_run_has_no_folder(self):
-        assert resolved("no-such-node") == ("", None)
+        assert resolved("no-such-node") == ("", None, None)
 
     def test_an_integer_and_its_string_are_the_same_node(self):
         remember(9, "/out/x")
-        assert resolved("9") == ("/out/x", None)
+        assert resolved("9") == ("/out/x", None, None)
 
     def test_a_shortlist_is_recorded_with_the_path(self):
         """A picker fed by another lists what that one approved, and the panel
         has to be able to ask for the same narrowed set."""
         remember("8", "/out/x", ["a.png", "b.png"])
-        assert resolved("8") == ("/out/x", ["a.png", "b.png"])
+        assert resolved("8") == ("/out/x", ["a.png", "b.png"], None)
+
+    def test_the_edits_being_shown_are_recorded_too(self):
+        """The panel has to ask the run's question, not a broader one: a picker
+        showing the edits of one approval must not have its grid list every
+        edit in the folder."""
+        remember("6", "/out/x/edits", None, ["Chair_00001_.png"])
+        assert resolved("6") == ("/out/x/edits", None, ["Chair_00001_.png"])
 
 
 class TestListingAShortlist:
@@ -279,3 +286,128 @@ def test_discarding_a_prefixed_render_files_it_under_the_asset(tmp_path):
     assert [e["name"] for e in listing_for(target)] == ["Spookies_00001_.png"]
     assert os.path.isfile(category / "Spookies" / "discarded"
                           / "Spookies_00002_.png")
+
+
+class TestWhatAnEditWasMadeFrom:
+    """An edit is a NEW file: the save node gives it a fresh counter name that
+    was never in the tick set of the render it came from. So the link has to be
+    written down at save time, in the one place that travels with the file —
+    its name.
+
+    The format is shaped by two constraints, not by taste. It has to survive
+    ComfyUI appending `_00012_`, and it has to leave the file still matching the
+    stage prefix a picker lists that folder by, which is why the marker follows
+    `<stage>_` instead of leading the name.
+    """
+
+    def test_the_prefix_carries_the_render_the_edit_came_from(self):
+        assert edit_prefix("edits", "Spiderweb Chair_00001_.png") == (
+            "edits_from.Spiderweb Chair_00001_")
+
+    def test_the_saved_file_says_what_it_came_from(self):
+        # The name ComfyUI actually writes from that prefix, counter and all.
+        assert parent_of("edits_from.Spiderweb Chair_00001__00012_.png") == (
+            "Spiderweb Chair_00001_")
+
+    def test_a_file_with_no_marker_has_no_parent_rather_than_a_wrong_one(self):
+        assert parent_of("edits_00012_.png") is None
+        assert parent_of("ComfyUI_00001_.png") is None
+        assert parent_of("Spiderweb Chair_00001_.png") is None
+
+    def test_naming_no_render_marks_nothing(self):
+        # Never a wrong mark: with nothing to point at, the prefix stays the
+        # plain stage and the file simply has no parent.
+        assert edit_prefix("edits", "") == "edits"
+        assert edit_prefix("edits", None) == "edits"
+
+    def test_a_marked_edit_is_still_listed_under_its_stage(self, tmp_path):
+        """The constraint that shaped the format. A picker lists `<asset>/edits`
+        by the prefix `edits`, so a marked file that stopped matching it would
+        vanish from the very grid it was saved for."""
+        renders(str(tmp_path), ("edits_from.Spiderweb Chair_00001__00012_.png",
+                                "edits_00003_.png"))
+        assert images_in(str(tmp_path), "edits") == [
+            "edits_00003_.png", "edits_from.Spiderweb Chair_00001__00012_.png"]
+
+
+class TestListingWhatCameFromOnePick:
+    """The second picker in an edit lane shows the edits OF the render that was
+    approved — which it can only do by reading each file's own mark, since the
+    edits were named by the save node long after the tick was made."""
+
+    def test_only_the_edits_of_that_render_are_listed(self, tmp_path):
+        renders(str(tmp_path), (
+            "edits_from.Chair_00001__00001_.png",
+            "edits_from.Chair_00001__00002_.png",
+            "edits_from.Lamp_00007__00001_.png"))
+        names = [e["name"] for e in
+                 listing_for(str(tmp_path), derived_from=["Chair_00001_.png"])]
+        assert names == ["edits_from.Chair_00001__00001_.png",
+                         "edits_from.Chair_00001__00002_.png"]
+
+    def test_an_unmarked_edit_is_claimed_by_no_one(self, tmp_path):
+        """It does not say where it came from, so it cannot answer for a parent
+        — the same rule that keeps every file already on disk out of trouble."""
+        renders(str(tmp_path), ("edits_from.Chair_00001__00001_.png",
+                                "edits_00002_.png"))
+        names = [e["name"] for e in
+                 listing_for(str(tmp_path), derived_from=["Chair_00001_.png"])]
+        assert names == ["edits_from.Chair_00001__00001_.png"]
+
+    def test_the_numbering_is_of_what_is_shown(self, tmp_path):
+        renders(str(tmp_path), ("edits_from.Lamp_00007__00001_.png",
+                                "edits_from.Chair_00001__00005_.png",
+                                "edits_from.Chair_00001__00009_.png"))
+        entries = listing_for(str(tmp_path),
+                              derived_from=["Chair_00001_.png"])
+        assert [e["index"] for e in entries] == [1, 2]
+
+    def test_several_approved_renders_show_the_edits_of_each(self, tmp_path):
+        renders(str(tmp_path), ("edits_from.Chair_00001__00005_.png",
+                                "edits_from.Lamp_00007__00001_.png",
+                                "edits_from.Rug_00002__00001_.png"))
+        names = [e["name"] for e in listing_for(
+            str(tmp_path), derived_from=["Chair_00001_.png", "Lamp_00007_.png"])]
+        assert names == ["edits_from.Chair_00001__00005_.png",
+                         "edits_from.Lamp_00007__00001_.png"]
+
+    def test_nothing_approved_upstream_means_no_edits_to_show(self, tmp_path):
+        """An empty set is a real answer, not the absence of a question — the
+        same reading `only` gives it. Listing the whole folder here would offer
+        edits of renders nobody approved."""
+        renders(str(tmp_path), ("edits_from.Chair_00001__00001_.png",
+                                "edits_00002_.png"))
+        assert listing_for(str(tmp_path), derived_from=[]) == []
+
+    def test_asking_about_no_parent_at_all_lists_the_folder(self, tmp_path):
+        renders(str(tmp_path), ("edits_from.Chair_00001__00001_.png",
+                                "edits_00002_.png"))
+        assert len(listing_for(str(tmp_path), derived_from=None)) == 2
+
+
+class TestNarrowingBeforeTheCap:
+    """The cap exists so one wrong folder cannot list a whole volume into a
+    node body. Applied before the narrowing it does the opposite: it throws
+    away the very files that were asked for and hands back an empty grid while
+    they sit on disk."""
+
+    def test_a_marked_edit_survives_a_folder_at_the_cap(self, tmp_path):
+        from pipeline.pick_folder import LISTING_LIMIT
+        # Plain counter names sort before `edits_from.` ("0" < "f"), so every
+        # marked edit is at the far end of the listing — exactly where a cap
+        # applied first would cut them.
+        renders(str(tmp_path),
+                tuple(f"edits_{i:05d}_.png" for i in range(LISTING_LIMIT)))
+        renders(str(tmp_path), ("edits_from.Chair_00001__00001_.png",))
+        names = [e["name"] for e in
+                 listing_for(str(tmp_path), derived_from=["Chair_00001_.png"])]
+        assert names == ["edits_from.Chair_00001__00001_.png"]
+
+    def test_a_shortlisted_file_survives_a_folder_at_the_cap(self, tmp_path):
+        """The same cut, on the narrowing that shipped long before this one."""
+        from pipeline.pick_folder import LISTING_LIMIT
+        renders(str(tmp_path),
+                tuple(f"a{i:05d}.png" for i in range(LISTING_LIMIT)))
+        renders(str(tmp_path), ("zzz.png",))
+        names = [e["name"] for e in listing_for(str(tmp_path), only=["zzz.png"])]
+        assert names == ["zzz.png"]

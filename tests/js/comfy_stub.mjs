@@ -237,6 +237,38 @@ export async function create(comfyClass, widgets = {}) {
     return node;
 }
 
+// Restore a saved node the way ComfyUI does, then call onConfigure.
+//
+// This mirrors `LGraphNode.configure` exactly, because a migration is written
+// against its precise behaviour and an approximation here passes tests the real
+// frontend fails:
+//
+//     let i = 0
+//     for (const widget of this.widgets ?? []) {
+//       if (widget.serialize === false) continue
+//       if (i >= info.widgets_values.length) break
+//       widget.value = info.widgets_values[i++]
+//     }
+//
+// Two details carry all the weight. It BREAKS past the end of the array rather
+// than assigning undefined, so a widget the save did not reach keeps its
+// declared default. And the counter only advances for widgets that serialize,
+// so one that opts out shifts nothing — while one that does NOT opt out takes a
+// position, and every later widget reads the value saved one slot along.
+export function configure(node, info) {
+    const values = info?.widgets_values;
+    if (Array.isArray(values)) {
+        let i = 0;
+        for (const w of node.widgets ?? []) {
+            if (w.serialize === false) continue;
+            if (i >= values.length) break;
+            w.value = values[i++];
+        }
+    }
+    node.onConfigure?.call(node, info);
+    return node;
+}
+
 // One LiteGraph repaint: every combo widget whose values is a function has it
 // invoked, exactly as ComboWidget._displayValue does per frame.
 export function repaint(...targets) {

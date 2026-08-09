@@ -169,6 +169,78 @@ def test_resolution_ignores_canvas_studio(vol, monkeypatch):
 
 
 @pytest.fixture()
+def scoped(tmp_path, monkeypatch):
+    """A studio-assets mount carrying sub_path=studios/imperia: the mount point IS
+    the studio root, so the studio's own folders sit directly under it."""
+    _touch(tmp_path / "bakery" / "October" / "order.xlsx")
+    monkeypatch.setattr("pipeline.studio_library.STUDIO_ASSETS_SCOPE", "studios/imperia")
+    return tmp_path
+
+
+def test_scoped_mount_resolves_a_selection_written_at_the_volume_root(scoped):
+    # The selection a canvas stores is volume-root-relative; the same string has to
+    # name the same asset through a mount that is already inside studios/imperia.
+    assert resolve_studio_path(str(scoped), "studios/imperia/bakery/October") == \
+        os.path.realpath(str(scoped / "bakery" / "October"))
+
+
+def test_scoped_mount_resolves_the_studio_root_itself(scoped):
+    assert resolve_studio_path(str(scoped), "studios/imperia") == os.path.realpath(str(scoped))
+
+
+def test_scoped_mount_refuses_another_studio(scoped):
+    # Nothing inside the sandbox re-checks tenancy, so naming a studio this mount
+    # does not carry must SAY so rather than resolve to a path that happens to miss.
+    with pytest.raises(ValueError, match="outside this mount"):
+        resolve_studio_path(str(scoped), "studios/ggs/bakery")
+
+
+def test_scoped_mount_matches_whole_segments(scoped, monkeypatch):
+    # "studios/imp" is not a prefix of the studio "imperia" — it is a different studio.
+    monkeypatch.setattr("pipeline.studio_library.STUDIO_ASSETS_SCOPE", "studios/imp")
+    with pytest.raises(ValueError, match="outside this mount"):
+        resolve_studio_path(str(scoped), "studios/imperia/bakery")
+
+
+def test_scoped_mount_still_confines_traversal(scoped):
+    _touch(scoped.parent / "secret.png")
+    with pytest.raises(ValueError, match="outside the studio library"):
+        resolve_studio_path(str(scoped), "studios/imperia/../../secret.png")
+
+
+def test_scoped_mount_reports_a_miss_by_the_name_that_was_asked_for(scoped):
+    with pytest.raises(ValueError, match="not found: studios/imperia/nope"):
+        resolve_studio_path(str(scoped), "studios/imperia/nope")
+
+
+def test_unscoped_mount_is_unchanged(vol, monkeypatch):
+    # The canvas mounts the whole Volume and declares no scope.
+    monkeypatch.setattr("pipeline.studio_library.STUDIO_ASSETS_SCOPE", "")
+    assert resolve_studio_path(str(vol), "studios/ggs/references/hero.png") == \
+        os.path.realpath(str(vol / "studios" / "ggs" / "references" / "hero.png"))
+
+
+def test_scoped_mount_lists_the_studio_it_carries(scoped):
+    # An unprovisioned studio and a studio the lister looked for in the wrong place
+    # produce the same empty listing, so the listing has to reach the right place.
+    res = list_studio_dir(str(scoped), "imperia", "")
+    assert [e["name"] for e in res["entries"]] == ["bakery"]
+    # Entries stay in volume-root coordinates: that is what the browser stores back
+    # as a selection, and it has to name the same asset off this mount as on it.
+    assert res["entries"][0]["rel"] == "studios/imperia/bakery"
+
+
+def test_scoped_mount_lists_below_the_studio_root(scoped):
+    res = list_studio_dir(str(scoped), "imperia", "studios/imperia/bakery")
+    assert [e["name"] for e in res["entries"]] == ["October"]
+
+
+def test_scoped_mount_refuses_to_list_another_studio(scoped):
+    # Not an empty studio — a studio this mount does not carry at all.
+    assert "outside this mount" in list_studio_dir(str(scoped), "ggs", "").get("error", "")
+
+
+@pytest.fixture()
 def vol2(tmp_path):
     root = tmp_path
     for k in ("checkpoints", "loras", "references", "renders"):

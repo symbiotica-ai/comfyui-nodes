@@ -4,7 +4,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, emit, fire, reset, setResponder, tick } from "./comfy_stub.mjs";
+import { app, create, emit, fire, reset, setResponder, tick, configure,
+} from "./comfy_stub.mjs";
 import "../../web/js/pick.js";
 
 globalThis.window.confirm = () => true;
@@ -33,8 +34,12 @@ function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) 
     };
 }
 
+// The node's widgets, in the order define_schema declares them — the order is
+// what a saved workflow's values are applied by, so this list is the one thing
+// here that has to track the Python schema exactly.
 const WIDGET_DEFAULTS = {
     save_path: "", selection: "", view: "", mode: "multiple", stage: "",
+    names: "", show: "approved",
 };
 
 async function panelNode(seen = [], images = [], values = {},
@@ -276,7 +281,7 @@ test("a graph saved before the one-wire layout keeps its values", async () => {
     // the five surviving widgets by position unless onConfigure puts each
     // back on its own widget.
     const node = await panelNode([], [ONE]);
-    node.onConfigure?.call(node, { widgets_values: [
+    configure(node, { widgets_values: [
         false, "Spookies", "Food", '["a.png"]', "", "", "October/Ev/Food",
         "edit", "single", "edits", "",
     ] });
@@ -284,6 +289,44 @@ test("a graph saved before the one-wire layout keeps its values", async () => {
     assert.equal(widgetOf(node, "selection").value, '["a.png"]');
     assert.equal(widgetOf(node, "mode").value, "single");
     assert.equal(widgetOf(node, "stage").value, "edits");
+});
+
+test("a widget added after that layout goes back to its own default", async () => {
+    // The old values are applied positionally BEFORE onConfigure runs, so a
+    // widget appended since then is holding one of them — here the 7th value,
+    // the old folder path, lands on the `shortlist` combo. ComfyUI validates a
+    // combo against its option list and refuses the whole queue over a value
+    // that is not in it, so a graph nobody touched would stop running.
+    const node = await panelNode([], [ONE]);
+    configure(node, { widgets_values: [
+        false, "Spookies", "Food", '["a.png"]', "", "", "October/Ev/Food",
+        "edit", "single", "edits", "",
+    ] });
+    assert.equal(widgetOf(node, "show").value, "approved");
+});
+
+test("the panel claims no slot in the saved values", async () => {
+    // What actually broke a live graph. `LGraphNode.configure` and `.serialize`
+    // read `serialize` ON THE WIDGET; the one passed in addDOMWidget's options
+    // is a different flag governing the API prompt, and is not copied across. A
+    // panel left serializing takes the last slot and contributes "" (a DOM
+    // widget with no getValue reads as that), so the next widget appended to
+    // this node takes the position the panel had and inherits its empty string.
+    const node = await panelNode([], [ONE]);
+    const panel = node.widgets.find((w) => w.name === "pick_panel");
+    assert.equal(panel.serialize, false);
+});
+
+test("an empty value is unset too, not a choice the widget offers", async () => {
+    // What the live sandbox actually sent: `shortlist: '' not in
+    // ['approved','edits']`. The restore leaves the widget holding an empty
+    // string rather than nothing, and an empty string is not one of the
+    // options, so ComfyUI refuses the queue exactly as it does for no value.
+    const node = await panelNode([], [ONE]);
+    configure(node, { widgets_values: [
+        "Oct/Food/Spookies", "[]", "", "single", "edits", "", "",
+    ] });
+    assert.equal(widgetOf(node, "show").value, "approved");
 });
 
 test("it registers under one extension name", async () => {

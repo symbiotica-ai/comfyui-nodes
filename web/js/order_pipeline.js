@@ -53,6 +53,23 @@ function featureKey(value) {
     return String(value ?? "").split(" — ")[0].trim();
 }
 
+// Which event a stored feature opens, and whether the order still holds it.
+//
+// The queue takes the feature literally: it builds the named event or refuses,
+// and never answers a name it cannot find with the order's first event. This is
+// the panel half of that rule, so the two agree about which event is on screen.
+//
+// A BLANK feature is not a stale one — it means "whichever this order leads
+// with", and the first event is the answer. Neither is an order with no events:
+// nothing was substituted because there was nothing to substitute.
+export function eventForStoredFeature(events, stored) {
+    const list = events ?? [];
+    const wanted = featureKey(stored);
+    const asked = wanted ? list.find((e) => e.feature === wanted) : null;
+    const event = asked ?? list[0] ?? null;
+    return { event, stale: Boolean(wanted) && !asked && Boolean(event) };
+}
+
 // --- graph helpers -----------------------------------------------------------
 // Canvas-level notice. Saving a template piggybacks on a normal queue of the
 // WHOLE graph, so it fails for reasons that have nothing to do with the packer
@@ -1728,8 +1745,19 @@ async function taskDataFor(node) {
     const ownFeature = widgetOf(node, "feature")?.value?.trim();
     const specFeature = upstreamNode(node, "spec")?.widgets
         ?.find((w) => w.name === "feature")?.value;
-    const feature = ownFeature || specFeature || events[0]?.feature || "";
-    const ev = events.find((e) => e.feature === feature) || events[0];
+    const stored = ownFeature || specFeature;
+    const { event: ev, stale } = eventForStoredFeature(events, stored);
+    // The widget follows the panel onto the event being shown, in the bare form
+    // the queue reads. Left behind, it would name one event while the panel
+    // built another, and the run would refuse a feature nobody saw on screen.
+    const featW = widgetOf(node, "feature");
+    if (ownFeature && featW && ev && featW.value !== ev.feature) {
+        featW.value = ev.feature;
+    }
+    if (stale && ownFeature) {
+        toast("warn", "Event no longer in this order",
+              `"${ownFeature}" is not in this order — opened "${ev.feature}".`);
+    }
     const taskAssets = (ev?.assets ?? []).filter((a) => a.assetName).map((a) => ({
         assetName: a.assetName,
         category: a.category,
@@ -1738,7 +1766,7 @@ async function taskDataFor(node) {
         refFiles: a.refFiles ?? [],
     }));
     return { taskAssets, refsRoot, assetsRoot, events,
-             feature: ev?.feature ?? feature };
+             feature: ev?.feature ?? featureKey(stored) };
 }
 
 async function openEditorForNode(node, uiState) {

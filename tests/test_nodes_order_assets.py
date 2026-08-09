@@ -295,6 +295,32 @@ def test_save_render_survives_a_short_label_list(nodes_mod, tmp_path):
     assert out.args[0][1].startswith("render-2-")
 
 
+def test_save_render_declares_its_files_as_output_images(nodes_mod, tmp_path):
+    """The order plane's only render-to-client path reads /history outputs and
+    keeps images typed "output". A save that declares none completes with zero
+    generations to show, and an edit of one has no parent id to derive from."""
+    proj = _book(tmp_path / "bakery", **{"Decoration": "DECO"})
+    out = nodes_mod.SymbioticaSaveRender.execute(
+        images=[_tensor(), _tensor()], asset_names=["A", "B"],
+        categories=["Decoration"] * 2, system_prompts=["DECO"] * 2,
+        subfolder=["renders"], project_path=[proj])
+    images = out.ui.as_dict()["images"]
+    assert [i["filename"] for i in images] == out.args[0]
+    assert {i["type"] for i in images} == {"output"}
+
+
+def test_save_render_declares_the_folder_it_actually_wrote_to(nodes_mod, tmp_path):
+    """A declared path the client cannot fetch is worse than none — the harvest
+    records a generation whose image 404s. Asserted by opening what it named."""
+    proj = _book(tmp_path / "bakery", **{"Decoration": "DECO"})
+    out = nodes_mod.SymbioticaSaveRender.execute(
+        images=[_tensor()], asset_names=["A"], categories=["Decoration"],
+        system_prompts=["DECO"], subfolder=["  october/renders  "],
+        project_path=[proj])
+    named = out.ui.as_dict()["images"][0]
+    assert (tmp_path / "output" / named["subfolder"] / named["filename"]).is_file()
+
+
 def test_save_render_refuses_an_empty_batch(nodes_mod, tmp_path):
     with pytest.raises(ValueError, match="nothing to save"):
         nodes_mod.SymbioticaSaveRender.execute(

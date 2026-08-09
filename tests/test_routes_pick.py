@@ -105,6 +105,20 @@ class TestListingWhatTheNodeResolved:
         assert len(_run(env.routes.pick_list(_Req(node_id="1")))["body"]["images"]) == 1
         assert len(_run(env.routes.pick_list(_Req(node_id="2")))["body"]["images"]) == 2
 
+    def test_the_panel_lists_the_edits_the_run_was_showing(self, env):
+        """A picker showing the edits of one approval must not have its grid
+        offer every edit in the folder — the panel has to ask the run's own
+        question, and the run records which one it asked."""
+        renders(str(env.out / "Spookies"),
+                ("edits_from.Spookies_00001__00001_.png",
+                 "edits_from.Spookies_00002__00001_.png",
+                 "edits_00003_.png"))
+        env.pick.remember("7", str(env.out / "Spookies"), None,
+                          ["Spookies_00001_.png"])
+        body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
+        assert [i["name"] for i in body["images"]] == [
+            "edits_from.Spookies_00001__00001_.png"]
+
     def test_an_explicit_folder_is_listed_for_browsing(self, env):
         renders(str(env.out / "elsewhere"), ("x.png",))
         body = _run(env.routes.pick_list(

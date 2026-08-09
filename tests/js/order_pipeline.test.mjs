@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import {
     calls, setResponder, setLatency, reset, create, link, repaint, tick, repaints,
 } from "./comfy_stub.mjs";
-import "../../web/js/order_pipeline.js";
+import { eventForStoredFeature } from "../../web/js/order_pipeline.js";
 
 // A stale local path: it exists on the artist's mac, never inside the hosted
 // sandbox, so resolve_month() yields no order_path and the route 400s forever.
@@ -56,6 +56,45 @@ async function runGraph({ responder, packerCount = 1, frames = 40 }) {
 }
 
 const always = (reply) => () => reply;
+
+// The queue refuses a feature the order does not hold rather than building its
+// first event. These pin the panel to the same rule: the two are parallel
+// implementations, and a panel that opened a different event while the widget
+// kept the old one would name a feature the panel never showed.
+const TWO_EVENTS = [
+    ONE_EVENT,
+    { feature: "Mini 2", eventName: "Frosted", assets: [] },
+];
+
+test("the panel opens the event the stored feature names", () => {
+    const { event, stale } = eventForStoredFeature(TWO_EVENTS, "Mini 2");
+    assert.equal(event.feature, "Mini 2");
+    assert.equal(stale, false);
+});
+
+test("a feature the order no longer holds is stale, not a silent swap", () => {
+    const { event, stale } = eventForStoredFeature(TWO_EVENTS, "Mini 9");
+    assert.equal(stale, true, "the panel must be able to say the pick is gone");
+    assert.equal(event.feature, "Mini 1", "and still have something to show");
+});
+
+test("a blank feature is not stale — it means the order's first event", () => {
+    const { event, stale } = eventForStoredFeature(TWO_EVENTS, "");
+    assert.equal(event.feature, "Mini 1");
+    assert.equal(stale, false);
+});
+
+test("the combo's labelled form matches the event it labels", () => {
+    const { event, stale } = eventForStoredFeature(TWO_EVENTS, "Mini 2 — Frosted");
+    assert.equal(event.feature, "Mini 2");
+    assert.equal(stale, false);
+});
+
+test("an order with no events substitutes nothing, so nothing is stale", () => {
+    const { event, stale } = eventForStoredFeature([], "Mini 9");
+    assert.equal(event, null);
+    assert.equal(stale, false);
+});
 
 test("a permanently failing order parse settles instead of flooding", async () => {
     const n = await runGraph({

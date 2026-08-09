@@ -729,7 +729,7 @@ async def prompt_write(request):
     return web.json_response({"ok": True, **saved})
 
 
-def _pick_target(node_id: str, folder: str = "") -> tuple[str, object]:
+def _pick_target(node_id: str, folder: str = "") -> tuple[str, object, object]:
     """The asset path a Pick node's panel should list, resolved server-side.
 
     Without an explicit folder this is whatever the node itself resolved when
@@ -759,11 +759,11 @@ def _pick_target(node_id: str, folder: str = "") -> tuple[str, object]:
     named = _expand_project(named)
     real = resolve_within(declared_roots(), named, kind="dir")
     if real is not None:
-        return real, None
+        return real, None, None
     parent = resolve_within(declared_roots(), os.path.dirname(named),
                             kind="dir")
-    return (os.path.join(parent, os.path.basename(named)), None) if parent \
-        else ("", None)
+    return (os.path.join(parent, os.path.basename(named)), None, None) if parent \
+        else ("", None, None)
 
 
 @PromptServer.instance.routes.get("/symbiotica/pick-list")
@@ -777,7 +777,7 @@ async def pick_list(request):
     from .pick_folder import LISTING_LIMIT, listing_for, read_folders
 
     named = str(request.query.get("folder", "") or "").strip()
-    target, only = _pick_target(request.query.get("node_id", ""), named)
+    target, only, derived = _pick_target(request.query.get("node_id", ""), named)
     if not target:
         # A folder that was asked for by name and could not be resolved is a
         # refusal and has to say so. Silence is only right for a picker that
@@ -813,7 +813,8 @@ async def pick_list(request):
                 status=403)
         return web.json_response({"ok": True, "folder": target, "images": [],
                                   "shortlist": only is not None})
-    entries = await asyncio.to_thread(listing_for, target, LISTING_LIMIT, only)
+    entries = await asyncio.to_thread(listing_for, target, LISTING_LIMIT, only,
+                                      derived)
     return web.json_response({
         "ok": True, "folder": target, "shortlist": only is not None,
         "images": [{"id": e["id"], "name": e["name"], "index": e["index"],
@@ -843,7 +844,7 @@ async def pick_discard(request):
     except Exception:
         body = {}
     names = [str(n) for n in (body.get("names") or [])]
-    target, _only = _pick_target(str(body.get("node_id") or ""),
+    target, _only, _derived = _pick_target(str(body.get("node_id") or ""),
                                  str(body.get("folder") or ""))
     if not target:
         return web.json_response(

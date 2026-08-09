@@ -55,6 +55,10 @@ PackTemplateWire = io.Custom("SYMBIOTICA_PACK_TEMPLATE")
 
 # A step takes a set of images, or the one being worked on.
 _PICK_MODES = ["multiple", "single"]
+# What a picker fed by another picker shows: that one's approvals, or the files
+# saved FROM them. Two different questions — an edit is written after the tick
+# is made, so it can never be in the tick set that answers the first.
+_SHOW_OPTIONS = ["approved", "edits"]
 
 _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 # Derived from the preset table so a new model shows up without editing here.
@@ -202,8 +206,8 @@ class SymbioticaOrderRead(io.ComfyNode):
         project_path = (project_path or "").strip()
         op = rp = assets_root = ""
         if project_path:
-            from .project_layout import resolve_month
-            r = resolve_month(project_path, (month or "").strip())
+            from .project_layout import require_month
+            r = require_month(project_path, (month or "").strip())
             op = r["order_path"]
             rp = r["refs_path"]
             assets_root = r["assets_root"]
@@ -280,8 +284,8 @@ class SymbioticaOrderSpecs(io.ComfyNode):
         project_path = (project_path or "").strip()
         op = rp = assets_root = ""
         if project_path:
-            from .project_layout import resolve_month
-            r = resolve_month(project_path, (month or "").strip())
+            from .project_layout import require_month
+            r = require_month(project_path, (month or "").strip())
             op, rp, assets_root = r["order_path"], r["refs_path"], r["assets_root"]
         return op, rp, assets_root
 
@@ -1373,12 +1377,11 @@ class SymbioticaSaveRender(io.ComfyNode):
             # surviving: a missing label must not lose the image.
             return seq[i] if i < len(seq) else default
 
-        out_root = os.path.join(folder_paths.get_output_directory(),
-                                str(one(subfolder, "renders")).strip()
-                                or "renders")
+        out_dir = str(one(subfolder, "renders")).strip() or "renders"
+        out_root = os.path.join(folder_paths.get_output_directory(), out_dir)
         os.makedirs(out_root, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        files, shas, records = [], [], []
+        files, shas, records, saved = [], [], [], []
         for i, tensor in enumerate(imgs):
             name = str(at(names, i, f"render-{i + 1}")).strip() or f"render-{i + 1}"
             cat = str(at(cats, i))
@@ -1402,11 +1405,18 @@ class SymbioticaSaveRender(io.ComfyNode):
                 (arr.cpu().numpy() * 255).clip(0, 255).astype(np.uint8))
             img.save(os.path.join(out_root, fname), pnginfo=meta)
             files.append(fname)
+            saved.append(ui.SavedResult(fname, out_dir, io.FolderType.output))
             shas.append(rec["prompt_sha"])
             records.append(rec)
         if project:
             append_records(project, records, timestamp=stamp)
-        return io.NodeOutput(files, shas)
+        # Declared as SAVED, not previewed: the files are already on disk under
+        # the output folder, and a preview would write them a second time into
+        # temp. Only what a node declares reaches /history, which is the one
+        # path a caller outside this machine has to the images — an API client
+        # sees a run with no renders at all otherwise, and an edit of one has no
+        # parent it can name.
+        return io.NodeOutput(files, shas, ui=ui.SavedImages(saved))
 
 
 class SymbioticaPromptBook(io.ComfyNode):
@@ -2935,13 +2945,17 @@ class SymbioticaTemplateEditor(io.ComfyNode):
 
     @staticmethod
     def _event_spec_of(events_list, refs_root, feature):
+        """One event's spec plus the client-refs root.
+
+        A blank feature means "whichever this order leads with". A NAMED one the
+        order does not hold is a stale request — a saved workflow keeps the
+        feature it was built with, and the order it names can be re-issued
+        without it. `event_spec` refuses it and lists what the order does hold;
+        building the first event instead spends a render on artwork nobody asked
+        for and reports it as the one that was requested."""
         feat = (feature or "").strip() or (
             events_list[0].get("feature", "") if events_list else "")
-        try:
-            resolved = event_spec(events_list, feat)
-        except ValueError:
-            resolved = event_spec(events_list, events_list[0].get("feature", ""))
-        return {**resolved, "refsRoot": refs_root}
+        return {**event_spec(events_list, feat), "refsRoot": refs_root}
 
     @classmethod
     def _resolve_spec(cls, spec, events, project_path, month, feature):
@@ -2949,8 +2963,8 @@ class SymbioticaTemplateEditor(io.ComfyNode):
         itself from project+month; a wired spec/events still works; with none of
         them it's an empty spec for a from-scratch template."""
         if project_path and project_path.strip():
-            from .project_layout import resolve_month
-            r = resolve_month(project_path.strip(), (month or "").strip())
+            from .project_layout import require_month
+            r = require_month(project_path.strip(), (month or "").strip())
             if r["order_path"]:
                 loaded = load_order(r["order_path"], r["refs_path"])
                 return (cls._event_spec_of(loaded["events"], r["refs_path"], feature),
@@ -3936,6 +3950,23 @@ class SymbioticaPick(io.ComfyNode):
                                         "only the references the client sent "
                                         "for THIS asset. Empty lists the "
                                         "whole folder."),
+                # APPENDED, and optional. ComfyUI restores a saved workflow's
+                # widget values positionally, and a REQUIRED input is a demand
+                # on every payload already stored elsewhere — both of which
+                # this node has been bitten by before.
+                io.Combo.Input("show", options=_SHOW_OPTIONS,
+                               default="approved", optional=True,
+                               advanced=True,
+                               tooltip="Only matters when another picker feeds "
+                                       "this one, and does nothing otherwise. "
+                                       "`approved` lists exactly what that "
+                                       "picker ticked. `edits` lists the files "
+                                       "saved FROM those ticks instead, which "
+                                       "is how you review the edits of one "
+                                       "approval — wire that picker's "
+                                       "`edit_save_path` into the Save Image "
+                                       "in between, so each edit records the "
+                                       "render it came from."),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
@@ -3945,6 +3976,20 @@ class SymbioticaPick(io.ComfyNode):
                                          "`filename_prefix` — so the node that "
                                          "WRITES this stage and the node that "
                                          "READS it are named in one place."),
+                # APPENDED for the same reason the widget was: a saved
+                # workflow's links are held by slot number, so an output added
+                # anywhere but the end repoints them at their neighbours.
+                io.String.Output(display_name="edit_save_path",
+                                 tooltip="`save_path`, marked with the render "
+                                         "that was picked — for the Save Image "
+                                         "that writes EDITS of it. The mark is "
+                                         "what lets a later picker list the "
+                                         "edits of one approval, which no set "
+                                         "of ticks can do: an edit is a file "
+                                         "named after the tick was made. With "
+                                         "no single pick to name, this is "
+                                         "`save_path` and the edit carries no "
+                                         "mark."),
             ],
             # `prompt`/`dynprompt` are how check_lazy_status finds out whether
             # `images` actually has a link before asking for it, and how a
@@ -3958,7 +4003,8 @@ class SymbioticaPick(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, images=None, save_path="", selection="",
-                           view="", mode="multiple", stage="", names=""):
+                           view="", mode="multiple", stage="", names="",
+                           show="approved"):
         """Change only when what LEAVES the node could have.
 
         The first version returned NaN — always changed — so the panel would
@@ -3981,15 +4027,17 @@ class SymbioticaPick(io.ComfyNode):
         one = SymbioticaCategoryPrompts._one
         node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
         node_id = one(node_id, None) if isinstance(node_id, list) else node_id
-        target, only = resolved(node_id) if node_id else ("", None)
+        target, only, derived = resolved(node_id) if node_id else ("", None, None)
         if not target:
             return float("nan")
         picked_one = str(one(mode, "multiple") or "multiple") == "single"
         ticks = _pick_ids(str(one(selection, "")))
         stamp = [target, sorted(only) if only is not None else None,
+                 sorted(derived) if derived is not None else None,
                  picked_one, str(one(stage, "")), ticks]
         try:
-            paths = picked_paths(listing_for(target, only=only), ticks)
+            paths = picked_paths(
+                listing_for(target, only=only, derived_from=derived), ticks)
             for path in paths[:1] if picked_one else paths:
                 st = os.stat(path)
                 stamp.append([path, st.st_mtime_ns, st.st_size])
@@ -3999,7 +4047,8 @@ class SymbioticaPick(io.ComfyNode):
 
     @classmethod
     def check_lazy_status(cls, images=None, save_path="", selection="",
-                          view="", mode="multiple", stage="", names=""):
+                          view="", mode="multiple", stage="", names="",
+                          show="approved"):
         """Ask for the wire when there is one — for its ORDER, not its value.
 
         The images are read off disk, and `execute` ignores whatever arrives
@@ -4078,10 +4127,12 @@ class SymbioticaPick(io.ComfyNode):
 
     @classmethod
     def execute(cls, images=None, save_path="", selection="", view="",
-                mode="multiple", stage="", names="") -> io.NodeOutput:
+                mode="multiple", stage="", names="",
+                show="approved") -> io.NodeOutput:
         from PIL import Image
 
-        from .pick_folder import listing_for, picked_paths, remember, resolved
+        from .pick_folder import (edit_prefix, listing_for, picked_paths,
+                                  remember, resolved)
 
         one = SymbioticaCategoryPrompts._one
         node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
@@ -4105,17 +4156,26 @@ class SymbioticaPick(io.ComfyNode):
         # resolved when it ran — which it did, because asking for its wire is
         # what put it before this node.
         only = None
+        derived_from = None
         upstream = cls._upstream_pick()
         if upstream:
             source = cls._prompt_node(upstream) or {}
-            only = _pick_ids(str((source.get("inputs") or {}).get("selection", "")))
-            source_target, source_only = resolved(upstream)
-            if source_target:
-                target = source_target
+            ticks = _pick_ids(str((source.get("inputs") or {}).get("selection", "")))
+            source_target, source_only, _ = resolved(upstream)
             if source_only is not None:
                 # The upstream is itself narrowed; a tick it no longer shows is
                 # not something this node may offer.
-                only = [name for name in only if name in set(source_only)]
+                ticks = [name for name in ticks if name in set(source_only)]
+            if str(one(show, "approved") or "approved") == "edits":
+                # The edits OF those picks, which sit in THIS node's stage
+                # folder under names the picker above never saw — so its ticks
+                # cannot narrow them, and the mark each file carries does. The
+                # target stays this node's own for the same reason.
+                derived_from = ticks
+            else:
+                only = ticks
+                if source_target:
+                    target = source_target
 
         # A name filter narrows the folder to one asset's files. Order
         # references live FLAT in the order's folder, so a path cannot say
@@ -4124,11 +4184,11 @@ class SymbioticaPick(io.ComfyNode):
         if wanted:
             only = wanted if only is None else [n for n in only
                                                 if n in set(wanted)]
-        entries = listing_for(target, only=only)
+        entries = listing_for(target, only=only, derived_from=derived_from)
         # The panel lists the same thing this run resolved; it cannot work it
         # out for itself, because asset and category arrive on wires and a
         # wired input has no value on the canvas.
-        remember(node_id, target, only)
+        remember(node_id, target, only, derived_from)
 
         # Nothing ticked is a legitimate state, not a failure: it is what the
         # node looks like before the images have been looked at. An empty list
@@ -4167,13 +4227,39 @@ class SymbioticaPick(io.ComfyNode):
         # images, so it cannot also wait for this node.
         out_folder = stage_home if step else target
         listed = _shown(out_folder) if out_folder else ""
+        # Where an EDIT of this pick gets saved: the same stage prefix, marked
+        # with the render it came from. An edit is a file the approving picker
+        # never saw, so its own name is the only place that link can live.
+        # Nothing single to point at means no mark rather than a wrong one, and
+        # the lane still works — the edit simply has no parent.
+        # Where an EDIT of this pick is saved: the prefix this node already
+        # hands out, with its last segment marked by the render the edit came
+        # from. An edit is a file the approving picker never saw, so its own
+        # name is the only place that link can live.
+        #
+        # Marking that prefix rather than requiring a step keeps this valid
+        # wherever `save_path` is. A blank is NOT the safe answer here: a blank
+        # reaches Save Image as a real filename_prefix, and ComfyUI resolves it
+        # to a hidden `._00001_.png` at the output root — which no listing
+        # shows, since dot-names are skipped, and which every later save
+        # overwrites because the counter never matches. That loses paid,
+        # unrepeatable renders and reports success.
+        #
+        # Nothing single to point at means no mark rather than a wrong one, and
+        # the prefix is then exactly `save_path`.
+        marked = ""
+        if listed:
+            head, _, tail = listed.rpartition("/")
+            parent = os.path.basename(paths[0]) if len(paths) == 1 else ""
+            stem = edit_prefix(tail, parent)
+            marked = f"{head}/{stem}" if head else stem
         _push("symbiotica.pick", {
             "node_id": str(node_id), "count": len(entries),
             "folder": listed, "picked": len(paths),
             "shortlist": bool(upstream),
         })
         picked = [_pil_to_tensor_keep_alpha(Image.open(p)) for p in paths]
-        return io.NodeOutput(picked, listed)
+        return io.NodeOutput(picked, listed, marked)
 
 
 class SymbioticaPromptRecipe(io.ComfyNode):

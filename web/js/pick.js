@@ -9,6 +9,10 @@ import { attachHoverZoom, el, emptyState, errorLine, hideHoverZoom }
     from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaPick";
+// Widgets this node gained after graphs were already saved, with the value each
+// falls back to. A saved workflow carries one value per widget it knew about,
+// applied by position, so anything appended since comes back unset.
+const APPENDED_WIDGETS = [["show", "approved"]];
 const MIN_NODE_W = 340;
 const PANEL_MIN = 44;        // an empty picker still shows its own message
 const DEFAULT_NODE_H = 460;  // only for a node that has never been given a height
@@ -92,11 +96,20 @@ function pickPanel(node) {
     // The panel therefore declares a small CONSTANT floor and no computeSize
     // at all: the layout hands it whatever is left of the node's body, the
     // element fills that box, and the grid scrolls inside it.
-    node.addDOMWidget("pick_panel", "sym_pick", container, {
+    const panelWidget = node.addDOMWidget("pick_panel", "sym_pick", container, {
         serialize: false,
         hideOnZoom: true,
         getMinHeight: () => PANEL_MIN,
     });
+    // The `serialize` in those options is a DIFFERENT flag: it governs the API
+    // prompt. Persistence in the workflow is `serialize` ON THE WIDGET, which
+    // `LGraphNode.configure` and `.serialize` are the ones to read, and
+    // addDOMWidget never copies the option onto the widget. Left alone the
+    // panel takes a slot in `widgets_values` and contributes an empty string —
+    // a DOM widget with no `getValue` reads as "" — so the next widget added to
+    // this node inherits that empty string on load and its combo refuses the
+    // queue. Setting it here is what keeps the saved values to the real widgets.
+    if (panelWidget) panelWidget.serialize = false;
     // Redraw, never resize. The only thing this may change is a node so narrow
     // that a tile cannot fit, and a node that has never been given a height.
     const refit = () => requestAnimationFrame(() => {
@@ -503,6 +516,30 @@ registerSymbioticaExtension(app, {
                     const w = widgetOf(this, name);
                     if (w) w.value = v[i];
                 }
+                // Every widget added since that layout is holding one of its
+                // values by now, so each goes back to its own default.
+                for (const [name, value] of APPENDED_WIDGETS) {
+                    const w = widgetOf(this, name);
+                    if (w) w.value = value;
+                }
+            }
+            // Repair for graphs already on disk. `LGraphNode.configure` walks
+            // the widgets and takes `widgets_values` in order, so a value saved
+            // against one widget lands on whichever widget now holds that
+            // position. Any save written while the panel still occupied a slot
+            // carries its empty string there, and it comes back on the widget
+            // that took the position since. An empty string is not one of a
+            // combo's options, so ComfyUI refuses the whole queue over it:
+            // `Value not in list: show: '' not in [...]`. Anything the widget
+            // does not actually offer goes back to its default.
+            for (const [name, value] of APPENDED_WIDGETS) {
+                const w = widgetOf(this, name);
+                if (!w) continue;
+                const offered = w.options?.values;
+                const known = Array.isArray(offered)
+                    ? offered.includes(w.value)
+                    : w.value !== undefined && w.value !== null && w.value !== "";
+                if (!known) w.value = value;
             }
             queueMicrotask(() => this._symReloadPick?.());
         };
