@@ -49,6 +49,31 @@ class TestWhichFilesBelongToAnAsset:
         # A bare counter with no trailing underscore still belongs.
         assert name_matches_prefix("Spookies_7.png", "Spookies") is True
 
+    def test_a_names_entry_without_an_extension_is_a_save_prefix(self,
+                                                                 tmp_path):
+        """"do i have to ask you again instead of just connecting that
+        filename prefix to the name input?" — no: the tag the save node was
+        given IS the filter. With an extension an entry stays one exact file,
+        so the client-references flow keeps its meaning.
+        """
+        renders(str(tmp_path), ("_base_00001_.png", "_base_00002_.png",
+                                "edits_00001_.png",
+                                "edits_from.X_00001__00001_.png",
+                                "Spookies_00001_.png"))
+        rows = listing_for(str(tmp_path), only=["_base"])
+        assert [r["name"] for r in rows] == ["_base_00001_.png",
+                                             "_base_00002_.png"]
+        rows = listing_for(str(tmp_path), only=["edits"])
+        assert [r["name"] for r in rows] == ["edits_00001_.png",
+                                             "edits_from.X_00001__00001_.png"]
+        rows = listing_for(str(tmp_path), only=["Spookies_00001_.png"])
+        assert [r["name"] for r in rows] == ["Spookies_00001_.png"]
+        # Exact and prefix entries compose in one list.
+        rows = listing_for(str(tmp_path), only=["_base", "Spookies_00001_.png"])
+        assert [r["name"] for r in rows] == ["Spookies_00001_.png",
+                                             "_base_00001_.png",
+                                             "_base_00002_.png"]
+
     def test_without_a_prefix_the_whole_folder_is_listed(self, tmp_path):
         renders(str(tmp_path), ("a.png", "b.png"))
         assert images_in(str(tmp_path)) == ["a.png", "b.png"]

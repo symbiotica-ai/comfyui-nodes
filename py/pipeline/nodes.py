@@ -3951,11 +3951,16 @@ class SymbioticaPick(io.ComfyNode):
                                         "into the Save Image that fills this "
                                         "stage and the two cannot disagree."),
                 io.String.Input("names", default="", optional=True,
-                                tooltip="Filenames to list, and nothing else "
-                                        "— wire Asset Refs' names to see "
-                                        "only the references the client sent "
-                                        "for THIS asset. Empty lists the "
-                                        "whole folder."),
+                                tooltip="Which files out of the folder. An "
+                                        "entry with an extension is one exact "
+                                        "file — wire Asset Refs' names to see "
+                                        "only THIS asset's client references. "
+                                        "An entry without one is a save "
+                                        "prefix: the same tag the Save Image "
+                                        "in this lane was given (`_base`, "
+                                        "`edits`) lists exactly what it "
+                                        "wrote. Empty lists the whole "
+                                        "folder."),
                 # APPENDED, and optional. ComfyUI restores a saved workflow's
                 # widget values positionally, and a REQUIRED input is a demand
                 # on every payload already stored elsewhere — both of which

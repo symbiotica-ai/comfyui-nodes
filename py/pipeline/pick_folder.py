@@ -203,12 +203,23 @@ def listing_for(target: str, limit: int = LISTING_LIMIT, only=None,
     Asking about no parent at all means the whole folder; asking about an empty
     set of them means nothing, because nothing approved upstream has no edits.
     """
-    wanted = None if only is None else {str(name) for name in only}
+    # An entry with an extension is one exact file; one without is a save
+    # PREFIX — the same tag the Save Image node was given — so the string that
+    # names a lane at the writer can be wired straight into `names` at the
+    # reader: `_base` lists `_base_00001_`, `edits` lists `edits_00012_` and
+    # its marked derivatives, and nothing needs a code change to add a tag.
+    exacts, prefixes = None, None
+    if only is not None:
+        entries_only = [str(name) for name in only]
+        exacts = {n for n in entries_only if os.path.splitext(n)[1]}
+        prefixes = [n for n in entries_only if not os.path.splitext(n)[1]]
     parents = _parent_stems(derived_from)
 
     def keep(name: str) -> bool:
-        if wanted is not None and name not in wanted:
-            return False
+        if exacts is not None:
+            if name not in exacts and not any(
+                    name_matches_prefix(name, p) for p in prefixes):
+                return False
         return parents is None or parent_of(name) in parents
 
     entries: list[dict] = []
