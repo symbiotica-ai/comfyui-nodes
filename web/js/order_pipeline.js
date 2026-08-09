@@ -1429,6 +1429,20 @@ registerSymbioticaExtension(app, {
             };
         }
 
+        if (nodeData.name === "SymbioticaDatasetReference") {
+            // The `folder` widget became `subfolder` (2026-08-06). Values
+            // restore positionally so plain saves need nothing — but a graph
+            // that converted the widget to an INPUT socket stored the old
+            // name, and that socket would come back dead. Rename it on load.
+            const origCfg = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                origCfg?.apply(this, arguments);
+                for (const input of this.inputs || []) {
+                    if (input.name === "folder") input.name = "subfolder";
+                }
+            };
+        }
+
         if (nodeData.name === "SymbioticaOrderAssets") {
             const orig = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {

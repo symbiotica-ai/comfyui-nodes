@@ -6,6 +6,47 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## Unreleased
+
+**Output labels unify — saved graphs load unchanged.** Every slot keeps its
+index; only the label shown at the socket changes. One name per concept now:
+
+| Node | Old | New |
+|---|---|---|
+| Dataset Reference | `dataset_path` | `save_path` |
+| Dataset Reference | `reference_names` | `names` |
+| Asset Refs | `folder` | `save_path` |
+| Asset Refs | `ref_names` | `names` |
+| Refs Folder | `filenames` | `names` |
+| Prompt Book / Prompt Block | `project` | `project_path` |
+| Prompt Book | `image_system_prompt` | `image_prompt` |
+
+**Dataset Reference's `folder` widget is now `subfolder`** — the widget names
+a subfolder under the project (the sense Save Render's `subfolder` already
+had), while the output named `folder` was an absolute type folder; one word
+per sense. Values restore positionally so saved graphs are untouched; a
+graph that converted the widget to an input socket is renamed on load.
+API-format exports of this node need a re-export.
+
+**Asset Focus emits the order itself, narrowed to the focus.** The tail
+output `index` (wired nowhere in any live graph) is replaced by `order`: the
+incoming order with a one-asset assets list, one per focused asset. One wire
+now feeds Dataset Reference (`categories` optional), Asset Refs
+(`asset_name` optional) and Prompt Recipe (appended optional `order` input,
+supplying project and category) — the category/asset_name/project string
+fan-out those nodes needed before is redundant on that lane. The string
+outputs all remain for core consumers (Save Image's filename_prefix, string
+joins).
+
+**Prompt Compose is deprecated** — Prompt Recipe composes the same document
+plus the image prompt and version picks. The node stays registered so saved
+graphs keep working; its display name says so.
+
+New reference workflows wired for the one-link lane:
+`dev-picker-03.json` (100→86 links) and
+`dev-prompt-manager-wired-17.json` (68→54 links), replacing the prompt-block
+chains with Prompt Recipe.
+
 ## 2026.8.17
 
 **This release repairs order renders that carried a Studio Library Picker.** If a

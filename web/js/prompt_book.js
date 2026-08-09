@@ -8,6 +8,38 @@ import { resolveProjectPath } from "./order_pipeline.js";
 const BOOK = "SymbioticaPromptBook";
 const BLOCK = "SymbioticaPromptBlock";
 const COMPOSE = "SymbioticaPromptCompose";
+const RECIPE = "SymbioticaPromptRecipe";
+
+// The Recipe node's six version widgets, in the order its Python maps them
+// onto the book: rules in filename order, then the image block, then the
+// active type's block. Position IS the contract (nodes.py _SLOTS).
+export const RECIPE_SLOTS = ["game", "inputs", "your_job", "overwrite",
+                             "image_model", "asset_type"];
+
+// `<!-- version: name -->` lines split a block file into versions; text above
+// the first marker is version 1. Mirrors prompt_book.split_versions — parsing
+// here is what lets the panel show chips without a round-trip per keystroke.
+export const VERSION_MARK = /^[ \t]*<!--\s*version:\s*([^>]+?)\s*-->[ \t]*$/gm;
+
+export function versionsOf(text) {
+    const names = ["1"];
+    for (const m of String(text ?? "").matchAll(VERSION_MARK)) {
+        names.push(m[1]);
+    }
+    return names;
+}
+
+// Which Recipe widget composes this block: rules by their position in the
+// book's rules list, any image block via image_model, the ACTIVE type's file
+// via asset_type. Another type's file has no slot — its versions only matter
+// when it becomes the active type.
+export function slotOf(name, rules, activeCategory) {
+    const ri = (rules ?? []).findIndex((r) => r.name === name);
+    if (ri >= 0 && ri < 4) return RECIPE_SLOTS[ri];
+    if (name.startsWith("_image/")) return "image_model";
+    if (activeCategory && name === `${activeCategory}.md`) return "asset_type";
+    return null;
+}
 
 // Picker entries that are a composed VIEW of an asset type rather than a file.
 // A prefix, not a separate control, so switching between "the block I edit" and
@@ -48,15 +80,20 @@ function projectOf(node, seen = new Set()) {
     seen.add(node.id);
     const typed = widgetOf(node, "project_path")?.value?.trim();
     if (typed) return typed;
-    const OURS = new Set([BOOK, BLOCK, COMPOSE]);
+    const OURS = new Set([BOOK, BLOCK, COMPOSE, RECIPE]);
     for (const name of ["project_path", "order"]) {
         const link = node.inputs?.find((i) => i.name === name)?.link;
         if (link == null) continue;
         const origin = app.graph.getNodeById(app.graph.links[link]?.origin_id);
         if (!origin) continue;
-        const found = OURS.has(origin.comfyClass)
+        let found = OURS.has(origin.comfyClass)
             ? projectOf(origin, seen)
             : resolveProjectPath(origin);
+        // An order-passing node with no project of its own (Asset Focus) is a
+        // hop, not a dead end — climb through it to the Order Specs behind.
+        if (!found && origin.inputs?.some((i) => i.name === "order")) {
+            found = projectOf(origin, seen);
+        }
         if (found) return found;
     }
     return "";
@@ -599,10 +636,371 @@ function composePanel(node) {
     queueMicrotask(refresh);
 }
 
+// --- the Prompt Recipe node: the whole book, versions, and the composed
+// --- result in ONE node — browse, edit, pin a version per block, preview ----
+function recipePanel(node) {
+    const ui = panelChrome(node, "prompt_recipe");
+    const { picker, saveBtn, blocksBar, editor, setStatus, setEditable } = ui;
+
+    // A chip row between the bar and the editor: one chip per version of the
+    // picked block. Clicking a chip sets the node's OWN combo widget for that
+    // block's slot — the panel drives the same values the queue composes.
+    const chips = document.createElement("div");
+    chips.style.cssText = "display:none;gap:4px;flex-wrap:wrap;"
+        + "align-items:center;";
+    keepEvents(chips);
+    editor.parentNode.insertBefore(chips, editor);
+
+    let loaded = { name: "", text: "" };
+    let existing = new Set();
+    let book = { rules: [], image: [], types: [] };
+    const dirty = () => editor.value !== loaded.text;
+
+    // The category widget of whatever upstream node feeds one of our inputs —
+    // Asset Focus, in every graph that has one.
+    const upstreamCategory = (input) => {
+        const link = node.inputs?.find((i) => i.name === input)?.link;
+        if (link == null) return null;
+        const origin = app.graph.getNodeById(app.graph.links[link]?.origin_id);
+        return (origin && widgetOf(origin, "category")) || null;
+    };
+
+    // The type whose block fills the asset_type slot, in execute()'s own
+    // precedence: a wired category beats the node's widget, which beats the
+    // type the wired order is focused on. Reading it the same way the queue
+    // does is what keeps the preview from claiming a type the run will not use.
+    const activeCategory = () => {
+        const wired = upstreamCategory("category")?.value?.trim();
+        if (wired) return wired;
+        const own = widgetOf(node, "category")?.value?.trim();
+        if (own) return own;
+        return upstreamCategory("order")?.value?.trim()
+            || book.types?.[0]?.title || "";
+    };
+
+    // Whichever widget the answer above actually came from — the one whose
+    // changes this panel has to follow.
+    const categorySource = () => {
+        const wired = upstreamCategory("category");
+        if (wired?.value?.trim()) return wired;
+        if (widgetOf(node, "category")?.value?.trim()) return null;
+        return upstreamCategory("order");
+    };
+
+    // Retarget a composed preview when the upstream type changes. An open
+    // block FILE is left alone — switching type must not discard an edit in
+    // progress — but the status line says where the queue has moved.
+    async function onActiveCategoryChanged() {
+        const want = COMPOSED + activeCategory();
+        if (![...picker.options].some((o) => o.value === want)) return;
+        if (!loaded.name || loaded.name.startsWith(COMPOSED)) {
+            picker.value = want;
+            await load(want);
+        } else {
+            setStatus(`the queue now composes ${activeCategory()} — pick it `
+                      + "under “Composed” to read it");
+        }
+    }
+
+    // Follow that widget by wrapping its callback, one node at a time: rewire
+    // the input and the old wrapper is unhooked, delete this node and the
+    // wrapper unhooks itself on its next call.
+    let followed = null;
+    function followCategory() {
+        const w = categorySource();
+        if (w === (followed?.w ?? null)) return;
+        if (followed) followed.w.callback = followed.orig;
+        followed = null;
+        if (!w) return;
+        const orig = w.callback;
+        w.callback = function () {
+            orig?.apply(this, arguments);
+            if (!app.graph.getNodeById(node.id)) {
+                w.callback = orig;
+                return;
+            }
+            queueMicrotask(onActiveCategoryChanged);
+        };
+        followed = { w, orig };
+    }
+
+    // {block name: version name} from the six combo widgets — the exact
+    // recipe execute() composes, so the preview cannot drift from the run.
+    function recipeOfWidgets() {
+        const recipe = {};
+        const withSlot = (name, versions) => {
+            const slot = slotOf(name, book.rules, activeCategory());
+            if (!slot) return;
+            const pick = Number(widgetOf(node, slot)?.value ?? 1);
+            if (pick > 1 && pick <= versions.length) {
+                recipe[name] = versions[pick - 1];
+            }
+        };
+        for (const row of [...(book.rules ?? []), ...(book.image ?? []),
+                           ...(book.types ?? [])]) {
+            withSlot(row.name, row.versions ?? ["1"]);
+        }
+        return recipe;
+    }
+
+    function recipeSummary() {
+        return RECIPE_SLOTS
+            .map((s) => `${s.replace("_", " ")} ${widgetOf(node, s)?.value ?? 1}`)
+            .join(" · ");
+    }
+
+    function renderChips() {
+        chips.replaceChildren();
+        const name = loaded.name;
+        if (!name || name.startsWith(COMPOSED)) {
+            chips.style.display = "none";
+            return;
+        }
+        const versions = versionsOf(editor.value);
+        const slot = slotOf(name, book.rules, activeCategory());
+        if (versions.length < 2 && !slot) {
+            chips.style.display = "none";
+            return;
+        }
+        chips.style.display = "flex";
+        const active = slot ? Number(widgetOf(node, slot)?.value ?? 1) : 1;
+        versions.forEach((v, i) => {
+            const chip = document.createElement("button");
+            chip.textContent = i === 0 ? "v1" : `v${i + 1} · ${v}`;
+            const on = slot && active === i + 1;
+            chip.style.cssText = "padding:1px 8px;border-radius:9px;"
+                + "cursor:pointer;font-size:10px;border:1px solid "
+                + (on ? "#7aa2e8;background:#24406b;color:#dbe6ff;"
+                      : "#555;background:#2a2a2a;color:#bbb;");
+            chip.title = slot
+                ? `compose version ${i + 1} of this block (sets ${slot})`
+                : "this type's versions apply via asset_type when it is the "
+                  + "active type";
+            if (slot) {
+                chip.addEventListener("click", () => {
+                    const w = widgetOf(node, slot);
+                    if (w) {
+                        w.value = i + 1;
+                        node.setDirtyCanvas?.(true, true);
+                    }
+                    renderChips();
+                    setStatus(`recipe: ${recipeSummary()}`);
+                });
+            }
+            chips.append(chip);
+        });
+        const addV = document.createElement("button");
+        addV.textContent = "+ version";
+        addV.title = "duplicate the top version under a new "
+            + "<!-- version: … --> marker, to tweak without losing v1";
+        addV.style.cssText = "padding:1px 8px;border-radius:9px;cursor:pointer;"
+            + "font-size:10px;border:1px dashed #666;background:none;color:#999;";
+        addV.addEventListener("click", async () => {
+            const name2 = await askText("Name for the new version:");
+            if (!name2?.trim()) return;
+            const top = editor.value.split(VERSION_MARK)[0] ?? editor.value;
+            editor.value = editor.value.replace(/\s*$/, "")
+                + `\n\n<!-- version: ${name2.trim()} -->\n\n${top.trim()}\n`;
+            renderChips();
+            setStatus("new version drafted — edit it, then Save");
+        });
+        chips.append(addV);
+    }
+
+    async function loadComposed(category) {
+        const project = projectOf(node);
+        const recipe = recipeOfWidgets();
+        const { text, blocks } = await getJson(
+            `/symbiotica/prompt-compose?project=${encodeURIComponent(project)}`
+            + `&category=${encodeURIComponent(category)}`
+            + `&recipe=${encodeURIComponent(JSON.stringify(recipe))}`);
+        loaded = { name: COMPOSED + category, text };
+        editor.value = text;
+        setEditable(false);
+        renderChips();
+        blocksBar.textContent = blocks
+            .map((b) => `${b.name} (${b.chars})`).join("  +  ");
+        // Naming the type in the status is the difference between "the node is
+        // broken" and "you are previewing a type the run will not compose":
+        // the picker can show any type, the queue only ever composes this one.
+        const active = activeCategory();
+        const off = category !== active;
+        setStatus(`${text.length} chars at [${recipeSummary()}] — read-only; `
+                  + (off ? `the queue composes ${active}, not this`
+                         : `this is what the queue composes for ${active}`),
+                  off);
+    }
+
+    async function load(name) {
+        const project = projectOf(node);
+        if (!project || !name) return;
+        try {
+            if (name.startsWith(COMPOSED)) {
+                await loadComposed(name.slice(COMPOSED.length));
+                return;
+            }
+            if (!existing.has(name)) {
+                loaded = { name, text: "" };
+                editor.value = "";
+                setEditable(true);
+                renderChips();
+                setStatus(`${name} — new block, Save creates it`);
+                return;
+            }
+            const { text } = await getJson(
+                `/symbiotica/prompt-read?project=${encodeURIComponent(project)}`
+                + `&name=${encodeURIComponent(name)}`);
+            loaded = { name, text };
+            editor.value = text;
+            setEditable(true);
+            renderChips();
+            const versions = versionsOf(text);
+            setStatus(`${text.length} chars · ${versions.length} version`
+                      + (versions.length === 1 ? "" : "s"));
+        } catch (err) {
+            setStatus(String(err.message || err), true);
+        }
+    }
+
+    async function refresh() {
+        const project = projectOf(node);
+        if (!project) {
+            picker.replaceChildren();
+            editor.value = "";
+            setStatus("wire Asset Focus's order (or the Prompt Book's "
+                      + "project_path), or set project_path", true);
+            return;
+        }
+        try {
+            const [bookRes, versionsRes] = await Promise.all([
+                getJson(`/symbiotica/prompt-book?project=`
+                        + encodeURIComponent(project)),
+                getJson(`/symbiotica/prompt-versions?project=`
+                        + encodeURIComponent(project)).catch(() => null),
+            ]);
+            book = bookRes;
+            // Fold each block's version names in, so chip state and the
+            // widget recipe never need a second fetch.
+            const vmap = new Map((versionsRes?.blocks ?? [])
+                .map((b) => [b.name, b.versions]));
+            for (const row of [...(book.rules ?? []), ...(book.image ?? []),
+                               ...(book.types ?? [])]) {
+                row.versions = vmap.get(row.name) ?? ["1"];
+            }
+            // A composed selection is a view of "what the queue composes", so
+            // it follows the active type instead of sticking to the one it was
+            // opened on. A block file stays put — that one is being edited.
+            const cur = picker.value ?? "";
+            const keep = cur.startsWith(COMPOSED)
+                ? COMPOSED + activeCategory()
+                : cur;
+            picker.replaceChildren();
+            groupInto(picker, "Game rules — apply to every type", book.rules);
+            const image = book.image ?? [];
+            groupInto(picker, "Image model — style, light, camera",
+                      image.length ? image
+                                   : [{ name: NEW_IMAGE, title: "01-image-model",
+                                        chars: "new" }]);
+            groupInto(picker, "Asset type", book.types);
+            groupInto(picker, "Composed — what the queue receives",
+                      (book.types ?? []).map(
+                (row) => ({ name: COMPOSED + row.title, title: row.title,
+                            chars: "rules + type @ recipe" })));
+            groupInto(picker, "New",
+                      [{ name: NEW_BLOCK, title: "+ new block…", chars: "?" }]);
+            const names = [...(book.rules ?? []), ...image,
+                           ...(book.types ?? [])].map((r) => r.name);
+            existing = new Set(names);
+            if (!image.length) names.push(NEW_IMAGE);
+            const selectable = [...names, ...(book.types ?? []).map(
+                (r) => COMPOSED + r.title)];
+            const pick = selectable.includes(keep)
+                ? keep
+                : (COMPOSED + activeCategory());
+            picker.value = selectable.includes(pick) ? pick : names[0] ?? "";
+            if (!picker.value) {
+                setStatus("empty book — pick “+ new block…” to write the "
+                          + "first one", true);
+                return;
+            }
+            followCategory();
+            if (!(dirty() && loaded.name === picker.value)) {
+                await load(picker.value);
+            }
+        } catch (err) {
+            setStatus(String(err.message || err), true);
+        }
+    }
+
+    picker.addEventListener("change", async () => {
+        if (dirty() && !(await askConfirm(
+            `Discard your unsaved changes to ${loaded.name}?`))) {
+            picker.value = loaded.name;
+            return;
+        }
+        if (picker.value === NEW_BLOCK) {
+            const typed = await askText(
+                "New block name — a shared rule (_rules/05-….md), an image "
+                + "block (_image/01-image-model.md), or an asset type exactly "
+                + "as the order sheet spells it (Food - 3 stages.md):");
+            if (!typed?.trim()) { picker.value = loaded.name; return; }
+            let name = typed.trim();
+            if (!name.endsWith(".md")) name += ".md";
+            groupInto(picker, "Not on disk",
+                      [{ name, title: name, chars: "new" }]);
+            picker.value = name;
+        }
+        load(picker.value);
+    });
+
+    saveBtn.addEventListener("click", async () => {
+        const project = projectOf(node);
+        if (!project || !picker.value) return;
+        if (picker.value.startsWith(COMPOSED)) return;
+        saveBtn.disabled = true;
+        try {
+            const res = await postJson("/symbiotica/prompt-write", {
+                project, name: picker.value, text: editor.value,
+            });
+            loaded = { name: picker.value, text: editor.value };
+            setStatus(`saved — ${res.chars} chars (.bak kept)`);
+            toastSaved(`${picker.value} — ${res.chars} chars`);
+            announceSaved(project);
+            await refresh();
+        } catch (err) {
+            setStatus(String(err.message || err), true);
+        } finally {
+            saveBtn.disabled = false;
+        }
+    });
+
+    // The six combos are panel-driven but stay visible: they are the
+    // serialized truth a saved workflow restores. Changing one by hand must
+    // refresh a composed preview too.
+    for (const slot of RECIPE_SLOTS) {
+        const w = widgetOf(node, slot);
+        if (!w) continue;
+        const orig = w.callback;
+        w.callback = function () {
+            orig?.apply(this, arguments);
+            if (loaded.name.startsWith(COMPOSED)) {
+                load(loaded.name);
+            } else {
+                renderChips();
+            }
+        };
+    }
+
+    node._symRefreshBook = refresh;
+    onBookSaved(node, refresh);
+    queueMicrotask(refresh);
+}
+
 const PANELS = {
     [BOOK]: { build: bookPanel, minW: 420, minH: 460 },
     [BLOCK]: { build: blockPanel, minW: 380, minH: 400 },
     [COMPOSE]: { build: composePanel, minW: 420, minH: 460 },
+    [RECIPE]: { build: recipePanel, minW: 460, minH: 500 },
 };
 
 registerSymbioticaExtension(app, {

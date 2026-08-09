@@ -66,7 +66,7 @@ def test_the_schema_declares_what_the_contract_promises(nodes):
     schema = nodes.SymbioticaRefsFolder.GET_SCHEMA()
     assert [i.id for i in schema.inputs] == ["refs_dir", "max_count"]
     assert [o.display_name for o in schema.outputs] == \
-        ["images", "filenames", "count"]
+        ["images", "names", "count"]
 
 
 def test_it_loads_a_folder_with_no_selection_at_all(nodes, refs):
