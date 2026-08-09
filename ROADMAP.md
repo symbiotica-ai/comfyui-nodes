@@ -17,3 +17,15 @@ Track the progression of the order, gamify it.
 - Demo the gamified creation flow: a short run on a real month's order showing
   progression ticking up as assets get approved — the pitch artifact for the
   feature.
+
+## Asset Focus: reference thumbnails in the asset list
+
+Reuse the Auto Packer panel's row rendering for the Asset Focus list — the
+thumbnail machinery already exists (`order_pipeline.js`: `thumbUrl` over the
+`/symbiotica/ref-image` route, refs root registered by the order run).
+
+- Row format, per asset:
+  `Title · resolution` (canvas from the order row), then the reference
+  thumbnails underneath — first ref, second ref if any.
+- No reorder arrows and no hide toggle — those are packer concerns; this list
+  only picks the focus.
