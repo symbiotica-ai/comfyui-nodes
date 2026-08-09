@@ -29,3 +29,7 @@ thumbnail machinery already exists (`order_pipeline.js`: `thumbUrl` over the
   thumbnails underneath — first ref, second ref if any.
 - No reorder arrows and no hide toggle — those are packer concerns; this list
   only picks the focus.
+
+| Asset Focus today | Auto Packer rows to borrow | Target row format |
+|---|---|---|
+| ![current list](assets/roadmap/asset-focus-current-list.png) | ![packer rows](assets/roadmap/auto-packer-thumb-rows.png) | ![row format](assets/roadmap/row-format-title-thumbs.png) |
