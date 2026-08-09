@@ -3935,7 +3935,13 @@ class SymbioticaPick(io.ComfyNode):
                                        "ticking replaces the previous pick "
                                        "instead of adding to it."),
                 io.String.Input("stage", default="", optional=True,
-                                tooltip="Which step of this asset to list, as "
+                                tooltip="Deprecated — review a step by "
+                                        "chaining pickers with `show` and "
+                                        "`edit_save_path` instead; the panel "
+                                        "hides this widget when it is empty. "
+                                        "Kept because widget values restore "
+                                        "by position in saved graphs. "
+                                        "Which step of this asset to list, as "
                                         "a name under the asset's own folder: "
                                         "`edits` lists "
                                         "`…/<asset>/edits_00001_.png`. Empty "
@@ -3967,6 +3973,10 @@ class SymbioticaPick(io.ComfyNode):
                                        "`edit_save_path` into the Save Image "
                                        "in between, so each edit records the "
                                        "render it came from."),
+                # Canvas state like `selection`, appended so saved graphs
+                # restore positionally: the files marked ✎ on the panel, a
+                # second set beside the approve ticks with its own output.
+                io.String.Input("edit_selection", default="", optional=True),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
@@ -3990,6 +4000,14 @@ class SymbioticaPick(io.ComfyNode):
                                          "no single pick to name, this is "
                                          "`save_path` and the edit carries no "
                                          "mark."),
+                # APPENDED. The files marked ✎ on the panel — a second lane
+                # out of one picker, so approving to export and sending to
+                # edit no longer need two chained nodes.
+                io.Image.Output(display_name="for_edit", is_output_list=True,
+                                tooltip="The images marked for edit on the "
+                                        "panel (✎), as their own lane — wire "
+                                        "into the edit chat/model. Approve "
+                                        "ticks flow out `picked` unchanged."),
             ],
             # `prompt`/`dynprompt` are how check_lazy_status finds out whether
             # `images` actually has a link before asking for it, and how a
@@ -4004,7 +4022,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def fingerprint_inputs(cls, images=None, save_path="", selection="",
                            view="", mode="multiple", stage="", names="",
-                           show="approved"):
+                           show="approved", edit_selection=""):
         """Change only when what LEAVES the node could have.
 
         The first version returned NaN — always changed — so the panel would
@@ -4032,13 +4050,19 @@ class SymbioticaPick(io.ComfyNode):
             return float("nan")
         picked_one = str(one(mode, "multiple") or "multiple") == "single"
         ticks = _pick_ids(str(one(selection, "")))
+        edit_ticks = _pick_ids(str(one(edit_selection, "")))
         stamp = [target, sorted(only) if only is not None else None,
                  sorted(derived) if derived is not None else None,
-                 picked_one, str(one(stage, "")), ticks]
+                 picked_one, str(one(stage, "")), ticks, edit_ticks]
         try:
-            paths = picked_paths(
-                listing_for(target, only=only, derived_from=derived), ticks)
+            listing = listing_for(target, only=only, derived_from=derived)
+            paths = picked_paths(listing, ticks)
             for path in paths[:1] if picked_one else paths:
+                st = os.stat(path)
+                stamp.append([path, st.st_mtime_ns, st.st_size])
+            # The edit set is an emission too: a file re-rendered under a
+            # marked name must reach the edit lane the next queue.
+            for path in picked_paths(listing, edit_ticks):
                 st = os.stat(path)
                 stamp.append([path, st.st_mtime_ns, st.st_size])
         except OSError:
@@ -4048,7 +4072,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def check_lazy_status(cls, images=None, save_path="", selection="",
                           view="", mode="multiple", stage="", names="",
-                          show="approved"):
+                          show="approved", edit_selection=""):
         """Ask for the wire when there is one — for its ORDER, not its value.
 
         The images are read off disk, and `execute` ignores whatever arrives
@@ -4128,7 +4152,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def execute(cls, images=None, save_path="", selection="", view="",
                 mode="multiple", stage="", names="",
-                show="approved") -> io.NodeOutput:
+                show="approved", edit_selection="") -> io.NodeOutput:
         from PIL import Image
 
         from .pick_folder import (edit_prefix, listing_for, picked_paths,
@@ -4253,13 +4277,20 @@ class SymbioticaPick(io.ComfyNode):
             parent = os.path.basename(paths[0]) if len(paths) == 1 else ""
             stem = edit_prefix(tail, parent)
             marked = f"{head}/{stem}" if head else stem
+        # The ✎ set, a second lane out of the same listing. Not narrowed by
+        # `single`: mode is about how many the APPROVE step takes, and a batch
+        # of edits is the point of marking several.
+        edit_paths = picked_paths(entries, _pick_ids(one(edit_selection, "")))
         _push("symbiotica.pick", {
             "node_id": str(node_id), "count": len(entries),
             "folder": listed, "picked": len(paths),
+            "for_edit": len(edit_paths),
             "shortlist": bool(upstream),
         })
         picked = [_pil_to_tensor_keep_alpha(Image.open(p)) for p in paths]
-        return io.NodeOutput(picked, listed, marked)
+        for_edit = [_pil_to_tensor_keep_alpha(Image.open(p))
+                    for p in edit_paths]
+        return io.NodeOutput(picked, listed, marked, for_edit)
 
 
 class SymbioticaPromptRecipe(io.ComfyNode):

@@ -39,7 +39,7 @@ function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) 
 // here that has to track the Python schema exactly.
 const WIDGET_DEFAULTS = {
     save_path: "", selection: "", view: "", mode: "multiple", stage: "",
-    names: "", show: "approved",
+    names: "", show: "approved", edit_selection: "",
 };
 
 async function panelNode(seen = [], images = [], values = {},
@@ -117,7 +117,7 @@ test("the ticks saved in the workflow come back ticked", async () => {
     const node = await panelNode([], [ONE, TWO], {
         selection: JSON.stringify(["Spookies_00002_.png"]),
     });
-    assert.match(textOf(node), /1 ticked/);
+    assert.match(textOf(node), /1 ✓/);
 });
 
 test("the header says how many are in the folder", async () => {
@@ -393,26 +393,54 @@ test("roles still row when one of them is the bare asset name", async () => {
     assert.ok(text.includes("prep · 1"), text);
 });
 
-test("discard takes two clicks and posts the ticked names", async () => {
+test("discard takes two clicks and posts the checked names", async () => {
     const seen = [];
     const node = await panelNode(seen, [ONE, TWO]);
+    // Tick tile 1 (approve), then checkbox-select it for the batch bar.
     fire(cells(node)[0], "click");
-    fire(buttonsSaying(node, "discard")[0], "click");
+    fire(buttonsSaying(node, "\u2610")[0], "click");
+    fire(buttonsSaying(node, "\u2715 discard 1")[0], "click");
     await tick();
     // Armed, not fired: nothing has touched the disk yet.
     assert.equal(seen.filter((c) => c.route.includes("pick-discard")).length, 0);
-    fire(buttonsSaying(node, "discard 1?")[0], "click");
+    fire(buttonsSaying(node, "\u2715 discard 1?")[0], "click");
     for (let i = 0; i < 10; i++) await tick();
     const call = seen.find((c) => c.route.includes("pick-discard"));
     assert.ok(call, "no discard call");
     assert.deepEqual(JSON.parse(call.init.body).names, [ONE.name]);
-    // A discarded file must not stay ticked — it would read as missing.
+    // A discarded file must not stay in either set — it would read as missing.
     assert.deepEqual(JSON.parse(widgetOf(node, "selection").value), []);
 });
 
-test("discard is offered only once something ticked is on screen", async () => {
+test("the batch bar appears only once something is checkbox-selected", async () => {
     const node = await panelNode([], [ONE, TWO]);
     assert.equal(buttonsSaying(node, "discard").length, 0);
+    fire(buttonsSaying(node, "\u2610")[0], "click");
+    assert.equal(buttonsSaying(node, "\u2715 discard 1").length, 1);
+    assert.equal(buttonsSaying(node, "\u2713 approve 1").length, 1);
+    assert.equal(buttonsSaying(node, "\u270e edit 1").length, 1);
+});
+
+test("the per-tile edit button records the file on edit_selection", async () => {
+    const node = await panelNode([], [ONE, TWO]);
+    const pens = walk(listOf(node)).filter(
+        (e) => e.textContent === "\u270e" && e._listeners?.click);
+    fire(pens[1], "click");
+    assert.deepEqual(JSON.parse(widgetOf(node, "edit_selection").value),
+                     ["Spookies_00002_.png"]);
+    // Independent fates: the approve set is untouched.
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value || "[]"), []);
+});
+
+test("batch approve ticks every checked tile at once", async () => {
+    const node = await panelNode([], [ONE, TWO, THREE]);
+    // Re-query after each click: a checked box redraws as \u2714, so the
+    // remaining \u2610 list shifts.
+    fire(buttonsSaying(node, "\u2610")[0], "click");
+    fire(buttonsSaying(node, "\u2610")[0], "click");
+    fire(buttonsSaying(node, "\u2713 approve 2")[0], "click");
+    assert.deepEqual(JSON.parse(widgetOf(node, "selection").value).sort(),
+                     ["Spookies_00001_.png", "Spookies_00002_.png"]);
 });
 
 test("the panel declares its height the way the frontend actually asks", async () => {

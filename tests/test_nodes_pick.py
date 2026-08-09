@@ -70,7 +70,7 @@ class TestSchema:
         schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
         widgets = [i.id for i in schema.inputs if i.id != "images"]
         assert widgets == ["save_path", "selection", "view", "mode", "stage",
-                           "names", "show"]
+                           "names", "show", "edit_selection"]
 
     def test_every_input_is_optional(self, nodes_mod):
         """The other half of surviving a saved workflow: `optional`, not order.
@@ -102,6 +102,13 @@ class TestSchema:
         one tensor, and downstream should run once per approved image."""
         assert nodes_mod.SymbioticaPick.GET_SCHEMA().outputs[0].is_output_list \
             is True
+
+    def test_the_for_edit_output_is_a_list_too(self, nodes_mod):
+        """The ✎ set is its own lane: a batch of edits leaves as one image per
+        run downstream, same shape as `picked`."""
+        out = nodes_mod.SymbioticaPick.GET_SCHEMA().outputs[3]
+        assert out.display_name == "for_edit"
+        assert out.is_output_list is True
 
     def test_it_is_an_output_node(self, nodes_mod):
         """So it can be queued on its own — "Queue Selected Output Node" lists
@@ -362,6 +369,49 @@ class TestItWritesNothing:
         category = tmp_path / "output" / EVENT_DIR / "Food"
         assert sorted(p.name for p in category.iterdir()) == [
             "Spookies_00001_.png", "Spookies_00002_.png"]
+
+
+class TestTheEditSetIsItsOwnLane:
+    """Approve and edit are independent fates from one listing: ✓ flows out
+    `picked` to export, ✎ flows out `for_edit` to the edit lane, and marking
+    one never moves the other."""
+
+    def test_marked_files_leave_on_for_edit(self, nodes_mod, tmp_path):
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png"))
+        out = spookies(nodes_mod, tmp_path,
+                       selection=[json.dumps(["Spookies_00001_.png"])],
+                       edit_selection=[json.dumps(["Spookies_00002_.png"])])
+        assert len(out.args[0]) == 1
+        assert len(out.args[3]) == 1
+
+    def test_single_mode_never_truncates_the_edit_set(self, nodes_mod,
+                                                      tmp_path):
+        """`mode` is about how many the APPROVE step takes; a batch of edits
+        is the point of marking several."""
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png",
+                 "Spookies_00003_.png"))
+        out = spookies(nodes_mod, tmp_path, mode=["single"],
+                       edit_selection=[json.dumps(
+                           ["Spookies_00002_.png", "Spookies_00003_.png"])])
+        assert len(out.args[3]) == 2
+
+    def test_an_empty_edit_set_is_an_empty_lane(self, nodes_mod, tmp_path):
+        renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
+        out = spookies(nodes_mod, tmp_path)
+        assert out.args[3] == []
+
+    def test_a_changed_edit_mark_reports_changed(self, nodes_mod, tmp_path):
+        """The stamp answers for everything that LEAVES the node, and the ✎
+        set leaves it."""
+        renders(tmp_path, f"{EVENT_DIR}/Food",
+                ("Spookies_00001_.png", "Spookies_00002_.png"))
+        spookies(nodes_mod, tmp_path)
+        a = nodes_mod.SymbioticaPick.fingerprint_inputs()
+        b = nodes_mod.SymbioticaPick.fingerprint_inputs(
+            edit_selection=[json.dumps(["Spookies_00002_.png"])])
+        assert a != b
 
 
 class TestTheFolderItListsIsAnOutput:

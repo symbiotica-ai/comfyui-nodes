@@ -12,7 +12,7 @@ const NODE_CLASS = "SymbioticaPick";
 // Widgets this node gained after graphs were already saved, with the value each
 // falls back to. A saved workflow carries one value per widget it knew about,
 // applied by position, so anything appended since comes back unset.
-const APPENDED_WIDGETS = [["show", "approved"]];
+const APPENDED_WIDGETS = [["show", "approved"], ["edit_selection", ""]];
 const MIN_NODE_W = 340;
 const PANEL_MIN = 44;        // an empty picker still shows its own message
 const DEFAULT_NODE_H = 460;  // only for a node that has never been given a height
@@ -45,20 +45,28 @@ const isSingle = (node) =>
 // run was queued with. Names rather than positions, because a new render
 // landing in the folder shifts every position after it and would silently
 // re-point every tick at its neighbour.
-function readTicks(node) {
+function readSet(node, widget) {
     try {
-        const raw = JSON.parse(widgetOf(node, "selection")?.value || "[]");
+        const raw = JSON.parse(widgetOf(node, widget)?.value || "[]");
         return new Set(Array.isArray(raw) ? raw.map(String) : []);
     } catch {
         return new Set();
     }
 }
 
-function writeTicks(node, ticks) {
-    const w = widgetOf(node, "selection");
-    if (w) w.value = JSON.stringify([...ticks]);
+function writeSet(node, widget, values) {
+    const w = widgetOf(node, widget);
+    if (w) w.value = JSON.stringify([...values]);
     node.setDirtyCanvas?.(true, true);
 }
+
+const readTicks = (node) => readSet(node, "selection");
+const writeTicks = (node, ticks) => writeSet(node, "selection", ticks);
+// The ✎ set: files travelling out the `for_edit` output. Its own widget so
+// approving and sending to edit are independent fates, both saved with the
+// workflow.
+const readEdits = (node) => readSet(node, "edit_selection");
+const writeEdits = (node, edits) => writeSet(node, "edit_selection", edits);
 
 function thumbSize(node) {
     const key = node.properties?.symPickThumb;
@@ -179,6 +187,10 @@ function pickPanel(node) {
     }
     const oneAtATime = () => isSingle(node);
 
+    // Batch selection: which tiles the bar's buttons act on. Canvas-only —
+    // a half-made selection is not workflow state worth saving.
+    let checked = new Set();
+
     function toggle(name) {
         const ticks = readTicks(node);
         if (ticks.has(name)) {
@@ -197,15 +209,65 @@ function pickPanel(node) {
         render();
     }
 
+    // One fate per action. Approve and edit are independent sets — a file can
+    // be both (approved for export AND sent for a variant edit) — so each
+    // button toggles its own set and never touches the other.
+    function assign(names, fate) {
+        if (fate === "approve") {
+            const ticks = readTicks(node);
+            const allIn = names.every((n) => ticks.has(n));
+            for (const n of names) allIn ? ticks.delete(n) : ticks.add(n);
+            if (oneAtATime() && !allIn) {
+                const keep = names[names.length - 1];
+                ticks.clear();
+                ticks.add(keep);
+            }
+            writeTicks(node, ticks);
+        } else if (fate === "edit") {
+            const edits = readEdits(node);
+            const allIn = names.every((n) => edits.has(n));
+            for (const n of names) allIn ? edits.delete(n) : edits.add(n);
+            writeEdits(node, edits);
+        }
+        render();
+    }
+
+    // The only control that touches the disk: files move one folder deeper,
+    // never away. Both sets forget a discarded file so no tick reads as
+    // "missing" forever.
+    async function discard(names) {
+        if (!names.length) return;
+        try {
+            const res = await fetchJson("/symbiotica/pick-discard", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ node_id: String(node.id),
+                                       names }),
+            });
+            const dropped = new Set(names);
+            writeTicks(node, new Set([...readTicks(node)]
+                .filter((t) => !dropped.has(t))));
+            writeEdits(node, new Set([...readEdits(node)]
+                .filter((t) => !dropped.has(t))));
+            checked = new Set([...checked].filter((t) => !dropped.has(t)));
+            notice = `${(res.discarded || []).length} moved to discarded/`;
+        } catch (e) {
+            error = e.message || "could not discard those";
+        }
+        await load();
+    }
+
     // --- header ------------------------------------------------------------
-    function renderHead(ticks) {
+    function renderHead(ticks, edits) {
         const bar = el("div",
             `display:flex;align-items:center;gap:6px;padding:2px 2px 4px;color:${HUB.inkSubtle};`);
         const here = images.filter((i) => ticks.has(i.id)).length;
+        const editing = images.filter((i) => edits.has(i.id)).length;
         bar.append(el("span", "flex:1;min-width:0;overflow:hidden;"
             + "text-overflow:ellipsis;white-space:nowrap;",
             images.length
-                ? `${images.length} in folder · ${here} ticked`
+                ? `${images.length} in folder · ${here} ✓`
+                  + (editing ? ` · ${editing} ✎` : "")
                 : `nothing listed yet (node ${node.id})`));
 
         // A tick whose file is no longer in the folder is not sent on, and is
@@ -265,21 +327,58 @@ function pickPanel(node) {
         reload.addEventListener("click", () => load());
         bar.appendChild(reload);
 
-        if (here) {
-            // Never delete: the tiles ARE the renders, several of them paid
-            // for and unrepeatable, so the worst this button may do is file
-            // them one folder deeper. Two clicks, because it is the only
-            // control here that touches the disk at all.
-            const armed = node._symDiscardArmed;
-            const bin = el("button", ghostButtonCss + "padding:1px 8px;flex:none;"
-                + (armed ? `border-color:${HUB.accent};color:${HUB.ink};` : ""),
-                           armed ? `discard ${here}?` : "discard");
-            bin.className = "sym-btn";
-            bin.title = `Move the ${here} ticked file(s) into \`discarded/\` `
-                + "under this folder. They leave the grid, not the disk — drag "
-                + "them back to undo.";
-            bin.addEventListener("pointerdown", (e) => e.stopPropagation());
-            bin.addEventListener("click", async () => {
+        if (ticks.size || edits.size) {
+            const clear = el("button", ghostButtonCss + "padding:1px 8px;flex:none;",
+                             "untick all");
+            clear.className = "sym-btn";
+            clear.title = "Clear every ✓ and ✎. The images on disk are untouched.";
+            clear.addEventListener("pointerdown", (e) => e.stopPropagation());
+            clear.addEventListener("click", () => {
+                writeTicks(node, new Set());
+                writeEdits(node, new Set());
+                render();
+            });
+            bar.appendChild(clear);
+        }
+        return bar;
+    }
+
+    // --- batch bar ----------------------------------------------------------
+    // Appears once anything is checkbox-selected: one row, three fates, each
+    // acting on every checked tile at once. Discard keeps its two-click arm —
+    // it is still the only control that touches the disk.
+    function renderBatchBar() {
+        const names = images.filter((i) => checked.has(i.id)).map((i) => i.id);
+        const bar = el("div",
+            `display:flex;align-items:center;gap:6px;padding:3px 2px 4px;`
+            + `border-top:1px solid ${HUB.hairline};color:${HUB.ink};`);
+        bar.append(el("span", "flex:none;", `${names.length} selected`));
+
+        const make = (label, title, fn, accent) => {
+            const b = el("button", ghostButtonCss + "padding:1px 9px;flex:none;"
+                + (accent ? `border-color:${HUB.accent};color:${HUB.ink};` : ""),
+                         label);
+            b.className = "sym-btn";
+            b.title = title;
+            b.addEventListener("pointerdown", (e) => e.stopPropagation());
+            b.addEventListener("click", fn);
+            return b;
+        };
+
+        bar.appendChild(make(`✓ approve ${names.length}`,
+            "Toggle the checked tiles in the approved set — they flow out "
+            + "`picked` to the final export step.",
+            () => assign(names, "approve")));
+        bar.appendChild(make(`✎ edit ${names.length}`,
+            "Toggle the checked tiles in the edit set — they flow out "
+            + "`for_edit` to the edit lane.",
+            () => assign(names, "edit")));
+        const armed = node._symDiscardArmed;
+        bar.appendChild(make(
+            armed ? `✕ discard ${names.length}?` : `✕ discard ${names.length}`,
+            "Move the checked files into `discarded/` under this folder. They "
+            + "leave the grid, not the disk — drag them back to undo.",
+            async () => {
                 if (!node._symDiscardArmed) {
                     node._symDiscardArmed = true;
                     render();
@@ -292,39 +391,11 @@ function pickPanel(node) {
                     return;
                 }
                 node._symDiscardArmed = false;
-                const gone = images.filter((i) => ticks.has(i.id))
-                                   .map((i) => i.id);
-                try {
-                    const res = await fetchJson("/symbiotica/pick-discard", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ node_id: String(node.id),
-                                               names: gone }),
-                    });
-                    // A discarded file must not stay ticked: the tick would
-                    // read as "missing" forever and never travel anywhere.
-                    const dropped = new Set(gone);
-                    writeTicks(node, new Set([...readTicks(node)]
-                        .filter((t) => !dropped.has(t))));
-                    notice = `${(res.discarded || []).length} moved to `
-                        + "discarded/";
-                } catch (e) {
-                    error = e.message || "could not discard those";
-                }
-                await load();
-            });
-            bar.appendChild(bin);
-        }
-
-        if (ticks.size) {
-            const clear = el("button", ghostButtonCss + "padding:1px 8px;flex:none;",
-                             "untick all");
-            clear.className = "sym-btn";
-            clear.title = "Clear every tick. The images on disk are untouched.";
-            clear.addEventListener("pointerdown", (e) => e.stopPropagation());
-            clear.addEventListener("click", () => { writeTicks(node, new Set()); render(); });
-            bar.appendChild(clear);
-        }
+                await discard(names);
+            }, armed));
+        bar.appendChild(make("clear",
+            "Drop the checkbox selection. Nothing else changes.",
+            () => { checked = new Set(); render(); }));
         return bar;
     }
 
@@ -336,17 +407,27 @@ function pickPanel(node) {
     const groupOf = (name) =>
         name.replace(/\.[^.]+$/, "").replace(/_\d+_?$/, "");
 
-    function renderRow(ticks, rowImages) {
+    // The edit set's own colour, one step warmer than the approve accent so a
+    // tile carrying both reads as both.
+    const EDIT_HUE = "#e0a84a";
+
+    function renderRow(ticks, edits, rowImages) {
         const px = SIZES[thumbSize(node)];
         const grid = el("div", "display:flex;flex-wrap:wrap;gap:4px;"
             + "width:100%;box-sizing:border-box;");
         for (const image of rowImages) {
             const on = ticks.has(image.id);
+            const editing = edits.has(image.id);
+            const isChecked = checked.has(image.id);
+            const border = on ? HUB.accent
+                : editing ? EDIT_HUE
+                : isChecked ? HUB.inkSubtle : HUB.hairline;
             const cell = el("div",
                 `position:relative;width:${px}px;height:${px}px;flex:none;`
-                + `border:2px solid ${on ? HUB.accent : HUB.hairline};`
+                + `border:2px solid ${border};`
                 + `border-radius:4px;overflow:hidden;cursor:pointer;`
                 + `background:${HUB.surface1};box-sizing:border-box;`);
+            cell.className = "sym-pick-cell";
             const caption = `${image.index} · ${image.name}`
                 + (image.w ? ` · ${image.w}×${image.h}` : "");
             // No `title`: the browser's own tooltip lands a second later, on
@@ -367,6 +448,62 @@ function pickPanel(node) {
                 + `color:${on ? "#000" : HUB.ink};border-radius:0 0 4px 0;`,
                 String(image.index));
             cell.appendChild(badge);
+            if (editing) {
+                cell.appendChild(el("div",
+                    `position:absolute;left:0;bottom:0;padding:0 3px;`
+                    + `font:10px ${HUB.font};background:${EDIT_HUE};`
+                    + "color:#000;border-radius:0 4px 0 0;", "✎"));
+            }
+
+            // Batch checkbox, its own click target: selecting for a batch
+            // action must not toggle the approve tick underneath.
+            const box = el("div",
+                `position:absolute;right:0;top:0;width:15px;height:15px;`
+                + `font:11px/13px ${HUB.font};text-align:center;`
+                + `background:${isChecked ? HUB.ink : "rgba(0,0,0,.55)"};`
+                + `color:${isChecked ? "#000" : HUB.inkSubtle};`
+                + "border-radius:0 0 0 4px;",
+                isChecked ? "✔" : "☐");
+            box.title = "select for a batch action (approve / edit / discard "
+                + "several at once)";
+            box.addEventListener("pointerdown", (e) => e.stopPropagation());
+            box.addEventListener("click", (e) => {
+                e.stopPropagation?.();
+                isChecked ? checked.delete(image.id) : checked.add(image.id);
+                render();
+            });
+            cell.appendChild(box);
+
+            // Per-tile fates, on hover so the render stays the thing looked
+            // at. The strip is the same three verbs as the batch bar.
+            const acts = el("div", "position:absolute;left:0;right:0;bottom:0;"
+                + "display:none;justify-content:space-around;"
+                + "background:rgba(0,0,0,.62);padding:1px 0;");
+            acts.className = "sym-pick-acts";
+            const act = (glyph, title, fn, active, hue) => {
+                const b = el("div",
+                    `flex:1;text-align:center;font:12px ${HUB.font};`
+                    + "cursor:pointer;"
+                    + `color:${active ? (hue || HUB.accent) : HUB.ink};`,
+                    glyph);
+                b.title = title;
+                b.addEventListener("pointerdown", (e) => e.stopPropagation());
+                b.addEventListener("click", (e) => { e.stopPropagation?.(); fn(); });
+                return b;
+            };
+            acts.appendChild(act("✓",
+                on ? "approved — click to unapprove"
+                   : "approve: send out `picked` to the final export step",
+                () => assign([image.id], "approve"), on));
+            acts.appendChild(act("✎",
+                editing ? "marked for edit — click to unmark"
+                        : "send out `for_edit` to the edit lane",
+                () => assign([image.id], "edit"), editing, EDIT_HUE));
+            acts.appendChild(act("✕",
+                "discard: move this file into `discarded/` (leaves the grid, "
+                + "not the disk)",
+                () => discard([image.id]), false));
+            cell.appendChild(acts);
 
             // S tiles are 64px: too small to tell two renders apart, which is
             // the whole job of this node. Resting on one floats it big beside
@@ -379,6 +516,10 @@ function pickPanel(node) {
                 placeholder: img.src,   // already fetched: the frame fills now
                 src: (zoomPx) => thumbUrl(image.path, zoomPx),
             }));
+            cell.addEventListener("mouseenter",
+                () => { acts.style.display = "flex"; });
+            cell.addEventListener("mouseleave",
+                () => { acts.style.display = "none"; });
 
             cell.addEventListener("pointerdown", (e) => e.stopPropagation());
             cell.addEventListener("click", () => toggle(image.id));
@@ -391,14 +532,14 @@ function pickPanel(node) {
         return grid;
     }
 
-    function renderGrid(ticks) {
+    function renderGrid(ticks, edits) {
         const groups = new Map();
         for (const image of images) {
             const key = groupOf(image.name);
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key).push(image);
         }
-        if (groups.size <= 1) return renderRow(ticks, images);
+        if (groups.size <= 1) return renderRow(ticks, edits, images);
 
         // The shared start of every key is the asset's own name — the label
         // is the part that differs, which is the role.
@@ -420,7 +561,7 @@ function pickPanel(node) {
         const stem = shared.replace(/_+$/, "");
         const rowed = stem && keys.every(
             (key) => key === stem || key.startsWith(`${stem}_`));
-        if (!rowed) return renderRow(ticks, images);
+        if (!rowed) return renderRow(ticks, edits, images);
 
         const wrap = el("div", "width:100%;box-sizing:border-box;");
         for (const [key, rowImages] of groups) {
@@ -430,13 +571,14 @@ function pickPanel(node) {
                 `padding:5px 3px 2px;font:10px ${HUB.font};`
                 + `color:${here ? HUB.ink : HUB.inkSubtle};`,
                 `${label} · ${rowImages.length}${here ? ` · ${here} ✓` : ""}`));
-            wrap.appendChild(renderRow(ticks, rowImages));
+            wrap.appendChild(renderRow(ticks, edits, rowImages));
         }
         return wrap;
     }
 
     function render() {
         const ticks = readTicks(node);
+        const edits = readEdits(node);
         // The tile a preview belongs to is about to be thrown away — a frame
         // left up would be floating beside nothing.
         hideHoverZoom();
@@ -447,7 +589,8 @@ function pickPanel(node) {
         // is the thing worth being able to read at any time.
         const top = el("div", "position:sticky;top:0;z-index:2;"
             + `background:${HUB.surface1};padding-bottom:2px;`);
-        top.appendChild(renderHead(ticks));
+        top.appendChild(renderHead(ticks, edits));
+        if (checked.size) top.appendChild(renderBatchBar());
         if (folder) {
             top.appendChild(el("div",
                 `color:${HUB.inkTertiary};font:10px ${HUB.font};padding:0 3px 3px;`
@@ -471,7 +614,7 @@ function pickPanel(node) {
                   + "asset's images are in from the wires, then lists them "
                   + "here"));
         } else {
-            list.appendChild(renderGrid(ticks));
+            list.appendChild(renderGrid(ticks, edits));
         }
         refit();
     }
@@ -490,9 +633,18 @@ registerSymbioticaExtension(app, {
             onNodeCreated?.apply(this, arguments);
             // Canvas state: collapse it (a bare .hidden is ignored by the
             // classic canvas widgets).
-            for (const name of ["selection", "view"]) {
+            for (const name of ["selection", "view", "edit_selection"]) {
                 const w = widgetOf(this, name);
                 if (w) { w.hidden = true; w.computeSize = () => [0, -4]; }
+            }
+            // Deprecated, superseded by chaining pickers with `show` +
+            // `edit_save_path`. The slot stays (values restore positionally);
+            // an empty one just stops taking up a row. A graph that still
+            // uses a stage keeps its visible widget.
+            const stage = widgetOf(this, "stage");
+            if (stage && !String(stage.value ?? "").trim()) {
+                stage.hidden = true;
+                stage.computeSize = () => [0, -4];
             }
             pickPanel(this);
         };
