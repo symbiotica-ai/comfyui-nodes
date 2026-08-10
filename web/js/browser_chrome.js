@@ -6,7 +6,22 @@
 // Browser renders them inside a node instead of an overlay, which is a layout
 // difference, not a visual one — so the parts live here rather than being drawn
 // twice with drifting styles.
+import { api } from "../../../scripts/api.js";
 import { HUB, ghostButtonCss } from "./hub_theme.js";
+
+// --- image URLs --------------------------------------------------------------
+// Keep the /api/ prefix: ComfyUI mirrors custom routes under /api/ locally AND
+// the Modal gateway proxies /api/* only, so a root-level /symbiotica/* would
+// blank every thumbnail there.
+//
+// `imageThumbUrl` resizes per request and leaves nothing on disk, so a panel
+// drawing thirty tiles asks for thirty small PNGs instead of thirty renders.
+// `imageFullUrl` is the same file at full size, for opening or for a hover
+// preview's final swap. Both take an ABSOLUTE path the server has registered.
+export const imageThumbUrl = (path, px) => api.apiURL(
+    `/symbiotica/pick-thumb?px=${px}&path=${encodeURIComponent(path)}`);
+export const imageFullUrl = (path) => api.apiURL(
+    `/symbiotica/local-image?path=${encodeURIComponent(path)}`);
 
 export function el(tag, style = "", text = "") {
     const d = document.createElement(tag);

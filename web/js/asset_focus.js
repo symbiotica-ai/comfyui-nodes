@@ -5,10 +5,14 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
-import { el, emptyState } from "./browser_chrome.js";
+import { attachHoverZoom, el, emptyState, hideHoverZoom, imageFullUrl,
+         imageThumbUrl } from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaAssetFocus";
 const MIN_NODE_W = 300;
+// The client's own reference art for an asset, at the size the Auto Packer's
+// cell strip uses — the two panels list the same assets and must read alike.
+const THUMB_PX = 30;
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
 
@@ -60,6 +64,10 @@ function askSource(node, source) {
         .catch(() => {});
 }
 
+// `{ assets, refsRoot }` — the reference files ride along with the names, and
+// the root they are relative to comes off the same source node the Auto Packer
+// reads (`_symRefsRoot`, set by the order parse that also registers the folder
+// with the server, which is what makes the thumbnails loadable at all).
 function publishedAssets(node) {
     const source = orderSource(node);
     if (!source) return null;
@@ -76,9 +84,13 @@ function publishedAssets(node) {
         askSource(node, source);
         return null;
     }
-    return assets
-        .filter((a) => String(a.assetName ?? "").trim())
-        .map((a) => ({ name: a.assetName, category: a.category ?? "" }));
+    return {
+        refsRoot: source._symRefsRoot ?? "",
+        assets: assets
+            .filter((a) => String(a.assetName ?? "").trim())
+            .map((a) => ({ name: a.assetName, category: a.category ?? "",
+                           refs: a.refFiles ?? [] })),
+    };
 }
 
 // A text box you cannot be told what to type is not an input. The classic node
@@ -113,7 +125,7 @@ function comboify(node, widgetName, valuesFn) {
 // dropdown reads down the order sheet rather than alphabetically.
 function categoriesOf(node) {
     const out = [ALL_CATEGORIES];
-    for (const asset of publishedAssets(node) ?? []) {
+    for (const asset of publishedAssets(node)?.assets ?? []) {
         const category = String(asset.category ?? "").trim();
         if (category && !out.includes(category)) out.push(category);
     }
@@ -129,8 +141,13 @@ function focusPanel(node) {
     // whose content is wider than the node otherwise resolves its width
     // against a shrink-to-fit parent and paints outside the node, over
     // whatever is behind it.
+    // HUB.ink is a dark-theme token (#f7f8f8): on ComfyUI's LIGHT palette the
+    // node body is white and every asset name painted in it is invisible —
+    // measured at rgb(247,248,248) on white. ComfyUI's own text colour follows
+    // the palette both ways, with the hub ink as the fallback.
     const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
-        + `padding:2px;font:11px ${HUB.font};color:${HUB.ink};`);
+        + `padding:2px;font:11px ${HUB.font};`
+        + `color:var(--input-text, ${HUB.ink});`);
     container.appendChild(list);
     container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
 
@@ -170,18 +187,105 @@ function focusPanel(node) {
         render();
     }
 
+    // One reference image, at strip size, big under the pointer. The tile is
+    // the asset's own art, so hovering it is how you tell two similar assets
+    // apart without leaving the node.
+    function refThumb(asset, refsRoot, file) {
+        const path = `${refsRoot}/${file}`;
+        const img = el("img",
+            `width:${THUMB_PX}px;height:${THUMB_PX}px;object-fit:contain;`
+            + `background:${HUB.surface1};border-radius:3px;flex:none;`
+            + `border:1px solid ${HUB.hairline};`);
+        img.src = imageThumbUrl(path, THUMB_PX * 2);   // crisp on a retina panel
+        img.loading = "lazy";
+        img.draggable = false;
+        img.title = file;
+        // A missing or unreadable reference must not leave a broken-image glyph
+        // sitting in the strip; an empty slot reads as "no art for this one".
+        img.addEventListener("error", () => { img.style.visibility = "hidden"; });
+        attachHoverZoom(img, () => ({
+            w: img.naturalWidth, h: img.naturalHeight,
+            label: asset.name,
+            hint: file,
+            placeholder: img.src,       // already fetched: the frame fills now
+            src: () => imageFullUrl(path),
+        }));
+        return img;
+    }
+
+    function assetRow(asset, refsRoot, pick) {
+        const on = asset.name === pick;
+        const row = el("div",
+            "display:flex;flex-direction:column;gap:3px;width:100%;"
+            + "box-sizing:border-box;overflow:hidden;"
+            + "padding:4px 5px;margin:2px 0;"
+            + `border:1px solid ${on ? HUB.accent : HUB.hairline};`
+            + "border-radius:5px;cursor:pointer;"
+            + (on ? "" : "opacity:.75;"));
+        const head = el("div",
+            "display:flex;align-items:center;gap:6px;min-width:0;");
+        head.append(el("span", "flex:1;min-width:0;overflow:hidden;"
+            + "text-overflow:ellipsis;white-space:nowrap;", asset.name));
+        const refs = asset.refs ?? [];
+        if (refs.length) {
+            head.appendChild(el("span",
+                `flex:none;color:${HUB.inkTertiary};`,
+                `${refs.length} ref${refs.length === 1 ? "" : "s"}`));
+        }
+        row.appendChild(head);
+        if (refs.length && refsRoot) {
+            const strip = el("div",
+                "display:flex;gap:4px;flex-wrap:wrap;min-width:0;");
+            for (const file of refs) strip.appendChild(refThumb(asset, refsRoot, file));
+            row.appendChild(strip);
+        }
+        row.title = `${asset.name}${asset.category ? ` · ${asset.category}` : ""}`;
+        row.addEventListener("pointerdown", (e) => e.stopPropagation());
+        row.addEventListener("click", () => { hideHoverZoom(); choose(asset.name); });
+        return row;
+    }
+
+    // The category name over the assets that belong to it, for the "All" view.
+    // Narrowed to one category there is nothing to separate, and the widget
+    // already says which one it is.
+    function groupHeader(category, count) {
+        return el("div",
+            "display:flex;align-items:baseline;gap:6px;width:100%;"
+            + "box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;"
+            + "white-space:nowrap;padding:6px 3px 3px;"
+            + `border-bottom:1px solid ${HUB.hairline};margin-bottom:2px;`
+            + `color:${HUB.inkSubtle};`,
+            `${category || "uncategorised"} · ${count}`);
+    }
+
     function render() {
         list.replaceChildren();
+        // A preview left floating over a list that is being replaced points at
+        // a tile that no longer exists.
+        hideHoverZoom();
         // What a run reported wins — it is the list the node actually chose
         // from, already narrowed by `category`. Otherwise fall back to what the
         // wired source published, so the choices are there before any run.
         const narrow = narrowed().toLowerCase();
+        const published = publishedAssets(node);
+        // A run reports the names it chose from; the source publishes the
+        // reference files. Merge by name so the thumbnails are there either
+        // way — a run's own payload carries them too, and whichever list is in
+        // use, the fuller record wins.
+        const refsOf = new Map((published?.assets ?? []).map((a) => [a.name, a.refs ?? []]));
+        const fromRun = node._symFocusAssets?.length ? node._symFocusAssets : null;
+        const refsRoot = (fromRun ? node._symFocusRefsRoot : "")
+            || published?.refsRoot || "";
         // Narrow whichever list is in use. A run's list already arrives
         // narrowed by the same widget, but between runs the widget can move
         // and the panel must not keep showing what it would no longer choose.
-        const assets = (node._symFocusAssets?.length
-            ? node._symFocusAssets : (publishedAssets(node) ?? [])).filter(
-                (a) => !narrow || String(a.category ?? "").toLowerCase() === narrow);
+        const assets = (fromRun ?? published?.assets ?? [])
+            .filter((a) => !narrow
+                || String(a.category ?? "").toLowerCase() === narrow)
+            .map((a) => ({
+                ...a,
+                refs: refsOf.get(a.name)?.length ? refsOf.get(a.name) : (a.refs ?? []),
+            }));
         // A saved workflow restores the widget AFTER onNodeCreated ran, so the
         // normalising done there is overwritten by the empty value on disk.
         const categoryW = widgetOf(node, "category");
@@ -234,25 +338,25 @@ function focusPanel(node) {
         }
         list.appendChild(head);
 
-        for (const asset of assets) {
-            const on = asset.name === pick;
-            const row = el("div",
-                "display:flex;align-items:center;gap:6px;width:100%;"
-                + "box-sizing:border-box;overflow:hidden;"
-                + "padding:3px 5px;margin:2px 0;"
-                + `border:1px solid ${on ? HUB.accent : HUB.hairline};`
-                + `border-radius:5px;cursor:pointer;`
-                + (on ? "" : "opacity:.75;"));
-            row.append(el("span", "flex:1;min-width:0;overflow:hidden;"
-                + "text-overflow:ellipsis;white-space:nowrap;", asset.name));
-            row.appendChild(el("span",
-                "flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;"
-                + `white-space:nowrap;color:${HUB.inkTertiary};`,
-                asset.category || ""));
-            row.title = `${asset.name}${asset.category ? ` · ${asset.category}` : ""}`;
-            row.addEventListener("pointerdown", (e) => e.stopPropagation());
-            row.addEventListener("click", () => choose(asset.name));
-            list.appendChild(row);
+        if (narrowed()) {
+            for (const asset of assets) list.appendChild(assetRow(asset, refsRoot, pick));
+        } else {
+            // First-appearance order, the same order `assets_by_category`
+            // groups by on the Python side — so the panel reads down the order
+            // sheet rather than alphabetically, and the run order it describes
+            // is the order it shows.
+            const groups = new Map();
+            for (const asset of assets) {
+                const key = String(asset.category ?? "").trim();
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(asset);
+            }
+            for (const [category, members] of groups) {
+                list.appendChild(groupHeader(category, members.length));
+                for (const asset of members) {
+                    list.appendChild(assetRow(asset, refsRoot, pick));
+                }
+            }
         }
         refit();
     }
@@ -266,7 +370,7 @@ function focusPanel(node) {
         categoryWidget.callback = function (value) {
             previous?.apply(this, arguments);
             const pool = node._symFocusAssets?.length
-                ? node._symFocusAssets : (publishedAssets(node) ?? []);
+                ? node._symFocusAssets : (publishedAssets(node)?.assets ?? []);
             const keep = pool.some(
                 (a) => a.name === chosen()
                     && (!narrowed() || a.category === narrowed()));
@@ -354,5 +458,8 @@ api.addEventListener("symbiotica.focus", (event) => {
         ?? app.graph?.getNodeById?.(detail.node_id);
     if (!node) return;
     node._symFocusAssets = Array.isArray(detail.assets) ? detail.assets : [];
+    // The run's own reference root, so the thumbnails load from a graph whose
+    // source node has published nothing to the canvas.
+    node._symFocusRefsRoot = String(detail.refs_root ?? "");
     node._symRenderFocus?.();
 });

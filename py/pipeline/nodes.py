@@ -1259,14 +1259,25 @@ class SymbioticaAssetFocus(io.ComfyNode):
                 f"the event {order.get('feature', '')!r} has no named assets — "
                 "pick a feature on the Order Specs node")
 
+        # The RAW asset record, by name: `assets_by_category` keeps the four
+        # fields a run needs and drops `refFiles`, which both the panel below
+        # and the narrowed order at the end read references off.
+        raw = {str(a.get("assetName", "") or "").strip(): a
+               for a in order.get("assets", []) or []}
+
         # The panel needs the choices before anything is chosen, and the order
-        # arrives on a wire the canvas cannot read.
+        # arrives on a wire the canvas cannot read. It draws the client's own
+        # reference art beside each name, so every ref file goes over with the
+        # root they are relative to — the root whoever parsed the order
+        # registered, which is what lets the thumbnail route serve out of it.
         _push("symbiotica.focus", {
             "node_id": str(getattr(getattr(cls, "hidden", None),
                                    "unique_id", "")),
             "feature": str(order.get("feature", "")),
+            "refs_root": str(order.get("refsRoot", "") or ""),
             "assets": [{"name": a["assetName"], "category": a["category"],
-                        "refs": list(a.get("refFiles", []) or [])[:1]}
+                        "refs": list(raw.get(a["assetName"], {})
+                                     .get("refFiles", []) or [])}
                        for a in items],
         })
 
@@ -1290,10 +1301,7 @@ class SymbioticaAssetFocus(io.ComfyNode):
         picked = [item for _, item in chosen]
         # A narrowed order per asset: the whole record on ONE wire, in the
         # shape every order consumer already reads. The RAW asset record goes
-        # in — assets_by_category strips refFiles, and Asset Refs downstream
-        # reads references off exactly that key.
-        raw = {str(a.get("assetName", "") or "").strip(): a
-               for a in order.get("assets", []) or []}
+        # in — Asset Refs downstream reads references off exactly that key.
         narrowed = [{**order,
                      "assets": [raw.get(i["assetName"], i)]} for i in picked]
         return io.NodeOutput([i["assetName"] for i in picked],
