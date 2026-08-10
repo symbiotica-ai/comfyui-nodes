@@ -7,6 +7,11 @@ refer to an entry as #N. Move a block to the CHANGELOG when it ships.
 
 Track the progression of the order, gamify it.
 
+- A slot per asset the order asks for, filled or empty: the node lays out one
+  slot for every asset that has to be generated, labelled with the asset's name
+  and its category, so the whole month is visible as a board. An empty slot is
+  work left; a filled slot shows the approved render. At a glance: which icon is
+  still needed, and how many of them are already made.
 - Data already exists: `parse-order` returns per-asset `status` (1 / 0.75 / 0),
   and approved renders land under the asset's save path — so per-event and
   per-month completion is computable with no new bookkeeping.
@@ -17,6 +22,19 @@ Track the progression of the order, gamify it.
 - Demo the gamified creation flow: a short run on a real month's order showing
   progression ticking up as assets get approved — the pitch artifact for the
   feature.
+
+## [#71](https://github.com/symbiotica-ai/comfyui-nodes/issues/71) — Approved assets go back into the dataset
+
+An approved render should land back in the project's `dataset/` under its
+category and asset name, so it can be picked as the base for a future
+generation — this month's approved crate becomes next month's reference.
+
+- Today the approve lane stops at the save path; `dataset/<Category>/` is
+  seeded by hand and never learns what was accepted.
+- Once it does, `Dataset Reference` and `Pick Similar Asset From Project` offer
+  approved work like any seeded reference, and the style loop is closed.
+- Open: copy or reference in place; write from the Pick node at approve time or
+  from its own node in the lane; what a re-approval does to the earlier version.
 
 ## [#64](https://github.com/symbiotica-ai/comfyui-nodes/issues/64) — Asset Focus: reference thumbnails in the asset list
 
