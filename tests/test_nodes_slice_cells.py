@@ -99,8 +99,11 @@ def test_malformed_boxes_are_refused(nodes_mod):
 
 def test_outputs_are_lists_so_the_lane_fans_out(nodes_mod):
     schema = nodes_mod.SymbioticaSliceCells.define_schema()
-    assert [o.display_name for o in schema.outputs] == ["cells", "roles"]
-    assert all(o.is_output_list for o in schema.outputs)
+    assert [o.display_name for o in schema.outputs] == ["cells", "roles",
+                                                        "stitched"]
+    assert all(o.is_output_list for o in schema.outputs[:2])
+    # One picture on purpose: the whole set travels as a single image.
+    assert not getattr(schema.outputs[2], "is_output_list", False)
 
 
 def test_stitched_is_the_cells_side_by_side_in_index_order(nodes_mod):
