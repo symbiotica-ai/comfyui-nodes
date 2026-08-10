@@ -47,7 +47,7 @@ def sheet(size=1024):
 
 
 def test_cuts_one_cell_per_box_with_its_role(nodes_mod):
-    cells, roles = nodes_mod.SymbioticaSliceCells.execute(
+    cells, roles, _ = nodes_mod.SymbioticaSliceCells.execute(
         image=sheet(), cell_boxes=FOOD, inset=0).args
     assert roles == ["prep", "ready", "serving"]
     assert [tuple(c.shape) for c in cells] == [(1, 482, 482, 3)] * 3
@@ -55,7 +55,7 @@ def test_cuts_one_cell_per_box_with_its_role(nodes_mod):
 
 def test_each_cell_holds_its_own_region(nodes_mod):
     src = sheet()
-    cells, _ = nodes_mod.SymbioticaSliceCells.execute(
+    cells, _, _ = nodes_mod.SymbioticaSliceCells.execute(
         image=src, cell_boxes=FOOD, inset=0).args
     for cell, box in zip(cells, json.loads(FOOD)):
         expected = src[:, box["y"]:box["y"] + box["h"],
@@ -67,13 +67,13 @@ def test_inset_shrinks_every_cell(nodes_mod):
     # The boxes are the grid the render was ASKED to hit; a couple of pixels of
     # slack keeps the matte out of a cell when it lands slightly off.
     cells, _ = nodes_mod.SymbioticaSliceCells.execute(
-        image=sheet(), cell_boxes=FOOD, inset=2).args
+        image=sheet(), cell_boxes=FOOD, inset=2).args[:2]
     assert [tuple(c.shape) for c in cells] == [(1, 478, 478, 3)] * 3
 
 
 def test_output_size_squares_every_cell(nodes_mod):
     cells, _ = nodes_mod.SymbioticaSliceCells.execute(
-        image=sheet(), cell_boxes=FOOD, inset=1, output_size=512).args
+        image=sheet(), cell_boxes=FOOD, inset=1, output_size=512).args[:2]
     assert [tuple(c.shape) for c in cells] == [(1, 512, 512, 3)] * 3
     assert all(float(c.min()) >= 0.0 and float(c.max()) <= 1.0 for c in cells)
 

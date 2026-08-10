@@ -72,7 +72,7 @@ def test_the_round_trip_with_slice_cells_preserves_placement(nodes_mod):
         y, x, w, h = box["y"], box["x"], box["w"], box["h"]
         sheet[:, y:y + h, x:x + w, :] = shade
 
-    cells, _roles = nodes_mod.SymbioticaSliceCells.execute(
+    cells, _roles, _ = nodes_mod.SymbioticaSliceCells.execute(
         image=sheet, cell_boxes=FOOD, inset=0).args
     rebuilt = nodes_mod.SymbioticaReconstructCells.execute(
         cells=cells, cell_boxes=[FOOD], background=["#000000"],

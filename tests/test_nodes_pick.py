@@ -449,13 +449,19 @@ class TestAStageOfTheAsset:
                                               "Spookies_00001_.png"])])
         assert len(out.args[0]) == 2
 
-    def test_no_stage_lists_the_assets_own_renders(self, nodes_mod, tmp_path):
+    def test_no_stage_lists_both_layouts_and_names_narrows(self, nodes_mod,
+                                                           tmp_path):
+        """"that node should show everything from the folder if it's not
+        filtered with a name" — the renders beside the folder AND the lane
+        files inside it are one listing; one lane is a `names` tag.
+        """
         renders(tmp_path, f"{EVENT_DIR}/Food", ("Spookies_00001_.png",))
         renders(tmp_path, f"{EVENT_DIR}/Food/Spookies", ("edits_00001_.png",),
                 colour=90)
-        out = spookies(nodes_mod, tmp_path,
-                       selection=[json.dumps(["Spookies_00001_.png",
-                                              "edits_00001_.png"])])
+        both = [json.dumps(["Spookies_00001_.png", "edits_00001_.png"])]
+        out = spookies(nodes_mod, tmp_path, selection=both)
+        assert len(out.args[0]) == 2
+        out = spookies(nodes_mod, tmp_path, selection=both, names=["edits"])
         assert len(out.args[0]) == 1
 
     def test_a_stage_cannot_deepen_the_tree(self, nodes_mod, tmp_path):
