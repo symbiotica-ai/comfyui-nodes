@@ -5,7 +5,8 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
-import { attachHoverZoom, el, emptyState, errorLine, hideHoverZoom }
+import { attachHoverZoom, el, emptyState, errorLine, hideHoverZoom,
+         imageFullUrl as fullUrl, imageThumbUrl as thumbUrl }
     from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaPick";
@@ -20,14 +21,6 @@ const SIZES = { S: 64, M: 108, L: 184 };
 const DEFAULT_SIZE = "S";
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
-
-// Keep the /api/ prefix: ComfyUI mirrors custom routes under /api/ locally AND
-// the Modal gateway proxies /api/* only, so a root-level /symbiotica/* would
-// blank every thumbnail there.
-const thumbUrl = (path, px) => api.apiURL(
-    `/symbiotica/pick-thumb?px=${px}&path=${encodeURIComponent(path)}`);
-const fullUrl = (path) => api.apiURL(
-    `/symbiotica/local-image?path=${encodeURIComponent(path)}`);
 
 async function fetchJson(url, options) {
     const res = await api.fetchApi(url, options);

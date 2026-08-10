@@ -152,6 +152,51 @@ class TestSchema:
         assert nodes_mod.SymbioticaAssetFocus in nodes_mod.PIPELINE_NODE_CLASSES
 
 
+class TestWhatThePanelIsTold:
+    """The order arrives on a wire the canvas cannot read, so the run hands the
+    panel everything it draws: the choices, their reference art, and the root
+    that art is relative to."""
+
+    @pytest.fixture()
+    def pushed(self, nodes_mod, monkeypatch):
+        seen = []
+        monkeypatch.setattr(nodes_mod, "_push",
+                            lambda event, detail: seen.append((event, detail)))
+        return seen
+
+    def detail(self, pushed):
+        return next(d for e, d in pushed if e == "symbiotica.focus")
+
+    def test_every_reference_file_goes_over_not_just_the_first(
+            self, nodes_mod, pushed):
+        """The panel draws a strip per asset. `assets_by_category` keeps the
+        four fields a run needs and drops `refFiles`, so the names are looked
+        back up in the raw order — reading them off its output sent nothing."""
+        run(nodes_mod, order={**ORDER, "refsRoot": "/refs/bakery"})
+        detail = self.detail(pushed)
+        assert [(a["name"], a["refs"]) for a in detail["assets"]] == [
+            ("Frankencrisps", ["a.png", "b.png"]),
+            ("Frankenstein Pops", ["c.png"]),
+            ("Bunting", []),
+        ]
+
+    def test_the_refs_root_rides_along(self, nodes_mod, pushed):
+        """Relative file names alone cannot be turned into a thumbnail URL."""
+        run(nodes_mod, order={**ORDER, "refsRoot": "/refs/bakery"})
+        assert self.detail(pushed)["refs_root"] == "/refs/bakery"
+
+    def test_an_order_with_no_refs_root_still_lists(self, nodes_mod, pushed):
+        """A Reference Browser event may carry no root; names still draw."""
+        run(nodes_mod, order=ORDER)
+        assert self.detail(pushed)["refs_root"] == ""
+        assert len(self.detail(pushed)["assets"]) == 3
+
+    def test_the_category_narrows_what_is_offered(self, nodes_mod, pushed):
+        """The panel must not offer a choice the node would refuse."""
+        run(nodes_mod, order=ORDER, category="Decoration")
+        assert [a["name"] for a in self.detail(pushed)["assets"]] == ["Bunting"]
+
+
 class TestItCanBeQueuedOnItsOwn:
     def test_it_is_an_output_node(self, nodes_mod):
         """Its list of choices only exists once it has run, and nothing is

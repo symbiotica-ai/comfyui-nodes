@@ -35,12 +35,21 @@ function walk(elem, out = []) {
 }
 
 const widgetOf = (node, name) => node.widgets.find((w) => w.name === name);
-const rows = (node) => listOf(node).children.slice(1);
+// Everything under the count header: asset rows, and — in the "All" view — a
+// category header before each group. A row is the one that carries a `title`.
+const body = (node) => listOf(node).children.slice(1);
+const rows = (node) => body(node).filter((c) => c.title);
+const headers = (node) => body(node).filter((c) => !c.title)
+    .map((c) => c.textContent);
+// row -> [head, (thumbnail strip)], head -> [name, (ref count)].
+const rowName = (row) => row.children[0].children[0].textContent;
+const names = (node) => rows(node).map(rowName);
+const thumbs = (row) => (row.children[1]?.children ?? []);
 
 test("every asset in the event is listed", async () => {
     const node = await focusNode();
     assert.equal(rows(node).length, 3);
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Frankencrisps", "Frankenstein Pops", "Bunting"]);
 });
 
@@ -55,14 +64,14 @@ test("clicking an asset writes it to the widget", async () => {
 test("clicking the chosen one again clears it", async () => {
     // How you get back to "the first" without knowing what the first is called.
     const node = await focusNode({ asset: "Bunting" });
-    const bunting = rows(node).find((r) => r.children[0].textContent === "Bunting");
+    const bunting = rows(node).find((r) => rowName(r) === "Bunting");
     fire(bunting, "click");
     assert.equal(widgetOf(node, "asset").value, "");
 });
 
 test("the chosen asset is the one drawn as selected", async () => {
     const node = await focusNode({ asset: "Bunting" });
-    const drawn = rows(node).map((r) => [r.children[0].textContent,
+    const drawn = rows(node).map((r) => [rowName(r),
                                          !/opacity:\.75/.test(r.style.cssText)]);
     assert.deepEqual(drawn, [["Frankencrisps", false],
                              ["Frankenstein Pops", false],
@@ -106,7 +115,7 @@ test("the assets appear from the wired source, with no run at all", async () => 
     node._symRenderFocus();
     for (let i = 0; i < 5; i++) await tick();
     // The nameless row is spreadsheet padding, not an asset.
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Frankencrisps", "Bunting"]);
 });
 
@@ -130,13 +139,13 @@ test("changing the feature upstream re-lists without touching this node", async 
     link(specs, node, "order");
     node._symRenderFocus();
     for (let i = 0; i < 5; i++) await tick();
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Skull Rose Cupcake"]);
 
     widgetOf(specs, "feature").value = "Mini 3";
     node._symOrderChanged(specs);
     for (let i = 0; i < 5; i++) await tick();
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Bunting"]);
 });
 
@@ -155,12 +164,12 @@ test("a run's list does not survive the feature changing under it", async () => 
     node._symFocusAssets = [{ name: "Frankencrisps", category: "Food - 3 stages" }];
     node._symRenderFocus();
     for (let i = 0; i < 5; i++) await tick();
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Frankencrisps"]);
 
     node._symOrderChanged(specs);
     for (let i = 0; i < 5; i++) await tick();
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Bunting"]);
 });
 
@@ -187,7 +196,7 @@ test("a category the new feature does not have falls back to All", async () => {
     node._symOrderChanged(specs);
     for (let i = 0; i < 5; i++) await tick();
     assert.equal(widgetOf(node, "category").value, "All");
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Frankencrisps"]);
 });
 
@@ -212,7 +221,7 @@ test("an order change from somewhere else is ignored", async () => {
     node._symOrderChanged(other);
     for (let i = 0; i < 5; i++) await tick();
     // Still the run's list: nothing about this node's own order changed.
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Frankencrisps"]);
 });
 
@@ -230,7 +239,7 @@ test("the category widget narrows the published list too", async () => {
     link(specs, node, "order");
     node._symRenderFocus();
     for (let i = 0; i < 5; i++) await tick();
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent), ["Bunting"]);
+    assert.deepEqual(names(node), ["Bunting"]);
 });
 
 test("with nothing wired it says what to wire", async () => {
@@ -253,7 +262,7 @@ test("what a run reported wins over what was published", async () => {
     node._symFocusAssets = [{ name: "FromTheRun", category: "Food" }];
     node._symRenderFocus();
     for (let i = 0; i < 5; i++) await tick();
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["FromTheRun"]);
 });
 
@@ -274,7 +283,7 @@ test("the order is followed through a reroute", async () => {
     link(hop, node, "order");
     node._symRenderFocus();
     for (let i = 0; i < 5; i++) await tick();
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Frankencrisps"]);
 });
 
@@ -319,7 +328,7 @@ test("a source holding no events yet is asked to parse, once", async () => {
     node._symRenderFocus();
     for (let i = 0; i < 10; i++) await tick();
     assert.equal(asked, 1);
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent),
+    assert.deepEqual(names(node),
                      ["Frankencrisps"]);
     // Re-rendering must not ask again — the render is called on every repaint.
     node._symRenderFocus();
@@ -381,7 +390,7 @@ test("choosing a category narrows the rows", async () => {
     w.value = "Decoration";
     w.callback("Decoration");
     for (let i = 0; i < 5; i++) await tick();
-    assert.deepEqual(rows(node).map((r) => r.children[0].textContent), ["Bunting"]);
+    assert.deepEqual(names(node), ["Bunting"]);
 });
 
 test("a chosen asset the new category hides is dropped, not left chosen invisibly", async () => {
@@ -439,14 +448,111 @@ test("nothing in the panel is allowed to paint outside the node", async () => {
         { name: "A Very Long Asset Name That Would Otherwise Widen The Row",
           category: "A Very Long Category Name As Well" },
     ]);
-    const boxes = [listOf(node), ...rows(node)];
+    const boxes = [listOf(node), ...body(node)];
     for (const box of boxes) {
         assert.match(box.style.cssText, /width:100%/);
         assert.match(box.style.cssText, /box-sizing:border-box/);
         assert.match(box.style.cssText, /overflow:hidden/);
     }
-    // Both texts must be able to shrink, or one of them forces the row wide.
-    const [name, category] = rows(node)[0].children;
-    assert.match(name.style.cssText, /min-width:0/);
-    assert.match(category.style.cssText, /min-width:0/);
+    // The name and the strip beside it must both be able to shrink, or one of
+    // them forces the row wide.
+    const [head] = rows(node)[0].children;
+    assert.match(head.style.cssText, /min-width:0/);
+    assert.match(head.children[0].style.cssText, /min-width:0/);
+});
+
+test("All groups the rows under a header per category", async () => {
+    // Forty assets in one flat list is a wall; the order sheet reads by type
+    // and so should the panel.
+    const node = await focusNode({ category: "All" });
+    // First-appearance order, the same order the run itself is grouped in.
+    assert.deepEqual(headers(node),
+                     ["Food - 3 stages · 2", "Decoration · 1"]);
+    assert.deepEqual(names(node),
+                     ["Frankencrisps", "Frankenstein Pops", "Bunting"]);
+});
+
+test("narrowed to one category there are no headers", async () => {
+    // The widget already says which one it is.
+    const node = await focusNode({ category: "Decoration" });
+    assert.deepEqual(headers(node), []);
+    assert.deepEqual(names(node), ["Bunting"]);
+});
+
+test("an asset with no category still gets a group", async () => {
+    const node = await focusNode({ category: "All" },
+                                 [{ name: "Loose", category: "" }]);
+    assert.deepEqual(headers(node), ["uncategorised · 1"]);
+});
+
+test("each asset shows its reference art", async () => {
+    // The names alone do not say which of two similar assets this is.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symRefsRoot = "/refs/bakery";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Bunting", category: "Decoration",
+          refFiles: ["bunting-1.png", "bunting-2.png"] },
+        { assetName: "Frankencrisps", category: "Food - 3 stages",
+          refFiles: [] },
+    ] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+
+    const [bunting, crisps] = rows(node);
+    assert.equal(thumbs(bunting).length, 2);
+    // Under the refs root, through the resizing route — a strip of full-size
+    // renders is what made the picker feel broken.
+    assert.match(thumbs(bunting)[0].src, /pick-thumb/);
+    assert.match(thumbs(bunting)[0].src,
+                 new RegExp(encodeURIComponent("/refs/bakery/bunting-1.png")));
+    assert.equal(thumbs(bunting)[0].title, "bunting-1.png");
+    // The count is on the row, and an asset with no art gets no empty strip.
+    assert.match(bunting.children[0].children[1].textContent, /2 refs/);
+    assert.equal(thumbs(crisps).length, 0);
+});
+
+test("a run's list gets its thumbnails from the wired source", async () => {
+    // The run reports the names it chose from; the source holds the reference
+    // files. Whichever list is in use, the fuller record wins.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symRefsRoot = "/refs/bakery";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Bunting", category: "Decoration",
+          refFiles: ["bunting-1.png"] }] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symFocusAssets = [{ name: "Bunting", category: "Decoration" }];
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(thumbs(rows(node)[0]).length, 1);
+});
+
+test("a run brings its own refs root when nothing is published", async () => {
+    const node = await focusNode({}, []);
+    node._symFocusAssets = [{ name: "Bunting", category: "Decoration",
+                              refs: ["bunting-1.png"] }];
+    node._symFocusRefsRoot = "/refs/from-the-run";
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    assert.match(thumbs(rows(node)[0])[0].src,
+                 new RegExp(encodeURIComponent("/refs/from-the-run/bunting-1.png")));
+});
+
+test("with no refs root there are names and no broken tiles", async () => {
+    // A source that has not parsed yet knows the assets but not where their
+    // art lives.
+    const node = await focusNode({}, [
+        { name: "Bunting", category: "Decoration", refs: ["bunting-1.png"] }]);
+    assert.deepEqual(names(node), ["Bunting"]);
+    assert.equal(thumbs(rows(node)[0]).length, 0);
 });
