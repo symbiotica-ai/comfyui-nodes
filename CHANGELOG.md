@@ -6,6 +6,29 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.19
+
+**Pick: three fates per thumbnail.** Every tile carries ✓ approve, ✎ edit and
+✕ discard on hover, and the corner checkboxes summon a batch bar (approve /
+edit / discard the ticked set, or clear it). ✓ keeps its old meaning and fills
+`picked`; ✎ fills a new appended `edit_selection` widget and a new appended
+`for_edit` image output, so the edit lane runs off its own set. Single mode
+never truncates `for_edit`. The `stage` widget is deprecated: hidden when
+empty, slot kept, so saved graphs restore positionally.
+
+**Pick reads the path you attach, literally.** The `save_path` input is
+labelled `input_path` (id unchanged) and lists what is there. Prefix matching
+is now literal — after the prefix only ComfyUI's counter or an edit mark may
+follow — so a plain-named picker no longer claims another lane's files. The
+`names` widget is the filter: an entry with an extension is an exact file, an
+entry without one is a save-prefix tag (`_base`, `edits`). Listing merges both
+layouts, sibling prefix files and the same-named directory's contents, deduped,
+so a stray sibling can no longer hide a lane's folder.
+
+**Slice Cells gains a `stitched` output** — every cell in one image, side by
+side in index order, bottom-padded to the tallest. `cells` and `roles` are
+unchanged.
+
 ## 2026.8.18
 
 **Output labels unify — saved graphs load unchanged.** Every slot keeps its
