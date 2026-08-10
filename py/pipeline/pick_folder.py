@@ -282,6 +282,82 @@ def discard(target: str, names) -> list[str]:
     return moved
 
 
+# The approved render, on disk. A tick lives in the node's `selection` widget,
+# which is workflow JSON: it is per-node, it dies with the graph, and nothing
+# else on the canvas can see it. An approval that has to be READ by another
+# node — the Order Tracker filling a slot per asset — has to be a file.
+#
+# `_final` is a stage like `_base` or `edits`, so `names="_final"` lists exactly
+# the approved renders through the machinery that already exists, and a Save
+# Image writing that prefix by hand lands in the same place.
+FINAL_STAGE = "_final"
+
+
+def final_name(source_name: str) -> str:
+    """The `_final` file written when `source_name` is approved.
+
+    `_final_from._base_00007__00001_.png`: the stage leads so the picker still
+    lists it, the `_from.` mark carries WHICH render was approved, and the
+    trailing counter is what `parent_of` strips to read that mark back — a name
+    without one resolves to the parent's stage instead of the parent.
+    """
+    stem, ext = os.path.splitext(os.path.basename(str(source_name or "")))
+    return f"{edit_prefix(FINAL_STAGE, stem)}_00001_{ext or '.png'}"
+
+
+def finals_in(folder: str) -> dict[str, str]:
+    """`{approved render name: its _final path}` for one folder.
+
+    Read off the names rather than kept in an index: the files ARE the record,
+    so a copy made by hand and a copy made by a click are the same thing.
+    """
+    out = {}
+    for name in images_in(folder, FINAL_STAGE):
+        parent = parent_of(name)
+        if parent:
+            out[parent] = os.path.join(folder, name)
+    return out
+
+
+def approve(target: str, names, on: bool = True) -> list[str]:
+    """Write (or remove) the `_final` copy for each of `names`.
+
+    A COPY, not a rename: the render keeps its name, so the tick that points at
+    it and any edit whose filename carries `_from.<it>` both keep pointing at
+    something. The `_final` sits in the same folder as its source, which is the
+    folder the picker lists — so approving does not move work out of view.
+
+    Scoped like `discard`: a name is only accepted if it is one the node
+    actually shows, matched against the listing rather than joined onto a path.
+    """
+    listed = {entry["name"]: entry["path"] for entry in listing_for(target)}
+    written = []
+    for name in names or ():
+        source = listed.get(str(name))
+        if not source:
+            continue
+        # Approving an approval is not a thing: the `_final` of a `_final` would
+        # list under the same stage as its own parent and read as a second
+        # approved render for the asset.
+        if os.path.basename(source).startswith(FINAL_STAGE + FROM_MARKER):
+            continue
+        destination = os.path.join(os.path.dirname(source),
+                                   final_name(os.path.basename(source)))
+        try:
+            if on:
+                if not os.path.isfile(source):
+                    continue
+                shutil.copy2(source, destination)
+            elif os.path.isfile(destination):
+                os.remove(destination)
+            else:
+                continue
+        except OSError:
+            continue
+        written.append(destination)
+    return written
+
+
 def picked_paths(entries, selection) -> list[str]:
     """The ticked files, in the order the grid shows them.
 

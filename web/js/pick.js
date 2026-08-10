@@ -184,8 +184,34 @@ function pickPanel(node) {
     // a half-made selection is not workflow state worth saving.
     let checked = new Set();
 
+    // Approving writes a file, not only a tick. The tick lives on the
+    // `selection` widget — workflow JSON, which no other node on the canvas
+    // can read — so an approval that the Order Tracker has to see becomes
+    // `_final_from.<render>_00001_.png` beside the render it approves. The
+    // render itself is untouched: renaming it would break this very tick and
+    // orphan any edit whose name carries `_from.<it>`.
+    async function finalise(before, after) {
+        const added = [...after].filter((n) => !before.has(n));
+        const removed = [...before].filter((n) => !after.has(n));
+        for (const [names, on] of [[added, true], [removed, false]]) {
+            if (!names.length) continue;
+            try {
+                await fetchJson("/symbiotica/pick-final", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ node_id: String(node.id), names, on }),
+                });
+            } catch (e) {
+                // The tick still stands — it is what travels downstream — so
+                // this is a failure to RECORD the approval, not to make it.
+                console.warn("[symbiotica] could not write _final:", e.message);
+            }
+        }
+    }
+
     function toggle(name) {
         const ticks = readTicks(node);
+        const before = new Set(ticks);
         if (ticks.has(name)) {
             // Clicking the chosen one clears it, which is how you change your
             // mind without having to pick something else first.
@@ -199,6 +225,7 @@ function pickPanel(node) {
             ticks.add(name);
         }
         writeTicks(node, ticks);
+        finalise(before, ticks);
         render();
     }
 
@@ -208,6 +235,7 @@ function pickPanel(node) {
     function assign(names, fate) {
         if (fate === "approve") {
             const ticks = readTicks(node);
+            const before = new Set(ticks);
             const allIn = names.every((n) => ticks.has(n));
             for (const n of names) allIn ? ticks.delete(n) : ticks.add(n);
             if (oneAtATime() && !allIn) {
@@ -216,6 +244,7 @@ function pickPanel(node) {
                 ticks.add(keep);
             }
             writeTicks(node, ticks);
+            finalise(before, ticks);
         } else if (fate === "edit") {
             const edits = readEdits(node);
             const allIn = names.every((n) => edits.has(n));
