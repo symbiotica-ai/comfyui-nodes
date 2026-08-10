@@ -2395,6 +2395,13 @@ class SymbioticaSliceCells(io.ComfyNode):
                                  tooltip="What each cell holds — 'prep', "
                                          "'serving', a rotation — index-aligned "
                                          "with `cells`."),
+                # APPENDED: saved graphs hold output links by slot number.
+                io.Image.Output(display_name="stitched",
+                                tooltip="Every cell in one image, side by "
+                                        "side left to right in the same "
+                                        "order `cells` counts them. A "
+                                        "shorter cell is padded at the "
+                                        "bottom to the tallest one."),
             ],
         )
 
@@ -2430,7 +2437,21 @@ class SymbioticaSliceCells(io.ComfyNode):
                 cell = _resize_square(cell, size)
             cells.append(cell)
             roles.append(role)
-        return io.NodeOutput(cells, roles)
+        # The same cells as ONE image, side by side in index order — for the
+        # lanes that want the set travelling as a single picture (compare,
+        # preview, a contact-sheet save) without a stitcher node in between.
+        tallest = max(c.shape[1] for c in cells)
+        strips = []
+        for cell in cells:
+            if cell.shape[1] < tallest:
+                pad = torch.zeros(
+                    (cell.shape[0], tallest - cell.shape[1],
+                     cell.shape[2], cell.shape[3]),
+                    dtype=cell.dtype, device=cell.device)
+                cell = torch.cat([cell, pad], dim=1)
+            strips.append(cell)
+        stitched = torch.cat(strips, dim=2)
+        return io.NodeOutput(cells, roles, stitched)
 
 
 class SymbioticaTemplateLibrary(io.ComfyNode):

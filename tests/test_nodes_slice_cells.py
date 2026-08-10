@@ -101,3 +101,29 @@ def test_outputs_are_lists_so_the_lane_fans_out(nodes_mod):
     schema = nodes_mod.SymbioticaSliceCells.define_schema()
     assert [o.display_name for o in schema.outputs] == ["cells", "roles"]
     assert all(o.is_output_list for o in schema.outputs)
+
+
+def test_stitched_is_the_cells_side_by_side_in_index_order(nodes_mod):
+    src = sheet()
+    out = nodes_mod.SymbioticaSliceCells.execute(
+        image=src, cell_boxes=FOOD, inset=0)
+    cells, _, stitched = out.args
+    assert tuple(stitched.shape) == (1, 482, 482 * 3, 3)
+    for i, cell in enumerate(cells):
+        piece = stitched[:, :, i * 482:(i + 1) * 482, :]
+        assert torch.equal(piece, cell)
+
+
+def test_stitched_pads_a_shorter_cell_to_the_tallest(nodes_mod):
+    boxes = json.dumps([
+        {"role": "tall", "x": 0, "y": 0, "w": 100, "h": 200},
+        {"role": "short", "x": 200, "y": 0, "w": 100, "h": 100},
+    ])
+    out = nodes_mod.SymbioticaSliceCells.execute(
+        image=sheet(), cell_boxes=boxes, inset=0)
+    cells, _, stitched = out.args
+    assert tuple(stitched.shape) == (1, 200, 200, 3)
+    assert torch.equal(stitched[:, :, :100, :], cells[0])
+    assert torch.equal(stitched[:, :100, 100:, :], cells[1])
+    # The pad below the short cell is empty, not leaked sheet.
+    assert stitched[:, 100:, 100:, :].abs().sum().item() == 0
