@@ -53,19 +53,29 @@ LISTING_LIMIT = 400
 
 
 def name_matches_prefix(name: str, prefix: str) -> bool:
-    """Whether a file was written under `prefix` by a Save Image node.
+    """Whether a file was written under EXACTLY `prefix` by a Save Image node.
 
-    ComfyUI appends `_00001_` to the prefix, so an underscore has to follow it
-    rather than merely the prefix matching: `Spookies` must not claim
-    `Spookies Deluxe_00001_.png`, a different asset filed in the same category
-    folder. Only the underscore counts, because a space or a dash is an
-    ordinary character in an asset name — "Black Cat Lollipop" — while the
-    underscore before the counter is ComfyUI's own convention.
+    ComfyUI appends `_00001_` to the prefix, so what follows the prefix must
+    be its counter and nothing else: digits between underscores. Anything
+    other than a counter is a DIFFERENT prefix that merely starts the same —
+    `Spookies` claims neither `Spookies Deluxe_00001_.png` (another asset)
+    nor `Spookies_lora_00001_.png` (another save lane into the same folder).
+    The picker lists the path it is handed, literally; two lanes stay two
+    listings because their save prefixes differ, with no convention beyond
+    what is already typed into the save nodes.
     """
     stem = os.path.splitext(name)[0]
     if stem == prefix:
         return True
-    return stem.startswith(prefix + "_")
+    # A marked derivative — `edits_from.<parent>_00001_` — is this stage's own
+    # file: the mark is written by edit_prefix ON TOP of the stage prefix,
+    # so it belongs to the stage the way a counter does.
+    if stem.startswith(prefix + FROM_MARKER):
+        return True
+    if not stem.startswith(prefix + "_"):
+        return False
+    tail = stem[len(prefix) + 1:].rstrip("_")
+    return tail.isdigit()
 
 
 def images_in(folder: str, name_prefix: str = "") -> list[str]:
@@ -138,29 +148,30 @@ def listing(folder: str, name_prefix: str = "",
 
 
 def read_folders(target: str) -> list[tuple[str, str]]:
-    """The (folder, prefix) pairs to read for one name. The prefix layout wins.
+    """The (folder, prefix) pairs to read for one name — BOTH layouts.
 
-    A name is both things at once and only one of them is ever the answer. A
-    Save Image node given `…/Food - 3 stages/Spookies` writes
-    `Spookies_00001_.png` one level UP — the last segment of a filename prefix
-    names the file — while `…/Spookies/` is also a real directory, holding the
-    steps that come after: `…/Spookies/edits_00001_.png`.
+    A name is two things at once. A Save Image node given
+    `…/Food - 3 stages/Spookies` writes `Spookies_00001_.png` one level UP —
+    the last segment of a filename prefix names the file — while `…/Spookies/`
+    is also a real directory, holding whatever later lanes saved into it.
 
-    So when files named after it sit beside it, those ARE it, and the directory
-    of the same name belongs to the stages within. Reading both merged them
-    together, which put every edit in the list of renders to choose a base
-    from, and moved the numbering under someone every time a stage was saved.
-    Only when nothing is named after it is the directory the thing meant —
-    which is how work saved a folder-per-asset still reads.
+    Both are it: "that node should show everything from the folder if it's
+    not filtered with a name". An earlier version made the prefix layout win
+    outright, which hid an entire directory of lane saves behind one stray
+    sibling file. Narrowing to one lane is `names`' job now — an entry
+    without an extension is a save prefix — so the listing's job is to show
+    everything the name could mean. Files named after the target come first,
+    keeping the numbering of pure-prefix folders exactly as it was.
     """
     if not target:
         return []
+    pairs = []
     parent, own = os.path.dirname(target), os.path.basename(target)
     if own and os.path.isdir(parent) and images_in(parent, own):
-        return [(parent, own)]
+        pairs.append((parent, own))
     if os.path.isdir(target):
-        return [(target, "")]
-    return []
+        pairs.append((target, ""))
+    return pairs
 
 
 def _parent_stems(derived_from):
@@ -193,12 +204,23 @@ def listing_for(target: str, limit: int = LISTING_LIMIT, only=None,
     Asking about no parent at all means the whole folder; asking about an empty
     set of them means nothing, because nothing approved upstream has no edits.
     """
-    wanted = None if only is None else {str(name) for name in only}
+    # An entry with an extension is one exact file; one without is a save
+    # PREFIX — the same tag the Save Image node was given — so the string that
+    # names a lane at the writer can be wired straight into `names` at the
+    # reader: `_base` lists `_base_00001_`, `edits` lists `edits_00012_` and
+    # its marked derivatives, and nothing needs a code change to add a tag.
+    exacts, prefixes = None, None
+    if only is not None:
+        entries_only = [str(name) for name in only]
+        exacts = {n for n in entries_only if os.path.splitext(n)[1]}
+        prefixes = [n for n in entries_only if not os.path.splitext(n)[1]]
     parents = _parent_stems(derived_from)
 
     def keep(name: str) -> bool:
-        if wanted is not None and name not in wanted:
-            return False
+        if exacts is not None:
+            if name not in exacts and not any(
+                    name_matches_prefix(name, p) for p in prefixes):
+                return False
         return parents is None or parent_of(name) in parents
 
     entries: list[dict] = []

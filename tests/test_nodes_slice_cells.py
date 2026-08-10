@@ -47,7 +47,7 @@ def sheet(size=1024):
 
 
 def test_cuts_one_cell_per_box_with_its_role(nodes_mod):
-    cells, roles = nodes_mod.SymbioticaSliceCells.execute(
+    cells, roles, _ = nodes_mod.SymbioticaSliceCells.execute(
         image=sheet(), cell_boxes=FOOD, inset=0).args
     assert roles == ["prep", "ready", "serving"]
     assert [tuple(c.shape) for c in cells] == [(1, 482, 482, 3)] * 3
@@ -55,7 +55,7 @@ def test_cuts_one_cell_per_box_with_its_role(nodes_mod):
 
 def test_each_cell_holds_its_own_region(nodes_mod):
     src = sheet()
-    cells, _ = nodes_mod.SymbioticaSliceCells.execute(
+    cells, _, _ = nodes_mod.SymbioticaSliceCells.execute(
         image=src, cell_boxes=FOOD, inset=0).args
     for cell, box in zip(cells, json.loads(FOOD)):
         expected = src[:, box["y"]:box["y"] + box["h"],
@@ -67,13 +67,13 @@ def test_inset_shrinks_every_cell(nodes_mod):
     # The boxes are the grid the render was ASKED to hit; a couple of pixels of
     # slack keeps the matte out of a cell when it lands slightly off.
     cells, _ = nodes_mod.SymbioticaSliceCells.execute(
-        image=sheet(), cell_boxes=FOOD, inset=2).args
+        image=sheet(), cell_boxes=FOOD, inset=2).args[:2]
     assert [tuple(c.shape) for c in cells] == [(1, 478, 478, 3)] * 3
 
 
 def test_output_size_squares_every_cell(nodes_mod):
     cells, _ = nodes_mod.SymbioticaSliceCells.execute(
-        image=sheet(), cell_boxes=FOOD, inset=1, output_size=512).args
+        image=sheet(), cell_boxes=FOOD, inset=1, output_size=512).args[:2]
     assert [tuple(c.shape) for c in cells] == [(1, 512, 512, 3)] * 3
     assert all(float(c.min()) >= 0.0 and float(c.max()) <= 1.0 for c in cells)
 
@@ -99,5 +99,34 @@ def test_malformed_boxes_are_refused(nodes_mod):
 
 def test_outputs_are_lists_so_the_lane_fans_out(nodes_mod):
     schema = nodes_mod.SymbioticaSliceCells.define_schema()
-    assert [o.display_name for o in schema.outputs] == ["cells", "roles"]
-    assert all(o.is_output_list for o in schema.outputs)
+    assert [o.display_name for o in schema.outputs] == ["cells", "roles",
+                                                        "stitched"]
+    assert all(o.is_output_list for o in schema.outputs[:2])
+    # One picture on purpose: the whole set travels as a single image.
+    assert not getattr(schema.outputs[2], "is_output_list", False)
+
+
+def test_stitched_is_the_cells_side_by_side_in_index_order(nodes_mod):
+    src = sheet()
+    out = nodes_mod.SymbioticaSliceCells.execute(
+        image=src, cell_boxes=FOOD, inset=0)
+    cells, _, stitched = out.args
+    assert tuple(stitched.shape) == (1, 482, 482 * 3, 3)
+    for i, cell in enumerate(cells):
+        piece = stitched[:, :, i * 482:(i + 1) * 482, :]
+        assert torch.equal(piece, cell)
+
+
+def test_stitched_pads_a_shorter_cell_to_the_tallest(nodes_mod):
+    boxes = json.dumps([
+        {"role": "tall", "x": 0, "y": 0, "w": 100, "h": 200},
+        {"role": "short", "x": 200, "y": 0, "w": 100, "h": 100},
+    ])
+    out = nodes_mod.SymbioticaSliceCells.execute(
+        image=sheet(), cell_boxes=boxes, inset=0)
+    cells, _, stitched = out.args
+    assert tuple(stitched.shape) == (1, 200, 200, 3)
+    assert torch.equal(stitched[:, :, :100, :], cells[0])
+    assert torch.equal(stitched[:, :100, 100:, :], cells[1])
+    # The pad below the short cell is empty, not leaked sheet.
+    assert stitched[:, 100:, 100:, :].abs().sum().item() == 0

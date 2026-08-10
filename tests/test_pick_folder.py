@@ -34,6 +34,46 @@ class TestWhichFilesBelongToAnAsset:
         assert name_matches_prefix("Spookies Deluxe_00001_.png",
                                    "Spookies") is False
 
+    def test_another_lane_into_the_same_folder_is_not_claimed_either(self):
+        """Two save nodes writing one folder under different prefixes are two
+        listings: "i want the Pick node to read the path I attached to it".
+        Only ComfyUI's own counter may follow the prefix — anything else is a
+        different prefix that merely starts the same.
+        """
+        assert name_matches_prefix("Spookies_lora_00001_.png",
+                                   "Spookies") is False
+        assert name_matches_prefix("Spookies_lora_00001_.png",
+                                   "Spookies_lora") is True
+        assert name_matches_prefix("Spookies_lora.png",
+                                   "Spookies_lora") is True
+        # A bare counter with no trailing underscore still belongs.
+        assert name_matches_prefix("Spookies_7.png", "Spookies") is True
+
+    def test_a_names_entry_without_an_extension_is_a_save_prefix(self,
+                                                                 tmp_path):
+        """"do i have to ask you again instead of just connecting that
+        filename prefix to the name input?" — no: the tag the save node was
+        given IS the filter. With an extension an entry stays one exact file,
+        so the client-references flow keeps its meaning.
+        """
+        renders(str(tmp_path), ("_base_00001_.png", "_base_00002_.png",
+                                "edits_00001_.png",
+                                "edits_from.X_00001__00001_.png",
+                                "Spookies_00001_.png"))
+        rows = listing_for(str(tmp_path), only=["_base"])
+        assert [r["name"] for r in rows] == ["_base_00001_.png",
+                                             "_base_00002_.png"]
+        rows = listing_for(str(tmp_path), only=["edits"])
+        assert [r["name"] for r in rows] == ["edits_00001_.png",
+                                             "edits_from.X_00001__00001_.png"]
+        rows = listing_for(str(tmp_path), only=["Spookies_00001_.png"])
+        assert [r["name"] for r in rows] == ["Spookies_00001_.png"]
+        # Exact and prefix entries compose in one list.
+        rows = listing_for(str(tmp_path), only=["_base", "Spookies_00001_.png"])
+        assert [r["name"] for r in rows] == ["Spookies_00001_.png",
+                                             "_base_00001_.png",
+                                             "_base_00002_.png"]
+
     def test_without_a_prefix_the_whole_folder_is_listed(self, tmp_path):
         renders(str(tmp_path), ("a.png", "b.png"))
         assert images_in(str(tmp_path)) == ["a.png", "b.png"]
@@ -183,15 +223,20 @@ class TestWhichLayoutANameMeans:
     """A name is both a filename prefix and a directory at once, and only one
     of them is ever the answer."""
 
-    def test_files_named_after_it_are_what_it_means(self, tmp_path):
+    def test_both_layouts_are_listed_and_names_narrows(self, tmp_path):
+        """"that node should show everything from the folder if it's not
+        filtered with a name" — the files named after the target AND the
+        directory's own contents are one listing, prefix files first so a
+        pure-prefix folder keeps its numbering. One lane is a `names` tag.
+        """
         renders(str(tmp_path / "Food"), ("Spookies_00001_.png",))
         renders(str(tmp_path / "Food" / "Spookies"), ("edits_00001_.png",),
                 colour=90)
-        names = [e["name"] for e in listing_for(str(tmp_path / "Food" / "Spookies"))]
-        # Not the edits inside `Spookies/` — those are a later step, and
-        # merging them put every edit in the list of renders to choose a base
-        # from, moving the numbering every time a stage was saved.
-        assert names == ["Spookies_00001_.png"]
+        target = str(tmp_path / "Food" / "Spookies")
+        assert [e["name"] for e in listing_for(target)] == [
+            "Spookies_00001_.png", "edits_00001_.png"]
+        assert [e["name"] for e in listing_for(target, only=["edits"])] == [
+            "edits_00001_.png"]
 
     def test_the_directory_is_meant_when_nothing_is_named_after_it(self,
                                                                     tmp_path):
@@ -213,6 +258,11 @@ class TestWhichLayoutANameMeans:
         renders(str(tmp_path / "Food"), ("Spookies_00001_.png",))
         assert read_folders(str(tmp_path / "Food" / "Spookies")) == [
             (str(tmp_path / "Food"), "Spookies")]
+        # With a directory of the same name, both layouts are read.
+        renders(str(tmp_path / "Food" / "Spookies"), ("edits_00001_.png",))
+        assert read_folders(str(tmp_path / "Food" / "Spookies")) == [
+            (str(tmp_path / "Food"), "Spookies"),
+            (str(tmp_path / "Food" / "Spookies"), "")]
 
     def test_nothing_to_read_is_no_folders(self):
         assert read_folders("") == []

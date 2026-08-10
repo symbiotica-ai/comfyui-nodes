@@ -206,15 +206,18 @@ class TestServingTheThumbnails:
 
 
 class TestWhichLayoutANameMeans:
-    def test_files_named_after_it_win_over_the_folder_of_that_name(self, env):
-        """The directory of the same name holds the steps that come after —
-        listing both put every edit among the renders to choose a base from."""
+    def test_both_layouts_are_listed_prefix_files_first(self, env):
+        """"that node should show everything from the folder if it's not
+        filtered with a name" — one listing, sibling prefix files first so a
+        pure-prefix folder keeps its numbering; a lane is a `names` tag.
+        """
         renders(str(env.out / "Food"), ("Spookies_00001_.png",))
         renders(str(env.out / "Food" / "Spookies"), ("edits_00001_.png",),
                 colour=90)
         env.pick.remember("7", str(env.out / "Food" / "Spookies"))
         body = _run(env.routes.pick_list(_Req(node_id="7")))["body"]
-        assert [i["name"] for i in body["images"]] == ["Spookies_00001_.png"]
+        assert [i["name"] for i in body["images"]] == ["Spookies_00001_.png",
+                                                       "edits_00001_.png"]
 
     def test_a_stage_reads_inside_the_assets_folder(self, env):
         renders(str(env.out / "Food"), ("Spookies_00001_.png",))
