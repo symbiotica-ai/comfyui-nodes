@@ -863,6 +863,46 @@ async def pick_discard(request):
                               "discarded": [os.path.basename(p) for p in moved]})
 
 
+@PromptServer.instance.routes.post("/symbiotica/pick-final")
+async def pick_final(request):
+    """Write, or remove, the `_final` copy of each named render.
+
+    Approving used to be a tick and nothing more, and a tick lives in the
+    node's `selection` widget — workflow JSON, invisible to every other node on
+    the canvas. The Order Tracker fills a slot per asset by READING approvals,
+    so the approval has to exist as a file. `_final` is a stage like `_base`,
+    so it lists through the machinery that is already here.
+
+    Scoped like `pick-discard`: a name is only accepted if it is one the node
+    actually shows.
+    """
+    from .pick_folder import approve, read_folders
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    names = [str(n) for n in (body.get("names") or [])]
+    on = bool(body.get("on", True))
+    target, _only, _derived = _pick_target(str(body.get("node_id") or ""),
+                                           str(body.get("folder") or ""))
+    if not target:
+        return web.json_response(
+            {"error": "queue this picker once before approving from it"},
+            status=409)
+    if not names:
+        return web.json_response({"ok": True, "final": []})
+    if not register_root_within(target) and not any(
+            register_root_within(folder)
+            for folder, _ in read_folders(target)):
+        return web.json_response(
+            {"error": f"{target} is not inside a folder this install serves"},
+            status=403)
+    written = await asyncio.to_thread(approve, target, names, on)
+    return web.json_response({"ok": True, "on": on,
+                              "final": [os.path.basename(p) for p in written]})
+
+
 @PromptServer.instance.routes.get("/symbiotica/pick-thumb")
 async def pick_thumb(request):
     """One listed image, shrunk to grid size, never written to disk.

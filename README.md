@@ -244,6 +244,23 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   already on disk needs renaming. The edits land wherever `save_path` points, so
   give the picker a `stage` to keep them in their own step folder rather than
   beside the renders they came from.
+  Approving a tile also writes it: `_final_from.<render>_00001_.png` lands beside
+  the render, and un-approving deletes it. A tick lives on the `selection`
+  widget — workflow JSON, which nothing else on the canvas can read — so an
+  approval that another node has to see has to be a file. `_final` is a stage
+  like `_base`, so `names="_final"` lists exactly the approved renders through
+  the machinery that was already here, and the render itself is copied rather
+  than renamed: a rename would break the tick pointing at it and orphan any edit
+  whose name carries `_from.<it>`.
+- **Symbiotica Order Tracker** — the order as a board: one slot per asset it
+  asks for, filled with the approved render or left empty, with a count and a
+  percent for the event. It is a Pick node pointed at every asset at once —
+  the same folders, the same `names` tag, the same thumbnails — so nothing is
+  tracked that is not already on disk and there is no bookkeeping to drift.
+  Wire an Order Specs or an Asset Focus into `order`; `names` defaults to
+  `_final`, and any other save prefix asks the board a different question
+  ("which assets have a `_base` at all") without a code change. Queue it on its
+  own to re-read the folders.
 - **Symbiotica Asset Refs** — the client's own reference art for one asset, in
   the order the order sheet pairs it, so the index that picks a cell picks the
   reference belonging to it. References with transparency are composited onto a

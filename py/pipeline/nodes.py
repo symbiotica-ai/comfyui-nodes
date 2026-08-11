@@ -4466,9 +4466,94 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                              composed["image_prompt"])
 
 
+class SymbioticaOrderTracker(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaOrderTracker",
+            display_name="Symbiotica Order Tracker",
+            category="symbiotica/pipeline",
+            description="The order as a board: one slot per asset it asks "
+                        "for, filled with the approved render or empty. It is "
+                        "a Pick node pointed at every asset at once — the "
+                        "same folders, the same `names` tag, the same "
+                        "thumbnails — so nothing is tracked that is not "
+                        "already on disk. `_final` is written by approving in "
+                        "a Pick node, or by any Save Image given that prefix.",
+            inputs=[
+                Order.Input("order"),
+                io.String.Input("category", default="", optional=True,
+                                tooltip="Narrow the board to one asset type, "
+                                        "or leave empty for every type."),
+                io.String.Input("names", default="_final", optional=True,
+                                tooltip="Which files fill a slot, read the "
+                                        "same way as a Pick node's `names`: "
+                                        "an entry without an extension is a "
+                                        "save prefix. `_final` is what "
+                                        "approving writes."),
+            ],
+            outputs=[],
+            hidden=[io.Hidden.unique_id],
+            # Queued on its own — "Queue Selected Output Node" on the tracker
+            # re-reads the folders, which is the same gesture that refreshes a
+            # picker, with nothing downstream needing to exist.
+            is_output_node=True,
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, order=None, category="", names="_final"):
+        """The board is a question about DISK, and disk changes without the
+        graph changing — a render saved, an approval written. Caching this on
+        its inputs would show yesterday's board until a widget moved."""
+        return float("nan")
+
+    @classmethod
+    def execute(cls, order=None, category="", names="_final") -> io.NodeOutput:
+        from .pick_folder import listing_for
+
+        if not isinstance(order, dict) or "assets" not in order:
+            raise ValueError("wire an Order Specs (or an Asset Focus) into "
+                             "'order'")
+        items = assets_by_category(order, category)
+        wanted = [n for n in (str(names or "").split(",")) if n.strip()]
+        wanted = [n.strip() for n in wanted] or None
+
+        slots = []
+        for item, path in zip(items, save_paths(order, items)):
+            folders = _pick_folders([path])
+            target = folders[0] if folders else ""
+            # Same read the picker makes, one folder per asset. `only` is the
+            # tag: `_final` lists approvals, and any other save prefix asks the
+            # board a different question without a code change.
+            entries = listing_for(target, only=wanted) if target else []
+            # The tiles are fetched by the canvas from a folder the graph also
+            # WRITES into, which is exactly what `_register_served_root` is
+            # for — servable, not watched.
+            if target:
+                _register_served_root(target)
+            slots.append({
+                "asset": item["assetName"],
+                "category": item["category"],
+                "image": entries[0]["path"] if entries else None,
+                "count": len(entries),
+            })
+
+        done = sum(1 for slot in slots if slot["image"])
+        # The order arrives on a wire the canvas cannot read, so the run hands
+        # the board over — the same way Asset Focus hands over its choices.
+        _push("symbiotica.tracker", {
+            "node_id": str(getattr(getattr(cls, "hidden", None),
+                                   "unique_id", "")),
+            "feature": str(order.get("feature", "")),
+            "done": done, "total": len(slots), "slots": slots,
+        })
+        return io.NodeOutput()
+
+
 PIPELINE_NODE_CLASSES = [
     SymbioticaPick,
     SymbioticaAssetFocus,
+    SymbioticaOrderTracker,
     SymbioticaOrderRead,
     SymbioticaOrderSpecs,
     SymbioticaReferenceBrowser,
