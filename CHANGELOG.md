@@ -6,6 +6,29 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.22
+
+**Pick no longer writes files. Reverts the approve-writes-`_final` behaviour
+added in 2026.8.20.** Pick is a generic folder chooser — the same node class
+also ticks a reference out of `dataset/<category>` — so a side effect on
+ticking fired in every role it has and dropped `_final_from.*` copies into
+folders that are inputs, not outputs. `POST /symbiotica/pick-final` is gone
+with it. `_final` remains what it always was: a save prefix, written by a Save
+Image and listed by the Order Tracker.
+
+**Order Tracker: slots group under a category header**, first-appearance order,
+each header counting its own group while the top line totals the event — the
+shape the Asset Focus list already reads in.
+
+**Thumbnail backings are mid grey.** These renders are background-removed, so
+the tile's backing shows through the alpha and a pale asset read as a
+silhouette on the old near-black. Filled tracker slots and Pick's grid sit on
+`#808080`; an empty slot paints no backing at all.
+
+**Asset Focus rows carry the canvas** — `Pastel Enchantment Chest · 128×256` —
+merged the same way the reference files are, so a run reporting only names
+still shows it.
+
 ## 2026.8.21
 
 **Fix: an approval was invisible in the prefix layout, so the Order Tracker
