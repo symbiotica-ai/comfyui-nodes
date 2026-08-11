@@ -6,6 +6,41 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.20
+
+**New node: Order Tracker.** The order as a board — one slot per asset it asks
+for, filled with the approved render or left as a dashed frame, with
+`done/total` and a percent above them. It is a Pick node pointed at every asset
+at once: `assets_by_category` and `save_paths` give one folder per asset, each
+read with the same listing call the picker makes, so nothing is tracked that is
+not already on disk. Wire an Order Specs or an Asset Focus into `order`.
+`names` defaults to `_final`; it is an ordinary save prefix, so pointing the
+board at another lane (`_base`, `edits`) asks a different question without a
+code change. No outputs — it reads. It never caches, because disk changes
+without the graph changing.
+
+**Pick: approving now writes a file.** ✓ copies the render to
+`_final_from.<render>_00001_.png` beside it, and un-approving deletes that
+copy. No input, output or id changed — but the ✓ has a side effect it did not
+have before. A tick lives on the `selection` widget, which is workflow JSON and
+invisible to every other node on the canvas, so an approval another node has to
+read has to exist as a file. `_final` is a stage like `_base`, so `names` lists
+approvals through the machinery that was already here. The render is copied
+rather than renamed: a rename would break the tick pointing at it and orphan
+any edit whose name carries `_from.<it>`. Approving a `_final` does nothing.
+
+**Asset Focus lists each asset with its reference art.** The client's own
+references sit under every asset name, at the Auto Packer's cell size and
+without its reorder arrows. Under `All` the rows group beneath a category
+header, in the same first-appearance order the run is grouped in; narrowed to
+one category the headers go away. A run now sends every `refFiles` entry and
+the refs root — it previously sent a one-element slice that was always empty,
+because `assets_by_category` drops `refFiles`.
+
+**Asset Focus was unreadable on the light palette.** Its panel painted text in
+a dark-theme token (`#f7f8f8`) on the white node body, so every asset name was
+invisible. It follows ComfyUI's own text colour now.
+
 ## 2026.8.19
 
 **Pick: three fates per thumbnail.** Every tile carries ✓ approve, ✎ edit and
