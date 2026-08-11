@@ -600,3 +600,4 @@ test("one frame is reused, however many tiles are hovered", async () => {
     }
     assert.equal(frames().length, 1);
 });
+

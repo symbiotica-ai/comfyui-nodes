@@ -29,9 +29,13 @@ async function trackerNode(board = BOARD) {
 
 const listOf = (node) =>
     node.widgets.find((w) => w.name === "tracker_panel").element.children[0];
-// header, bar, grid
-const gridOf = (node) => listOf(node).children[2];
-const tiles = (node) => [...(gridOf(node)?.children ?? [])];
+// header, bar, then a (category header, grid) pair per category.
+const body = (node) => [...listOf(node).children].slice(2);
+const grids = (node) => body(node).filter((_, i) => i % 2 === 1);
+const gridOf = (node) => grids(node)[0];
+const groupHeaders = (node) =>
+    body(node).filter((_, i) => i % 2 === 0).map((c) => c.textContent);
+const tiles = (node) => grids(node).flatMap((g) => [...(g.children ?? [])]);
 const tileName = (tile) => tile.children[1].textContent;
 const tileImage = (tile) => tile.children[0].children[0];
 
@@ -50,6 +54,13 @@ test("a slot per asset the order asks for", async () => {
                      ["Bat Brew", "Bat Bookshelf", "Spookies"]);
 });
 
+test("a filled slot backs the render with mid grey", async () => {
+    // These renders are background-removed, so the backing shows THROUGH them:
+    // on near-black a pale asset reads as a silhouette and a dark one vanishes.
+    const node = await trackerNode();
+    assert.match(tiles(node)[0].children[0].style.cssText, /background:#808080/);
+});
+
 test("a filled slot shows the approved render", async () => {
     const node = await trackerNode();
     const img = tileImage(tiles(node)[0]);
@@ -63,6 +74,47 @@ test("an empty slot is work left, and holds no image", async () => {
     assert.equal(tiles(node)[1].children[0].children.length, 0);
     // Dashed, so "nothing here yet" reads differently from a black tile.
     assert.match(tiles(node)[1].children[0].style.cssText, /border-style:dashed/);
+});
+
+test("an empty slot paints no backing", async () => {
+    // HUB.surface1 is a dark-theme token: on the light palette it fills the
+    // tile solid black, which reads as a render that came out wrong.
+    const node = await trackerNode();
+    assert.match(tiles(node)[1].children[0].style.cssText,
+                 /background:transparent/);
+    assert.doesNotMatch(tiles(node)[1].children[0].style.cssText,
+                        new RegExp("background:#0f1011"));
+});
+
+test("the slots group under a header per category", async () => {
+    // The same shape the Asset Focus list reads in, so the two panels describe
+    // one order the same way.
+    const node = await trackerNode();
+    assert.deepEqual(groupHeaders(node),
+                     ["Decoration · 1/2", "Food - 3 stages · 0/1"]);
+});
+
+test("each group holds only its own assets", async () => {
+    const node = await trackerNode();
+    assert.deepEqual(grids(node).map((g) => [...g.children].map(tileName)),
+                     [["Bat Brew", "Bat Bookshelf"], ["Spookies"]]);
+});
+
+test("a group header counts what is done in it", async () => {
+    const node = await trackerNode({
+        ...BOARD, done: 2,
+        slots: BOARD.slots.map((s) => ({ ...s, image: "/out/x.png" })),
+    });
+    assert.deepEqual(groupHeaders(node),
+                     ["Decoration · 2/2", "Food - 3 stages · 1/1"]);
+});
+
+test("an asset with no category still gets a group", async () => {
+    const node = await trackerNode({
+        ...BOARD, done: 0, total: 1,
+        slots: [{ asset: "Loose", category: "", image: null, count: 0 }],
+    });
+    assert.deepEqual(groupHeaders(node), ["uncategorised · 0/1"]);
 });
 
 test("the header counts what is done", async () => {

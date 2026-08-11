@@ -11,6 +11,10 @@ import { attachHoverZoom, el, emptyState, hideHoverZoom, imageFullUrl,
 const NODE_CLASS = "SymbioticaOrderTracker";
 const MIN_NODE_W = 320;
 const SLOT_PX = 72;
+// What a filled slot sits on. These renders are background-removed, so the
+// backing IS visible through them: on near-black a pale asset reads as a
+// silhouette and a dark one disappears into it. Mid grey shows both.
+const SLOT_BACKING = "#808080";
 
 function trackerPanel(node) {
     injectHubStyles();
@@ -38,12 +42,17 @@ function trackerPanel(node) {
     function slotTile(slot) {
         const cell = el("div", "display:flex;flex-direction:column;gap:3px;"
             + `width:${SLOT_PX}px;flex:none;`);
+        // An empty slot is work left, so it must not paint like a render that
+        // came out black: `HUB.surface1` is a dark-theme token and fills the
+        // tile solid on ComfyUI's light palette. Only a filled slot gets a
+        // backing, and it gets it behind an image.
         const frame = el("div",
             `width:${SLOT_PX}px;height:${SLOT_PX}px;border-radius:5px;`
             + "display:flex;align-items:center;justify-content:center;"
-            + `background:${HUB.surface1};`
             + `border:1px solid ${slot.image ? HUB.accent : HUB.hairline};`
-            + (slot.image ? "" : "border-style:dashed;"));
+            + (slot.image
+                ? `background:${SLOT_BACKING};`
+                : "border-style:dashed;background:transparent;"));
         if (slot.image) {
             const img = el("img", `width:100%;height:100%;object-fit:contain;`);
             img.src = imageThumbUrl(slot.image, SLOT_PX * 2);
@@ -96,10 +105,30 @@ function trackerPanel(node) {
             `width:${percent}%;height:100%;background:${HUB.accent};`));
         list.appendChild(track);
 
-        const grid = el("div", "display:flex;flex-wrap:wrap;gap:8px;"
-            + "width:100%;box-sizing:border-box;overflow:hidden;");
-        for (const slot of slots) grid.appendChild(slotTile(slot));
-        list.appendChild(grid);
+        // Grouped by category, first-appearance order — the same shape the
+        // Asset Focus list reads in, and the order the run itself is grouped
+        // in, so the two panels describe one order the same way.
+        const groups = new Map();
+        for (const slot of slots) {
+            const key = String(slot.category ?? "").trim();
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(slot);
+        }
+        for (const [category, members] of groups) {
+            const filled = members.filter((s) => s.image).length;
+            list.appendChild(el("div",
+                "display:flex;align-items:baseline;gap:6px;width:100%;"
+                + "box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;"
+                + "white-space:nowrap;padding:6px 3px 3px;"
+                + `border-bottom:1px solid ${HUB.hairline};margin-bottom:4px;`
+                + `color:${HUB.inkSubtle};`,
+                `${category || "uncategorised"} · ${filled}/${members.length}`));
+            const grid = el("div", "display:flex;flex-wrap:wrap;gap:8px;"
+                + "width:100%;box-sizing:border-box;overflow:hidden;"
+                + "margin-bottom:6px;");
+            for (const slot of members) grid.appendChild(slotTile(slot));
+            list.appendChild(grid);
+        }
         refit();
     }
 

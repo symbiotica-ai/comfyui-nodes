@@ -1,5 +1,30 @@
 # comfyui-nodes — agent instructions
 
+## How to answer him
+
+**Lead with the action he has to take, in bold, on the first line.** He is at
+the canvas waiting to see the change, and digging for "do I reload or restart?"
+is the whole cost of a long answer. One of:
+
+- **Hard-reload the Comfy tab.** — `web/js` only
+- **Restart ComfyUI.** — anything under `py/`, and a new node needs it to
+  register at all
+- **Nothing to do.** — tests, docs, a commit, a release he has not pulled yet
+
+Then keep it SHORT. A few lines. What changed and, only if it is not obvious,
+the one reason it was broken. No walls of text, no restating the task, no
+listing what you verified unless he asked. Explanations he did not ask for are
+the thing to cut, not the detail he did.
+
+**Answer the question he asked, and stop.** "Is the model downloaded?" is
+answered by yes and a size. Do not carry a finding from an earlier step into
+every later message, and never offer to act on something he has not mentioned —
+noticing a big file is not an invitation to propose deleting it. A side
+observation goes in one line, once, or not at all.
+
+Never restart his ComfyUI yourself without asking first — the AskUserQuestion
+button, every time, however urgent it feels.
+
 ## MANDATORY: load the ComfyUI skill for your task before writing code
 
 This repo vendors the ComfyUI dev skills in `.claude/skills/`. Before creating
