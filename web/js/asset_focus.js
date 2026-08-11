@@ -89,7 +89,7 @@ function publishedAssets(node) {
         assets: assets
             .filter((a) => String(a.assetName ?? "").trim())
             .map((a) => ({ name: a.assetName, category: a.category ?? "",
-                           refs: a.refFiles ?? [] })),
+                           canvas: a.canvas ?? "", refs: a.refFiles ?? [] })),
     };
 }
 
@@ -225,7 +225,8 @@ function focusPanel(node) {
         const head = el("div",
             "display:flex;align-items:center;gap:6px;min-width:0;");
         head.append(el("span", "flex:1;min-width:0;overflow:hidden;"
-            + "text-overflow:ellipsis;white-space:nowrap;", asset.name));
+            + "text-overflow:ellipsis;white-space:nowrap;",
+            `${asset.name}${asset.canvas ? ` · ${asset.canvas}` : ""}`));
         const refs = asset.refs ?? [];
         if (refs.length) {
             head.appendChild(el("span",
@@ -272,7 +273,7 @@ function focusPanel(node) {
         // reference files. Merge by name so the thumbnails are there either
         // way — a run's own payload carries them too, and whichever list is in
         // use, the fuller record wins.
-        const refsOf = new Map((published?.assets ?? []).map((a) => [a.name, a.refs ?? []]));
+        const known = new Map((published?.assets ?? []).map((a) => [a.name, a]));
         const fromRun = node._symFocusAssets?.length ? node._symFocusAssets : null;
         const refsRoot = (fromRun ? node._symFocusRefsRoot : "")
             || published?.refsRoot || "";
@@ -284,7 +285,9 @@ function focusPanel(node) {
                 || String(a.category ?? "").toLowerCase() === narrow)
             .map((a) => ({
                 ...a,
-                refs: refsOf.get(a.name)?.length ? refsOf.get(a.name) : (a.refs ?? []),
+                canvas: a.canvas || known.get(a.name)?.canvas || "",
+                refs: known.get(a.name)?.refs?.length
+                    ? known.get(a.name).refs : (a.refs ?? []),
             }));
         // A saved workflow restores the widget AFTER onNodeCreated ran, so the
         // normalising done there is overwritten by the empty value on disk.

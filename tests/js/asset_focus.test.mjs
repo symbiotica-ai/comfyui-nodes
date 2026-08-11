@@ -556,3 +556,32 @@ test("with no refs root there are names and no broken tiles", async () => {
     assert.deepEqual(names(node), ["Bunting"]);
     assert.equal(thumbs(rows(node)[0]).length, 0);
 });
+
+test("the row says the canvas the order asked for", async () => {
+    // "add resolution to the asset name too" — the size is what tells two
+    // similar assets apart when both are called a cupcake.
+    const node = await focusNode({}, [
+        { name: "Frankencrisps", category: "Food - 3 stages", canvas: "256×256" }]);
+    assert.equal(rowName(rows(node)[0]), "Frankencrisps · 256×256");
+});
+
+test("an asset with no canvas is just its name", async () => {
+    const node = await focusNode();
+    assert.equal(rowName(rows(node)[2]), "Bunting");
+});
+
+test("the canvas survives a run reporting only names", async () => {
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Bunting", category: "Decoration", canvas: "128×256" }] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symFocusAssets = [{ name: "Bunting", category: "Decoration" }];
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(rowName(rows(node)[0]), "Bunting · 128×256");
+});

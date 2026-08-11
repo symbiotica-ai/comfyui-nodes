@@ -1276,6 +1276,7 @@ class SymbioticaAssetFocus(io.ComfyNode):
             "feature": str(order.get("feature", "")),
             "refs_root": str(order.get("refsRoot", "") or ""),
             "assets": [{"name": a["assetName"], "category": a["category"],
+                        "canvas": a.get("canvas", ""),
                         "refs": list(raw.get(a["assetName"], {})
                                      .get("refFiles", []) or [])}
                        for a in items],

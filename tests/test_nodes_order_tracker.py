@@ -74,16 +74,14 @@ class TestTheBoard:
 
     def test_a_final_fills_the_slot_for_its_asset(self, nodes_mod, monkeypatch):
         """The whole feature: the tracker reads the same folder the picker
-        lists, so an approval shows up with no bookkeeping in between."""
-        from pipeline.pick_folder import approve
+        lists, so a Save Image writing `_final` shows up with no bookkeeping in
+        between. Nothing else in the pack writes these — the save node does."""
         folder = folder_for(nodes_mod, "Bat Brew", "Decoration")
-        render(folder, "_base_00007_.png")
-        approve(folder, ["_base_00007_.png"])
+        render(folder, "_base_00007_.png", "_final_00001_.png")
         board = pushed(nodes_mod, monkeypatch, order=ORDER)
         filled = board["slots"][0]
         assert filled["asset"] == "Bat Brew"
-        assert os.path.basename(filled["image"]) == \
-            "_final_from._base_00007__00001_.png"
+        assert os.path.basename(filled["image"]) == "_final_00001_.png"
         assert board["done"] == 1
 
     def test_it_fills_from_the_prefix_layout_too(self, nodes_mod, monkeypatch):
@@ -91,11 +89,10 @@ class TestTheBoard:
         `<category>/<asset>/_base_00001_.png` — the last segment of a save
         prefix names the FILE. The board was tested only against the second
         and could never fill against the first."""
-        from pipeline.pick_folder import approve
         category = os.path.join(nodes_mod._TEST_OUTPUT, "October", "Mini 3",
                                 "Decoration")
         render(category, "Bat Brew_00001_.png")
-        approve(os.path.join(category, "Bat Brew"), ["Bat Brew_00001_.png"])
+        render(os.path.join(category, "Bat Brew"), "_final_00001_.png")
         board = pushed(nodes_mod, monkeypatch, order=ORDER)
         assert board["slots"][0]["asset"] == "Bat Brew"
         assert board["slots"][0]["image"] is not None
