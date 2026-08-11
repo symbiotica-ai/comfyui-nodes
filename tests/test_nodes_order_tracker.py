@@ -86,6 +86,21 @@ class TestTheBoard:
             "_final_from._base_00007__00001_.png"
         assert board["done"] == 1
 
+    def test_it_fills_from_the_prefix_layout_too(self, nodes_mod, monkeypatch):
+        """His renders are `<category>/<asset>_00001_.png`, not
+        `<category>/<asset>/_base_00001_.png` — the last segment of a save
+        prefix names the FILE. The board was tested only against the second
+        and could never fill against the first."""
+        from pipeline.pick_folder import approve
+        category = os.path.join(nodes_mod._TEST_OUTPUT, "October", "Mini 3",
+                                "Decoration")
+        render(category, "Bat Brew_00001_.png")
+        approve(os.path.join(category, "Bat Brew"), ["Bat Brew_00001_.png"])
+        board = pushed(nodes_mod, monkeypatch, order=ORDER)
+        assert board["slots"][0]["asset"] == "Bat Brew"
+        assert board["slots"][0]["image"] is not None
+        assert board["done"] == 1
+
     def test_a_render_without_an_approval_leaves_the_slot_empty(
             self, nodes_mod, monkeypatch):
         """Rendering is not finishing — the board answers "what is done", and

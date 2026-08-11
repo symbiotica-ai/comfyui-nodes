@@ -102,6 +102,48 @@ class TestApproving:
         assert list(finals_in(folder)) == ["_base_00008_"]
 
 
+class TestThePrefixLayout:
+    """A render is `<category>/<asset>_00001_.png` as often as it is
+    `<category>/<asset>/_base_00001_.png` — the last segment of a save prefix
+    names the FILE. Every test above builds the directory layout, and that is
+    what hid this: a `_final` written beside its source in the prefix layout is
+    filtered out by the asset prefix before its own tag is read, so the board
+    it exists to fill could never fill."""
+
+    def test_the_approval_is_visible_where_the_render_is_a_prefix(self, tmp_path):
+        category = tmp_path / "Crate Icon"
+        write(str(category), "Pastel Chest_00001_.png")
+        target = str(category / "Pastel Chest")
+        approve(target, ["Pastel Chest_00001_.png"])
+        listed = [e["name"] for e in listing_for(target, only=[FINAL_STAGE])]
+        assert listed == ["_final_from.Pastel Chest_00001__00001_.png"]
+
+    def test_it_lands_in_the_asset_folder_not_beside_the_render(self, tmp_path):
+        category = tmp_path / "Crate Icon"
+        write(str(category), "Pastel Chest_00001_.png")
+        target = str(category / "Pastel Chest")
+        written = approve(target, ["Pastel Chest_00001_.png"])
+        assert os.path.dirname(written[0]) == target
+
+    def test_the_render_still_lists_under_its_own_name(self, tmp_path):
+        """Approving must not take the render out of the grid it was ticked
+        in."""
+        category = tmp_path / "Crate Icon"
+        write(str(category), "Pastel Chest_00001_.png")
+        target = str(category / "Pastel Chest")
+        approve(target, ["Pastel Chest_00001_.png"])
+        assert "Pastel Chest_00001_.png" in [e["name"] for e in
+                                             listing_for(target)]
+
+    def test_un_approving_finds_it_there_too(self, tmp_path):
+        category = tmp_path / "Crate Icon"
+        write(str(category), "Pastel Chest_00001_.png")
+        target = str(category / "Pastel Chest")
+        approve(target, ["Pastel Chest_00001_.png"])
+        approve(target, ["Pastel Chest_00001_.png"], on=False)
+        assert listing_for(target, only=[FINAL_STAGE]) == []
+
+
 class TestReadingApprovalsBack:
     def test_finals_in_maps_render_to_its_final(self, tmp_path):
         folder = str(tmp_path)

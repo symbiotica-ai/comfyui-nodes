@@ -6,6 +6,19 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.21
+
+**Fix: an approval was invisible in the prefix layout, so the Order Tracker
+could never fill a slot.** A render is `<category>/<asset>_00001_.png` as often
+as it is `<category>/<asset>/_base_00001_.png` — the last segment of a save
+prefix names the FILE. `read_folders` reads the first through the prefix
+`<asset>`, and a name starting `_final` does not begin with the asset's name,
+so the copy written beside its source was filtered out before its own tag was
+ever consulted. The `_final` now lands in the asset's own directory, which is
+the one place both layouts read without a prefix. Nothing about the naming
+changed, and approvals already written beside a render can be moved one folder
+down to be seen.
+
 ## 2026.8.20
 
 **New node: Order Tracker.** The order as a board — one slot per asset it asks

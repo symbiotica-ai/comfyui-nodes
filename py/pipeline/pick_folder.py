@@ -324,8 +324,15 @@ def approve(target: str, names, on: bool = True) -> list[str]:
 
     A COPY, not a rename: the render keeps its name, so the tick that points at
     it and any edit whose filename carries `_from.<it>` both keep pointing at
-    something. The `_final` sits in the same folder as its source, which is the
-    folder the picker lists — so approving does not move work out of view.
+    something.
+
+    It lands in `target` ITSELF — the asset's directory — never beside its
+    source. In the prefix layout a render is `<category>/<asset>_00001_.png`,
+    and `read_folders` reads that folder through the prefix `<asset>`: a name
+    starting `_final` does not begin with the asset's name, so a copy dropped
+    next to it is filtered out before the `_final` tag is ever consulted, and
+    is invisible to the picker and the tracker alike. `target` is the one place
+    both layouts read without a prefix.
 
     Scoped like `discard`: a name is only accepted if it is one the node
     actually shows, matched against the listing rather than joined onto a path.
@@ -341,12 +348,13 @@ def approve(target: str, names, on: bool = True) -> list[str]:
         # approved render for the asset.
         if os.path.basename(source).startswith(FINAL_STAGE + FROM_MARKER):
             continue
-        destination = os.path.join(os.path.dirname(source),
+        destination = os.path.join(target,
                                    final_name(os.path.basename(source)))
         try:
             if on:
                 if not os.path.isfile(source):
                     continue
+                os.makedirs(target, exist_ok=True)
                 shutil.copy2(source, destination)
             elif os.path.isfile(destination):
                 os.remove(destination)
