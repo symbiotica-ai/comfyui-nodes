@@ -6,7 +6,8 @@ import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
 import { attachHoverZoom, el, emptyState, errorLine, hideHoverZoom,
-         imageFullUrl as fullUrl, imageThumbUrl as thumbUrl }
+         imageFullUrl as fullUrl, imageThumbUrl as thumbUrl,
+         pinPanelWidth }
     from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaPick";
@@ -120,10 +121,14 @@ const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
     if (panelWidget) panelWidget.serialize = false;
     // Redraw, never resize. The only thing this may change is a node so narrow
     // that a tile cannot fit, and a node that has never been given a height.
+    // The wrapper ComfyUI gives this widget lags a SHRINK, so pin it or the
+    // grid paints over the canvas to the right of a narrowed node.
+    const syncPanelWidth = pinPanelWidth(node, container);
     const refit = () => requestAnimationFrame(() => {
         if (node.size[0] < MIN_NODE_W) {
             node.setSize?.([MIN_NODE_W, node.size[1]]);
         }
+        syncPanelWidth();
         node.setDirtyCanvas?.(true, true);
     });
     node.size[0] = Math.max(node.size[0], MIN_NODE_W);
@@ -328,6 +333,26 @@ const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
         reload.addEventListener("pointerdown", (e) => e.stopPropagation());
         reload.addEventListener("click", () => load());
         bar.appendChild(reload);
+
+        // Tick every tile's corner box, which is what summons the batch bar —
+        // seven ✕ clicks to clear a folder of tries is the thing this saves.
+        // It toggles: once everything is checked the same button lets go.
+        if (images.length) {
+            const all = images.length > 0 && checked.size === images.length;
+            const every = el("button", ghostButtonCss + "padding:1px 8px;flex:none;"
+                + (all ? `border-color:${HUB.accent};color:${HUB.ink};` : ""),
+                             all ? "none" : "check all");
+            every.className = "sym-btn";
+            every.title = all
+                ? "Clear the checkbox selection"
+                : "Check every tile, then approve, edit or discard them together";
+            every.addEventListener("pointerdown", (e) => e.stopPropagation());
+            every.addEventListener("click", () => {
+                checked = all ? new Set() : new Set(images.map((i) => i.id));
+                render();
+            });
+            bar.appendChild(every);
+        }
 
         if (ticks.size || edits.size) {
             const clear = el("button", ghostButtonCss + "padding:1px 8px;flex:none;",

@@ -6,6 +6,7 @@ import { openTemplateEditor } from "./template_editor/editor.js";
 import { createOrderCache } from "./order_cache.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
 import { registerSymbioticaExtension } from "./register.js";
+import { pinPanelWidth } from "./browser_chrome.js";
 
 // node.id -> {events, refFileCount, refsRoot} (last parse per Order Read node)
 const orderCache = new Map();
@@ -901,12 +902,14 @@ function wireTemplateLibrary(node) {
     stopWheel(strip);
     const stripW = node.addDOMWidget("library_thumbs", "sym_library_thumbs",
                                      strip, { serialize: false });
+    const syncStripWidth = pinPanelWidth(node, strip);
     const STRIP_MAX = 420;
     stripW.computeSize = function (width) {
         const h = stripList.scrollHeight;
         return [width, Math.min(Math.max(h ? h + 8 : 24, 24), STRIP_MAX)];
     };
     const refit = () => requestAnimationFrame(() => {
+        syncStripWidth();
         node.setSize?.([node.size[0], node.computeSize()[1]]);
         node.setDirtyCanvas?.(true, true);
     });
@@ -1421,6 +1424,8 @@ registerSymbioticaExtension(app, {
                 renderBrowser(container, undefined);
                 this.addDOMWidget("events_browser", "custom", container,
                                   { serialize: false, hideOnZoom: true });
+                const sync = pinPanelWidth(this, container);
+                requestAnimationFrame(sync);
                 this.size[0] = Math.max(this.size[0], 320);
             };
         }

@@ -6,7 +6,7 @@ import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
 import { attachHoverZoom, el, emptyState, hideHoverZoom, imageFullUrl,
-         imageThumbUrl } from "./browser_chrome.js";
+         imageThumbUrl, pinPanelWidth } from "./browser_chrome.js";
 // The Order Specs front end — project, month, feature, "Read folder" — hosted
 // here rather than reimplemented: "order specs and asset focus are 2 nodes
 // that are doing one thing… i select month and feature in specs and asset in
@@ -194,8 +194,12 @@ function focusPanel(node) {
     // Redraw, never resize: with the panel's height now decided by the layout,
     // re-listing must not push the node back to any height of its own — his
     // drag is the only thing that sets it.
+    // The wrapper ComfyUI gives this widget lags a SHRINK, so pin it or every
+    // row paints over the canvas to the right of a narrowed node.
+    const syncPanelWidth = pinPanelWidth(node, container);
     const refit = () => requestAnimationFrame(() => {
         if (node.size[0] < MIN_NODE_W) node.setSize?.([MIN_NODE_W, node.size[1]]);
+        syncPanelWidth();
         node.setDirtyCanvas?.(true, true);
     });
     node.size[0] = Math.max(node.size[0], MIN_NODE_W);

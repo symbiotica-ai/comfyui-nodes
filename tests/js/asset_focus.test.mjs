@@ -654,3 +654,16 @@ test("it lists its own parse when no order is wired", async () => {
     for (let i = 0; i < 5; i++) await tick();
     assert.deepEqual(names(node), ["Bunting"]);
 });
+
+test("the panel's wrapper is pinned to the node width", async () => {
+    // The rows are contained, but they live in a wrapper ComfyUI sizes on its
+    // own pass — one that follows a widening and lags a shrink. Pinning the
+    // wrapper is the only thing that survives a narrowed node.
+    const node = await focusNode();
+    const container = node.widgets.find((w) => w.name === "focus_panel").element;
+    const wrap = { style: { width: "900px" } };
+    container.parent = wrap;
+    node.size[0] = 320;
+    node.onResize();
+    assert.equal(wrap.style.width, "300px");
+});

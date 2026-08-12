@@ -645,3 +645,71 @@ test("the batch bar is contained too", async () => {
         for (const rule of CONTAINED) assert.match(bar.style.cssText, rule);
     }
 });
+
+// --- check all --------------------------------------------------------------
+
+const headButtons = (node) =>
+    [...listOf(node).children[0].children[0].children].filter(
+        (e) => e.className === "sym-btn");
+const buttonNamed = (node, text) =>
+    headButtons(node).find((b) => b.textContent === text);
+
+test("check all ticks every tile's box", async () => {
+    const node = await panelNode([], [ONE, TWO, THREE]);
+    fire(buttonNamed(node, "check all"), "click", { stopPropagation() {} });
+    for (let i = 0; i < 5; i++) await tick();
+    // The batch bar is what the checkbox selection summons.
+    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
+    assert.match(text, /3 selected/);
+});
+
+test("once everything is checked the button lets go", async () => {
+    const node = await panelNode([], [ONE, TWO]);
+    fire(buttonNamed(node, "check all"), "click", { stopPropagation() {} });
+    for (let i = 0; i < 5; i++) await tick();
+    const off = buttonNamed(node, "none");
+    assert.ok(off, "expected the button to read 'none' once all are checked");
+    fire(off, "click", { stopPropagation() {} });
+    for (let i = 0; i < 5; i++) await tick();
+    const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
+    assert.doesNotMatch(text, /selected/);
+    assert.ok(buttonNamed(node, "check all"));
+});
+
+test("an empty folder offers nothing to check", async () => {
+    const node = await panelNode([], []);
+    assert.equal(buttonNamed(node, "check all"), undefined);
+});
+
+test("the panel's wrapper is pinned to the node width", async () => {
+    // ComfyUI's own layout pass follows a WIDENING but lags a SHRINK, so a
+    // narrowed node keeps a too-wide wrapper and the grid paints over the
+    // canvas. `width:100%` cannot save it: 100% of too wide is too wide.
+    const node = await panelNode([], [ONE]);
+    const container = node.widgets.find((w) => w.name === "pick_panel").element;
+    const wrap = { style: { width: "600px" } };
+    container.parent = wrap;
+    node.size[0] = 340;
+    node.onResize();
+    assert.equal(wrap.style.width, "320px");   // node width minus the inset
+});
+
+test("the wrapper is re-pinned on every draw, not just on resize", async () => {
+    // ComfyUI re-writes the wrapper from its own layout pass, so a one-shot pin
+    // set before that pass is overwritten and the panel goes back to hanging
+    // off the node. This is the thing that made four separate fixes look like
+    // they had not landed.
+    const node = await panelNode([], [ONE]);
+    const container = node.widgets.find((w) => w.name === "pick_panel").element;
+    const wrap = { style: { width: "900px" } };
+    container.parent = wrap;
+    node.size[0] = 340;
+    node.onDrawForeground?.();
+    assert.equal(wrap.style.width, "320px");
+    // And nothing inside may paint past it either way.
+    assert.equal(wrap.style.overflow, "hidden");
+    // A later stomp by ComfyUI is undone on the next frame.
+    wrap.style.width = "900px";
+    node.onDrawForeground?.();
+    assert.equal(wrap.style.width, "320px");
+});

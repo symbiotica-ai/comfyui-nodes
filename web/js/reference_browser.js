@@ -7,6 +7,7 @@ import { registerSymbioticaExtension } from "./register.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
 import {
     el, emptyState, errorLine, filterBox, filterByName, folderRow, navBar,
+    pinPanelWidth,
 } from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaReferenceBrowser";
@@ -133,11 +134,15 @@ function referencePanel(node) {
 
     const panelW = node.addDOMWidget("reference_panel", "sym_reference_browser",
                                      container, { serialize: false, hideOnZoom: true });
+    // The wrapper ComfyUI sizes for this widget lags a SHRINK, so pin it or
+    // every row paints over the canvas beside a narrowed node.
+    const syncPanelWidth = pinPanelWidth(node, container);
     panelW.computeSize = function (width) {
         const h = list.scrollHeight;
         return [width, Math.min(Math.max(h ? h + 8 : 44, 44), PANEL_MAX)];
     };
     const refit = () => requestAnimationFrame(() => {
+        syncPanelWidth();
         node.setSize?.([Math.max(node.size[0], MIN_NODE_W), node.computeSize()[1]]);
         node.setDirtyCanvas?.(true, true);
     });

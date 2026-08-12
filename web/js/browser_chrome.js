@@ -23,6 +23,55 @@ export const imageThumbUrl = (path, px) => api.apiURL(
 export const imageFullUrl = (path) => api.apiURL(
     `/symbiotica/local-image?path=${encodeURIComponent(path)}`);
 
+// --- keeping a DOM panel inside its node -------------------------------------
+// ComfyUI sizes a DOM widget's WRAPPER from the node width on its own layout
+// pass, and that pass follows a WIDENING immediately but lags a SHRINK — it
+// only catches up when something else re-lays-out the node. Narrow a node (or
+// collapse it into a group) and the wrapper keeps the old width, so every row
+// inside it paints over the canvas to the right, however carefully the rows
+// themselves are contained.
+//
+// `width:100%` on the content cannot help: 100% of a wrapper that is too wide
+// is too wide. The wrapper is the thing to pin, and pinning it is the only fix
+// that survives a shrink. The inset is a constant 20px at every width
+// (320->300, 325->305, 520->500, 600->580).
+const PANEL_INSET = 20;
+
+/**
+ * Pin `container`'s wrapper to the node's width, now and on every resize.
+ * Returns the sync function so a render path can call it too — a re-render
+ * inside a node that shrank while the panel was empty needs it.
+ */
+export function pinPanelWidth(node, container) {
+    const sync = () => {
+        const wrap = container.parentElement;
+        if (!wrap) return;
+        const want = Math.max(0, node.size[0] - PANEL_INSET);
+        if (parseFloat(wrap.style.width) !== want) wrap.style.width = `${want}px`;
+        // Belt and braces: whatever width the wrapper ends up with, nothing
+        // inside it may paint past it. A row that overflows a correct wrapper
+        // and a correct row inside a stale wrapper look identical on screen,
+        // and only this rules out the first.
+        if (wrap.style.overflow !== "hidden") wrap.style.overflow = "hidden";
+    };
+    // onResize fires for a dragged shrink, but it is NOT enough on its own:
+    // ComfyUI re-writes the wrapper from its own layout pass, so a one-shot
+    // pin set before that pass is simply overwritten and the panel goes back
+    // to hanging off the node. Re-asserting every frame is what makes it
+    // stick — it is a width comparison against a number already in memory, so
+    // the cost is nothing, and it covers every way a node can get narrower:
+    // the drag, a group collapse, a workflow load, an undo.
+    for (const hook of ["onResize", "onDrawForeground"]) {
+        const previous = node[hook];
+        node[hook] = function () {
+            const answer = previous?.apply(this, arguments);
+            sync();
+            return answer;
+        };
+    }
+    return sync;
+}
+
 export function el(tag, style = "", text = "") {
     const d = document.createElement(tag);
     if (style) d.style.cssText = style;

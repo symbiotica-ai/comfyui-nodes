@@ -649,3 +649,35 @@ class TestShowingTheEditsOfAnApproval:
         assert derived is None
         assert only == ["Spookies_00001_.png"]
         assert target.endswith("Spookies")
+
+
+class TestAMissingTickDoesNotMarkTheNodeDirtyForever:
+    """A tick naming a file that is no longer in the folder is ordinary — the
+    panel says "1 missing" and carries on. Answering NaN for it marks the node
+    permanently changed, and everything downstream of `picked` then re-runs on
+    every queue, seed untouched."""
+
+    def test_the_stamp_is_stable_when_a_ticked_file_is_gone(
+            self, nodes_mod, tmp_path, monkeypatch):
+        folder = tmp_path / "asset"
+        folder.mkdir()
+        from PIL import Image
+        Image.new("RGB", (4, 4)).save(folder / "_base_00001_.png")
+        monkeypatch.setattr(
+            nodes_mod.SymbioticaPick, "hidden",
+            types.SimpleNamespace(unique_id="5"), raising=False)
+        from pipeline.pick_folder import remember
+        remember("5", str(folder), None, None)
+        ticks = json.dumps(["_base_00001_.png", "gone_00009_.png"])
+        first = nodes_mod.SymbioticaPick.fingerprint_inputs(selection=ticks)
+        second = nodes_mod.SymbioticaPick.fingerprint_inputs(selection=ticks)
+        assert first == second
+        assert first == first          # not NaN
+
+    def test_an_unreadable_folder_still_says_it_cannot_tell(
+            self, nodes_mod, monkeypatch):
+        monkeypatch.setattr(
+            nodes_mod.SymbioticaPick, "hidden",
+            types.SimpleNamespace(unique_id="6"), raising=False)
+        answer = nodes_mod.SymbioticaPick.fingerprint_inputs(selection="[]")
+        assert answer != answer        # no folder registered -> NaN, runs once

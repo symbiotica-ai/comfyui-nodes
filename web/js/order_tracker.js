@@ -6,7 +6,7 @@ import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, injectHubStyles } from "./hub_theme.js";
 import { attachHoverZoom, el, emptyState, hideHoverZoom, imageFullUrl,
-         imageThumbUrl } from "./browser_chrome.js";
+         imageThumbUrl, pinPanelWidth } from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaOrderTracker";
 const MIN_NODE_W = 320;
@@ -44,7 +44,11 @@ function trackerPanel(node) {
         getMinHeight: () => 34,
     });
     node.size[0] = Math.max(node.size[0], MIN_NODE_W);
+    // The wrapper ComfyUI gives this widget lags a SHRINK, so pin it or the
+    // slots paint over the canvas to the right of a narrowed node.
+    const syncPanelWidth = pinPanelWidth(node, container);
     const refit = () => requestAnimationFrame(() => {
+        syncPanelWidth();
         node.setDirtyCanvas?.(true, true);
     });
 
@@ -159,19 +163,28 @@ function trackerPanel(node) {
         }
         const { done, total, slots } = board;
         const percent = total ? Math.round((done / total) * 100) : 0;
-        list.appendChild(el("div",
+        // The count and the bar stay put while the slots scroll under them —
+        // they answer "how far in am I", which is the question you are still
+        // asking on the fortieth asset. Opaque, or the tiles read through it.
+        const head = el("div",
+            "position:sticky;top:0;z-index:2;"
+            + "width:100%;box-sizing:border-box;overflow:hidden;"
+            + `background:var(--comfy-menu-bg, ${HUB.surface1});`
+            + "padding:2px 3px 4px;");
+        head.appendChild(el("div",
             "width:100%;box-sizing:border-box;overflow:hidden;"
-            + `padding:2px 3px 4px;color:${HUB.inkSubtle};`,
+            + `color:${HUB.inkSubtle};`,
             `${done}/${total} done · ${percent}%`
             + `${board.feature ? ` · ${board.feature}` : ""}`));
         // The bar IS the progress: a rectangle as wide as the work that is
         // finished, over one as wide as the work there is.
         const track = el("div", "width:100%;box-sizing:border-box;height:4px;"
             + `border-radius:2px;background:${HUB.hairline};overflow:hidden;`
-            + "margin:0 0 6px;");
+            + "margin:2px 0 0;");
         track.appendChild(el("div",
             `width:${percent}%;height:100%;background:${HUB.accent};`));
-        list.appendChild(track);
+        head.appendChild(track);
+        list.appendChild(head);
 
         // Grouped by category, first-appearance order — the same shape the
         // Asset Focus list reads in, and the order the run itself is grouped
