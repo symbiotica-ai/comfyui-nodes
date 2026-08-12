@@ -6,6 +6,29 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.24
+
+**Nothing reports always-changed any more.** Asset Focus answered its change
+check with NaN whenever the order arrived on a wire, which marks a node
+permanently dirty — and its outputs feed the string joins, the save paths and
+the render lane, so every queue re-ran the whole graph with the seed untouched.
+It caches on `category` + `asset` now. Pick had the same shape in a narrower
+case: a tick naming a file no longer in the folder made the stat raise and the
+node answer NaN; a missing file is stamped as absent instead, while an
+unreadable FOLDER still says it cannot tell.
+
+**Every panel stays inside its node.** ComfyUI sizes a DOM widget's wrapper
+from the node width on its own layout pass, which follows a widening but lags a
+shrink, and it re-writes the wrapper after `onResize` — so panels hung off the
+right of a narrowed node. The width is re-asserted every frame now, on all
+seven panels.
+
+**Order Tracker: the count and progress bar stay on screen** while the slots
+scroll.
+
+**Pick: `check all`** in the header ticks every tile's corner box, and reads
+`none` once they all are.
+
 ## 2026.8.23
 
 **Asset Focus makes the whole selection.** It now carries `project_path`,
