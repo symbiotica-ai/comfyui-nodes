@@ -308,7 +308,7 @@ function referencePanel(node) {
                 + `border:1px solid ${HUB.hairline};border-radius:6px;margin:3px 0;`);
             if (g.files?.[0] && level?.root) {
                 const img = el("img", "width:22px;height:22px;object-fit:contain;"
-                    + "background:#111;border-radius:3px;flex:none;");
+                    + `background:${HUB.mat};border-radius:3px;flex:none;`);
                 img.src = thumbUrl(level.root, g.files[0]);
                 card.appendChild(img);
             }
@@ -439,7 +439,7 @@ function referencePanel(node) {
                 cell.title = `${im.name}${im.w ? ` · ${im.w}×${im.h}` : ""}`;
                 const img = el("img",
                     `width:${THUMB_PX}px;height:${THUMB_PX}px;object-fit:contain;`
-                    + "background:#111;border-radius:4px;display:block;"
+                    + `background:${HUB.mat};border-radius:4px;display:block;`
                     + `border:2px solid ${picked.has(im.rel) ? HUB.accent : "transparent"};`
                     + "box-sizing:border-box;");
                 img.src = thumbUrl(level.root, im.rel);

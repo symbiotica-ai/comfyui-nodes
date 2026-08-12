@@ -468,11 +468,11 @@ test("narrowing the packer pulls the assets panel in with it", async () => {
 
     packer.size[0] = 600;
     packer.onResize?.([600, packer.size[1]]);
-    assert.equal(wrap.style.width, "580px", "wide node, wide panel");
+    assert.equal(wrap.style.maxWidth, "580px", "wide node, wide panel");
 
     packer.size[0] = 325;
     packer.onResize?.([325, packer.size[1]]);
-    assert.equal(wrap.style.width, "305px",
+    assert.equal(wrap.style.maxWidth, "305px",
                  "narrow node must pull the panel in, not leave it at 580");
 });
 

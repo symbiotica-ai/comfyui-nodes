@@ -473,7 +473,7 @@ function symImg(src, px) {
     const img = document.createElement("img");
     img.src = src;
     img.style.cssText = `width:${px}px;height:${px}px;object-fit:contain;`
-        + "background:#111;border-radius:3px;flex:none;";
+        + `background:${HUB.mat};border-radius:3px;flex:none;`;
     return img;
 }
 
@@ -512,31 +512,17 @@ function assetsPanel(node) {
         getMinHeight: () => 44,
     });
     // ComfyUI sizes the DOM wrapper from the node width on its own layout pass,
-    // and that pass follows a WIDENING immediately but lags a SHRINK — it only
-    // catches up when something else re-lays-out the node. Narrow a packer whose
-    // panel has rows and nothing does, so the wrapper keeps the old width and the
-    // rows visibly hang off the right edge of the node. Pin it ourselves instead
-    // of waiting: the inset is a constant 20px at every width (320->300,
-    // 325->305, 520->500, 600->580).
-    const PANEL_INSET = 20;
-    const syncPanelWidth = () => {
-        const wrap = container.parentElement;
-        if (!wrap) return;
-        const want = Math.max(0, node.size[0] - PANEL_INSET);
-        if (parseFloat(wrap.style.width) !== want) wrap.style.width = `${want}px`;
-    };
-    // Redraw and re-pin the width after each render. NOT the height: the node
+    // and that pass follows a WIDENING immediately but lags a SHRINK — narrow a
+    // packer whose panel has rows and the rows hang off the node's right edge.
+    // The shared cap is what holds them inside; it hooks the resize and draw
+    // paths itself.
+    const syncPanelWidth = pinPanelWidth(node, container);
+    // Redraw and re-cap the width after each render. NOT the height: the node
     // is his to size, and re-listing must never move the corner he dragged.
     const refit = () => requestAnimationFrame(() => {
         syncPanelWidth();
         node.setDirtyCanvas?.(true, true);
     });
-    // The dragged-edge case: onResize is the one signal that fires for a shrink.
-    const prevResize = node.onResize;
-    node.onResize = function () {
-        prevResize?.apply(this, arguments);
-        syncPanelWidth();
-    };
     node.size[0] = Math.max(node.size[0], 320);
 
     const save = () => {
@@ -563,8 +549,9 @@ function assetsPanel(node) {
             const hidden = state.hidden.includes(a.assetName);
             const row = document.createElement("div");
             row.style.cssText = "display:flex;flex-direction:column;gap:3px;min-width:0;"
-                + "border:1px solid #3a3a3a;border-radius:6px;padding:4px 5px;"
-                + `margin:3px 0;background:${hidden ? "#241a1a" : "#2a2a2a"};`
+                + `border:1px solid ${HUB.hairlineStrong};border-radius:6px;`
+                + "padding:4px 5px;"
+                + `margin:3px 0;background:${hidden ? HUB.dangerBg : HUB.surface2};`
                 + `opacity:${hidden ? ".5" : "1"};`;
             // header: name + hide toggle
             const head = document.createElement("div");
@@ -578,7 +565,9 @@ function assetsPanel(node) {
             const eye = document.createElement("button");
             eye.textContent = hidden ? "hidden" : "hide";
             eye.style.cssText = "font-size:10px;padding:1px 6px;border-radius:4px;cursor:pointer;"
-                + `border:1px solid #555;background:${hidden ? "#7a3a3a" : "#333"};color:#ddd;`;
+                + `border:1px solid ${HUB.hairlineStrong};`
+                + `background:${hidden ? HUB.dangerBg : HUB.surface2};`
+                + `color:${HUB.ink};`;
             eye.addEventListener("pointerdown", (e) => {
                 e.stopPropagation();
                 state.hidden = hidden ? state.hidden.filter((n) => n !== a.assetName)
@@ -607,8 +596,9 @@ function assetsPanel(node) {
                         const b = document.createElement("button");
                         b.textContent = txt;
                         b.style.cssText = "font-size:11px;line-height:1;padding:1px 5px;border-radius:3px;"
-                            + `cursor:pointer;border:1px solid #555;color:#ccc;`
-                            + `background:${danger ? "#5a2a2a" : "#333"};`;
+                            + `cursor:pointer;border:1px solid ${HUB.hairlineStrong};`
+                            + `color:${HUB.ink};`
+                            + `background:${danger ? HUB.dangerBg : HUB.surface2};`;
                         b.addEventListener("pointerdown", (e) => { e.stopPropagation(); fn(); });
                         return b;
                     };
@@ -1298,8 +1288,9 @@ function renderBrowser(container, data) {
 
         const card = document.createElement("div");
         card.style.cssText =
-            "border:1px solid #444;border-radius:6px;margin:2px 0;padding:4px 6px;" +
-            "font-size:11px;cursor:pointer;background:#2a2a2a;";
+            `border:1px solid ${HUB.hairline};border-radius:6px;margin:2px 0;` +
+            "padding:4px 6px;font-size:11px;cursor:pointer;" +
+            `background:${HUB.surface2};color:${HUB.ink};`;
         const head = document.createElement("div");
         head.style.cssText = "display:flex;justify-content:space-between;gap:6px;";
         const title = document.createElement("span");
@@ -1340,7 +1331,8 @@ function renderBrowser(container, data) {
                         const img = document.createElement("img");
                         img.src = thumbUrl(data.refsRoot, f);
                         img.style.cssText =
-                            "width:22px;height:22px;object-fit:contain;background:#111;border-radius:3px;";
+                            "width:22px;height:22px;object-fit:contain;"
+                            + `background:${HUB.mat};border-radius:3px;`;
                         row.appendChild(img);
                     }
                     if (a.refFiles.length > 5) {
