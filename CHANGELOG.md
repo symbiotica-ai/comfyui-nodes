@@ -6,6 +6,24 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.23
+
+**Asset Focus makes the whole selection.** It now carries `project_path`,
+`month`, `feature` and a 📁 Read folder button — the same front end Order Specs
+has, hosted rather than reimplemented — so month, feature, category and asset
+are picked in one place instead of half in each of two nodes. `order` is
+optional: wire one in and nothing changes, leave it and the node reads the
+project itself. `asset` is a dropdown of what the current narrowing holds
+("All assets" means every one of them). New output `event_order` carries the
+WHOLE event for the Auto Packer, Order Assets and the Order Tracker, which must
+not change when you focus a different asset. Everything is appended, so saved
+graphs keep every widget value and every wire.
+
+**Nothing in a Pick panel paints outside the node any more.** Its sticky
+header, both toolbars, the list and the grid rows had no width or overflow
+containment, so a toolbar wider than the node painted over the canvas behind
+it. Toolbars wrap now.
+
 ## 2026.8.22
 
 **Pick no longer writes files. Reverts the approve-writes-`_final` behaviour
