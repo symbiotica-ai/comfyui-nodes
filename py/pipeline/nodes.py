@@ -312,62 +312,73 @@ class SymbioticaOrderSpecs(io.ComfyNode):
                 h.update("\n".join(sorted(os.listdir(rp))).encode())
         except OSError:
             pass
-        h.update((cls._guide(project_path) or "").encode())
+        h.update((SymbioticaOrderSpecs._guide(project_path) or "").encode())
         return h.hexdigest()
 
     @classmethod
     def execute(cls, project_path="", month="", feature="") -> io.NodeOutput:
-        _register_project(project_path)
-        op, rp, assets_root = cls._paths(project_path, month)
-        if not op:
-            raise ValueError(
-                "no order file — set the project folder (the one with an "
-                "orders/ subfolder of .xlsx files) and pick a month")
-        loaded = load_order(op, rp)
-        events = loaded["events"]
-        if not events:
-            raise ValueError(f"no events found in {op}")
-        feature = (feature or "").strip()
-        # The JS combo labels events "Feature — Event Name"; accept that form as
-        # well as the bare feature (saved workflows keep the bare value).
-        if feature and feature not in {e.get("feature") for e in events}:
-            feature = feature.split(" — ")[0].strip()
-        feature = feature or events[0].get("feature", "")
-        # event_spec returns {feature, eventName, templates}; it raises an
-        # actionable ValueError listing the available features when not found.
-        spec = event_spec(events, feature)
-        # ORDER carries a FLAT asset list (the AutoPacker's contract); flatten
-        # the template groups back out, named assets only, spec order kept.
-        assets = [a for g in spec["templates"] for a in g["assets"]]
-        if not assets:
-            names = ", ".join(e.get("feature", "?") for e in events)
-            raise ValueError(
-                f"event {feature!r} has no named assets — this order's "
-                f"events: {names}")
-        if rp:
-            _register_refs_root(rp)
-        if assets_root:
-            _register_refs_root(assets_root)
-        payload = {
-            "feature": spec.get("feature", ""),
-            "eventName": spec.get("eventName", ""),
-            "assets": assets,
-            "refsRoot": rp,
-            "assetsRoot": assets_root,
-            "guide": cls._guide(project_path),
-            # The order identity, so a Template Library save can reproduce this
-            # exact event later (project + month + feature). Additive keys —
-            # older consumers ignore them.
-            "project_path": (project_path or "").strip(),
-            "month": (month or "").strip(),
-            # Where this pack came from — an order, not the asset library. The
-            # Auto Packer files "Save as template" by this: an order template is
-            # the design guide for ONE month and lives beside that month's
-            # order; a reference template is universal (see the Reference
-            # Browser).
-            "source": "order",
-        }
-        return io.NodeOutput(payload)
+        return io.NodeOutput(build_event_order(project_path, month, feature))
+
+
+def build_event_order(project_path="", month="", feature=""):
+    """The ORDER payload for one event: project + month + feature -> the flat
+    asset list every consumer reads.
+
+    Lifted out of Order Specs so Asset Focus can do the same selection without
+    a second node in front of it. One implementation, or the two would drift on
+    exactly the thing that makes an order identifiable.
+    """
+    _register_project(project_path)
+    op, rp, assets_root = SymbioticaOrderSpecs._paths(project_path, month)
+    if not op:
+        raise ValueError(
+            "no order file — set the project folder (the one with an "
+            "orders/ subfolder of .xlsx files) and pick a month")
+    loaded = load_order(op, rp)
+    events = loaded["events"]
+    if not events:
+        raise ValueError(f"no events found in {op}")
+    feature = (feature or "").strip()
+    # The JS combo labels events "Feature — Event Name"; accept that form as
+    # well as the bare feature (saved workflows keep the bare value).
+    if feature and feature not in {e.get("feature") for e in events}:
+        feature = feature.split(" — ")[0].strip()
+    feature = feature or events[0].get("feature", "")
+    # event_spec returns {feature, eventName, templates}; it raises an
+    # actionable ValueError listing the available features when not found.
+    spec = event_spec(events, feature)
+    # ORDER carries a FLAT asset list (the AutoPacker's contract); flatten
+    # the template groups back out, named assets only, spec order kept.
+    assets = [a for g in spec["templates"] for a in g["assets"]]
+    if not assets:
+        names = ", ".join(e.get("feature", "?") for e in events)
+        raise ValueError(
+            f"event {feature!r} has no named assets — this order's "
+            f"events: {names}")
+    if rp:
+        _register_refs_root(rp)
+    if assets_root:
+        _register_refs_root(assets_root)
+    payload = {
+        "feature": spec.get("feature", ""),
+        "eventName": spec.get("eventName", ""),
+        "assets": assets,
+        "refsRoot": rp,
+        "assetsRoot": assets_root,
+        "guide": SymbioticaOrderSpecs._guide(project_path),
+        # The order identity, so a Template Library save can reproduce this
+        # exact event later (project + month + feature). Additive keys —
+        # older consumers ignore them.
+        "project_path": (project_path or "").strip(),
+        "month": (month or "").strip(),
+        # Where this pack came from — an order, not the asset library. The
+        # Auto Packer files "Save as template" by this: an order template is
+        # the design guide for ONE month and lives beside that month's
+        # order; a reference template is universal (see the Reference
+        # Browser).
+        "source": "order",
+    }
+    return payload
 
 
 class SymbioticaReferenceBrowser(io.ComfyNode):
@@ -1199,7 +1210,10 @@ class SymbioticaAssetFocus(io.ComfyNode):
                         "covers both the one-asset iteration loop and a run "
                         "over everything.",
             inputs=[
-                Order.Input("order"),
+                # Optional since this node can make its own: month, feature,
+                # category and asset are one selection, and splitting it across
+                # two nodes meant picking half of it in each.
+                Order.Input("order", optional=True),
                 io.String.Input("category", default="",
                                 tooltip="Narrow the choice to one asset type, "
                                         "or leave empty for every type."),
@@ -1207,6 +1221,18 @@ class SymbioticaAssetFocus(io.ComfyNode):
                                 tooltip="Which asset, by name. Set by clicking "
                                         "it on the node; typed names work too. "
                                         "Empty means the first."),
+                # APPENDED, and optional. A saved workflow restores widget
+                # values BY POSITION, so anything added ahead of `asset` would
+                # hand every existing graph the wrong value in every slot.
+                io.String.Input("project_path", default="", optional=True,
+                                tooltip="The project folder, the one with an "
+                                        "orders/ subfolder. Only read when no "
+                                        "order is wired in — this node then "
+                                        "does the whole selection itself."),
+                io.String.Input("month", default="", optional=True),
+                io.String.Input("feature", default="", optional=True,
+                                tooltip="Which event of that month. Empty "
+                                        "means the order's first."),
             ],
             # Lists, but normally of one. A single-element list behaves exactly
             # like a scalar downstream — it runs once — so choosing an asset
@@ -1232,6 +1258,15 @@ class SymbioticaAssetFocus(io.ComfyNode):
                                      "project, a one-asset assets list. One "
                                      "of these per focused asset, so "
                                      "downstream still runs once per asset."),
+                # APPENDED: links are held by slot index, so a new output goes
+                # at the end or every saved graph repoints one slot left.
+                Order.Output(display_name="event_order",
+                             tooltip="The WHOLE event, unnarrowed — what an "
+                                     "Order Specs emits. The Auto Packer, "
+                                     "Order Assets and the Order Tracker all "
+                                     "want the event rather than the asset, "
+                                     "and they must not change every time you "
+                                     "focus a different one."),
             ],
             hidden=[io.Hidden.unique_id],
             # An output node so it can be queued on its own. Without that there
@@ -1241,10 +1276,29 @@ class SymbioticaAssetFocus(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, order=None, category="", asset="") -> io.NodeOutput:
+    def fingerprint_inputs(cls, order=None, category="", asset="",
+                           project_path="", month="", feature=""):
+        """When this node makes its own order it inherits Order Specs' change
+        check — the order file and the references folder move without the
+        graph moving. With one wired in, the wire already carries that."""
+        if not str(project_path or "").strip():
+            return float("nan")
+        return SymbioticaOrderSpecs.fingerprint_inputs(
+            project_path=project_path, month=month, feature=feature)
+
+    @classmethod
+    def execute(cls, order=None, category="", asset="",
+                project_path="", month="", feature="") -> io.NodeOutput:
+        # Its own selection when nothing is wired in: month, feature, category
+        # and asset are one act, and doing half of it on another node is what
+        # made this two nodes.
         if not isinstance(order, dict) or "assets" not in order:
-            raise ValueError("wire an Order Specs (or a Reference Browser) "
-                             "into 'order'")
+            if str(project_path or "").strip():
+                order = build_event_order(project_path, month, feature)
+            else:
+                raise ValueError(
+                    "set project_path (and month) to read an order here, or "
+                    "wire an Order Specs / Reference Browser into 'order'")
         items = assets_by_category(order, category)
         if not items:
             present = sorted({str(a.get("category", "") or "").strip()
@@ -1309,7 +1363,8 @@ class SymbioticaAssetFocus(io.ComfyNode):
                              [i["category"] for i in picked],
                              [i["prompt"] for i in picked],
                              save_paths(order, picked),
-                             narrowed)
+                             narrowed,
+                             order)
 
 
 class SymbioticaSaveRender(io.ComfyNode):

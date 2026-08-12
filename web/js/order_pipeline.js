@@ -351,7 +351,11 @@ function publishOrder(node, result, events, refsRoot) {
     node.setDirtyCanvas?.(true, true);
 }
 
-function wireOrderSpecs(node) {
+// Exported so Asset Focus can host the SAME selection — project, month,
+// feature, Read folder — rather than a second implementation of it that
+// drifts. It is the whole Order Specs front end, and it assumes only that
+// the node carries `project_path`, `month` and `feature` widgets.
+export function wireOrderSpecs(node) {
     node._symEvents = [];
     // Parsing on demand, the way `_symRefreshMonths` exposes the month parse.
     // A panel downstream that needs the event list has no other way to ask for

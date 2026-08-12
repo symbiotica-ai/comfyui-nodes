@@ -245,7 +245,7 @@ test("the category widget narrows the published list too", async () => {
 test("with nothing wired it says what to wire", async () => {
     const node = await focusNode({}, []);
     const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /wire an Order Specs/);
+    assert.match(text, /set project_path/);
 });
 
 test("what a run reported wins over what was published", async () => {
@@ -584,4 +584,73 @@ test("the canvas survives a run reporting only names", async () => {
     node._symRenderFocus();
     for (let i = 0; i < 5; i++) await tick();
     assert.equal(rowName(rows(node)[0]), "Bunting · 128×256");
+});
+
+// --- one node does the whole selection --------------------------------------
+
+test("asset is a dropdown of what the narrowing holds", async () => {
+    // "make asset a dropdown, it doesnt make sense to be text input field".
+    const node = await focusNode();
+    const w = widgetOf(node, "asset");
+    assert.equal(w.type, "combo");
+    assert.deepEqual(w.options.values(),
+                     ["All assets", "Frankencrisps", "Frankenstein Pops",
+                      "Bunting"]);
+});
+
+test("the asset dropdown follows the category", async () => {
+    const node = await focusNode({ category: "Decoration" });
+    assert.deepEqual(widgetOf(node, "asset").options.values(),
+                     ["All assets", "Bunting"]);
+});
+
+test("the All-assets sentinel reaches the node as an empty string", async () => {
+    // A combo cannot offer an empty label, and the node reads "" as "every
+    // asset in the narrowing".
+    const node = await focusNode();
+    const w = widgetOf(node, "asset");
+    assert.equal(w.value, "All assets");
+    assert.equal(w.serializeValue(), "");
+});
+
+test("choosing All assets clears the pick rather than naming it", async () => {
+    const node = await focusNode({ asset: "Bunting" });
+    const w = widgetOf(node, "asset");
+    w.value = "All assets";
+    w.callback("All assets");
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(w.serializeValue(), "");
+    // Every asset is listed again, none drawn as chosen.
+    assert.equal(rows(node).length, 3);
+    assert.ok(rows(node).every((r) => /opacity:\.75/.test(r.style.cssText)));
+});
+
+test("the selection widgets sit above the ones that narrow it", async () => {
+    // The schema appends project/month/feature (saved graphs restore by
+    // position); on screen the order has to read top-down.
+    const node = await focusNode();
+    const names = node.widgets.map((w) => w.name);
+    for (const name of ["project_path", "month", "feature"]) {
+        assert.ok(names.indexOf(name) < names.indexOf("category"),
+                  `${name} should precede category`);
+    }
+});
+
+test("it lists its own parse when no order is wired", async () => {
+    // The node hosts the same project/month/feature front end, so with nothing
+    // upstream it reads the order itself.
+    reset();
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "",
+                                project_path: "/p", month: "October",
+                                feature: "Mini 3" });
+    await node.onNodeCreated?.call(node);
+    // Seed AFTER its own startup refresh: that refresh publishes an empty
+    // event list when there is no readable project, and it lands late.
+    for (let i = 0; i < 5; i++) await tick();
+    node._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Bunting", category: "Decoration" }] }];
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(names(node), ["Bunting"]);
 });

@@ -25,6 +25,17 @@ observation goes in one line, once, or not at all.
 Never restart his ComfyUI yourself without asking first — the AskUserQuestion
 button, every time, however urgent it feels.
 
+**Never launch Chrome.** Not headless, not through a script, not through the
+old `.cs/local/browser` harness. He has disabled browser automation outside the
+Browser pane on purpose, and going around it with a node script is not a
+loophole. Verify in the pane: `preview_start {url: "http://127.0.0.1:8000"}`,
+then `javascript_tool` against `window.app` and `computer` for screenshots.
+
+His ComfyUI is **Comfy Desktop**, an Electron app, even though it serves the
+same `127.0.0.1:8000` the pane reaches. Verifying in the pane does not prove
+what his window shows — its renderer caches the frontend across in-app reloads.
+Say which one you checked.
+
 ## MANDATORY: load the ComfyUI skill for your task before writing code
 
 This repo vendors the ComfyUI dev skills in `.claude/skills/`. Before creating

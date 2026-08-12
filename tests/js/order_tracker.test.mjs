@@ -21,7 +21,9 @@ async function trackerNode(board = BOARD) {
     const node = await create("SymbioticaOrderTracker",
                               { order: null, category: "", names: "_final" });
     await node.onNodeCreated?.call(node);
-    if (board) node._symBoard = board;
+    // Deep copy: rejecting mutates the board it was handed, and the
+    // fixture is shared by every test in this file.
+    if (board) node._symBoard = JSON.parse(JSON.stringify(board));
     node._symRenderTracker?.();
     for (let i = 0; i < 5; i++) await tick();
     return node;
@@ -194,4 +196,68 @@ test("the panel does not pin the node's height", async () => {
 
 test("the extension registered", () => {
     assert.ok(app.extensions.some((e) => e.name === "symbiotica.order_tracker"));
+});
+
+// --- reject -----------------------------------------------------------------
+import { setResponder } from "./comfy_stub.mjs";
+
+const rejectOf = (tile) => tile.children[0].children[1];
+
+test("a filled slot carries a reject button, an empty one does not", async () => {
+    const node = await trackerNode();
+    assert.ok(rejectOf(tiles(node)[0]));
+    assert.equal(tiles(node)[1].children[0].children.length, 0);
+});
+
+test("it is hidden until the slot is hovered", async () => {
+    // Nine ✕ buttons on a full board is a wall of controls over the work.
+    const node = await trackerNode();
+    assert.equal(rejectOf(tiles(node)[0]).style.display, "none");
+    fire(tiles(node)[0], "mouseenter");
+    assert.equal(rejectOf(tiles(node)[0]).style.display, "block");
+});
+
+test("the first click arms, it does not reject", async () => {
+    const seen = [];
+    setResponder((route, _n, init) => {
+        seen.push({ route, init });
+        return { ok: true, body: { ok: true, moved: ["x.png"] } };
+    });
+    const node = await trackerNode();
+    fire(rejectOf(tiles(node)[0]), "click", { stopPropagation() {} });
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(seen.length, 0);
+    assert.equal(rejectOf(tiles(node)[0]).textContent, "✕?");
+});
+
+test("the second click moves the approval and empties the slot", async () => {
+    const seen = [];
+    setResponder((route, _n, init) => {
+        seen.push({ route, init });
+        return { ok: true, body: { ok: true, moved: ["x.png"] } };
+    });
+    const node = await trackerNode();
+    const button = rejectOf(tiles(node)[0]);
+    fire(button, "click", { stopPropagation() {} });
+    fire(button, "click", { stopPropagation() {} });
+    for (let i = 0; i < 10; i++) await tick();
+    assert.equal(seen.length, 1);
+    assert.match(seen[0].route, /tracker-reject/);
+    assert.equal(JSON.parse(seen[0].init.body).path,
+                 "/out/Bat Brew/_final_from._base_00007__00001_.png");
+    // The board is a reading of disk, and disk just changed.
+    assert.equal(tiles(node)[0].children[0].children.length, 0);
+    assert.match(listOf(node).children[0].textContent, /0\/3 done/);
+});
+
+test("a refused reject leaves the slot filled", async () => {
+    setResponder(() => ({ ok: false, status: 403,
+                          body: { error: "not inside a folder this install serves" } }));
+    const node = await trackerNode();
+    const button = rejectOf(tiles(node)[0]);
+    fire(button, "click", { stopPropagation() {} });
+    fire(button, "click", { stopPropagation() {} });
+    for (let i = 0; i < 10; i++) await tick();
+    assert.equal(tiles(node)[0].children[0].children.length, 2);
+    assert.match(listOf(node).children[0].textContent, /1\/3 done/);
 });

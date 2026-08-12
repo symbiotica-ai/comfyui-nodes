@@ -601,3 +601,47 @@ test("one frame is reused, however many tiles are hovered", async () => {
     assert.equal(frames().length, 1);
 });
 
+
+// --- nothing paints outside the node ----------------------------------------
+// A flex row whose content is wider than the node resolves its width against a
+// shrink-to-fit parent and paints over the canvas behind it. This has now been
+// fixed in three panels; the test is here so it stops coming back.
+
+const CONTAINED = [/width:100%/, /box-sizing:border-box/, /overflow:hidden/];
+
+test("the panel and every band across it stay inside the node", async () => {
+    const node = await panelNode([], [ONE, TWO, THREE]);
+    const list = listOf(node);
+    const bands = [list, ...list.children];          // sticky header, grid rows
+    for (const band of bands) {
+        for (const rule of CONTAINED) {
+            assert.match(band.style.cssText, rule);
+        }
+    }
+});
+
+test("the header row wraps rather than pushing the node wide", async () => {
+    // Its content is a count, a chip, three size buttons, a reload and two
+    // more — more than fits a narrow picker.
+    const node = await panelNode([], [ONE], { selection: JSON.stringify([ONE.name]) });
+    const head = listOf(node).children[0].children[0];
+    assert.match(head.style.cssText, /flex-wrap:wrap/);
+    for (const rule of CONTAINED) assert.match(head.style.cssText, rule);
+});
+
+test("the batch bar is contained too", async () => {
+    const node = await panelNode([], [ONE, TWO]);
+    // Tick a tile's checkbox to summon the bar.
+    const cells = walk(listOf(node)).filter((e) => e.className === "sym-pick-cell");
+    const box = walk(cells[0]).find((e) => e.type === "checkbox");
+    if (box) {
+        box.checked = true;
+        fire(box, "change", { target: box });
+        for (let i = 0; i < 5; i++) await tick();
+    }
+    const bars = walk(listOf(node)).filter(
+        (e) => /border-top/.test(e.style?.cssText ?? ""));
+    for (const bar of bars) {
+        for (const rule of CONTAINED) assert.match(bar.style.cssText, rule);
+    }
+});

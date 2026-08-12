@@ -139,14 +139,18 @@ class TestSchema:
         exactly once, so choosing an asset still leaves nothing to index —
         while choosing none can fan out over the whole event."""
         schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
-        assert all(o.is_output_list for o in schema.outputs)
+        # `event_order` excepted: it is the event, not a per-asset value, so
+        # fanning it out would run everything downstream once per asset.
+        assert all(o.is_output_list for o in schema.outputs
+                   if o.display_name != "event_order")
 
     def test_the_order_output_replaced_index_on_the_tail_slot(self, nodes_mod):
         """`index` was wired nowhere in any live graph; the narrowed order
         takes its tail slot, so no earlier slot moved for saved graphs."""
         schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
         assert [o.display_name for o in schema.outputs] == [
-            "asset_name", "category", "client_prompt", "save_path", "order"]
+            "asset_name", "category", "client_prompt", "save_path", "order",
+            "event_order"]
 
     def test_it_is_registered(self, nodes_mod):
         assert nodes_mod.SymbioticaAssetFocus in nodes_mod.PIPELINE_NODE_CLASSES
@@ -203,3 +207,72 @@ class TestItCanBeQueuedOnItsOwn:
         wired downstream when it is first dropped — so without this there is no
         way to run it at all."""
         assert nodes_mod.SymbioticaAssetFocus.GET_SCHEMA().is_output_node is True
+
+
+class TestItMakesItsOwnOrder:
+    """"order specs and asset focus are 2 nodes that are doing one thing… i
+    select month and feature in specs and asset in asset focus. this doesn't
+    make any sense". So the whole selection lives here when nothing is wired
+    in."""
+
+    def test_project_and_month_read_an_order_without_a_wire(
+            self, nodes_mod, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(nodes_mod, "build_event_order",
+                            lambda p, m, f: seen.update(
+                                project=p, month=m, feature=f) or ORDER)
+        out = run(nodes_mod, order=None, project_path="/p", month="October",
+                  feature="Mini 3", asset="Bunting")
+        assert seen == {"project": "/p", "month": "October",
+                        "feature": "Mini 3"}
+        assert out.args[0] == ["Bunting"]
+
+    def test_a_wired_order_wins_over_the_widgets(self, nodes_mod, monkeypatch):
+        """The wire is the explicit statement; reading the folder again would
+        quietly ignore whatever produced it (a Reference Browser has no
+        project_path at all)."""
+        monkeypatch.setattr(nodes_mod, "build_event_order",
+                            lambda *a: (_ for _ in ()).throw(
+                                AssertionError("should not parse")))
+        out = run(nodes_mod, order=ORDER, project_path="/p", asset="Bunting")
+        assert out.args[0] == ["Bunting"]
+
+    def test_neither_says_what_to_do(self, nodes_mod):
+        with pytest.raises(ValueError, match="set project_path"):
+            run(nodes_mod, order=None)
+
+    def test_the_whole_event_comes_out_beside_the_focused_one(self, nodes_mod):
+        """The Auto Packer, Order Assets and the Tracker want the EVENT, and
+        they must not change every time he focuses a different asset."""
+        out = run(nodes_mod, order=ORDER, asset="Bunting")
+        assert out.args[5] is ORDER
+        assert len(out.args[4]) == 1        # `order`, narrowed to the asset
+
+    def test_the_event_is_not_a_list(self, nodes_mod):
+        out = run(nodes_mod, order=ORDER)
+        assert isinstance(out.args[5], dict)
+
+    def test_its_own_order_also_comes_out_whole(self, nodes_mod, monkeypatch):
+        monkeypatch.setattr(nodes_mod, "build_event_order",
+                            lambda p, m, f: ORDER)
+        out = run(nodes_mod, order=None, project_path="/p")
+        assert out.args[5] is ORDER
+
+
+class TestWhenItReReads:
+    def test_its_own_order_follows_the_order_file(self, nodes_mod, monkeypatch):
+        """Reading the folder itself means inheriting Order Specs' change
+        check — the .xlsx moves without the graph moving."""
+        monkeypatch.setattr(
+            nodes_mod.SymbioticaOrderSpecs, "fingerprint_inputs",
+            classmethod(lambda cls, project_path="", month="", feature="":
+                        f"specs:{project_path}:{month}:{feature}"))
+        assert nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(
+            project_path="/p", month="October", feature="Mini 3") \
+            == "specs:/p:October:Mini 3"
+
+    def test_a_wired_order_never_caches(self, nodes_mod):
+        """The panel's list is pushed by a run, and the wire upstream decides
+        when there is something new to say."""
+        answer = nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(order=ORDER)
+        assert answer != answer

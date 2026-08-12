@@ -16,6 +16,15 @@ const SLOT_PX = 72;
 // silhouette and a dark one disappears into it. Mid grey shows both.
 const SLOT_BACKING = "#808080";
 
+async function fetchJson(url, options) {
+    const res = await api.fetchApi(url, options);
+    if (!res.ok) {
+        throw new Error((await res.json().catch(() => ({})))?.error
+                        ?? res.statusText);
+    }
+    return res.json();
+}
+
 function trackerPanel(node) {
     injectHubStyles();
 
@@ -38,6 +47,54 @@ function trackerPanel(node) {
     const refit = () => requestAnimationFrame(() => {
         node.setDirtyCanvas?.(true, true);
     });
+
+    // Send one approved render back for another try. It MOVES the `_final`
+    // into `discarded/` under the same folder rather than deleting it — the
+    // same thing the picker's ✕ does, and for the same reason: several of
+    // these cost real money and the board exists to judge them.
+    //
+    // Two clicks: the first arms, the second does it. A single click on a
+    // tile-sized target is too easy to hit by accident, and this one empties a
+    // slot that took a render to fill.
+    function rejectButton(slot) {
+        let armed = false;
+        const button = el("button",
+            "position:absolute;top:2px;right:2px;padding:0 4px;line-height:14px;"
+            + `border:1px solid ${HUB.hairlineStrong};border-radius:3px;`
+            + `background:rgba(0,0,0,.55);color:${HUB.ink};cursor:pointer;`
+            + "font:10px " + HUB.font + ";", "✕");
+        button.style.display = "none";
+        button.title = "Reject — move this approval to discarded/";
+        const arm = () => {
+            armed = true;
+            button.textContent = "✕?";
+            button.style.background = HUB.danger;
+        };
+        button.addEventListener("pointerdown", (e) => e.stopPropagation());
+        button.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (!armed) { arm(); return; }
+            button.disabled = true;
+            try {
+                await fetchJson("/symbiotica/tracker-reject", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ path: slot.image }),
+                });
+                // The board is a reading of disk, and disk just changed —
+                // empty the slot here rather than make him re-queue to see it.
+                slot.image = null;
+                const board = node._symBoard;
+                if (board) board.done = board.slots.filter((s) => s.image).length;
+                render();
+            } catch (err) {
+                button.disabled = false;
+                button.title = err.message || "could not reject that";
+                button.style.background = HUB.danger;
+            }
+        });
+        return button;
+    }
 
     function slotTile(slot) {
         const cell = el("div", "display:flex;flex-direction:column;gap:3px;"
@@ -65,8 +122,19 @@ function trackerPanel(node) {
                 src: () => imageFullUrl(slot.image),
             }));
             frame.appendChild(img);
+            frame.style.position = "relative";
+            frame.appendChild(rejectButton(slot));
         }
         cell.appendChild(frame);
+        if (slot.image) {
+            // Shown on hover only: nine ✕ buttons on a full board is a wall of
+            // controls over the work they describe.
+            const reject = frame.children[1];
+            cell.addEventListener("mouseenter",
+                                  () => { reject.style.display = "block"; });
+            cell.addEventListener("mouseleave",
+                                  () => { reject.style.display = "none"; });
+        }
         const name = el("div",
             "width:100%;overflow:hidden;text-overflow:ellipsis;"
             + "white-space:nowrap;"
