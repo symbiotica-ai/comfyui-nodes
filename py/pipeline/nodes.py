@@ -4400,73 +4400,65 @@ class SymbioticaPick(io.ComfyNode):
 
 
 class SymbioticaPromptRecipe(io.ComfyNode):
-    # The book's fixed shape, one native widget per slot: the four shared
-    # rules in filename order, the image block, and the ACTIVE type's block.
-    # Native Int widgets on purpose — no panel, no route, no custom JS.
-    _SLOTS = ("game", "inputs", "your_job", "overwrite", "image_model",
-              "asset_type")
+    """A saved set of blocks, served on one wire each.
+
+    A category needs several prompts at once — the architect's, the image
+    model's, the mirror rewriter's — and swapping category meant editing every
+    one of them by hand. A recipe names those blocks together under one name,
+    so changing category is changing one widget.
+    """
+
+    # Outputs are fixed because a schema is; `slots` decides how many of them
+    # carry text. Six because the chain that motivated this is three, and a
+    # type that grows a fourth and fifth prompt must not need a release.
+    MAX_SLOTS = 6
 
     @classmethod
     def define_schema(cls) -> io.Schema:
-        def slot(name, what):
-            return io.Combo.Input(name, options=[1, 2, 3], default=1,
-                                  tooltip=f"Which version of {what} to "
-                                          "compose: 1 is the top of the "
-                                          "file; a block with fewer versions "
-                                          "falls back to its top.")
         return io.Schema(
             node_id="SymbioticaPromptRecipe",
             display_name="Symbiotica Prompt Recipe",
             category="symbiotica/pipeline",
-            description="Composes the architect and image prompts, picking "
-                        "one version per block. Versions live inside each "
-                        "block file, split by `<!-- version: name -->` lines: "
-                        "top of the file is 1, the next marker 2, then 3. "
-                        "All widgets at 1 = the book exactly as it stands.",
+            description="Serves a saved recipe: one prompt block per output, "
+                        "picked in the panel and stored under "
+                        "`prompts/_recipes/<name>.json`. Switching recipe "
+                        "switches every prompt the category needs at once.",
             inputs=[
+                io.String.Input("recipe", default="",
+                                tooltip="The saved preset to serve. Pick it "
+                                        "in the panel — the panel writes this "
+                                        "widget, and it is what survives a "
+                                        "workflow reload."),
+                io.Int.Input("slots", default=3, min=1, max=cls.MAX_SLOTS,
+                             tooltip="How many blocks this recipe serves. "
+                                     "Outputs past it come back empty."),
                 io.String.Input("project_path", default="",
                                 tooltip="Client project folder holding the "
                                         "prompt book. Unneeded when `order` "
-                                        "is wired; otherwise wire the Prompt "
-                                        "Book's `project_path` output."),
-                io.String.Input("category", default="",
-                                tooltip="The asset type to compose. Unneeded "
-                                        "when `order` is wired to a focused "
-                                        "order. `asset_type` picks the "
-                                        "version of THIS type's block."),
-                slot("game", "the 1st rules block (01-game)"),
-                slot("inputs", "the 2nd rules block (02-inputs)"),
-                slot("your_job", "the 3rd rules block (03-your-job)"),
-                slot("overwrite", "the 4th rules block (04-overwrite)"),
-                slot("image_model", "the image-model block (_image)"),
-                slot("asset_type", "the wired category's own block"),
-                # Appended: widgets restore positionally in saved graphs.
+                                        "is wired."),
                 Order.Input("order", optional=True,
-                            tooltip="Asset Focus's `order` output. A focused "
-                                    "order carries the project AND the "
-                                    "asset's type, so project_path and "
-                                    "category can stay unwired."),
+                            tooltip="Any order from the pipeline — it carries "
+                                    "the project, so project_path can stay "
+                                    "empty."),
             ],
             outputs=[
-                io.String.Output(display_name="system_prompt",
-                                 tooltip="The composed architect prompt for "
-                                         "this type at the picked versions."),
-                io.String.Output(display_name="image_prompt",
-                                 tooltip="The image model's system prompt at "
-                                         "the picked versions."),
+                io.String.Output(display_name=f"text_{i}",
+                                 tooltip=f"Slot {i} of the recipe, or empty "
+                                         "when the recipe has no such slot.")
+                for i in range(1, cls.MAX_SLOTS + 1)
             ],
         )
 
     @classmethod
-    def fingerprint_inputs(cls, project_path="", category="", game=1,
-                           inputs=1, your_job=1, overwrite=1,
-                           image_model=1, asset_type=1, order=None):
-        # Same contract as Prompt Compose: widgets plus the book's file
-        # mtimes, never raise.
-        picks = (game, inputs, your_job, overwrite, image_model, asset_type)
+    def fingerprint_inputs(cls, recipe="", slots=3, project_path="",
+                           order=None):
+        # Widgets plus the book's file mtimes, and never raise: a raise becomes
+        # NaN, which re-bills every model under this node on each queue press.
+        one = SymbioticaCategoryPrompts._one
         h = hashlib.sha256(
-            f"recipe:{str(category or '').strip()}:{picks}".encode())
-        candidates = [str(project_path or "").strip()]
+            f"recipe:{str(one(recipe)).strip()}:{int(one(slots, 3) or 3)}"
+            .encode())
+        candidates = [str(one(project_path)).strip()]
         if not candidates[0]:
             candidates = _executed_projects()
         for project in candidates:
@@ -4477,7 +4469,8 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                 for where, dirs, files in os.walk(prompts_dir(project)):
                     dirs.sort()
                     for name in sorted(files):
-                        if not name.endswith(".md"):
+                        if not (name.endswith(".md")
+                                or name.endswith(".json")):
                             continue
                         p = os.path.join(where, name)
                         st = os.stat(p)
@@ -4489,53 +4482,41 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         return h.hexdigest()
 
     @classmethod
-    def execute(cls, project_path="", category="", game=1, inputs=1,
-                your_job=1, overwrite=1, image_model=1,
-                asset_type=1, order=None) -> io.NodeOutput:
-        from .prompt_book import (IMAGE_DIR, RULES_DIR, compose_recipe,
-                                  list_versions)
+    def execute(cls, recipe="", slots=3, project_path="",
+                order=None) -> io.NodeOutput:
+        from .prompt_book import pick_version, read_recipe
+        from .prompt_store import PromptPathError, read_block
+
         project = _prompt_node_project(project_path)
         if not project and isinstance(order, dict):
-            cand = str(order.get("project_path", "") or "").strip()
-            if cand and os.path.isdir(cand):
-                project = cand
+            project = str(order.get("project_path", "") or "").strip()
         if not project:
             raise ValueError(
-                "no project folder to read the prompt book from — wire "
-                "Asset Focus's `order` output, or the Prompt Book's "
-                "`project_path` output")
-        cat = str(category or "").strip()
-        if not cat and isinstance(order, dict):
-            # A focused order names each asset's type; several distinct types
-            # cannot compose ONE prompt, so that stays an error rather than a
-            # silent first-pick.
-            types = sorted({str(a.get("category", "") or "").strip()
-                            for a in order.get("assets", []) or []
-                            if str(a.get("category", "") or "").strip()})
-            if len(types) == 1:
-                cat = types[0]
-            elif len(types) > 1:
+                "no project folder to read the prompt book from — wire an "
+                "`order`, or set project_path")
+        name = str(recipe or "").strip()
+        if not name:
+            raise ValueError("no recipe picked — choose one in the panel, or "
+                             "save a new one")
+        picked = read_recipe(project, name)
+        if not picked:
+            raise ValueError(
+                f"recipe {name!r} names no blocks — it is missing from "
+                "prompts/_recipes/, or it was saved empty")
+        want = max(1, min(int(slots or 1), cls.MAX_SLOTS))
+        texts = []
+        for i in range(cls.MAX_SLOTS):
+            slot = picked[i] if i < len(picked) else None
+            if i >= want or not slot or not slot.get("block"):
+                texts.append("")
+                continue
+            try:
+                body = read_block(project, slot["block"])
+            except PromptPathError as exc:
                 raise ValueError(
-                    "category is unwired and this order holds several types "
-                    f"({', '.join(types)}) — wire Asset Focus's `order` "
-                    "with one asset focused, or wire category")
-        # Widgets map to blocks by position: rules in filename order carry the
-        # numeric prefixes, so slot order IS composition order.
-        versions = {b["name"]: b["versions"] for b in list_versions(project)}
-        rules = sorted(n for n in versions if n.startswith(f"{RULES_DIR}/"))
-        images = sorted(n for n in versions if n.startswith(f"{IMAGE_DIR}/"))
-        wanted = {}
-        for name, pick in (list(zip(rules, (game, inputs, your_job,
-                                            overwrite)))
-                           + [(n, image_model) for n in images]
-                           + ([(f"{cat}.md", asset_type)] if cat else [])):
-            names = versions.get(name, [])
-            pick = int(pick or 1)
-            if pick > 1 and pick <= len(names):
-                wanted[name] = names[pick - 1]
-        composed = compose_recipe(project, cat, wanted)
-        return io.NodeOutput(composed["system_prompt"],
-                             composed["image_prompt"])
+                    f"recipe {name!r} slot {i + 1}: {exc}") from exc
+            texts.append(pick_version(body, slot.get("version", "")))
+        return io.NodeOutput(*texts)
 
 
 class SymbioticaOrderTracker(io.ComfyNode):

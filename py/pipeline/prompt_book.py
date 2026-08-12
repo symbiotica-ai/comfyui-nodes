@@ -27,11 +27,69 @@ def prompts_dir(project_path):
 
 RULES_DIR = "_rules"
 IMAGE_DIR = "_image"
+FLIP_DIR = "_flip"
+RECIPES_DIR = "_recipes"
+
+# The folders a block may live in, in composition order. An allowlist rather
+# than "every underscore folder": the book also holds retired and backup
+# directories full of .md files, and those must never appear in a picker or
+# compose into a prompt. A new kind of block is a line here.
+BLOCK_DIRS = (RULES_DIR, IMAGE_DIR, FLIP_DIR)
 
 
 def rules_dir(project_path):
     """The game-wide rules every asset type is composed with."""
     return os.path.join(prompts_dir(project_path), RULES_DIR)
+
+
+def flip_dir(project_path):
+    """Blocks that are handed to a model on their own rather than composed —
+    the mirror rewriter is one. They are in the book so one panel edits every
+    prompt the pipeline uses, and out of `compose_*` because nothing composes
+    them."""
+    return os.path.join(prompts_dir(project_path), FLIP_DIR)
+
+
+def recipes_dir(project_path):
+    """Saved presets: one JSON file per recipe, naming the blocks it serves."""
+    return os.path.join(prompts_dir(project_path), RECIPES_DIR)
+
+
+def list_recipes(project_path):
+    """Recipe names on disk, sorted. Names, not bodies — the picker shows
+    these and one read follows the pick."""
+    try:
+        return sorted(n[:-5] for n in os.listdir(recipes_dir(project_path))
+                      if n.endswith(".json"))
+    except OSError:
+        return []
+
+
+def read_recipe(project_path, name):
+    """One recipe's slots, `[{"block": name, "version": name}]`.
+
+    An absent or unreadable recipe is an empty list, not an error: the node
+    holds the name of a preset that may not have been written yet, and a queue
+    must not die on a stale pick.
+    """
+    name = str(name or "").strip()
+    if not name:
+        return []
+    path = os.path.join(recipes_dir(project_path), f"{name}.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    slots = data.get("slots") if isinstance(data, dict) else data
+    out = []
+    for slot in slots or []:
+        if isinstance(slot, str):
+            out.append({"block": slot.strip(), "version": ""})
+        elif isinstance(slot, dict):
+            out.append({"block": str(slot.get("block", "") or "").strip(),
+                        "version": str(slot.get("version", "") or "").strip()})
+    return out
 
 
 def image_dir(project_path):
@@ -118,9 +176,10 @@ def list_versions(project_path):
     image, types. Names only: the Recipe panel pins by name, and the Block
     node is where a version's text is previewed."""
     out = []
-    for directory, prefix in ((rules_dir(project_path), f"{RULES_DIR}/"),
-                              (image_dir(project_path), f"{IMAGE_DIR}/"),
-                              (prompts_dir(project_path), "")):
+    folders = [(os.path.join(prompts_dir(project_path), d), f"{d}/")
+               for d in BLOCK_DIRS]
+    folders.append((prompts_dir(project_path), ""))
+    for directory, prefix in folders:
         try:
             names = sorted(n for n in os.listdir(directory)
                            if n.endswith(".md"))

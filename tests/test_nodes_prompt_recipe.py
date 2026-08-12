@@ -1,6 +1,7 @@
-# ABOUTME: Prompt Recipe — composes the two documents from the book at picked
-# ABOUTME: versions, and takes project + category off a focused order wire.
+# ABOUTME: Prompt Recipe — serves a saved preset, one prompt block per output,
+# ABOUTME: so switching category switches every prompt it needs at once.
 import importlib
+import json
 import os
 import sys
 import types
@@ -28,66 +29,80 @@ def nodes_mod(monkeypatch, tmp_path):
     sys.modules.pop("pipeline.nodes", None)
 
 
-def make_book(tmp_path):
+def make_book(tmp_path, slots=None, name="Decoration"):
     project = tmp_path / "project"
-    rules = project / "prompts" / "_rules"
-    image = project / "prompts" / "_image"
-    rules.mkdir(parents=True)
-    image.mkdir(parents=True)
-    (rules / "01-game.md").write_text("GAME RULES\n")
-    (rules / "02-inputs.md").write_text("INPUTS\n")
-    (image / "01-image-model.md").write_text("IMAGE RULES\n")
-    (project / "prompts" / "Decoration.md").write_text("DECO BLOCK\n")
+    book = project / "prompts"
+    (book / "_rules").mkdir(parents=True)
+    (book / "_image").mkdir(parents=True)
+    (book / "_flip").mkdir(parents=True)
+    (book / "_recipes").mkdir(parents=True)
+    (book / "_rules" / "01-llm-prompt.md").write_text(
+        "ARCHITECT\n\n<!-- version: tight -->\n\nARCHITECT TIGHT\n")
+    (book / "_image" / "01-image-model.md").write_text("IMAGE RULES\n")
+    (book / "_flip" / "01-flip.md").write_text("MIRROR RULES\n")
+    if slots is None:
+        slots = [{"block": "_rules/01-llm-prompt.md", "version": ""},
+                 {"block": "_image/01-image-model.md", "version": ""},
+                 {"block": "_flip/01-flip.md", "version": ""}]
+    (book / "_recipes" / f"{name}.json").write_text(
+        json.dumps({"slots": slots}))
     return project
 
 
-def test_composes_both_documents(nodes_mod, tmp_path):
+def test_one_recipe_serves_every_block_it_names(nodes_mod, tmp_path):
     project = make_book(tmp_path)
     out = nodes_mod.SymbioticaPromptRecipe.execute(
-        project_path=str(project), category="Decoration")
-    system_prompt, image_prompt = out.args
-    assert "GAME RULES" in system_prompt
-    assert system_prompt.rstrip().endswith("DECO BLOCK")
-    assert "IMAGE RULES" in image_prompt
+        project_path=str(project), recipe="Decoration", slots=3)
+    assert out.args[0].strip() == "ARCHITECT"
+    assert out.args[1].strip() == "IMAGE RULES"
+    assert out.args[2].strip() == "MIRROR RULES"
 
 
-def test_a_focused_order_supplies_project_and_category(nodes_mod, tmp_path):
-    """One wire from Asset Focus replaces the project_path and category
-    wires: the narrowed order names both."""
+def test_outputs_past_the_slot_count_are_empty(nodes_mod, tmp_path):
+    """The schema is fixed at six; `slots` is what says how many of them this
+    recipe actually fills, so a two-prompt type leaves four empty wires."""
+    project = make_book(tmp_path)
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        project_path=str(project), recipe="Decoration", slots=2)
+    assert out.args[1].strip() == "IMAGE RULES"
+    assert out.args[2] == ""
+    assert len(out.args) == nodes_mod.SymbioticaPromptRecipe.MAX_SLOTS
+
+
+def test_a_slot_can_pin_a_version(nodes_mod, tmp_path):
+    project = make_book(tmp_path, slots=[
+        {"block": "_rules/01-llm-prompt.md", "version": "tight"}])
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        project_path=str(project), recipe="Decoration", slots=1)
+    assert out.args[0].strip() == "ARCHITECT TIGHT"
+
+
+def test_the_order_wire_supplies_the_project(nodes_mod, tmp_path):
     project = make_book(tmp_path)
     order = {"project_path": str(project),
              "assets": [{"assetName": "Bunting", "category": "Decoration"}]}
-    out = nodes_mod.SymbioticaPromptRecipe.execute(order=order)
-    system_prompt, _image = out.args
-    assert system_prompt.rstrip().endswith("DECO BLOCK")
+    out = nodes_mod.SymbioticaPromptRecipe.execute(order=order,
+                                                   recipe="Decoration")
+    assert out.args[0].strip() == "ARCHITECT"
 
 
-def test_an_order_with_several_types_is_refused(nodes_mod, tmp_path):
-    """One prompt composes ONE type; picking a type silently would compose
-    the wrong book for half the assets."""
+def test_no_recipe_picked_is_refused(nodes_mod, tmp_path):
+    """Serving nothing silently would send an empty system prompt to a model
+    that then bills for a useless render."""
     project = make_book(tmp_path)
-    order = {"project_path": str(project),
-             "assets": [{"assetName": "A", "category": "Decoration"},
-                        {"assetName": "B", "category": "Food - 3 stages"}]}
-    with pytest.raises(ValueError, match="several types"):
-        nodes_mod.SymbioticaPromptRecipe.execute(order=order)
+    with pytest.raises(ValueError, match="no recipe picked"):
+        nodes_mod.SymbioticaPromptRecipe.execute(project_path=str(project))
 
 
-def test_wired_widgets_still_beat_the_order(nodes_mod, tmp_path):
-    """Explicit wins: a typed category composes that type even when the
-    order names another."""
+def test_a_recipe_that_is_not_on_disk_is_refused(nodes_mod, tmp_path):
     project = make_book(tmp_path)
-    (tmp_path / "project" / "prompts" / "Food - 3 stages.md").write_text(
-        "FOOD BLOCK\n")
-    order = {"project_path": str(project),
-             "assets": [{"assetName": "A", "category": "Decoration"}]}
-    out = nodes_mod.SymbioticaPromptRecipe.execute(
-        order=order, category="Food - 3 stages")
-    assert out.args[0].rstrip().endswith("FOOD BLOCK")
+    with pytest.raises(ValueError, match="names no blocks"):
+        nodes_mod.SymbioticaPromptRecipe.execute(
+            project_path=str(project), recipe="Nope")
 
 
 def test_the_order_input_is_appended_and_optional(nodes_mod):
-    """Widgets restore positionally in saved graphs, so the new input goes
+    """Widgets restore positionally in saved graphs, so the order input stays
     on the end; and a Recipe with no order must keep working from widgets."""
     schema = nodes_mod.SymbioticaPromptRecipe.GET_SCHEMA()
     assert schema.inputs[-1].id == "order"

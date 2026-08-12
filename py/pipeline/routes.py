@@ -18,8 +18,8 @@ from .order_sheet import slugify
 from .paths import parse_roots, resolve_within
 from .prompt_book import (MissingPromptsError, compose_detail, list_versions,
                           parse_recipe)
-from .prompt_store import (PromptPathError, list_book, read_block,
-                           write_block)
+from .prompt_store import (PromptPathError, delete_recipe, list_book,
+                           read_block, recipes, write_block, write_recipe)
 from .pack_library import (
     KINDS,
     delete_pack_template_dirs,
@@ -708,6 +708,48 @@ async def prompt_versions(request):
     if not project:
         return web.json_response({"error": "project required"}, status=400)
     return web.json_response({"ok": True, "blocks": list_versions(project)})
+
+
+@PromptServer.instance.routes.get("/symbiotica/recipe-list")
+async def recipe_list(request):
+    """Every saved recipe with its slots — one request fills the panel's
+    picker AND its dropdowns, because a picker that needs a read per entry
+    flickers through the whole list on open."""
+    project = _expand_project(request.query.get("project", ""))
+    if not project:
+        return web.json_response({"error": "project required"}, status=400)
+    return web.json_response({"ok": True, "recipes": recipes(project)})
+
+
+@PromptServer.instance.routes.post("/symbiotica/recipe-write")
+async def recipe_write(request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    project = _expand_project(str(body.get("project") or ""))
+    try:
+        saved = write_recipe(project, str(body.get("name") or ""),
+                             body.get("slots") or [])
+    except PromptPathError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except OSError as exc:
+        return web.json_response({"error": f"cannot save: {exc}"}, status=500)
+    return web.json_response({"ok": True, **saved})
+
+
+@PromptServer.instance.routes.post("/symbiotica/recipe-delete")
+async def recipe_delete(request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    project = _expand_project(str(body.get("project") or ""))
+    try:
+        gone = delete_recipe(project, str(body.get("name") or ""))
+    except PromptPathError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response({"ok": True, **gone})
 
 
 @PromptServer.instance.routes.post("/symbiotica/prompt-write")

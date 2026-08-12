@@ -130,3 +130,59 @@ def test_backups_are_not_listed_as_blocks(tmp_path):
     write_block(p, "Chair.md", "EDITED")
     (tmp_path / "prompts" / "Chair.md.before-split").write_text("OLD")
     assert [e["name"] for e in list_book(p)["types"]] == ["Chair.md"]
+
+
+class TestRecipes:
+    """A recipe is a saved set of blocks — the preset that turns "change three
+    prompts" into "change one widget"."""
+
+    def test_a_saved_recipe_comes_back_with_its_slots(self, tmp_path):
+        from pipeline.prompt_store import recipes, write_recipe
+        book = tmp_path / "prompts"
+        (book / "_rules").mkdir(parents=True)
+        (book / "_flip").mkdir(parents=True)
+        (book / "_rules" / "01-llm-prompt.md").write_text("A\n")
+        (book / "_flip" / "01-flip.md").write_text("B\n")
+        write_recipe(str(tmp_path), "Decoration", [
+            {"block": "_rules/01-llm-prompt.md", "version": ""},
+            {"block": "_flip/01-flip.md", "version": "tight"}])
+        saved = recipes(str(tmp_path))
+        assert [r["name"] for r in saved] == ["Decoration"]
+        assert saved[0]["slots"] == [
+            {"block": "_rules/01-llm-prompt.md", "version": ""},
+            {"block": "_flip/01-flip.md", "version": "tight"}]
+
+    def test_a_recipe_cannot_name_a_file_outside_the_book(self, tmp_path):
+        """A recipe the reader trusts is a file-read primitive if it can point
+        anywhere on disk."""
+        from pipeline.prompt_store import PromptPathError, write_recipe
+        (tmp_path / "prompts").mkdir()
+        with pytest.raises(PromptPathError):
+            write_recipe(str(tmp_path), "Bad",
+                         [{"block": "../../../etc/passwd.md"}])
+
+    def test_a_recipe_name_is_a_name_not_a_path(self, tmp_path):
+        from pipeline.prompt_store import PromptPathError, write_recipe
+        (tmp_path / "prompts").mkdir()
+        with pytest.raises(PromptPathError):
+            write_recipe(str(tmp_path), "../escape", [])
+
+    def test_deleting_a_recipe_leaves_its_blocks(self, tmp_path):
+        from pipeline.prompt_store import (delete_recipe, recipes,
+                                           write_recipe)
+        book = tmp_path / "prompts"
+        (book / "_rules").mkdir(parents=True)
+        (book / "_rules" / "01-llm-prompt.md").write_text("A\n")
+        write_recipe(str(tmp_path), "Gone",
+                     [{"block": "_rules/01-llm-prompt.md"}])
+        assert delete_recipe(str(tmp_path), "Gone")["removed"] is True
+        assert recipes(str(tmp_path)) == []
+        assert (book / "_rules" / "01-llm-prompt.md").exists()
+
+    def test_a_flip_block_is_editable(self, tmp_path):
+        """`_flip` holds prompts nothing composes — they still have to be
+        readable and writable by the same panel."""
+        from pipeline.prompt_store import read_block, write_block
+        (tmp_path / "prompts" / "_flip").mkdir(parents=True)
+        write_block(str(tmp_path), "_flip/01-flip.md", "MIRROR\n")
+        assert read_block(str(tmp_path), "_flip/01-flip.md") == "MIRROR\n"
