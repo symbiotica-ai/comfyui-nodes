@@ -48,12 +48,26 @@ test("a colour token is a variable with the dark value as its fallback", () => {
     assert.equal(HUB.radius.md, "8px");
 });
 
-test("ComfyUI's light canvas selects the light set", () => {
+test("a widget token takes its value from ComfyUI's own variable", () => {
+    // A field in one of our panels has to look like a field in any other node,
+    // so the fill, the text and the border come from ComfyUI, not from us.
     withDocument("#DDD", (styles) => {
         injectHubStyles();
         const css = paletteText(styles);
-        assert.match(css, /--sym-surface1:#ffffff;/);
-        assert.match(css, new RegExp(`--sym-ink:${HUB_PALETTES.light.ink};`));
+        assert.match(css, /--sym-surface1:var\(--comfy-input-bg, /);
+        assert.match(css, /--sym-ink:var\(--input-text, /);
+        assert.match(css, /--sym-hairline:var\(--border-color, /);
+        // The brand tokens are ours — ComfyUI has no opinion about them.
+        assert.match(css, new RegExp(`--sym-accent:${HUB_PALETTES.light.accent};`));
+    });
+});
+
+test("ComfyUI's light canvas selects the light fallbacks", () => {
+    withDocument("#DDD", (styles) => {
+        injectHubStyles();
+        const css = paletteText(styles);
+        assert.match(css, /--sym-surface1:var\(--comfy-input-bg, #ffffff\);/);
+        assert.match(css, new RegExp(`--sym-ink:var\\(--input-text, ${HUB_PALETTES.light.ink}\\);`));
     });
 });
 
@@ -61,15 +75,17 @@ test("ComfyUI's dark canvas keeps the hub's own set", () => {
     withDocument("#202020", (styles) => {
         injectHubStyles();
         const css = paletteText(styles);
-        assert.match(css, new RegExp(`--sym-surface1:${HUB_PALETTES.dark.surface1};`));
-        assert.match(css, new RegExp(`--sym-ink:${HUB_PALETTES.dark.ink};`));
+        assert.match(css,
+            new RegExp(`--sym-surface1:var\\(--comfy-input-bg, ${HUB_PALETTES.dark.surface1}\\);`));
+        assert.match(css,
+            new RegExp(`--sym-ink:var\\(--input-text, ${HUB_PALETTES.dark.ink}\\);`));
     });
 });
 
 test("an rgb() canvas colour is read as well as a hex one", () => {
     withDocument("rgb(240, 240, 240)", (styles) => {
         injectHubStyles();
-        assert.match(paletteText(styles), /--sym-surface1:#ffffff;/);
+        assert.match(paletteText(styles), /--sym-surface1:var\(--comfy-input-bg, #ffffff\);/);
     });
 });
 

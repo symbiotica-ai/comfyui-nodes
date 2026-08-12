@@ -46,8 +46,27 @@ export const HUB = {
 // a computed contrast) rather than a variable reference.
 export const HUB_PALETTES = { dark: DARK, light: LIGHT };
 
+// The tokens ComfyUI already has an answer for, mapped onto its own variables.
+// A widget in one of our panels should look like a widget in any other node —
+// same fill, same text, same border — and the only way that holds through a
+// palette change, a user theme or a future ComfyUI restyle is to take the value
+// from ComfyUI rather than to publish a second opinion about it. The sets above
+// stay as the fallback for an install that does not define one.
+const COMFY_VARS = {
+    ink: "--input-text",
+    inkSubtle: "--descrip-text",
+    inkTertiary: "--drag-text",
+    surface1: "--comfy-input-bg",        // the widget fill — the grey pill
+    surface2: "--comfy-menu-secondary-bg",
+    rowHover: "--comfy-menu-bg",
+    hairline: "--border-color",
+    hairlineStrong: "--border-color",
+};
+
 const asDeclarations = (set) => Object.entries(set)
-    .map(([k, v]) => `--sym-${k}:${v};`).join("");
+    .map(([k, v]) => `--sym-${k}:`
+        + (COMFY_VARS[k] ? `var(${COMFY_VARS[k]}, ${v})` : v) + ";")
+    .join("");
 
 // ComfyUI does not announce its palette, so read it off the canvas: every theme
 // sets --bg-color, and its luminance is the one thing a light theme and a dark
