@@ -31,8 +31,10 @@ async function trackerNode(board = BOARD) {
 
 const listOf = (node) =>
     node.widgets.find((w) => w.name === "tracker_panel").element.children[0];
-// header, bar, then a (category header, grid) pair per category.
-const body = (node) => [...listOf(node).children].slice(2);
+// [0] is the sticky head (count + bar); then a (category header, grid) pair
+// per category.
+const headOf = (node) => listOf(node).children[0];
+const body = (node) => [...listOf(node).children].slice(1);
 const grids = (node) => body(node).filter((_, i) => i % 2 === 1);
 const gridOf = (node) => grids(node)[0];
 const groupHeaders = (node) =>
@@ -121,12 +123,12 @@ test("an asset with no category still gets a group", async () => {
 
 test("the header counts what is done", async () => {
     const node = await trackerNode();
-    assert.match(listOf(node).children[0].textContent, /1\/3 done · 33%/);
+    assert.match(headOf(node).children[0].textContent, /1\/3 done · 33%/);
 });
 
 test("the bar is as wide as the work that is finished", async () => {
     const node = await trackerNode();
-    const fill = listOf(node).children[1].children[0];
+    const fill = headOf(node).children[1].children[0];
     assert.match(fill.style.cssText, /width:33%/);
 });
 
@@ -135,8 +137,8 @@ test("an untouched order reads 0%", async () => {
         ...BOARD, done: 0,
         slots: BOARD.slots.map((s) => ({ ...s, image: null })),
     });
-    assert.match(listOf(node).children[0].textContent, /0\/3 done · 0%/);
-    assert.match(listOf(node).children[1].children[0].style.cssText, /width:0%/);
+    assert.match(headOf(node).children[0].textContent, /0\/3 done · 0%/);
+    assert.match(headOf(node).children[1].children[0].style.cssText, /width:0%/);
 });
 
 test("a finished order reads 100%", async () => {
@@ -144,7 +146,7 @@ test("a finished order reads 100%", async () => {
         ...BOARD, done: 3,
         slots: BOARD.slots.map((s) => ({ ...s, image: "/out/x.png" })),
     });
-    assert.match(listOf(node).children[0].textContent, /3\/3 done · 100%/);
+    assert.match(headOf(node).children[0].textContent, /3\/3 done · 100%/);
 });
 
 test("with nothing wired it says what to wire", async () => {
@@ -178,7 +180,7 @@ test("re-wiring the order drops the board it produced", async () => {
 
 test("nothing in the panel is allowed to paint outside the node", async () => {
     const node = await trackerNode();
-    for (const box of [listOf(node), listOf(node).children[0], gridOf(node)]) {
+    for (const box of [listOf(node), headOf(node), gridOf(node)]) {
         assert.match(box.style.cssText, /width:100%/);
         assert.match(box.style.cssText, /box-sizing:border-box/);
         assert.match(box.style.cssText, /overflow:hidden/);
@@ -247,7 +249,7 @@ test("the second click moves the approval and empties the slot", async () => {
                  "/out/Bat Brew/_final_from._base_00007__00001_.png");
     // The board is a reading of disk, and disk just changed.
     assert.equal(tiles(node)[0].children[0].children.length, 0);
-    assert.match(listOf(node).children[0].textContent, /0\/3 done/);
+    assert.match(headOf(node).children[0].textContent, /0\/3 done/);
 });
 
 test("a refused reject leaves the slot filled", async () => {
@@ -259,5 +261,29 @@ test("a refused reject leaves the slot filled", async () => {
     fire(button, "click", { stopPropagation() {} });
     for (let i = 0; i < 10; i++) await tick();
     assert.equal(tiles(node)[0].children[0].children.length, 2);
-    assert.match(listOf(node).children[0].textContent, /1\/3 done/);
+    assert.match(headOf(node).children[0].textContent, /1\/3 done/);
+});
+
+test("the panel's wrapper is pinned to the node width", async () => {
+    const node = await trackerNode();
+    const container = node.widgets.find((w) => w.name === "tracker_panel").element;
+    const wrap = { style: { width: "900px" } };
+    container.parent = wrap;
+    node.size[0] = 400;
+    node.onResize();
+    assert.equal(wrap.style.width, "380px");
+});
+
+test("the count and bar stay put while the slots scroll", async () => {
+    // "progress bar should be visible all the time, when i scroll it get
+    // hidden" — it answers "how far in am I", which you are still asking on
+    // the fortieth asset.
+    const node = await trackerNode();
+    const head = headOf(node);
+    assert.match(head.style.cssText, /position:sticky/);
+    assert.match(head.style.cssText, /top:0/);
+    // Opaque, or the tiles read through it as they pass under.
+    assert.match(head.style.cssText, /background:/);
+    // The bar is inside the sticky block, not left behind in the scroll.
+    assert.match(head.children[1].children[0].style.cssText, /width:33%/);
 });

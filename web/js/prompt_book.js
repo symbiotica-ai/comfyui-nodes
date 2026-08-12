@@ -4,6 +4,7 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { resolveProjectPath } from "./order_pipeline.js";
+import { pinPanelWidth } from "./browser_chrome.js";
 
 const BOOK = "SymbioticaPromptBook";
 const BLOCK = "SymbioticaPromptBlock";
@@ -191,6 +192,10 @@ function panelChrome(node, widgetName, { save = true } = {}) {
         serialize: false, hideOnZoom: true,
         getMinHeight: () => 60,
     });
+    // The wrapper ComfyUI sizes for this widget lags a SHRINK, so pin it or the
+    // editor paints over the canvas beside a narrowed node.
+    const syncPanelWidth = pinPanelWidth(node, container);
+    requestAnimationFrame(syncPanelWidth);
     // The first draw measures last_y; redraw once so the height computed from
     // the fallback is corrected before the user notices it.
     requestAnimationFrame(() => node.setDirtyCanvas?.(true, true));

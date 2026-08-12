@@ -1279,10 +1279,14 @@ class SymbioticaAssetFocus(io.ComfyNode):
     def fingerprint_inputs(cls, order=None, category="", asset="",
                            project_path="", month="", feature=""):
         """When this node makes its own order it inherits Order Specs' change
-        check — the order file and the references folder move without the
-        graph moving. With one wired in, the wire already carries that."""
+        check — the order file and the references folder move without the graph
+        moving. With one WIRED IN, the wire already carries that, and the
+        answer must be STABLE: NaN here marks the node permanently dirty, and
+        because its outputs feed the string joins and the render lane, every
+        queue re-ran the whole graph even with the seed untouched."""
         if not str(project_path or "").strip():
-            return float("nan")
+            return hashlib.sha256(
+                f"{category}|{asset}".encode()).hexdigest()
         return SymbioticaOrderSpecs.fingerprint_inputs(
             project_path=project_path, month=month, feature=feature)
 
@@ -4144,18 +4148,30 @@ class SymbioticaPick(io.ComfyNode):
         stamp = [target, sorted(only) if only is not None else None,
                  sorted(derived) if derived is not None else None,
                  picked_one, str(one(stage, "")), ticks, edit_ticks]
+        def stamp_of(path):
+            """A file that cannot be statted is stamped as ABSENT rather than
+            answering NaN for the whole node. A tick naming a file that is no
+            longer in the folder is ordinary — the panel says "1 missing" and
+            carries on — and NaN would mark this node permanently dirty, which
+            re-runs everything downstream of `picked` on every queue."""
+            try:
+                st = os.stat(path)
+                return [path, st.st_mtime_ns, st.st_size]
+            except OSError:
+                return [path, None, None]
+
         try:
             listing = listing_for(target, only=only, derived_from=derived)
             paths = picked_paths(listing, ticks)
             for path in paths[:1] if picked_one else paths:
-                st = os.stat(path)
-                stamp.append([path, st.st_mtime_ns, st.st_size])
+                stamp.append(stamp_of(path))
             # The edit set is an emission too: a file re-rendered under a
             # marked name must reach the edit lane the next queue.
             for path in picked_paths(listing, edit_ticks):
-                st = os.stat(path)
-                stamp.append([path, st.st_mtime_ns, st.st_size])
+                stamp.append(stamp_of(path))
         except OSError:
+            # The FOLDER is unreadable, which is a different thing: nothing can
+            # be said about what would leave the node.
             return float("nan")
         return json.dumps(stamp)
 

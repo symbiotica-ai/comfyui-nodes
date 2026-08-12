@@ -271,8 +271,26 @@ class TestWhenItReReads:
             project_path="/p", month="October", feature="Mini 3") \
             == "specs:/p:October:Mini 3"
 
-    def test_a_wired_order_never_caches(self, nodes_mod):
-        """The panel's list is pushed by a run, and the wire upstream decides
-        when there is something new to say."""
-        answer = nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(order=ORDER)
-        assert answer != answer
+    def test_a_wired_order_caches_on_the_choice(self, nodes_mod):
+        """NaN here marks the node permanently dirty, and its outputs feed the
+        string joins and the render lane — so every queue re-ran the whole
+        graph with the seed untouched. The wire already carries whether the
+        order changed; what is left is which asset was picked."""
+        same = [nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(
+            order=ORDER, category="Decoration", asset="Bunting")
+            for _ in range(2)]
+        assert same[0] == same[1]
+        assert same[0] == same[0]       # not NaN
+
+    def test_choosing_another_asset_is_a_different_run(self, nodes_mod):
+        first = nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(
+            order=ORDER, asset="Bunting")
+        second = nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(
+            order=ORDER, asset="Frankencrisps")
+        assert first != second
+
+    def test_narrowing_the_category_is_a_different_run(self, nodes_mod):
+        first = nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(order=ORDER)
+        second = nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(
+            order=ORDER, category="Decoration")
+        assert first != second

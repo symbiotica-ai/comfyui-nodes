@@ -11,10 +11,12 @@ is the whole cost of a long answer. One of:
   register at all
 - **Nothing to do.** — tests, docs, a commit, a release he has not pulled yet
 
-Then keep it SHORT. A few lines. What changed and, only if it is not obvious,
-the one reason it was broken. No walls of text, no restating the task, no
-listing what you verified unless he asked. Explanations he did not ask for are
-the thing to cut, not the detail he did.
+**The action line is usually the WHOLE message.** Default to one line. Add a
+second only when it carries information he cannot get from the canvas — a new
+widget's name, a value he has to type, a file he has to open. Never a summary of
+what changed, what you verified, what failed before, or what you learned: he
+reads the message to find out whether to reload, and everything else is in his
+way. "it's really fucking annoying" is the standing feedback on this.
 
 **His feedback is a patch instruction, not a brief for a new version.** Take the
 last thing he accepted, change the part he named, leave every other line alone.
@@ -27,6 +29,12 @@ asked for this repeatedly: the claim is a prediction he has not tested, and it
 reads as selling him something that often does not work. Hand over the artifact
 and stop. A genuinely load-bearing reason goes in one clause BEFORE the
 artifact, never as a closing paragraph.
+
+**No post-mortems.** Never explain what you got wrong, why the last attempt
+failed, or what you learned. He does not care and has said so. Fix it, say the
+action line, stop. This includes the honest-sounding version ("what I got wrong
+was…") — it is still a paragraph he has to read to find out whether he can
+reload.
 
 **Answer the question he asked, and stop.** "Is the model downloaded?" is
 answered by yes and a size. Do not carry a finding from an earlier step into
