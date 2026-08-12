@@ -80,7 +80,11 @@ function pickPanel(node) {
     // ComfyUI sizes the container from computeSize, so its scrollHeight only
     // echoes its own box. Measure this inner list — its natural height IS the
     // content height.
-    const list = el("div", `padding:2px;font:11px ${HUB.font};color:${HUB.ink};`);
+    // Every level gets width + border-box + hidden overflow. A flex row whose
+// content is wider than the node otherwise resolves against a shrink-to-fit
+// parent and paints OUTSIDE the node, over the canvas behind it.
+const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
+    + `padding:2px;font:11px ${HUB.font};color:${HUB.ink};`);
     container.appendChild(list);
     container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
 
@@ -256,7 +260,9 @@ function pickPanel(node) {
     // --- header ------------------------------------------------------------
     function renderHead(ticks, edits) {
         const bar = el("div",
-            `display:flex;align-items:center;gap:6px;padding:2px 2px 4px;color:${HUB.inkSubtle};`);
+            "display:flex;align-items:center;gap:6px;width:100%;"
+            + "box-sizing:border-box;overflow:hidden;flex-wrap:wrap;"
+            + `padding:2px 2px 4px;color:${HUB.inkSubtle};`);
         const here = images.filter((i) => ticks.has(i.id)).length;
         const editing = images.filter((i) => edits.has(i.id)).length;
         bar.append(el("span", "flex:1;min-width:0;overflow:hidden;"
@@ -346,7 +352,9 @@ function pickPanel(node) {
     function renderBatchBar() {
         const names = images.filter((i) => checked.has(i.id)).map((i) => i.id);
         const bar = el("div",
-            `display:flex;align-items:center;gap:6px;padding:3px 2px 4px;`
+            "display:flex;align-items:center;gap:6px;width:100%;"
+            + "box-sizing:border-box;overflow:hidden;flex-wrap:wrap;"
+            + `padding:3px 2px 4px;`
             + `border-top:1px solid ${HUB.hairline};color:${HUB.ink};`);
         bar.append(el("span", "flex:none;", `${names.length} selected`));
 
@@ -410,7 +418,7 @@ function pickPanel(node) {
     function renderRow(ticks, edits, rowImages) {
         const px = SIZES[thumbSize(node)];
         const grid = el("div", "display:flex;flex-wrap:wrap;gap:4px;"
-            + "width:100%;box-sizing:border-box;");
+            + "width:100%;box-sizing:border-box;overflow:hidden;");
         for (const image of rowImages) {
             const on = ticks.has(image.id);
             const editing = edits.has(image.id);
@@ -587,6 +595,7 @@ function pickPanel(node) {
         // away from the images they act on, and the folder a picker landed on
         // is the thing worth being able to read at any time.
         const top = el("div", "position:sticky;top:0;z-index:2;"
+            + "width:100%;box-sizing:border-box;overflow:hidden;"
             + `background:${HUB.surface1};padding-bottom:2px;`);
         top.appendChild(renderHead(ticks, edits));
         if (checked.size) top.appendChild(renderBatchBar());

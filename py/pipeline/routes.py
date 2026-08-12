@@ -863,6 +863,41 @@ async def pick_discard(request):
                               "discarded": [os.path.basename(p) for p in moved]})
 
 
+@PromptServer.instance.routes.post("/symbiotica/tracker-reject")
+async def tracker_reject(request):
+    """Send one asset's approved render back for another try.
+
+    The board's slot is filled by a `_final` in that asset's folder, so
+    rejecting is that file leaving the listing — the same move `pick-discard`
+    makes, into `discarded/` under the same folder rather than off the disk.
+    Several of these cost real money and the node exists to judge them.
+
+    Scoped by the folder the file is IN, checked against the declared roots
+    like every other path a request names, and the name is only accepted if it
+    is one that folder actually lists.
+    """
+    from .pick_folder import discard
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    path = str(body.get("path") or "").strip()
+    if not path:
+        return web.json_response({"error": "path required"}, status=400)
+    folder, name = os.path.dirname(path), os.path.basename(path)
+    if not register_root_within(folder):
+        return web.json_response(
+            {"error": f"{folder} is not inside a folder this install serves"},
+            status=403)
+    moved = await asyncio.to_thread(discard, folder, [name])
+    if not moved:
+        return web.json_response(
+            {"error": f"{name} is not listed in that folder"}, status=404)
+    return web.json_response({"ok": True,
+                              "moved": [os.path.basename(p) for p in moved]})
+
+
 @PromptServer.instance.routes.get("/symbiotica/pick-thumb")
 async def pick_thumb(request):
     """One listed image, shrunk to grid size, never written to disk.
