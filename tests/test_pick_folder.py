@@ -267,6 +267,28 @@ class TestWhichLayoutANameMeans:
     def test_nothing_to_read_is_no_folders(self):
         assert read_folders("") == []
 
+    def test_a_folder_of_buckets_is_read_one_level_down(self, tmp_path):
+        """`Food - 3 stages/{Food,Drinks}` holds no images itself, and a
+        picker pointed at any path still has to show what is under it."""
+        stages = tmp_path / "Food - 3 stages"
+        renders(str(stages / "Food"), ("Truffles.png",))
+        renders(str(stages / "Drinks"), ("Tea.png",))
+        assert read_folders(str(stages)) == [
+            (str(stages), ""),
+            (str(stages / "Drinks"), ""),
+            (str(stages / "Food"), "")]
+        assert [e["name"] for e in listing_for(str(stages))] == ["Tea.png",
+                                                                "Truffles.png"]
+
+    def test_a_folder_with_its_own_images_ignores_its_sub_folders(self,
+                                                                 tmp_path):
+        """The step down is a fallback, so no listing that already worked
+        changes — `discarded` in particular stays out of the grid."""
+        stages = tmp_path / "Sheets"
+        renders(str(stages), ("Ready.png",))
+        renders(str(stages / "discarded"), ("Rejected.png",))
+        assert read_folders(str(stages)) == [(str(stages), "")]
+
 
 def test_discarding_moves_files_under_the_listing_and_out_of_it(tmp_path):
     """A bad render leaves the grid without leaving the disk.

@@ -143,19 +143,36 @@ class MissingDatasetsError(Exception):
 
 
 def list_dataset_images(directory):
-    """Image files directly inside `directory`, ordered by lowercased name.
+    """Image files inside `directory`, ordered by lowercased name.
 
     Sorted rather than left in filesystem order because the pick below indexes
     into this list: an arbitrary enumeration order would make the same seed
     choose different images on different machines.
+
+    A type folder holding no images but holding sub-folders is read one level
+    deeper, and the names come back carrying their sub-folder. That is how one
+    type splits into buckets — `Food - 3 stages/{Food,Drinks}` — without each
+    bucket having to become an asset type of its own.
     """
-    try:
-        names = os.listdir(directory)
-    except OSError:
-        return []
-    imgs = [n for n in names
-            if os.path.splitext(n)[1].lower() in IMG_EXTS
-            and os.path.isfile(os.path.join(directory, n))]
+    def direct(where):
+        try:
+            names = os.listdir(where)
+        except OSError:
+            return []
+        return [n for n in names
+                if os.path.splitext(n)[1].lower() in IMG_EXTS
+                and os.path.isfile(os.path.join(where, n))]
+
+    imgs = direct(directory)
+    if not imgs:
+        try:
+            entries = sorted(os.listdir(directory))
+        except OSError:
+            return []
+        for entry in entries:
+            sub = os.path.join(directory, entry)
+            if os.path.isdir(sub):
+                imgs.extend(os.path.join(entry, n) for n in direct(sub))
     return sorted(imgs, key=lambda n: (n.lower(), n))
 
 

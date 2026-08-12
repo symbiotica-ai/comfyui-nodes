@@ -171,6 +171,20 @@ def read_folders(target: str) -> list[tuple[str, str]]:
         pairs.append((parent, own))
     if os.path.isdir(target):
         pairs.append((target, ""))
+        if not images_in(target):
+            # A folder holding only sub-folders — `Food - 3 stages/{Food,
+            # Drinks}` — is still a folder of images to the eye, and a picker
+            # pointed at any path has to show what is under it. Read one level
+            # down, but only when the folder itself has none of its own, so no
+            # listing that already worked can change. `discarded` stays out: it
+            # is the one sub-folder that means "taken out of the grid".
+            try:
+                entries = sorted(os.listdir(target))
+            except OSError:
+                entries = []
+            pairs.extend((os.path.join(target, entry), "") for entry in entries
+                         if entry != DISCARD_DIR
+                         and os.path.isdir(os.path.join(target, entry)))
     return pairs
 
 
