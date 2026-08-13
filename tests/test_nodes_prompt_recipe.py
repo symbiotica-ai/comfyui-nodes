@@ -101,6 +101,61 @@ def test_a_recipe_that_is_not_on_disk_is_refused(nodes_mod, tmp_path):
             project_path=str(project), recipe="Nope")
 
 
+def test_follow_category_serves_the_recipe_named_after_the_asset(nodes_mod,
+                                                                 tmp_path):
+    """Picking a Food asset upstream must serve the Food recipe.
+
+    "why arent the prompts changing when i select the food category?" — it is
+    the point of the node that changing category is ONE move, and pinning the
+    recipe by name made it two, silently serving the Appliance prompts under a
+    Food asset.
+    """
+    project = make_book(tmp_path, name="Food - 3 stages")
+    order = {"project_path": str(project),
+             "assets": [{"assetName": "Bat Croissants",
+                         "category": "Food - 3 stages"}]}
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        order=order, recipe=nodes_mod.SymbioticaPromptRecipe.FOLLOW, slots=3)
+    assert out.args[0].strip() == "ARCHITECT"
+    assert out.args[2].strip() == "MIRROR RULES"
+
+
+def test_follow_category_re_reads_when_the_category_changes(nodes_mod,
+                                                            tmp_path):
+    """The name comes off the wire, so the category must be in the change
+    check — otherwise a switch of asset serves the previous category's cached
+    prompts and nothing on the canvas says why."""
+    project = make_book(tmp_path, name="Food - 3 stages")
+    recipe = nodes_mod.SymbioticaPromptRecipe
+    def fp(category):
+        return recipe.fingerprint_inputs(
+            recipe=recipe.FOLLOW, project_path=str(project),
+            order={"project_path": str(project),
+                   "assets": [{"assetName": "X", "category": category}]})
+    assert fp("Food - 3 stages") != fp("Appliance")
+
+
+def test_follow_category_on_a_wide_order_names_the_categories(nodes_mod,
+                                                              tmp_path):
+    """Guessing one of several would serve the wrong prompts under the right
+    name, which is worse than refusing."""
+    project = make_book(tmp_path, name="Food - 3 stages")
+    order = {"project_path": str(project),
+             "assets": [{"assetName": "A", "category": "Appliance"},
+                        {"assetName": "B", "category": "Food - 3 stages"}]}
+    with pytest.raises(ValueError, match="Appliance, Food - 3 stages"):
+        nodes_mod.SymbioticaPromptRecipe.execute(
+            order=order, recipe=nodes_mod.SymbioticaPromptRecipe.FOLLOW)
+
+
+def test_follow_category_without_an_order_says_so(nodes_mod, tmp_path):
+    project = make_book(tmp_path)
+    with pytest.raises(ValueError, match="needs an order"):
+        nodes_mod.SymbioticaPromptRecipe.execute(
+            project_path=str(project),
+            recipe=nodes_mod.SymbioticaPromptRecipe.FOLLOW)
+
+
 def test_the_order_input_is_appended_and_optional(nodes_mod):
     """Widgets restore positionally in saved graphs, so the order input stays
     on the end; and a Recipe with no order must keep working from widgets."""

@@ -622,6 +622,12 @@ function composePanel(node) {
 // --- all of them. Editing a block itself stays the Block node's job.
 const NEW_RECIPE = "__new-recipe__";
 
+// Serve the recipe named after the asset's own category instead of a fixed
+// one: picking a Food asset upstream then serves the Food recipe, which is
+// the whole reason the node exists — changing category should be one move,
+// not two. The string is the contract with nodes.py's FOLLOW.
+const FOLLOW_CATEGORY = "(follow category)";
+
 // Which group a block name belongs to, and what that group is called. Derived
 // from the folder, so a book that grows a folder groups itself.
 const GROUP_TITLES = {
@@ -802,9 +808,20 @@ function recipePanel(node) {
                           name: n, title: n,
                           chars: (saved.get(n) ?? []).length,
                       })));
+            groupInto(picker, "Follow the order",
+                      [{ name: FOLLOW_CATEGORY, title: FOLLOW_CATEGORY,
+                         chars: "auto" }]);
             groupInto(picker, "New",
                       [{ name: NEW_RECIPE, title: "+ new recipe…",
                          chars: "?" }]);
+            if (keep === FOLLOW_CATEGORY) {
+                picker.value = FOLLOW_CATEGORY;
+                if (recipeW) recipeW.value = FOLLOW_CATEGORY;
+                node.title = "Recipe — follows the category";
+                renderRows(null);
+                setStatus("serves the recipe named after the asset's category");
+                return;
+            }
             const pick = saved.has(keep) ? keep : [...saved.keys()][0] ?? "";
             picker.value = pick || NEW_RECIPE;
             if (recipeW) recipeW.value = pick;
@@ -834,8 +851,14 @@ function recipePanel(node) {
             return;
         }
         if (recipeW) recipeW.value = picker.value;
-        node.title = `Recipe — ${picker.value}`;
         node.setDirtyCanvas?.(true, true);
+        if (picker.value === FOLLOW_CATEGORY) {
+            node.title = "Recipe — follows the category";
+            renderRows(null);
+            setStatus("serves the recipe named after the asset's category");
+            return;
+        }
+        node.title = `Recipe — ${picker.value}`;
         setStatus(`${showRecipe(picker.value).length} blocks`);
     });
 
@@ -845,7 +868,8 @@ function recipePanel(node) {
     async function persist(loud) {
         const project = projectOf(node);
         const name = picker.value;
-        if (!project || !name || name === NEW_RECIPE) return;
+        if (!project || !name || name === NEW_RECIPE
+            || name === FOLLOW_CATEGORY) return;
         if (saveBtn) saveBtn.disabled = true;
         try {
             const res = await postJson("/symbiotica/recipe-write", {
@@ -867,7 +891,8 @@ function recipePanel(node) {
     delBtn.addEventListener("click", async () => {
         const project = projectOf(node);
         const name = picker.value;
-        if (!project || !name || name === NEW_RECIPE) return;
+        if (!project || !name || name === NEW_RECIPE
+            || name === FOLLOW_CATEGORY) return;
         if (!(await askConfirm(
             `Delete the recipe ${name}? Its blocks stay on disk.`))) return;
         try {
