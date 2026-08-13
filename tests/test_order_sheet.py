@@ -217,6 +217,15 @@ class TestWhichSubKindARowIs:
             "Prep) Ingredients on a chopping board alongside a cup of icing "
             "and a bowl of dough.") == ""
 
+    def test_a_row_with_no_stages_at_all_has_no_prep_line_to_read(self):
+        """`Midnight Cathedral Oven` is an Appliance whose door carries "red
+        and purple stained glass inserts". Reading the whole prompt as its prep
+        line called it a drink, and the Drinks bucket then hid its canvas — so
+        a 128x256 appliance asked for the wrong grid."""
+        assert bucket_of(
+            "A square-shaped oven with a flat top. The front door is arched, "
+            "with red and purple stained glass inserts.") == ""
+
     def test_a_row_that_says_neither_keeps_the_plain_category(self):
         assert bucket_of("Prep) Dough rolled out flat on a surface.") == ""
         assert bucket_of("") == ""

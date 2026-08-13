@@ -153,13 +153,34 @@ _PREP_VESSEL = re.compile(
     r"\b(teacup|tea cup|cup|mug|glass|tumbler|saucer|goblet|stein)s?\b", re.I)
 
 
+def is_staged(prompt: str) -> bool:
+    """Does this row describe a thing packed in STAGES — a Prep) line, or a
+    Ready) marker to read up to?
+
+    Only `Food - 3 stages` writes that way. Everything else is one description
+    of one object, and it has no prep line at all — which is not the same as
+    having an empty one.
+    """
+    text = str(prompt or "")
+    return ("Ready)" in text
+            or any(line.strip().lower().startswith("prep")
+                   for line in text.splitlines()))
+
+
 def prep_line(prompt: str) -> str:
-    """The client prompt's Prep) line, or everything before Ready).
+    """The client prompt's Prep) line, or everything before Ready), or "".
 
     The three states are three lines, but a sheet cell is one string whose
     newlines survive inconsistently — so falling back to "up to Ready)" reads
     the same row either way.
+
+    A row with NEITHER has no prep line, and answering with the whole prompt
+    was a quiet disaster one caller down: `Midnight Cathedral Oven` is an
+    Appliance whose door carries "red and purple stained glass inserts", and
+    the vessel test read that as a drink.
     """
+    if not is_staged(prompt):
+        return ""
     for line in str(prompt or "").splitlines():
         if line.strip().lower().startswith("prep"):
             return line
