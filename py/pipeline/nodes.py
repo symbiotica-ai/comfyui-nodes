@@ -66,6 +66,11 @@ _MODELS = [m["id"] for m in MODEL_PRESETS] + ["custom"]
 _ASPECTS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5",
             "21:9", "4:1", "1:4", "8:1", "1:8"]
 
+# How many blocks a recipe serves. Shared by the Recipe (one output per slot)
+# and the Prompt Block (which slot of the recipe it edits) so a wire from
+# `text_N` and a `slot` of N cannot mean different things.
+SLOT_MAX = 6
+
 
 def _push(event: str, payload: dict) -> None:
     """Fire-and-forget UI push; absent/failed server must never break execution."""
@@ -1593,7 +1598,10 @@ class SymbioticaPromptBlock(io.ComfyNode):
                         "<project>/prompts/ where every queue reads it. Wire "
                         "the Prompt Book's `project_path` output in, and chain "
                         "block to block through `project` so one wire feeds "
-                        "the row.",
+                        "the row. Wire a Prompt Recipe's `text_N` into "
+                        "`text_in` and Asset Focus's `category` in, and this "
+                        "becomes a window onto that recipe's slot: the asset "
+                        "picks the block, you read it, edit it and pass it on.",
             inputs=[
                 io.String.Input("project_path", default="",
                                 tooltip="Client project folder holding the "
@@ -1605,13 +1613,32 @@ class SymbioticaPromptBlock(io.ComfyNode):
                                         "block (Chair.md), a shared rule "
                                         "(_rules/02-inputs.md) or an image "
                                         "block (_image/01-image-model.md). "
-                                        "The panel's picker fills this in."),
+                                        "The panel's picker fills this in. "
+                                        "Ignored while `category` is wired — "
+                                        "then the recipe names the block."),
+                io.Combo.Input("slot",
+                               options=[str(i) for i in
+                                        range(1, SLOT_MAX + 1)],
+                               default="1",
+                               tooltip="Which slot of the category's recipe "
+                                       "this node edits. Set for you when "
+                                       "`text_in` comes from a Prompt "
+                                       "Recipe — wiring `text_3` in makes "
+                                       "this 3."),
+                io.String.Input("category", optional=True, force_input=True,
+                                tooltip="Wire Asset Focus's `category` here "
+                                        "and this node edits whatever "
+                                        "`_recipes/<category>.json` names in "
+                                        "`slot` — switch asset type and the "
+                                        "block on screen follows, with "
+                                        "nothing to pick."),
                 io.String.Input("text_in", force_input=True, optional=True,
-                                tooltip="Chain input: wire the PREVIOUS "
-                                        "block's `text` output here and this "
-                                        "node appends its own block — a row "
-                                        "of Blocks combines like Join String "
-                                        "Multi, in wire order."),
+                                tooltip="Wire the Prompt Recipe's `text_N` "
+                                        "here to preview and edit that "
+                                        "prompt. With no `category` wired it "
+                                        "is the old chain input instead: the "
+                                        "previous block's `text`, which this "
+                                        "node appends its own block to."),
             ],
             outputs=[
                 io.String.Output(display_name="project_path",
@@ -1620,22 +1647,65 @@ class SymbioticaPromptBlock(io.ComfyNode):
                                          "fanning every node back to the "
                                          "book."),
                 io.String.Output(display_name="text",
-                                 tooltip="Everything chained so far: text_in "
-                                         "plus this node's block, blank-line "
-                                         "separated. The LAST block in a row "
-                                         "carries the full combined prompt — "
-                                         "wire that into the LLM."),
+                                 tooltip="This node's block, ready for the "
+                                         "LLM. Chained (no `category` wired) "
+                                         "it is everything so far: text_in "
+                                         "plus this block, blank-line "
+                                         "separated, so the LAST block in a "
+                                         "row carries the whole prompt."),
             ],
+            # A push needs the node id to reach the right panel: which block a
+            # wired category names is decided at run time, and without the id
+            # the panel keeps showing whatever was last picked by hand.
+            hidden=[io.Hidden.unique_id],
         )
 
+    @staticmethod
+    def _slot_index(slot):
+        """`slot` as a 0-based index, clamped. Never raises: the widget is
+        written by the panel from a wire, and a stray value must not kill the
+        queue."""
+        try:
+            n = int(str(slot or "1").strip() or 1)
+        except ValueError:
+            n = 1
+        return max(1, min(n, SLOT_MAX)) - 1
+
     @classmethod
-    def fingerprint_inputs(cls, project_path="", block="", text_in=None):
+    def _pick(cls, project, block="", slot="1", category=""):
+        """Which block this node edits, as `(name, version, from_recipe)`.
+
+        A wired category beats the picker: the whole point is that switching
+        asset type re-points this editor with nothing to choose. It only wins
+        when the recipe actually names something in this slot — an absent
+        recipe or a short one falls back to the picked block rather than
+        blanking the panel the user is typing into.
+        """
+        cat = str(category or "").strip()
+        if not cat:
+            return str(block or "").strip(), "", False
+        from .prompt_book import read_recipe
+        picked = read_recipe(project, cat)
+        i = cls._slot_index(slot)
+        if i < len(picked) and picked[i].get("block"):
+            return picked[i]["block"], picked[i].get("version", ""), True
+        return str(block or "").strip(), "", False
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", block="", slot="1",
+                           category="", text_in=None):
         # Widgets only — a linked project reads as None here (see Category
         # Prompts), so fall back to the projects executions registered. Hash
         # the one file this node edits; never raise — a raise becomes NaN and
         # re-bills every descendant on each queue press.
-        name = str(block or "").strip()
-        h = hashlib.sha256(f"block:{name}".encode())
+        one = SymbioticaCategoryPrompts._one
+        cat = str(one(category) or "").strip()
+        # The category and the slot are what NAME the file when a recipe
+        # drives this node, so they belong in the hash even though the name
+        # below is derived from them — a recipe edited to point slot 2 at a
+        # different block changes nothing else here.
+        h = hashlib.sha256(
+            f"block:{str(block or '').strip()}:{cat}:{one(slot, '1')}".encode())
         candidates = [str(project_path or "").strip()]
         if not candidates[0]:
             candidates = _executed_projects()
@@ -1644,35 +1714,63 @@ class SymbioticaPromptBlock(io.ComfyNode):
                 continue
             h.update(project.encode())
             try:
+                name, version, _ = cls._pick(project, block, one(slot, "1"),
+                                             cat)
+                h.update(f"{name}:{version}".encode())
                 st = os.stat(resolve_block(project, name))
                 h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
-            except (PromptPathError, OSError):
+            except (PromptPathError, OSError, ValueError):
                 pass
         return h.hexdigest()
 
     @classmethod
-    def execute(cls, project_path="", block="", text_in=None) -> io.NodeOutput:
+    def execute(cls, project_path="", block="", slot="1", category="",
+                text_in=None) -> io.NodeOutput:
+        from .prompt_book import pick_version
+
+        one = SymbioticaCategoryPrompts._one
         project = _prompt_node_project(project_path)
         if not project:
             raise ValueError(
                 "no project folder to read the prompt book from — wire the "
                 "Prompt Book's `project_path` output, or set project_path")
-        name = str(block or "").strip()
+        name, version, from_recipe = cls._pick(
+            project, block, one(slot, "1"), one(category))
         if not name:
-            raise ValueError("no block picked — choose one in the panel")
+            raise ValueError(
+                "no block picked — choose one in the panel, or wire a "
+                "`category` whose recipe names one")
         # Empty rather than a raise when the file is not there yet: this node
         # is the editor the block is written in, so it has to run before its
         # first save. The composed architect prompts still raise on absence —
         # they are read by nodes that can do nothing without them.
         try:
-            text = read_block(project, name).strip()
+            body = read_block(project, name)
         except PromptPathError:
-            text = ""
-        # Chained: this node's output is everything so far. The join is the
-        # same blank line compose_prompt uses, so a hand-chained row reads the
-        # same as the book-composed prompt.
-        parts = [p for p in (str(text_in or "").strip(), text) if p]
-        return io.NodeOutput(project, "\n\n".join(parts))
+            body = ""
+        text = pick_version(body, version) if from_recipe else body.strip()
+        if from_recipe:
+            # Recipe-driven, so `text_in` is the SAME prompt arriving off the
+            # wire — appending it would emit the block twice. This node is a
+            # window onto the recipe's slot here, not a link in a chain.
+            out = text
+        else:
+            # Chained: this node's output is everything so far. The join is the
+            # same blank line compose_prompt uses, so a hand-chained row reads
+            # the same as the book-composed prompt.
+            out = "\n\n".join(
+                p for p in (str(text_in or "").strip(), text) if p)
+        # The panel cannot know which block a wired category named — that is
+        # decided here, at run time — so it is told, the same way the Recipe
+        # tells its own panel which recipe it served.
+        if from_recipe:
+            _push("symbiotica.block", {
+                "node_id": str(getattr(getattr(cls, "hidden", None),
+                                       "unique_id", "")),
+                "name": name,
+                "version": version,
+            })
+        return io.NodeOutput(project, out)
 
 
 class SymbioticaPromptCompose(io.ComfyNode):
@@ -4411,7 +4509,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
     # Outputs are fixed because a schema is; `slots` decides how many of them
     # carry text. Six because the chain that motivated this is three, and a
     # type that grows a fourth and fifth prompt must not need a release.
-    MAX_SLOTS = 6
+    MAX_SLOTS = SLOT_MAX
 
     # Pick this instead of a name and the recipe is the one named after the
     # asset's own category: choosing a Food asset upstream serves

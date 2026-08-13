@@ -88,6 +88,125 @@ def test_block_fingerprint_never_raises(nodes_mod):
         project_path=None, block=None)
 
 
+# --- Prompt Block driven by a recipe ------------------------------------------
+
+def _recipe(proj, name, *blocks):
+    import json
+    d = proj / "prompts" / "_recipes"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(json.dumps(
+        {"slots": [{"block": b, "version": ""} for b in blocks]}))
+
+
+def test_block_edits_the_slot_the_wired_category_names(nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{"_rules__03-llm-appliance.md": "APPLIANCE",
+                                 "_image__03-image-appliance.md": "IMAGE"})
+    _recipe(proj, "Appliance", "_rules/03-llm-appliance.md",
+            "_image/03-image-appliance.md")
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), block="Chair.md", slot="2",
+        category="Appliance")
+    assert out.args == (str(proj), "IMAGE")
+
+
+def test_block_follows_the_category_to_another_recipe(nodes_mod, tmp_path):
+    # The whole point: switch the asset upstream and this editor re-points
+    # itself, with the picked block untouched.
+    proj = _project(tmp_path, **{"_rules__03-llm-appliance.md": "APPLIANCE",
+                                 "_rules__04-llm-chair.md": "CHAIR"})
+    _recipe(proj, "Appliance", "_rules/03-llm-appliance.md")
+    _recipe(proj, "Chair", "_rules/04-llm-chair.md")
+    run = nodes_mod.SymbioticaPromptBlock.execute
+    assert run(project_path=str(proj), block="", slot="1",
+               category="Appliance").args[1] == "APPLIANCE"
+    assert run(project_path=str(proj), block="", slot="1",
+               category="Chair").args[1] == "CHAIR"
+
+
+def test_block_serving_a_recipe_slot_does_not_append_text_in(nodes_mod,
+                                                             tmp_path):
+    # text_in IS this slot's prompt arriving off the Recipe's wire; appending
+    # it would emit the block twice.
+    proj = _project(tmp_path, **{"_rules__03-llm-appliance.md": "APPLIANCE"})
+    _recipe(proj, "Appliance", "_rules/03-llm-appliance.md")
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), slot="1", category="Appliance",
+        text_in="APPLIANCE")
+    assert out.args[1] == "APPLIANCE"
+
+
+def test_block_without_a_category_still_chains(nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{"Chair.md": "CHAIR"})
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), block="Chair.md", text_in="EARLIER")
+    assert out.args[1] == "EARLIER\n\nCHAIR"
+
+
+def test_block_falls_back_to_its_pick_when_the_recipe_is_short(nodes_mod,
+                                                              tmp_path):
+    # A slot the recipe does not fill must not blank the panel he is typing in.
+    proj = _project(tmp_path, **{"Chair.md": "CHAIR",
+                                 "_rules__03-llm-appliance.md": "APPLIANCE"})
+    _recipe(proj, "Appliance", "_rules/03-llm-appliance.md")
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), block="Chair.md", slot="4",
+        category="Appliance")
+    assert out.args[1] == "CHAIR"
+
+
+def test_block_falls_back_when_the_category_has_no_recipe(nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{"Chair.md": "CHAIR"})
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), block="Chair.md", slot="1",
+        category="Wallpaper")
+    assert out.args[1] == "CHAIR"
+
+
+def test_block_serves_the_slot_version_the_recipe_pinned(nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{
+        "_rules__01-llm.md": "<!-- version: v1 -->\nONE\n"
+                             "<!-- version: v2 -->\nTWO\n"})
+    import json
+    d = proj / "prompts" / "_recipes"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "Chair.json").write_text(json.dumps(
+        {"slots": [{"block": "_rules/01-llm.md", "version": "v2"}]}))
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), slot="1", category="Chair")
+    assert out.args[1] == "TWO"
+
+
+def test_block_slot_out_of_range_is_clamped_not_an_error(nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{"_rules__03-llm-appliance.md": "APPLIANCE"})
+    _recipe(proj, "Appliance", "_rules/03-llm-appliance.md")
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), slot="nonsense", category="Appliance")
+    assert out.args[1] == "APPLIANCE"
+
+
+def test_block_fingerprint_changes_with_the_category(nodes_mod, tmp_path):
+    # Without this, switching from an Appliance asset to a Chair one served
+    # the cached Appliance prompt and nothing on the canvas said why.
+    proj = _project(tmp_path, **{"_rules__03-llm-appliance.md": "APPLIANCE",
+                                 "_rules__04-llm-chair.md": "CHAIR"})
+    _recipe(proj, "Appliance", "_rules/03-llm-appliance.md")
+    _recipe(proj, "Chair", "_rules/04-llm-chair.md")
+    fp = nodes_mod.SymbioticaPromptBlock.fingerprint_inputs
+    assert (fp(project_path=str(proj), slot="1", category="Appliance")
+            != fp(project_path=str(proj), slot="1", category="Chair"))
+
+
+def test_block_fingerprint_changes_when_the_recipe_repoints_the_slot(
+        nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{"_rules__03-llm-appliance.md": "APPLIANCE",
+                                 "_rules__04-llm-chair.md": "CHAIR"})
+    _recipe(proj, "Appliance", "_rules/03-llm-appliance.md")
+    fp = nodes_mod.SymbioticaPromptBlock.fingerprint_inputs
+    before = fp(project_path=str(proj), slot="1", category="Appliance")
+    _recipe(proj, "Appliance", "_rules/04-llm-chair.md")
+    assert fp(project_path=str(proj), slot="1", category="Appliance") != before
+
+
 # --- Prompt Compose -----------------------------------------------------------
 
 def test_compose_matches_what_category_prompts_hands_the_llm(nodes_mod,
