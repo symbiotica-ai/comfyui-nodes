@@ -134,16 +134,20 @@ function comboify(node, widgetName, valuesFn) {
     return w;
 }
 
-// The categories the wired order actually holds, in the order they appear in
-// it — the same first-appearance order `assets_by_category` groups by, so the
-// dropdown reads down the order sheet rather than alphabetically.
+// The categories the wired order actually holds, A-Z under "All". A dropdown
+// is read by hunting for a name, and seventeen of them in the order the
+// spreadsheet happens to list them is a list you have to scan every time.
+// Compared with `localeCompare` so "Cashier's Desk" files where a person looks
+// for it rather than where its apostrophe's code point puts it.
 function categoriesOf(node) {
-    const out = [ALL_CATEGORIES];
+    const found = [];
     for (const asset of publishedAssets(node)?.assets ?? []) {
         const category = String(asset.category ?? "").trim();
-        if (category && !out.includes(category)) out.push(category);
+        if (category && !found.includes(category)) found.push(category);
     }
-    return out;
+    return [ALL_CATEGORIES,
+            ...found.sort((a, b) => a.localeCompare(b, undefined,
+                                                    { sensitivity: "base" }))];
 }
 
 // Put the order-reading widgets above the ones that narrow it. Order on screen

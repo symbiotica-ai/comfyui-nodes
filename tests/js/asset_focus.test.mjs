@@ -374,9 +374,9 @@ test("category is a dropdown of what the order actually holds", async () => {
     for (let i = 0; i < 5; i++) await tick();
     const w = node.widgets.find((x) => x.name === "category");
     assert.equal(w.type, "combo");
-    // First-appearance order, the way the order sheet reads.
+    // A-Z under "All" — see the sorting test at the end of this file.
     assert.deepEqual(w.options.values(),
-                     ["All", "Decoration", "Food - 3 stages", "Appliance"]);
+                     ["All", "Appliance", "Decoration", "Food - 3 stages"]);
 });
 
 test("All means no narrowing", async () => {
@@ -734,4 +734,27 @@ test("a saved pick the order no longer holds is not put back", async () => {
 test("restoring the category narrows the list on the same pass", async () => {
     const node = await reopened({ category: "Decoration", asset: "Bunting" });
     assert.deepEqual(names(node), ["Bunting"]);
+});
+
+test("the category dropdown is sorted A-Z under All", async () => {
+    // Seventeen categories in the order the spreadsheet lists them is a list
+    // you have to scan every time.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Bunting", category: "Wallpaper" },
+        { assetName: "Oven", category: "Appliance" },
+        { assetName: "Tea", category: "Food - 3 stages" },
+        { assetName: "Desk", category: "Cashier's Desk" },
+    ] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    const values = widgetOf(node, "category").options.values();
+    assert.deepEqual(values, ["All", "Appliance", "Cashier's Desk",
+                              "Food - 3 stages", "Wallpaper"]);
 });
