@@ -184,3 +184,44 @@ class TestAssetkitsOwnFolders:
         """An empty category must not resolve to a folder called "Layout"."""
         project = self.built(tmp_path, "Layout", "anything-01.png")
         assert pick_layout(project, "") == ""
+
+
+class TestAssetkitSplitsACategoryBySize:
+    """assetkit files a category by tile footprint — `Appliance 1x2 Layout` for
+    what the order sheet calls plain `Appliance`. The wire carries the sheet's
+    word, so the size tag has to be tolerated."""
+
+    def built(self, tmp_path, folder, *names):
+        root = tmp_path / "bakery"
+        where = root / "datasets" / "dataset-single" / folder
+        where.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (where / name).write_bytes(b"")
+        return str(root)
+
+    def test_a_size_tag_still_answers_for_the_category(self, tmp_path):
+        project = self.built(tmp_path, "Appliance 1x2 Layout",
+                             "Appliance_1x2-layout.png")
+        assert os.path.basename(
+            pick_layout(project, "Appliance")) == "Appliance_1x2-layout.png"
+
+    def test_an_exact_folder_beats_a_sized_one(self, tmp_path):
+        project = self.built(tmp_path, "Appliance 1x2 Layout", "sized.png")
+        self.built(tmp_path, "Appliance Layout", "plain.png")
+        assert os.path.basename(pick_layout(project, "Appliance")) == "plain.png"
+
+    def test_a_longer_category_is_not_a_size(self, tmp_path):
+        """`Appliance Part` is its OWN category in the same sheet — it must
+        never be handed to `Appliance`."""
+        project = self.built(tmp_path, "Appliance Part Layout", "part.png")
+        assert pick_layout(project, "Appliance") == ""
+
+    def test_its_own_category_still_finds_it(self, tmp_path):
+        project = self.built(tmp_path, "Appliance Part Layout", "part.png")
+        assert os.path.basename(
+            pick_layout(project, "Appliance Part")) == "part.png"
+
+    def test_the_smallest_size_wins_when_several_exist(self, tmp_path):
+        project = self.built(tmp_path, "Appliance 2x2 Layout", "big.png")
+        self.built(tmp_path, "Appliance 1x1 Layout", "small.png")
+        assert os.path.basename(pick_layout(project, "Appliance")) == "small.png"

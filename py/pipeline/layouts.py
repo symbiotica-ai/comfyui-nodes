@@ -86,26 +86,43 @@ def _loose(name: str) -> str:
     return " ".join(str(name or "").replace("_", " ").split()).casefold()
 
 
+# assetkit splits a category by tile footprint — `Appliance 1x2 Layout` for a
+# category the order sheet calls plain `Appliance`. A size tag is the ONLY
+# extra part tolerated between the two, so `Appliance Part Layout` still
+# belongs to `Appliance Part` and can never answer for `Appliance`.
+_SIZE_TAG = re.compile(r"^\d+\s*x\s*\d+$", re.I)
+
+
 def built_dir(project_path: str, name: str) -> str:
     """assetkit's layout folder for `name`, or "".
 
     Matched loosely against every folder in the dataset, because the exact
     spelling is assetkit's to choose and this side only knows the order
-    sheet's.
+    sheet's. An exact match wins; failing that, the same name with a size tag
+    on it, shortest first so a plain category never loses to a bigger one.
     """
-    wanted = _loose(f"{name}{BUILT_SUFFIX}")
-    if not _loose(name):
+    wanted = _loose(name)
+    if not wanted:
         return ""
     root = os.path.join(str(project_path or ""), *BUILT_DIR)
     try:
         entries = sorted(os.listdir(root))
     except OSError:
         return ""
+    sized = []
     for entry in entries:
         found = os.path.join(root, entry)
-        if _loose(entry) == wanted and os.path.isdir(found):
+        if not os.path.isdir(found):
+            continue
+        loose = _loose(entry)
+        if not loose.endswith(BUILT_SUFFIX):
+            continue
+        stem = loose[: -len(BUILT_SUFFIX)].strip()
+        if stem == wanted:
             return found
-    return ""
+        if stem.startswith(wanted + " ") and _SIZE_TAG.match(stem[len(wanted):].strip()):
+            sized.append((len(stem), entry, found))
+    return sorted(sized)[0][2] if sized else ""
 
 
 def newest_in(folder: str) -> str:
