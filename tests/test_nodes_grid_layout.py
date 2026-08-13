@@ -131,3 +131,25 @@ def test_the_fingerprint_follows_the_category_and_the_file(nodes_mod, tmp_path):
 def test_the_fingerprint_never_raises(nodes_mod):
     assert nodes_mod.SymbioticaGridLayout.fingerprint_inputs(
         project_path=None, category=None)
+
+
+def test_a_redrawn_layout_invalidates_even_with_the_project_wired(
+        nodes_mod, tmp_path, monkeypatch):
+    """A WIRED order reads as unset in a change-check — it runs before upstream
+    outputs exist — so the widget alone cannot find the file. Without the
+    executed-projects fallback, re-saving a layout under the SAME name changed
+    nothing in the stamp and the cached render stood."""
+    project = project_with(tmp_path, "Chair.png")
+    monkeypatch.setattr(nodes_mod, "_executed_projects", lambda: [project])
+    fp = nodes_mod.SymbioticaGridLayout.fingerprint_inputs
+    before = fp(category="Chair")           # nothing wired, nothing typed
+    path = os.path.join(project, "datasets", "layouts", "Chair.png")
+    Image.new("RGBA", (32, 32), (9, 9, 9, 255)).save(path)
+    os.utime(path, ns=(1, 1))
+    assert fp(category="Chair") != before
+
+
+def test_the_fallback_still_never_raises(nodes_mod, monkeypatch):
+    monkeypatch.setattr(nodes_mod, "_executed_projects",
+                        lambda: ["/nowhere/at/all", ""])
+    assert nodes_mod.SymbioticaGridLayout.fingerprint_inputs(category="Chair")

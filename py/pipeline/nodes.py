@@ -4870,18 +4870,27 @@ class SymbioticaGridLayout(io.ComfyNode):
             f"layout:{str(one(layout) or '').strip()}:"
             f"{str(one(category) or '').strip()}:"
             f"{str(one(bucket) or '').strip()}".encode())
-        try:
-            project = cls._project(project_path, order)
-            found = pick_layout(project, str(one(category) or ""),
-                                str(one(bucket) or ""),
-                                str(one(layout) or ""))
-            h.update(found.encode())
-            st = os.stat(found)
-            # A layout redrawn under the same name is a different grid, and the
-            # render standing on it has to be made again.
-            h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
-        except (OSError, ValueError):
-            pass
+        # A WIRED order or project_path reads as unset here — this runs before
+        # upstream outputs exist — so the widget alone cannot find the file, and
+        # without the fallback a layout redrawn under the same name was
+        # invisible: nothing in the stamp changed and the cached render stood.
+        candidates = [cls._project(project_path, order)]
+        if not candidates[0]:
+            candidates = _executed_projects()
+        for project in candidates:
+            if not project:
+                continue
+            try:
+                found = pick_layout(project, str(one(category) or ""),
+                                    str(one(bucket) or ""),
+                                    str(one(layout) or ""))
+                h.update(found.encode())
+                st = os.stat(found)
+                # A layout redrawn under the same name is a different grid, and
+                # the render standing on it has to be made again.
+                h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
+            except (OSError, ValueError):
+                pass
         return h.hexdigest()
 
     @classmethod
