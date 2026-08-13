@@ -710,6 +710,18 @@ async def prompt_versions(request):
     return web.json_response({"ok": True, "blocks": list_versions(project)})
 
 
+@PromptServer.instance.routes.get("/symbiotica/layouts")
+async def layouts_list(request):
+    """The layout images a project holds — what the Grid Layout node's picker
+    offers beside "(follow category)"."""
+    from .layouts import list_layouts
+
+    project = _expand_project(request.query.get("project", ""))
+    if not project:
+        return web.json_response({"error": "project required"}, status=400)
+    return web.json_response({"ok": True, "layouts": list_layouts(project)})
+
+
 @PromptServer.instance.routes.get("/symbiotica/recipe-list")
 async def recipe_list(request):
     """Every saved recipe with its slots — one request fills the panel's

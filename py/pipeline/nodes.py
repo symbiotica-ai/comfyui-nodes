@@ -4781,6 +4781,157 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         return io.NodeOutput(*texts)
 
 
+class SymbioticaGridLayout(io.ComfyNode):
+    """The grid an asset type is drawn on, picked the way its recipe is.
+
+    The layout stopped being scenery the day the prompts started describing it —
+    three grey slots, a diamond grid in each, black everywhere else — so a
+    category that gets its own prompts needs its own grid, and switching asset
+    had to switch both.
+    """
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaGridLayout",
+            display_name="Symbiotica Grid Layout",
+            category="symbiotica/pipeline",
+            description="The layout image an asset type is drawn on, out of "
+                        "<project>/datasets/layouts/. Wire Asset Focus's "
+                        "`category` and `bucket` in and it picks "
+                        "`<category> - <bucket>` then `<category>`, newest "
+                        "version first — the same ladder the Prompt Recipe "
+                        "climbs, so one naming rule covers the prompts and the "
+                        "grid. A new version is a new file (`Food - 3 "
+                        "stages-7.png`), never a rename.",
+            inputs=[
+                io.String.Input("project_path", default="",
+                                tooltip="Client project folder. Unneeded when "
+                                        "`order` is wired."),
+                io.String.Input("layout", default="",
+                                tooltip="Pin one file by name and it wins over "
+                                        "the category. Empty follows the "
+                                        "category — the panel's picker fills "
+                                        "this in."),
+                Order.Input("order", optional=True,
+                            tooltip="Any order from the pipeline — it carries "
+                                    "the project, so project_path can stay "
+                                    "empty."),
+                io.String.Input("category", optional=True, force_input=True,
+                                tooltip="Asset Focus's `category`. Names the "
+                                        "layout the same way it names the "
+                                        "recipe."),
+                io.String.Input("bucket", optional=True, force_input=True,
+                                tooltip="Asset Focus's `bucket`. Narrows to "
+                                        "`<category> - <bucket>` when the "
+                                        "folder holds one, and falls back to "
+                                        "the plain category when it does not."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="image",
+                                tooltip="The layout, ready for the image "
+                                        "model's first input."),
+                io.Mask.Output(display_name="mask",
+                               tooltip="Its alpha, opaque where the layout has "
+                                       "pixels. Fully opaque for a layout "
+                                       "saved without transparency."),
+                io.String.Output(display_name="name",
+                                 tooltip="Which file was used — the answer to "
+                                         "\"which grid did that render "
+                                         "stand on\"."),
+            ],
+            hidden=[io.Hidden.unique_id],
+            # Queueable on its own, for the same reason the Recipe is: which
+            # file a wired category picks is decided here, so without a run of
+            # its own the canvas cannot say which grid it would send.
+            is_output_node=True,
+        )
+
+    @classmethod
+    def _project(cls, project_path, order):
+        one = SymbioticaCategoryPrompts._one
+        project = str(one(project_path) or "").strip()
+        if project:
+            return project
+        wired = one(order, None)
+        if isinstance(wired, dict):
+            return str(wired.get("project_path", "") or "").strip()
+        return ""
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", layout="", order=None,
+                           category="", bucket=""):
+        # Never raise: a raise is NaN, which re-bills every model under this
+        # node on each queue press.
+        from .layouts import pick_layout
+
+        one = SymbioticaCategoryPrompts._one
+        h = hashlib.sha256(
+            f"layout:{str(one(layout) or '').strip()}:"
+            f"{str(one(category) or '').strip()}:"
+            f"{str(one(bucket) or '').strip()}".encode())
+        try:
+            project = cls._project(project_path, order)
+            found = pick_layout(project, str(one(category) or ""),
+                                str(one(bucket) or ""),
+                                str(one(layout) or ""))
+            h.update(found.encode())
+            st = os.stat(found)
+            # A layout redrawn under the same name is a different grid, and the
+            # render standing on it has to be made again.
+            h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
+        except (OSError, ValueError):
+            pass
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, project_path="", layout="", order=None, category="",
+                bucket="") -> io.NodeOutput:
+        from PIL import Image, UnidentifiedImageError
+
+        from .layouts import layouts_dir, list_layouts, pick_layout
+
+        one = SymbioticaCategoryPrompts._one
+        project = cls._project(project_path, order)
+        if not project:
+            raise ValueError(
+                "no project folder to read layouts from — wire an `order`, or "
+                "set project_path")
+        wanted_category = str(one(category) or "").strip()
+        pinned = str(one(layout) or "").strip()
+        found = pick_layout(project, wanted_category,
+                            str(one(bucket) or ""), pinned)
+        if not found:
+            # Name the folder AND what is in it: "no layout" is otherwise
+            # indistinguishable from "wrong project", and the fix is different.
+            held = list_layouts(project)
+            asked = pinned or wanted_category or "(nothing wired)"
+            raise ValueError(
+                f"no layout for {asked!r} in {layouts_dir(project)} — it "
+                + (f"holds: {', '.join(held)}" if held
+                   else "is empty or missing"))
+        try:
+            with Image.open(found) as opened:
+                opened.load()
+                image = opened.convert("RGBA")
+        except (OSError, UnidentifiedImageError, ValueError) as exc:
+            raise ValueError(f"{found} could not be read as an image") from exc
+        arr = np.asarray(image, dtype=np.float32) / 255.0
+        pixels = torch.from_numpy(arr[..., :3])[None, ...]
+        mask = torch.from_numpy(arr[..., 3])[None, ...]
+        name = os.path.basename(found)
+        # The canvas cannot know which file a wired category picked — that is
+        # decided here — so it is told, the same way the Recipe reports the
+        # recipe it served.
+        _push("symbiotica.layout", {
+            "node_id": str(getattr(getattr(cls, "hidden", None),
+                                   "unique_id", "")),
+            "name": name,
+            "layouts": list_layouts(project),
+        })
+        return io.NodeOutput(pixels, mask, name)
+
+
 class SymbioticaOrderTracker(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -4883,6 +5034,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaPromptBlock,
     SymbioticaPromptCompose,
     SymbioticaPromptRecipe,
+    SymbioticaGridLayout,
     SymbioticaSaveRender,
     SymbioticaDatasetReference,
     SymbioticaSliceCells,
