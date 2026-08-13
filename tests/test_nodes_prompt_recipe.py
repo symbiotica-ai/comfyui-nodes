@@ -101,6 +101,36 @@ def test_a_recipe_that_is_not_on_disk_is_refused(nodes_mod, tmp_path):
             project_path=str(project), recipe="Nope")
 
 
+def test_the_orders_category_beats_a_pinned_recipe(nodes_mod, tmp_path):
+    """"still not fucking changing when i select a category in Asset focus" —
+    a recipe pinned to Appliance kept serving Appliance prompts under a Food
+    asset. With one category on the wire and a recipe saved under that name,
+    the wire wins; picking the asset is the whole gesture."""
+    project = make_book(tmp_path, name="Food - 3 stages")
+    (project / "prompts" / "_recipes" / "Appliance.json").write_text(
+        json.dumps({"slots": [{"block": "_image/01-image-model.md",
+                               "version": ""}]}))
+    order = {"project_path": str(project),
+             "assets": [{"assetName": "Bat Croissants",
+                         "category": "Food - 3 stages"}]}
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        order=order, recipe="Appliance", slots=3)
+    assert out.args[0].strip() == "ARCHITECT"      # the Food recipe's slot 1
+    assert out.args[2].strip() == "MIRROR RULES"
+
+
+def test_a_pinned_recipe_answers_for_a_category_the_book_has_none_for(
+        nodes_mod, tmp_path):
+    """Refusing to render because one category has no recipe yet would stop
+    him mid-order; the pinned name is the fallback, not the ruler."""
+    project = make_book(tmp_path, name="Appliance")
+    order = {"project_path": str(project),
+             "assets": [{"assetName": "Odd One", "category": "Wallpaper"}]}
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        order=order, recipe="Appliance", slots=1)
+    assert out.args[0].strip() == "ARCHITECT"
+
+
 def test_follow_category_serves_the_recipe_named_after_the_asset(nodes_mod,
                                                                  tmp_path):
     """Picking a Food asset upstream must serve the Food recipe.

@@ -4533,8 +4533,15 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                 "no project folder to read the prompt book from — wire an "
                 "`order`, or set project_path")
         name = str(recipe or "").strip()
-        if name == cls.FOLLOW:
-            cats = cls._order_category(order)
+        # The order decides. Picking a Food asset upstream has to serve the
+        # Food prompts by itself — a recipe pinned in the widget that keeps
+        # serving Appliance under a Food asset is the bug, not the feature.
+        # A pinned name still answers for a category the book has no recipe
+        # for, and for a Recipe with no order wired at all.
+        cats = cls._order_category(order)
+        if len(cats) == 1 and read_recipe(project, cats[0]):
+            name = cats[0]
+        elif name == cls.FOLLOW:
             if not cats:
                 raise ValueError(
                     "“follow category” needs an order that names one — wire "
@@ -4544,7 +4551,9 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                     "“follow category” needs ONE category and this order "
                     f"holds {len(cats)}: {', '.join(cats)}. Narrow it with "
                     "Asset Focus, or pick a recipe by name")
-            name = cats[0]
+            raise ValueError(
+                f"no recipe named {cats[0]!r} in prompts/_recipes/ — save one "
+                "under that name, or pick a recipe by name")
         if not name:
             raise ValueError("no recipe picked — choose one in the panel, or "
                              "save a new one")
@@ -4566,6 +4575,15 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                 raise ValueError(
                     f"recipe {name!r} slot {i + 1}: {exc}") from exc
             texts.append(pick_version(body, slot.get("version", "")))
+        # Say which recipe actually ran. The name is decided here, from the
+        # wire, so the canvas has no way to know it otherwise — and "which
+        # prompts did that render use" is the first question after a switch.
+        _push("symbiotica.recipe", {
+            "node_id": str(getattr(getattr(cls, "hidden", None),
+                                   "unique_id", "")),
+            "name": name,
+            "blocks": [str(s.get("block", "")) for s in picked[:want]],
+        })
         return io.NodeOutput(*texts)
 
 
