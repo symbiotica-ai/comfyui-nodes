@@ -6,6 +6,29 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.26
+
+**Adds inputs and outputs to Symbiotica Asset Focus.** One appended input
+(`ref`) and three appended outputs (`ref_image`, `ref_mask`, `ref_name`).
+Everything before them keeps its slot, so saved graphs are untouched.
+
+**Clicking a reference thumbnail picks the asset AND sends that image.**
+Choosing the asset, then choosing the same asset again on a Pick node, was the
+same decision made twice — "this is an extra click that is not necessary".
+The thumbnail click now does both: it focuses the asset and arms that file,
+which comes out on `ref_image` composited onto the sheet grey, with its alpha
+on `ref_mask` and its filename on `ref_name`. The armed tile is outlined, and
+a `ref` dropdown says which file it is. An asset the client sent no art for
+gets a one-pixel plate and an empty `ref_name` rather than a refusal — the
+outputs are index-aligned lists, and most graphs never wire this lane at all.
+
+**Asset Focus reads the folder without the button.** Through a Local/Modal
+switch, `project_path` is not resolvable until the graph's links are restored,
+and the single retry at 400 ms was a guess — when it missed, nothing tried
+again and the month and feature dropdowns stayed empty until "📁 Read folder"
+was pressed by hand. Four attempts now, backing off, stopping the moment the
+project resolves. The button stays for an on-demand re-read.
+
 ## 2026.8.25
 
 **Panels stay inside their node, for good this time.** Every earlier attempt

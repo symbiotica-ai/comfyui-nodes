@@ -150,7 +150,13 @@ class TestSchema:
         schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
         assert [o.display_name for o in schema.outputs] == [
             "asset_name", "category", "client_prompt", "save_path", "order",
-            "event_order", "bucket"]
+            "event_order", "bucket", "ref_image", "ref_mask", "ref_name"]
+
+    def test_ref_is_the_last_input(self, nodes_mod):
+        """Widget values restore BY POSITION, so the clicked reference goes on
+        the end or every saved graph reads its neighbours' values."""
+        schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
+        assert schema.inputs[-1].id == "ref"
 
     def test_it_is_registered(self, nodes_mod):
         assert nodes_mod.SymbioticaAssetFocus in nodes_mod.PIPELINE_NODE_CLASSES
@@ -199,6 +205,89 @@ class TestWhatThePanelIsTold:
         """The panel must not offer a choice the node would refuse."""
         run(nodes_mod, order=ORDER, category="Decoration")
         assert [a["name"] for a in self.detail(pushed)["assets"]] == ["Bunting"]
+
+
+class TestTheClickedReference:
+    """"i select the category, the asset and then i have to select the asset
+    again in Pick. this is an extra click that is not necessary. how about i
+    click on the thing in asset focus? and it sends the freaking image too" —
+    so the thumbnail click IS the pick, and the image rides out beside the
+    name."""
+
+    @pytest.fixture()
+    def refs(self, tmp_path):
+        from PIL import Image
+        root = tmp_path / "refs"
+        root.mkdir()
+        Image.new("RGB", (8, 4), (10, 20, 30)).save(root / "a.png")
+        Image.new("RGB", (16, 12), (200, 0, 0)).save(root / "b.png")
+        # Transparent, with a live pixel HIDDEN underneath it — the case that
+        # makes a plain convert("RGB") light up every soft edge.
+        pop = Image.new("RGBA", (6, 6), (255, 255, 255, 0))
+        pop.putpixel((0, 0), (0, 0, 255, 255))
+        pop.save(root / "c.png")
+        return {**ORDER, "refsRoot": str(root)}
+
+    def test_the_clicked_file_is_the_one_emitted(self, nodes_mod, refs):
+        out = run(nodes_mod, order=refs, asset="Frankencrisps", ref="b.png")
+        assert out.args[9] == ["b.png"]
+        assert tuple(out.args[7][0].shape) == (1, 12, 16, 3)
+
+    def test_no_click_means_the_assets_first(self, nodes_mod, refs):
+        out = run(nodes_mod, order=refs, asset="Frankencrisps")
+        assert out.args[9] == ["a.png"]
+
+    def test_a_file_the_asset_does_not_have_falls_back_to_its_first(
+            self, nodes_mod, refs):
+        """An all-assets run carries ONE filename past every asset in the
+        event, and it belongs to whichever one he clicked."""
+        out = run(nodes_mod, order=refs, ref="b.png")
+        assert out.args[9] == ["b.png", "c.png", ""]
+
+    def test_an_asset_with_no_references_is_not_a_refusal(self, nodes_mod, refs):
+        """Asset Focus names and files assets whether or not the client sent
+        art. Raising here would take down a lane that has nothing to do with
+        references; a shorter list would pair every later asset with the wrong
+        picture."""
+        out = run(nodes_mod, order=refs, asset="Bunting")
+        assert out.args[9] == [""]
+        assert tuple(out.args[7][0].shape) == (1, 1, 1, 3)
+        assert out.args[8][0].max().item() == 0.0
+
+    def test_transparency_comes_out_as_the_mask(self, nodes_mod, refs):
+        out = run(nodes_mod, order=refs, asset="Frankenstein Pops")
+        mask = out.args[8][0]
+        assert tuple(mask.shape) == (1, 6, 6)
+        assert (mask[0, 0, 0].item(), mask[0, 5, 5].item()) == (1.0, 0.0)
+
+    def test_the_transparent_reference_is_composited_not_converted(
+            self, nodes_mod, refs):
+        """These files keep live pixels under their transparent areas, so
+        dropping the alpha uncovers the hidden backdrop and lights up every
+        soft edge — the same reason Asset Refs flattens onto the sheet grey."""
+        image = run(nodes_mod, order=refs, asset="Frankenstein Pops").args[7][0]
+        assert [round(v, 3) for v in image[0, 5, 5].tolist()] == [0.502] * 3
+
+    def test_a_file_the_order_names_and_the_disk_lacks_is_not_a_refusal(
+            self, nodes_mod, refs):
+        """Nothing about the reference lane may take down a node that names,
+        files and fans out assets — most graphs do not wire it at all."""
+        os.remove(os.path.join(refs["refsRoot"], "a.png"))
+        out = run(nodes_mod, order=refs, asset="Frankencrisps")
+        assert (out.args[0], out.args[9]) == (["Frankencrisps"], [""])
+
+    def test_an_order_with_no_references_folder_still_runs(self, nodes_mod):
+        """A Reference Browser event carries no refs root at all."""
+        out = run(nodes_mod, order=ORDER, asset="Frankencrisps")
+        assert out.args[9] == [""]
+
+    def test_clicking_another_thumbnail_is_a_different_run(self, nodes_mod):
+        """Without this the second click serves the first click's tensor."""
+        first = nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(
+            order=ORDER, asset="Frankencrisps", ref="a.png")
+        second = nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(
+            order=ORDER, asset="Frankencrisps", ref="b.png")
+        assert first != second
 
 
 class TestItCanBeQueuedOnItsOwn:

@@ -1197,6 +1197,54 @@ class SymbioticaClientExamples(io.ComfyNode):
         return io.NodeOutput("\n\n".join(parts), len(kept))
 
 
+def _focus_reference(order, asset_record, asset_name, wanted_file):
+    """(image, mask, name) — ONE of an asset's client references, chosen by
+    filename, as the tensors Asset Focus hands out.
+
+    Which one is `wanted_file` if this asset has it and its FIRST otherwise:
+    the name comes off a thumbnail he clicked on one asset, and an "all" run
+    passes the same string by every other asset in the event.
+
+    Nothing to send — no art in the order, no references folder, a file the
+    order names and the disk has lost — is a one-pixel plate and an EMPTY name,
+    never a raise. Two reasons: the outputs are index-aligned lists, so a
+    dropped entry would pair every later asset with the wrong picture; and this
+    lane is optional. Asset Focus names, files and fans out assets whether or
+    not any art arrived, and refusing would take that down over a reference
+    nobody wired. The empty `ref_name` is what says there was none — the panel
+    shows the same thing by drawing no thumbnail.
+    """
+    from PIL import Image
+    from .asset_refs import alpha_of, flatten, parse_hex, reference_files
+    plate = torch.tensor(parse_hex(DEFAULT_BACKGROUND),
+                         dtype=torch.float32).div(255.0)
+    nothing = (plate.reshape(1, 1, 1, 3), torch.zeros(1, 1, 1), "")
+    files = [str(n) for n in ((asset_record or {}).get("refFiles") or [])
+             if str(n).strip()]
+    if not files:
+        return nothing
+
+    try:
+        paths, names = reference_files(order, asset_name)
+        want = str(wanted_file or "").strip()
+        index = names.index(want) if want in names else 0
+        with Image.open(paths[index]) as im:
+            alpha = alpha_of(im)
+            # Composited, never converted: these files keep live pixels under
+            # their transparent areas, so dropping the alpha lights up every
+            # soft edge — the same reason Asset Refs flattens.
+            flat = flatten(im, DEFAULT_BACKGROUND)
+            image = _pil_to_tensor(flat)
+            if alpha is None:
+                mask = torch.ones(1, flat.height, flat.width)
+            else:
+                mask = torch.from_numpy(
+                    np.asarray(alpha, dtype=np.float32) / 255.0)[None, ...]
+    except (ValueError, OSError):
+        return nothing
+    return image, mask, names[index]
+
+
 class SymbioticaAssetFocus(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1238,6 +1286,17 @@ class SymbioticaAssetFocus(io.ComfyNode):
                 io.String.Input("feature", default="", optional=True,
                                 tooltip="Which event of that month. Empty "
                                         "means the order's first."),
+                # APPENDED for the same positional reason. Set by clicking a
+                # reference thumbnail on the node — "i select the category, the
+                # asset and then i have to select the asset again in Pick. this
+                # is an extra click that is not necessary".
+                io.String.Input("ref", default="", optional=True,
+                                tooltip="Which of the asset's client "
+                                        "references to emit, by filename. Set "
+                                        "by clicking a thumbnail on the node. "
+                                        "Empty means the first, which is also "
+                                        "what every OTHER asset gets in an "
+                                        "all-assets run."),
             ],
             # Lists, but normally of one. A single-element list behaves exactly
             # like a scalar downstream — it runs once — so choosing an asset
@@ -1288,6 +1347,25 @@ class SymbioticaAssetFocus(io.ComfyNode):
                                          "`category` and it serves "
                                          "`<category> - <bucket>` when the "
                                          "book has one."),
+                # APPENDED, all three: the reference the click chose, so the
+                # lane that used to run Asset Focus → Pick Client Reference is
+                # one node. Same shape Asset Refs emits — flattened image and
+                # its alpha — so either can feed the same downstream.
+                io.Image.Output(display_name="ref_image", is_output_list=True,
+                                tooltip="The client reference you clicked, one "
+                                        "per focused asset. Composited onto "
+                                        "the sheet grey, like Asset Refs. An "
+                                        "asset the client sent no art for "
+                                        "gets a one-pixel plate and an empty "
+                                        "`ref_name`."),
+                io.Mask.Output(display_name="ref_mask", is_output_list=True,
+                               tooltip="That reference's alpha, opaque where "
+                                       "the art is."),
+                io.String.Output(display_name="ref_name", is_output_list=True,
+                                 tooltip="Its filename — what Save Render "
+                                         "records as the reference drawn. "
+                                         "Empty when the asset has no "
+                                         "references at all."),
             ],
             hidden=[io.Hidden.unique_id],
             # An output node so it can be queued on its own. Without that there
@@ -1298,7 +1376,7 @@ class SymbioticaAssetFocus(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, order=None, category="", asset="",
-                           project_path="", month="", feature=""):
+                           project_path="", month="", feature="", ref=""):
         """When this node makes its own order it inherits Order Specs' change
         check — the order file and the references folder move without the graph
         moving. With one WIRED IN, the wire already carries that, and the
@@ -1307,13 +1385,14 @@ class SymbioticaAssetFocus(io.ComfyNode):
         queue re-ran the whole graph even with the seed untouched."""
         if not str(project_path or "").strip():
             return hashlib.sha256(
-                f"{category}|{asset}".encode()).hexdigest()
+                f"{category}|{asset}|{ref}".encode()).hexdigest()
         return SymbioticaOrderSpecs.fingerprint_inputs(
             project_path=project_path, month=month, feature=feature)
 
     @classmethod
     def execute(cls, order=None, category="", asset="",
-                project_path="", month="", feature="") -> io.NodeOutput:
+                project_path="", month="", feature="",
+                ref="") -> io.NodeOutput:
         # Its own selection when nothing is wired in: month, feature, category
         # and asset are one act, and doing half of it on another node is what
         # made this two nodes.
@@ -1384,6 +1463,12 @@ class SymbioticaAssetFocus(io.ComfyNode):
         # in — Asset Refs downstream reads references off exactly that key.
         narrowed = [{**order,
                      "assets": [raw.get(i["assetName"], i)]} for i in picked]
+        # The reference he clicked, resolved here rather than by a Pick node
+        # downstream: clicking the thumbnail already said which one, and being
+        # asked the same question again on another node is the click he wanted
+        # gone.
+        chosen_refs = [_focus_reference(order, raw.get(i["assetName"]),
+                                        i["assetName"], ref) for i in picked]
         return io.NodeOutput([i["assetName"] for i in picked],
                              [i["category"] for i in picked],
                              [i["prompt"] for i in picked],
@@ -1394,7 +1479,10 @@ class SymbioticaAssetFocus(io.ComfyNode):
                              # parsed before buckets existed carries no key,
                              # and the answer is the same either way.
                              [i.get("bucket") or bucket_of(i.get("prompt", ""))
-                              for i in picked])
+                              for i in picked],
+                             [r[0] for r in chosen_refs],
+                             [r[1] for r in chosen_refs],
+                             [r[2] for r in chosen_refs])
 
 
 class SymbioticaSaveRender(io.ComfyNode):
