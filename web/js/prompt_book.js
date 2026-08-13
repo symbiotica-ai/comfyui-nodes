@@ -729,10 +729,9 @@ function recipePanel(node) {
         version.value = slot?.version ?? "";
         block.addEventListener("change", () => {
             fillVersions();
-            setStatus("unsaved — press Save");
+            persist(false);
         });
-        version.addEventListener("change",
-                                 () => setStatus("unsaved — press Save"));
+        version.addEventListener("change", () => persist(false));
         row.append(label, block, version);
         row._read = () => ({ block: block.value, version: version.value });
         return row;
@@ -830,25 +829,30 @@ function recipePanel(node) {
         setStatus(`${showRecipe(picker.value).length} blocks`);
     });
 
-    saveBtn?.addEventListener("click", async () => {
+    // The node serves the recipe FILE, so a row the panel shows but has not
+    // written is a lie: he wired text_3 to a preview and got nothing back
+    // because the third row was still only on screen. Every change writes.
+    async function persist(loud) {
         const project = projectOf(node);
         const name = picker.value;
         if (!project || !name || name === NEW_RECIPE) return;
-        saveBtn.disabled = true;
+        if (saveBtn) saveBtn.disabled = true;
         try {
             const res = await postJson("/symbiotica/recipe-write", {
                 project, name, slots: readSlots(),
             });
-            setStatus(`saved — ${res.slots.length} blocks`);
-            toastSaved(`${name} — ${res.slots.length} blocks`);
+            saved.set(name, res.slots);
+            setStatus(`${res.slots.length} blocks`);
+            if (loud) toastSaved(`${name} — ${res.slots.length} blocks`);
             announceSaved(project);
-            await refresh();
         } catch (err) {
             setStatus(String(err.message || err), true);
         } finally {
-            saveBtn.disabled = false;
+            if (saveBtn) saveBtn.disabled = false;
         }
-    });
+    }
+
+    saveBtn?.addEventListener("click", () => persist(true));
 
     delBtn.addEventListener("click", async () => {
         const project = projectOf(node);
@@ -873,7 +877,7 @@ function recipePanel(node) {
         slotsW.callback = function () {
             orig?.apply(this, arguments);
             renderRows(null);
-            setStatus("unsaved — press Save");
+            persist(false);
         };
     }
 

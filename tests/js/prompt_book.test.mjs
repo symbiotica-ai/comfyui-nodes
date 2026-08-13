@@ -272,3 +272,17 @@ test("switching to a shorter recipe drops the longer one's leftover rows",
     assert.deepEqual(rows.map((r) => r.children[1].value),
                      ["_rules/01-llm-prompt.md", "_image/01-image-model.md"]);
 });
+
+test("changing a row writes the recipe — the node serves the file, not the DOM",
+     async () => {
+    const seen = [];
+    const node = await recipeNode(seen);
+    const { rows } = recipeParts(node);
+    seen.length = 0;
+    rows.children[2].children[1].value = "Chair.md";
+    fire(rows.children[2].children[1], "change");
+    for (let i = 0; i < 10; i++) await tick();
+    const call = seen.find((s) => s.route.startsWith("/symbiotica/recipe-write"));
+    assert.ok(call, "a row change did not write the recipe");
+    assert.equal(JSON.parse(call.init.body).slots[2].block, "Chair.md");
+});
