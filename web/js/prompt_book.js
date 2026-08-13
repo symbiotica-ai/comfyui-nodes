@@ -3,7 +3,7 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
-import { resolveProjectPath } from "./order_pipeline.js";
+import { nodeOutputString, resolveProjectPath } from "./order_pipeline.js";
 import { pinPanelWidth } from "./browser_chrome.js";
 import { HUB, injectHubStyles } from "./hub_theme.js";
 
@@ -57,9 +57,16 @@ function projectOf(node, seen = new Set()) {
         if (link == null) continue;
         const origin = app.graph.getNodeById(app.graph.links[link]?.origin_id);
         if (!origin) continue;
+        // `resolveProjectPath` answers for pipeline nodes, which name their
+        // project in a `project_path` widget. A plain String node holding the
+        // path has no such widget and answered "" — so wiring a literal into
+        // `project_path`, which is the obvious way to point the book at a
+        // local folder, silently resolved to nothing and the panel showed an
+        // empty book. Fall through to "what string does this node output".
         let found = OURS.has(origin.comfyClass)
             ? projectOf(origin, seen)
-            : resolveProjectPath(origin);
+            : (resolveProjectPath(origin)
+               || nodeOutputString(origin, new Set()));
         // An order-passing node with no project of its own (Asset Focus) is a
         // hop, not a dead end — climb through it to the Order Specs behind.
         if (!found && origin.inputs?.some((i) => i.name === "order")) {

@@ -235,3 +235,22 @@ test("a version can be pinned per slot", async () => {
     const names = version.children.map((o) => o.value);
     assert.deepEqual(names, ["", "punchy"]);
 });
+
+test("a plain String node wired into project_path names the book", async () => {
+    // The obvious way to point the book at a local folder: a literal holding
+    // the path. It resolved to nothing, and the panel showed an empty book.
+    const seen = [];
+    reset();
+    app.graph._nodes = [];
+    setResponder(router(seen));
+    const literal = await create("String", { value: "/p/bakery" });
+    const book = await create("SymbioticaPromptBook", { project_path: "" });
+    book.inputs = [];
+    app.graph._nodes = [literal, book];
+    link(literal, book, "project_path");
+    await book.onNodeCreated?.call(book);
+    for (let i = 0; i < 20; i++) await tick();
+    const asked = seen.find((c) => c.route.includes("prompt-book"));
+    assert.ok(asked, "never asked for the book — the literal did not resolve");
+    assert.match(asked.route, /project=%2Fp%2Fbakery/);
+});

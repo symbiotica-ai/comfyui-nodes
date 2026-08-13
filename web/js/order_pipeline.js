@@ -175,7 +175,7 @@ export function inputString(node, inputName, seen) {
 // (a Reroute) follows its wire. A node with several wired inputs that we can't
 // read as a switch is an ambiguous selector — we refuse to guess a branch, since
 // the wrong one silently feeds a wrong project. `seen` guards against a cycle.
-function nodeOutputString(node, seen) {
+export function nodeOutputString(node, seen) {
     if (!node || seen.has(node.id)) return "";
     seen.add(node.id);
     const isSwitch = node.inputs?.some((i) => i.name === "on_true")
