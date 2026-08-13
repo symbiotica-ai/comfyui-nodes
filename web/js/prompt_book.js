@@ -917,6 +917,16 @@ function recipePanel(node) {
     }
 
     node._symRefreshBook = refresh;
+    // What the last run actually served. The category on the order wire beats
+    // the picker, so after a queue the panel follows the run rather than
+    // showing the name that lost — otherwise the rows on screen are not the
+    // blocks the render used. The widget is left alone: it is the fallback for
+    // a category the book has no recipe for.
+    node._symShowServed = (name) => {
+        if (!name || !saved.has(name)) return;
+        picker.value = name;
+        setStatus(`${showRecipe(name).length} blocks · from the asset's category`);
+    };
     onBookSaved(node, refresh);
     queueMicrotask(refresh);
 }
@@ -927,6 +937,21 @@ const PANELS = {
     [COMPOSE]: { build: composePanel, minW: 420, minH: 460 },
     [RECIPE]: { build: recipePanel, minW: 460, minH: 500 },
 };
+
+// The recipe a run actually served. With an order wired the CATEGORY decides
+// the name, and that decision happens in Python — so the panel is told, rather
+// than guessing, and the node titles itself with what it just served.
+api.addEventListener("symbiotica.recipe", (event) => {
+    const detail = event?.detail ?? {};
+    if (detail.node_id == null) return;
+    const node = app.graph?.getNodeById?.(Number(detail.node_id))
+        ?? app.graph?.getNodeById?.(detail.node_id);
+    if (!node || !detail.name) return;
+    node._symServedRecipe = String(detail.name);
+    node.title = `Recipe — ${detail.name}`;
+    node._symShowServed?.(String(detail.name));
+    node.setDirtyCanvas?.(true, true);
+});
 
 registerSymbioticaExtension(app, {
     name: "symbiotica.promptBook",
