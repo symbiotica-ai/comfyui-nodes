@@ -738,13 +738,31 @@ function recipePanel(node) {
         return row;
     }
 
+    // `slots` is a recipe's own list and is authoritative — a slot it does not
+    // fill is EMPTY. Carrying the previous rows over is only right when the
+    // slot COUNT changed and the recipe did not: switching recipe otherwise
+    // left the last one's blocks sitting in the rows past the new one's end,
+    // which is how an appliance flip ended up in the food recipe.
     function renderRows(slots) {
         const want = slotCount();
-        const kept = [...rows.children].map((r) => r._read?.() ?? null);
+        const kept = slots ? null
+                           : [...rows.children].map((r) => r._read?.() ?? null);
         rows.replaceChildren();
         for (let i = 0; i < want; i += 1) {
-            rows.appendChild(buildRow(i, slots?.[i] ?? kept[i] ?? null));
+            rows.appendChild(buildRow(i, slots?.[i] ?? kept?.[i] ?? null));
         }
+    }
+
+    // The recipe decides how many slots there are; the widget follows it, or
+    // the node serves outputs the panel is not showing.
+    function showRecipe(name) {
+        const slots = saved.get(name) ?? [];
+        const w = widgetOf(node, "slots");
+        if (w && slots.length) {
+            w.value = Math.max(1, Math.min(slots.length, 6));
+        }
+        renderRows(slots);
+        return slots;
     }
 
     function readSlots() {
@@ -782,8 +800,8 @@ function recipePanel(node) {
             picker.value = pick || NEW_RECIPE;
             if (recipeW) recipeW.value = pick;
             node.title = pick ? `Recipe — ${pick}` : "Symbiotica Prompt Recipe";
-            renderRows(saved.get(pick) ?? []);
-            setStatus(pick ? `${(saved.get(pick) ?? []).length} blocks`
+            const slots = showRecipe(pick);
+            setStatus(pick ? `${slots.length} blocks`
                            : "no recipes yet — pick “+ new recipe…”",
                       !pick);
         } catch (err) {
@@ -809,8 +827,7 @@ function recipePanel(node) {
         if (recipeW) recipeW.value = picker.value;
         node.title = `Recipe — ${picker.value}`;
         node.setDirtyCanvas?.(true, true);
-        renderRows(saved.get(picker.value) ?? []);
-        setStatus(`${(saved.get(picker.value) ?? []).length} blocks`);
+        setStatus(`${showRecipe(picker.value).length} blocks`);
     });
 
     saveBtn?.addEventListener("click", async () => {

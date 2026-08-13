@@ -254,3 +254,21 @@ test("a plain String node wired into project_path names the book", async () => {
     assert.ok(asked, "never asked for the book — the literal did not resolve");
     assert.match(asked.route, /project=%2Fp%2Fbakery/);
 });
+
+test("switching to a shorter recipe drops the longer one's leftover rows",
+     async () => {
+    // A 2-block recipe was showing the 3-block recipe's third block — an
+    // appliance flip sitting in the food recipe.
+    const node = await recipeNode([], [...DECO, { name: "Food", slots: [
+        { block: "_rules/01-llm-prompt.md", version: "" },
+        { block: "_image/01-image-model.md", version: "" }] }]);
+    const { picker } = recipeParts(node);
+    picker.value = "Food";
+    fire(picker, "change");
+    for (let i = 0; i < 10; i++) await tick();
+    const rows = recipeParts(node).rows.children;
+    assert.equal(rows.length, 2, "slot count did not follow the recipe");
+    assert.equal(node.widgets.find((w) => w.name === "slots").value, 2);
+    assert.deepEqual(rows.map((r) => r.children[1].value),
+                     ["_rules/01-llm-prompt.md", "_image/01-image-model.md"]);
+});
