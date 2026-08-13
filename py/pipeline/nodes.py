@@ -4413,6 +4413,35 @@ class SymbioticaPromptRecipe(io.ComfyNode):
     # type that grows a fourth and fifth prompt must not need a release.
     MAX_SLOTS = 6
 
+    # Pick this instead of a name and the recipe is the one named after the
+    # asset's own category: choosing a Food asset upstream serves
+    # `_recipes/Food - 3 stages.json` with no second thing to remember. The
+    # whole point of the node is that changing category is one move.
+    FOLLOW = "(follow category)"
+
+    @staticmethod
+    def _order_category(order):
+        """The single category the wired order is on, or "" when it isn't one.
+
+        Asset Focus narrows to one asset per run, so the normal case has
+        exactly one category. A wider order (a whole event) has several, and
+        guessing one of them would serve the wrong prompts under the right
+        name — the caller turns that into an error naming what it found.
+        """
+        if isinstance(order, dict):
+            orders = [order]
+        elif isinstance(order, (list, tuple)):
+            orders = [o for o in order if isinstance(o, dict)]
+        else:
+            return []
+        cats = set()
+        for one in orders:
+            for asset in one.get("assets", []) or []:
+                cat = str(asset.get("category", "") or "").strip()
+                if cat:
+                    cats.add(cat)
+        return sorted(cats)
+
     @classmethod
     def define_schema(cls) -> io.Schema:
         return io.Schema(
@@ -4428,7 +4457,11 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                                 tooltip="The saved preset to serve. Pick it "
                                         "in the panel — the panel writes this "
                                         "widget, and it is what survives a "
-                                        "workflow reload."),
+                                        "workflow reload. “(follow category)” "
+                                        "serves the recipe named after the "
+                                        "asset's category instead, so picking "
+                                        "a Food asset upstream serves the "
+                                        "Food recipe."),
                 io.Int.Input("slots", default=3, min=1, max=cls.MAX_SLOTS,
                              tooltip="How many blocks this recipe serves. "
                                      "Outputs past it come back empty."),
@@ -4458,6 +4491,11 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         h = hashlib.sha256(
             f"recipe:{str(one(recipe)).strip()}:{int(one(slots, 3) or 3)}"
             .encode())
+        # On “follow category” the recipe name comes off the wire, so the
+        # category has to be part of the fingerprint — without it, switching
+        # from an Appliance asset to a Food one served the cached Appliance
+        # prompts and nothing on the canvas said why.
+        h.update("|".join(cls._order_category(order)).encode())
         candidates = [str(one(project_path)).strip()]
         if not candidates[0]:
             candidates = _executed_projects()
@@ -4495,6 +4533,18 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                 "no project folder to read the prompt book from — wire an "
                 "`order`, or set project_path")
         name = str(recipe or "").strip()
+        if name == cls.FOLLOW:
+            cats = cls._order_category(order)
+            if not cats:
+                raise ValueError(
+                    "“follow category” needs an order that names one — wire "
+                    "Asset Focus's order in, or pick a recipe by name")
+            if len(cats) > 1:
+                raise ValueError(
+                    "“follow category” needs ONE category and this order "
+                    f"holds {len(cats)}: {', '.join(cats)}. Narrow it with "
+                    "Asset Focus, or pick a recipe by name")
+            name = cats[0]
         if not name:
             raise ValueError("no recipe picked — choose one in the panel, or "
                              "save a new one")
