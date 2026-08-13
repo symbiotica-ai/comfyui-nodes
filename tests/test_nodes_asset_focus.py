@@ -150,7 +150,7 @@ class TestSchema:
         schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
         assert [o.display_name for o in schema.outputs] == [
             "asset_name", "category", "client_prompt", "save_path", "order",
-            "event_order"]
+            "event_order", "bucket"]
 
     def test_it_is_registered(self, nodes_mod):
         assert nodes_mod.SymbioticaAssetFocus in nodes_mod.PIPELINE_NODE_CLASSES

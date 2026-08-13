@@ -32,7 +32,7 @@ from .regional_prompt import (
 )
 from .skeleton import build_client_prompts, build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
-from .order_sheet import slugify
+from .order_sheet import bucket_of, slugify
 from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import (assets_by_category, dataset_dir,
                            pick_reference_per_category, save_paths)
@@ -1272,6 +1272,22 @@ class SymbioticaAssetFocus(io.ComfyNode):
                                      "want the event rather than the asset, "
                                      "and they must not change every time you "
                                      "focus a different one."),
+                # APPENDED for the same reason. A NARROWING of the category,
+                # not a second one: one category can be drawn two ways —
+                # `Food - 3 stages` is a chopping board for a cake and an empty
+                # cup on a saucer for a tea — and the client's own Prep) line
+                # already says which. Emitted beside the category so the
+                # sheets, the dataset folders and the save paths keep seeing
+                # the one name the order sheet gives them.
+                io.String.Output(display_name="bucket", is_output_list=True,
+                                 tooltip="Which sub-kind of its category this "
+                                         "asset is — `Drinks` for a Food row "
+                                         "whose Prep line is an empty cup, "
+                                         "empty for everything else. Wire it "
+                                         "into the Prompt Recipe beside "
+                                         "`category` and it serves "
+                                         "`<category> - <bucket>` when the "
+                                         "book has one."),
             ],
             hidden=[io.Hidden.unique_id],
             # An output node so it can be queued on its own. Without that there
@@ -1373,7 +1389,12 @@ class SymbioticaAssetFocus(io.ComfyNode):
                              [i["prompt"] for i in picked],
                              save_paths(order, picked),
                              narrowed,
-                             order)
+                             order,
+                             # Re-read rather than taken off the row: an order
+                             # parsed before buckets existed carries no key,
+                             # and the answer is the same either way.
+                             [i.get("bucket") or bucket_of(i.get("prompt", ""))
+                              for i in picked])
 
 
 class SymbioticaSaveRender(io.ComfyNode):
@@ -4606,6 +4627,13 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                                         "one served — picking the asset then "
                                         "picks its prompts, with nothing to "
                                         "set here."),
+                io.String.Input("bucket", optional=True, force_input=True,
+                                tooltip="Asset Focus's `bucket` — how this row "
+                                        "of the category is drawn. With one "
+                                        "wired, `<category> - <bucket>` is "
+                                        "served when the book has such a "
+                                        "recipe (`Food - 3 stages - Drinks`), "
+                                        "and the plain category otherwise."),
             ],
             outputs=[
                 io.String.Output(display_name=f"text_{i}",
@@ -4621,7 +4649,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, recipe="", slots=3, project_path="",
-                           order=None, category=""):
+                           order=None, category="", bucket=""):
         # Widgets plus the book's file mtimes, and never raise: a raise becomes
         # NaN, which re-bills every model under this node on each queue press.
         one = SymbioticaCategoryPrompts._one
@@ -4634,6 +4662,10 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         # prompts and nothing on the canvas said why.
         h.update("|".join(cls._order_category(order)).encode())
         h.update(str(one(category) or "").strip().encode())
+        # The bucket names a DIFFERENT recipe, so switching from a cake to a
+        # tea under one category has to miss the cache the same way switching
+        # category does.
+        h.update(str(one(bucket) or "").strip().encode())
         candidates = [str(one(project_path)).strip()]
         if not candidates[0]:
             candidates = _executed_projects()
@@ -4659,7 +4691,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
 
     @classmethod
     def execute(cls, recipe="", slots=3, project_path="",
-                order=None, category="") -> io.NodeOutput:
+                order=None, category="", bucket="") -> io.NodeOutput:
         from .prompt_book import pick_version, read_recipe
         from .prompt_store import PromptPathError, read_block
 
@@ -4680,7 +4712,16 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         # what the picked asset is, and that names the recipe.
         wired = str(SymbioticaCategoryPrompts._one(category) or "").strip()
         cats = [wired] if wired else cls._order_category(order)
-        if len(cats) == 1 and read_recipe(project, cats[0]):
+        # A bucket narrows the category: one category can be drawn two ways —
+        # `Food - 3 stages` is a chopping board for a cake and an empty cup for
+        # a tea — so `<category> - <bucket>` is preferred when the book holds
+        # one, and the plain category answers for everything else. Never an
+        # error on its own: a bucket with no recipe means that row is drawn the
+        # ordinary way.
+        sub = str(SymbioticaCategoryPrompts._one(bucket) or "").strip()
+        if len(cats) == 1 and sub and read_recipe(project, f"{cats[0]} - {sub}"):
+            name = f"{cats[0]} - {sub}"
+        elif len(cats) == 1 and read_recipe(project, cats[0]):
             name = cats[0]
         elif name == cls.FOLLOW:
             if not cats:

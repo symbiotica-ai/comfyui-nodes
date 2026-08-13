@@ -144,6 +144,43 @@ def _number(s: str):
     return int(f) if f == int(f) else f
 
 
+# What a Food row's Prep) line says it stands on. The client already writes the
+# distinction — every food row names a chopping board, every drink row names an
+# empty cup on a saucer — so the bucket is READ rather than guessed from the
+# asset name, which would have caught "Skull Tea" but not "Fox Cocoa Float".
+_PREP_BOARD = re.compile(r"\b(chopping|cutting)\s+board\b|\bboard\b", re.I)
+_PREP_VESSEL = re.compile(
+    r"\b(teacup|tea cup|cup|mug|glass|tumbler|saucer|goblet|stein)s?\b", re.I)
+
+
+def prep_line(prompt: str) -> str:
+    """The client prompt's Prep) line, or everything before Ready).
+
+    The three states are three lines, but a sheet cell is one string whose
+    newlines survive inconsistently — so falling back to "up to Ready)" reads
+    the same row either way.
+    """
+    for line in str(prompt or "").splitlines():
+        if line.strip().lower().startswith("prep"):
+            return line
+    return str(prompt or "").split("Ready)")[0]
+
+
+def bucket_of(prompt: str) -> str:
+    """Which sub-kind of its category an asset is, or "" for the plain one.
+
+    Only `Drinks` today, and only ever a NARROWING: the category is untouched,
+    so the sheets, the dataset folders and the save paths all stay where they
+    are, and a row this cannot read simply keeps the category's own prompts.
+    A board wins over a vessel — a food prep names a bowl or a cup on the board
+    all the time, while a drink prep never has a board at all.
+    """
+    line = prep_line(prompt)
+    if _PREP_BOARD.search(line):
+        return ""
+    return "Drinks" if _PREP_VESSEL.search(line) else ""
+
+
 def extract_order_rows(grid: list[list[str]]) -> list[dict]:
     """Find the header row (contains both "Feature" and "Asset Name"), map
     columns by header text, and type every data row below it. Rows with neither
@@ -196,6 +233,7 @@ def extract_order_rows(grid: list[list[str]]) -> list[dict]:
             "rotation": cell(raw, "rotation"),
             "prompt": cell(raw, "prompt"),
             "sets": cell(raw, "sets"),
+            "bucket": bucket_of(cell(raw, "prompt")),
         })
     return rows
 
