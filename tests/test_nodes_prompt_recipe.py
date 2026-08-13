@@ -291,3 +291,26 @@ def test_the_bucket_is_part_of_the_fingerprint(nodes_mod, tmp_path):
     assert (fp(project_path=str(project), category="Food - 3 stages", bucket="")
             != fp(project_path=str(project), category="Food - 3 stages",
                   bucket="Drinks"))
+
+
+def test_it_is_queueable_on_its_own(nodes_mod):
+    """Which recipe a wired category and bucket pick is decided in Python, so
+    without a run of its own the panel sits on the last name it was told and
+    there is no way to find out what the graph would send short of rendering
+    the whole thing. "Queue Selected Output Node" needs this flag."""
+    assert nodes_mod.SymbioticaPromptRecipe.GET_SCHEMA().is_output_node is True
+
+
+def test_the_run_reports_the_size_of_every_block_it_served(nodes_mod, tmp_path,
+                                                           monkeypatch):
+    """"i have no idea what the actual prompt this sends out" — the names say
+    which blocks, the sizes say they were read and not empty."""
+    seen = []
+    monkeypatch.setattr(nodes_mod, "_push",
+                        lambda event, payload: seen.append((event, payload)))
+    project = make_book(tmp_path)
+    nodes_mod.SymbioticaPromptRecipe.execute(
+        recipe="Decoration", slots="2", project_path=str(project))
+    served = [p for e, p in seen if e == "symbiotica.recipe"]
+    assert served, "the run said nothing about what it served"
+    assert served[-1]["chars"] == [len("ARCHITECT"), len("IMAGE RULES")]

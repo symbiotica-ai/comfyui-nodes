@@ -967,10 +967,16 @@ function recipePanel(node) {
     // showing the name that lost — otherwise the rows on screen are not the
     // blocks the render used. The widget is left alone: it is the fallback for
     // a category the book has no recipe for.
-    node._symShowServed = (name) => {
+    node._symShowServed = (name, served = {}) => {
         if (!name || !saved.has(name)) return;
         picker.value = name;
-        setStatus(`${showRecipe(name).length} blocks · from the asset's category`);
+        const blocks = showRecipe(name).length;
+        // The sizes of what actually went out, not of what the file names: a
+        // row that reads right over an empty block is the failure this line
+        // exists to show.
+        const chars = (served.chars ?? []).filter((n) => Number.isFinite(n));
+        setStatus(`${blocks} blocks · from the asset's category`
+                  + (chars.length ? ` · ${chars.join(" + ")} chars` : ""));
     };
     onBookSaved(node, refresh);
     queueMicrotask(refresh);
@@ -994,7 +1000,7 @@ api.addEventListener("symbiotica.recipe", (event) => {
     if (!node || !detail.name) return;
     node._symServedRecipe = String(detail.name);
     node.title = `Recipe — ${detail.name}`;
-    node._symShowServed?.(String(detail.name));
+    node._symShowServed?.(String(detail.name), detail);
     node.setDirtyCanvas?.(true, true);
 });
 

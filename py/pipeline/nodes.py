@@ -4645,6 +4645,13 @@ class SymbioticaPromptRecipe(io.ComfyNode):
             # id to reach the right panel. Without this the id went over empty
             # and the node kept its old title while serving the new prompts.
             hidden=[io.Hidden.unique_id],
+            # Queueable on its own — "Queue Selected Output Node" on this node
+            # resolves the wired category and bucket and tells the panel what
+            # it served. Which recipe a wire picks is decided in Python, so
+            # without a run of its own the panel sits on the last name it was
+            # told and there is no way to find out what the graph would send
+            # short of rendering the whole thing.
+            is_output_node=True,
         )
 
     @classmethod
@@ -4766,6 +4773,10 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                                    "unique_id", "")),
             "name": name,
             "blocks": [str(s.get("block", "")) for s in picked[:want]],
+            # How big each served block actually is. "i have no idea what the
+            # actual prompt this sends out" — the names say which blocks, the
+            # sizes say they were read and not empty.
+            "chars": [len(t) for t in texts[:want]],
         })
         return io.NodeOutput(*texts)
 
