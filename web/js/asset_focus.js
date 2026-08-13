@@ -301,6 +301,34 @@ function focusPanel(node) {
         // A preview left floating over a list that is being replaced points at
         // a tile that no longer exists.
         hideHoverZoom();
+        // The pick he made last session, put back now that there is something
+        // to pick FROM. `category` and `asset` are combos whose choices only
+        // exist once the order has been read, and a combo restored with a
+        // value outside its options does not survive the load — so every
+        // restart lost the narrowing and he re-clicked the same widgets. The
+        // wanted values are snapshotted off the saved graph in onConfigure and
+        // only dropped once a list has arrived to look in.
+        const wanted = node._symWanted;
+        if (wanted) {
+            const categories = categoriesOf(node);
+            const cw = widgetOf(node, "category");
+            if (cw && wanted.category && categories.includes(wanted.category)) {
+                cw.value = wanted.category;
+            }
+            const offered = new Set([
+                ...(publishedAssets(node)?.assets ?? []),
+                ...(node._symFocusAssets ?? []),
+            ].map((a) => a.name));
+            const aw = widgetOf(node, "asset");
+            if (aw && wanted.asset && offered.has(wanted.asset)) {
+                aw.value = wanted.asset;
+            }
+            // Give up only once the choices are known: before that, "not in
+            // the list" means the list has not arrived, not that the pick is
+            // stale — which is the whole bug, one layer down.
+            if (offered.size) node._symWanted = null;
+        }
+
         // What a run reported wins — it is the list the node actually chose
         // from, already narrowed by `category`. Otherwise fall back to what the
         // wired source published, so the choices are there before any run.
@@ -514,7 +542,22 @@ registerSymbioticaExtension(app, {
         };
 
         const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function () {
+        nodeType.prototype.onConfigure = function (info) {
+            // Snapshot the saved narrowing BEFORE it is applied. `category`
+            // and `asset` are combos fed by the order, which has not been read
+            // yet at this point, so what lands on the widget does not stay
+            // there — the panel puts it back once the choices exist.
+            const saved = info?.widgets_values;
+            if (Array.isArray(saved)) {
+                const at = (name) =>
+                    this.widgets?.findIndex((w) => w.name === name) ?? -1;
+                const value = (name) => {
+                    const i = at(name);
+                    return i >= 0 ? String(saved[i] ?? "").trim() : "";
+                };
+                this._symWanted = { category: value("category"),
+                                    asset: value("asset") };
+            }
             onConfigure?.apply(this, arguments);
             queueMicrotask(() => this._symRenderFocus?.());
         };

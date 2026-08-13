@@ -682,3 +682,56 @@ test("the panel element itself is capped to the node width", async () => {
     assert.equal(el.style.maxWidth, "300px");
     assert.equal(el.style.overflowX, "hidden");
 });
+
+// --- the pick survives a restart ---------------------------------------------
+
+async function reopened(saved) {
+    // A saved graph, reopened: onNodeCreated first, then onConfigure applies
+    // widgets_values, and only later does the order arrive with the choices.
+    reset();
+    const specs = await create("SymbioticaOrderSpecs",
+                               { feature: "Mini 3 — Franken-Feast" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Frankencrisps", category: "Food - 3 stages" },
+        { assetName: "Bunting", category: "Decoration" },
+    ] }];
+    const node = await create("SymbioticaAssetFocus",
+                              { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    const at = (name) => node.widgets.findIndex((w) => w.name === name);
+    const values = [];
+    values[at("category")] = saved.category;
+    values[at("asset")] = saved.asset;
+    // The combos have no choices yet, which is exactly why the values on disk
+    // do not stick — configure applies them into an empty option list.
+    node.onConfigure?.call(node, { widgets_values: values });
+    widgetOf(node, "category").value = "";
+    widgetOf(node, "asset").value = "";
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    return node;
+}
+
+test("the category and asset picked last session come back after a restart",
+     async () => {
+    // "everytime i restart i have to fucking click the same 3 buttons again" —
+    // both are combos fed by the order, and a value restored into an empty
+    // option list does not survive the load.
+    const node = await reopened({ category: "Food - 3 stages",
+                                  asset: "Frankencrisps" });
+    assert.equal(widgetOf(node, "category").value, "Food - 3 stages");
+    assert.equal(widgetOf(node, "asset").value, "Frankencrisps");
+});
+
+test("a saved pick the order no longer holds is not put back", async () => {
+    const node = await reopened({ category: "Decoration", asset: "Gone Asset" });
+    assert.equal(widgetOf(node, "category").value, "Decoration");
+    assert.equal(widgetOf(node, "asset").value, "");
+});
+
+test("restoring the category narrows the list on the same pass", async () => {
+    const node = await reopened({ category: "Decoration", asset: "Bunting" });
+    assert.deepEqual(names(node), ["Bunting"]);
+});
