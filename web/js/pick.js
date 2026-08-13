@@ -141,6 +141,17 @@ const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
 
     let images = [];
     let folder = "";
+    // The folder the RUN resolved, and which step below it the breadcrumb is
+    // standing on. The crumb is a widget so it is saved with the workflow —
+    // where he left the picker is where it opens.
+    let root = "";
+    let folders = [];
+    const crumbOf = () => String(widgetOf(node, "subfolder")?.value ?? "").trim();
+    const setCrumb = (value) => {
+        const w = widgetOf(node, "subfolder");
+        if (w) w.value = String(value || "");
+        load();
+    };
     // Listing another picker's approvals rather than a folder of its own.
     let shortlist = false;
     let error = "";
@@ -160,9 +171,18 @@ const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
         try {
             const q = new URLSearchParams({ node_id: String(node.id) });
             if (explicitFolder) q.set("folder", explicitFolder);
+            if (crumbOf()) q.set("subfolder", crumbOf());
             const data = await fetchJson(`/symbiotica/pick-list?${q.toString()}`);
             images = Array.isArray(data.images) ? data.images : [];
             folder = data.folder || "";
+            root = data.root || "";
+            folders = Array.isArray(data.folders) ? data.folders : [];
+            // The server is the authority on where the crumb landed: a step
+            // that is gone since the graph was saved answers with the root,
+            // and a bar still showing it would never come back.
+            const landed = String(data.subfolder ?? "");
+            const w = widgetOf(node, "subfolder");
+            if (w && landed !== String(w.value ?? "")) w.value = landed;
             shortlist = Boolean(data.shortlist);
             loadedOk = images.length > 0;
             error = "";
@@ -247,7 +267,7 @@ const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ node_id: String(node.id),
-                                       names }),
+                                       subfolder: crumbOf(), names }),
             });
             const dropped = new Set(names);
             writeTicks(node, new Set([...readTicks(node)]
@@ -367,6 +387,66 @@ const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
             });
             bar.appendChild(clear);
         }
+        return bar;
+    }
+
+    // --- breadcrumbs --------------------------------------------------------
+    // One bar: root / step / step, each clickable, followed by the folders one
+    // click further down. A picker handed a project root lists everything
+    // under it, and this is how you walk to the one folder you meant —
+    // "just one bradcrumbs bar with the root/subfolder/subfolder i can click
+    // to navigate".
+    function renderCrumbs() {
+        const bar = el("div",
+            "display:flex;align-items:center;gap:3px;width:100%;flex-wrap:wrap;"
+            + `box-sizing:border-box;padding:0 3px 3px;font:10px ${HUB.font};`
+            + `color:${HUB.inkTertiary};`);
+        bar.title = folder;
+        // A shortlist is another picker's ticks, not a tree — there is nothing
+        // under it to walk into.
+        if (shortlist) {
+            bar.appendChild(el("span", "overflow:hidden;text-overflow:ellipsis;"
+                + "white-space:nowrap;", folder));
+            return bar;
+        }
+        const step = (label, target, current) => {
+            const b = el("button", ghostButtonCss + "padding:1px 6px;flex:none;"
+                + (current ? `border-color:${HUB.accent};color:${HUB.ink};` : ""),
+                         label);
+            b.className = "sym-btn";
+            b.title = current ? folder : `List ${target || "everything"}`;
+            b.addEventListener("pointerdown", (e) => e.stopPropagation());
+            if (!current) b.addEventListener("click", () => setCrumb(target));
+            return b;
+        };
+        const parts = crumbOf().split("/").filter(Boolean);
+        bar.appendChild(step(root ? root.split("/").pop() || root : "root", "",
+                             parts.length === 0));
+        parts.forEach((part, i) => {
+            bar.appendChild(el("span", "flex:none;opacity:.5;", "/"));
+            bar.appendChild(step(part, parts.slice(0, i + 1).join("/"),
+                                 i === parts.length - 1));
+        });
+        // The next step down, as chips rather than a dropdown: what is under
+        // here is the question the bar is being read to answer.
+        for (const name of folders) {
+            const down = el("button", ghostButtonCss
+                + `padding:1px 6px;flex:none;color:${HUB.inkSubtle};`,
+                            `↳ ${name}`);
+            down.className = "sym-btn";
+            down.title = `List only ${name}`;
+            down.addEventListener("pointerdown", (e) => e.stopPropagation());
+            down.addEventListener("click", () =>
+                setCrumb([...parts, name].join("/")));
+            bar.appendChild(down);
+        }
+        // The absolute path, dimmed, at the end of the same bar: which folder
+        // a picker landed on is the thing that goes wrong, and the crumbs
+        // above it are relative — they cannot say WHERE the root is.
+        bar.appendChild(el("span",
+            `flex:1;min-width:40px;opacity:.7;color:${HUB.inkTertiary};`
+            + "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+            + "direction:rtl;text-align:left;", folder));
         return bar;
     }
 
@@ -624,12 +704,7 @@ const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
             + `background:${HUB.surface1};padding-bottom:2px;`);
         top.appendChild(renderHead(ticks, edits));
         if (checked.size) top.appendChild(renderBatchBar());
-        if (folder) {
-            top.appendChild(el("div",
-                `color:${HUB.inkTertiary};font:10px ${HUB.font};padding:0 3px 3px;`
-                + "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;",
-                folder));
-        }
+        if (folder) top.appendChild(renderCrumbs());
         if (error) top.appendChild(errorLine(error));
         if (notice) {
             top.appendChild(el("div",
@@ -666,7 +741,8 @@ registerSymbioticaExtension(app, {
             onNodeCreated?.apply(this, arguments);
             // Canvas state: collapse it (a bare .hidden is ignored by the
             // classic canvas widgets).
-            for (const name of ["selection", "view", "edit_selection"]) {
+            for (const name of ["selection", "view", "edit_selection",
+                                "subfolder"]) {
                 const w = widgetOf(this, name);
                 if (w) { w.hidden = true; w.computeSize = () => [0, -4]; }
             }

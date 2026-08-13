@@ -28,7 +28,17 @@ function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) 
                 discarded: JSON.parse(init?.body ?? "{}").names ?? [] } };
         }
         if (route.startsWith("/symbiotica/pick-list")) {
-            return { ok: true, body: { ok: true, folder, images, shortlist } };
+            // The server echoes where the crumb LANDED, which is not always
+            // where it was asked to go: `under` answers a step that is not
+            // there with the root, and "gone" stands for that here.
+            const asked = new URLSearchParams(route.split("?")[1] ?? "")
+                .get("subfolder") ?? "";
+            const landed = asked === "gone" ? "" : asked;
+            return { ok: true, body: { ok: true, images, shortlist,
+                                       folder: landed ? `${folder}/${landed}`
+                                                      : folder,
+                                       root: folder, subfolder: landed,
+                                       folders: ["Drinks", "Food"] } };
         }
         return { ok: false, status: 404, body: { error: "no such route" } };
     };
@@ -39,7 +49,7 @@ function router(seen, images, folder = `${FOLDER}/Spookies`, shortlist = false) 
 // here that has to track the Python schema exactly.
 const WIDGET_DEFAULTS = {
     save_path: "", selection: "", view: "", mode: "multiple", stage: "",
-    names: "", show: "approved", edit_selection: "",
+    names: "", show: "approved", edit_selection: "", subfolder: "",
 };
 
 async function panelNode(seen = [], images = [], values = {},
@@ -719,4 +729,70 @@ test("a stale wrapper width cannot widen the panel past the node", async () => {
     node.size[0] = 700;
     node.onDrawForeground?.();
     assert.equal(wrap.style.maxWidth, "680px");
+});
+
+// --- the breadcrumb bar -------------------------------------------------------
+
+test("the folders one step down are offered as crumbs to click", async () => {
+    // "just one bradcrumbs bar with the root/subfolder/subfolder i can click
+    // to navigate" — a picker handed a project root lists everything under it,
+    // and this is how you walk to the one folder you meant.
+    const node = await panelNode([], [ONE]);
+    assert.deepEqual(buttonsSaying(node, "↳").map((b) => b.textContent),
+                     ["↳ Drinks", "↳ Food"]);
+});
+
+test("clicking a folder writes the crumb and re-lists", async () => {
+    const seen = [];
+    const node = await panelNode(seen, [ONE]);
+    seen.length = 0;
+    fire(buttonsSaying(node, "↳ Food")[0], "click");
+    for (let i = 0; i < 20; i++) await tick();
+    assert.equal(widgetOf(node, "subfolder").value, "Food");
+    assert.ok(seen.some((c) => c.route.includes("subfolder=Food")),
+              "the listing was not re-fetched for that folder");
+});
+
+test("a crumb is saved on the node, so the picker reopens where he left it",
+     async () => {
+    const node = await panelNode([], [ONE], { subfolder: "datasets/Food" });
+    assert.deepEqual(
+        buttonsSaying(node, "datasets").map((b) => b.textContent),
+        ["datasets"]);
+    assert.equal(widgetOf(node, "subfolder").value, "datasets/Food");
+});
+
+test("clicking a step further up walks back", async () => {
+    const node = await panelNode([], [ONE], { subfolder: "datasets/Food" });
+    fire(buttonsSaying(node, "datasets")[0], "click");
+    for (let i = 0; i < 20; i++) await tick();
+    assert.equal(widgetOf(node, "subfolder").value, "datasets");
+});
+
+test("the server decides where the crumb landed", async () => {
+    // A folder renamed since the graph was saved answers with the root — a bar
+    // still showing the dead step would never come back.
+    const node = await panelNode([], [ONE], { subfolder: "gone" });
+    assert.equal(widgetOf(node, "subfolder").value, "");
+});
+
+test("a shortlist has no tree to walk into", async () => {
+    const node = await panelNode([], [ONE], {}, true);
+    assert.deepEqual(buttonsSaying(node, "↳"), []);
+});
+
+test("discarding says which step of the folder the names came from", async () => {
+    // A picker standing on a step lists names relative to it; matching those
+    // against the ROOT's listing would silently discard nothing.
+    const seen = [];
+    const node = await panelNode(seen, [ONE, TWO], { subfolder: "Food" });
+    fire(cells(node)[0], "click");
+    fire(buttonsSaying(node, "\u2610")[0], "click");
+    fire(buttonsSaying(node, "\u2715 discard 1")[0], "click");
+    await tick();
+    fire(buttonsSaying(node, "\u2715 discard 1?")[0], "click");
+    for (let i = 0; i < 10; i++) await tick();
+    const call = seen.find((c) => c.route.includes("pick-discard"));
+    assert.ok(call, "no discard call");
+    assert.equal(JSON.parse(call.init.body).subfolder, "Food");
 });

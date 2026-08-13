@@ -173,19 +173,55 @@ def read_folders(target: str) -> list[tuple[str, str]]:
         pairs.append((target, ""))
         if not images_in(target):
             # A folder holding only sub-folders — `Food - 3 stages/{Food,
-            # Drinks}` — is still a folder of images to the eye, and a picker
-            # pointed at any path has to show what is under it. Read one level
-            # down, but only when the folder itself has none of its own, so no
-            # listing that already worked can change. `discarded` stays out: it
-            # is the one sub-folder that means "taken out of the grid".
-            try:
-                entries = sorted(os.listdir(target))
-            except OSError:
-                entries = []
-            pairs.extend((os.path.join(target, entry), "") for entry in entries
-                         if entry != DISCARD_DIR
-                         and os.path.isdir(os.path.join(target, entry)))
+            # Drinks}`, or a whole project root — is still a folder of images
+            # to the eye, and a picker pointed at any path has to show what is
+            # under it. Walk the WHOLE tree, not one level: "we have the bakery
+            # root folder and i want to navigate to dataset/food", which is
+            # four levels down, and one level answered that with an empty grid.
+            # Only when the folder itself has no images of its own, so no
+            # listing that already worked changes. `discarded` stays out: it is
+            # the one sub-folder that means "taken out of the grid".
+            for where, dirs, _files in os.walk(target):
+                dirs[:] = sorted(d for d in dirs if d != DISCARD_DIR
+                                 and not d.startswith("."))
+                pairs.extend((os.path.join(where, d), "") for d in dirs)
+                if len(pairs) > LISTING_LIMIT:
+                    break
     return pairs
+
+
+def subfolders_in(folder: str) -> list[str]:
+    """The immediate sub-folders of `folder`, sorted — the next step down.
+
+    What the panel's breadcrumb offers to click. One level only: a breadcrumb
+    is a walk taken a step at a time, and the grid below it already shows
+    everything under the step you are on.
+    """
+    try:
+        entries = sorted(os.listdir(folder))
+    except OSError:
+        return []
+    return [e for e in entries
+            if not e.startswith(".") and e != DISCARD_DIR
+            and os.path.isdir(os.path.join(folder, e))]
+
+
+def under(root: str, subfolder: str) -> str:
+    """`root` narrowed to the sub-folder the breadcrumb is standing on.
+
+    A crumb that escapes the root, or names a folder that is not there, is
+    answered with the root itself: the crumb is saved in the workflow, and a
+    stale one must show the root again rather than point a picker at a folder
+    outside the tree it was given.
+    """
+    sub = str(subfolder or "").strip().strip("/\\")
+    if not root or not sub:
+        return root
+    base = os.path.normpath(root)
+    path = os.path.normpath(os.path.join(base, sub))
+    if path != base and not path.startswith(base + os.sep):
+        return root
+    return path if os.path.isdir(path) else root
 
 
 def _parent_stems(derived_from):
@@ -239,23 +275,42 @@ def listing_for(target: str, limit: int = LISTING_LIMIT, only=None,
 
     entries: list[dict] = []
     for folder, prefix in read_folders(target):
-        entries.extend(listing(folder, prefix, limit, keep))
-    # `id` is the file name, which is what a tick records, so the same name
-    # arriving from both layouts must not become two tiles with one identity.
+        # Stop reading folders once the cap is met. A tree-wide walk can hand
+        # back a hundred folders, and reading a full `limit` out of each means
+        # a hundred directory reads and an image header opened per file for a
+        # grid that shows the first four hundred.
+        room = limit - len(entries)
+        if room <= 0:
+            break
+        entries.extend(listing(folder, prefix, room, keep))
+    # `id` is what a tick records. Below a walked folder it is the path
+    # RELATIVE to the target, not the bare name: two sub-folders of one asset
+    # may hold the same filename, and a bare name made them one tile with one
+    # identity — the second silently missing from the grid it is sitting in.
+    base = target if os.path.isdir(target) else ""
     seen, unique = set(), []
     for entry in entries:
-        if entry["id"] in seen:
+        ident = entry["id"]
+        if base:
+            try:
+                rel = os.path.relpath(entry["path"], base)
+            except ValueError:
+                rel = ""
+            if rel and not rel.startswith(".."):
+                ident = rel.replace(os.sep, "/")
+        if ident in seen:
             continue
         if len(unique) >= limit:
             break
-        seen.add(entry["id"])
-        unique.append({**entry, "index": len(unique) + 1})
+        seen.add(ident)
+        unique.append({**entry, "id": ident, "name": ident,
+                       "index": len(unique) + 1})
     return unique
 
 
-# Where a rejected render goes. A subfolder of what the node lists, because
-# both layouts read one level only — so anything in here is out of every
-# listing without being out of the tree.
+# Where a rejected render goes. A subfolder of what the node lists, skipped by
+# name everywhere a folder is read — so anything in here is out of every
+# listing, and out of the tree walk, without being off the disk.
 DISCARD_DIR = "discarded"
 
 

@@ -4169,6 +4169,10 @@ class SymbioticaPick(io.ComfyNode):
                 # restore positionally: the files marked ✎ on the panel, a
                 # second set beside the approve ticks with its own output.
                 io.String.Input("edit_selection", default="", optional=True),
+                # Canvas state, appended for the same reason: which step of the
+                # folder the panel's breadcrumb is standing on, as a path
+                # relative to the wired one. Empty is the whole tree.
+                io.String.Input("subfolder", default="", optional=True),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
@@ -4214,7 +4218,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def fingerprint_inputs(cls, images=None, save_path="", selection="",
                            view="", mode="multiple", stage="", names="",
-                           show="approved", edit_selection=""):
+                           show="approved", edit_selection="", subfolder=""):
         """Change only when what LEAVES the node could have.
 
         The first version returned NaN — always changed — so the panel would
@@ -4232,7 +4236,7 @@ class SymbioticaPick(io.ComfyNode):
         change. A file replaced under the same name changes mtime and size,
         which is why the stat is part of the stamp rather than just the name.
         """
-        from .pick_folder import listing_for, picked_paths, resolved
+        from .pick_folder import listing_for, picked_paths, resolved, under
 
         one = SymbioticaCategoryPrompts._one
         node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
@@ -4240,6 +4244,9 @@ class SymbioticaPick(io.ComfyNode):
         target, only, derived = resolved(node_id) if node_id else ("", None, None)
         if not target:
             return float("nan")
+        # The breadcrumb names a different folder, so what leaves the node can
+        # change with nothing else touched.
+        target = under(target, str(one(subfolder, "") or ""))
         picked_one = str(one(mode, "multiple") or "multiple") == "single"
         ticks = _pick_ids(str(one(selection, "")))
         edit_ticks = _pick_ids(str(one(edit_selection, "")))
@@ -4276,7 +4283,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def check_lazy_status(cls, images=None, save_path="", selection="",
                           view="", mode="multiple", stage="", names="",
-                          show="approved", edit_selection=""):
+                          show="approved", edit_selection="", subfolder=""):
         """Ask for the wire when there is one — for its ORDER, not its value.
 
         The images are read off disk, and `execute` ignores whatever arrives
@@ -4356,11 +4363,12 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def execute(cls, images=None, save_path="", selection="", view="",
                 mode="multiple", stage="", names="",
-                show="approved", edit_selection="") -> io.NodeOutput:
+                show="approved", edit_selection="",
+                subfolder="") -> io.NodeOutput:
         from PIL import Image
 
         from .pick_folder import (edit_prefix, listing_for, picked_paths,
-                                  remember, resolved)
+                                  remember, resolved, under)
 
         one = SymbioticaCategoryPrompts._one
         node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
@@ -4412,11 +4420,14 @@ class SymbioticaPick(io.ComfyNode):
         if wanted:
             only = wanted if only is None else [n for n in only
                                                 if n in set(wanted)]
-        entries = listing_for(target, only=only, derived_from=derived_from)
         # The panel lists the same thing this run resolved; it cannot work it
         # out for itself, because asset and category arrive on wires and a
-        # wired input has no value on the canvas.
+        # wired input has no value on the canvas. What is remembered is the
+        # ROOT — the breadcrumb walks down from it, and the panel applies its
+        # own step the same way this does, so navigating needs no re-queue.
         remember(node_id, target, only, derived_from)
+        here = under(target, str(one(subfolder, "") or ""))
+        entries = listing_for(here, only=only, derived_from=derived_from)
 
         # Nothing ticked is a legitimate state, not a failure: it is what the
         # node looks like before the images have been looked at. An empty list

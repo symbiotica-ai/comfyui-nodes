@@ -6,7 +6,8 @@ from PIL import Image
 
 from pipeline.pick_folder import (edit_prefix, images_in, listing, listing_for,
                                   name_matches_prefix, picked_paths,
-                                  parent_of, read_folders, remember, resolved)
+                                  parent_of, read_folders, remember, resolved,
+                                  subfolders_in, under)
 
 
 def renders(folder, names, colour=10):
@@ -267,9 +268,14 @@ class TestWhichLayoutANameMeans:
     def test_nothing_to_read_is_no_folders(self):
         assert read_folders("") == []
 
-    def test_a_folder_of_buckets_is_read_one_level_down(self, tmp_path):
+    def test_a_folder_of_buckets_is_read_all_the_way_down(self, tmp_path):
         """`Food - 3 stages/{Food,Drinks}` holds no images itself, and a
-        picker pointed at any path still has to show what is under it."""
+        picker pointed at any path still has to show what is under it.
+
+        The name is the path RELATIVE to what was asked for: two buckets of
+        one asset may hold the same filename, and a bare name made them one
+        tile — the second silently absent from the grid it is sitting in.
+        """
         stages = tmp_path / "Food - 3 stages"
         renders(str(stages / "Food"), ("Truffles.png",))
         renders(str(stages / "Drinks"), ("Tea.png",))
@@ -277,8 +283,25 @@ class TestWhichLayoutANameMeans:
             (str(stages), ""),
             (str(stages / "Drinks"), ""),
             (str(stages / "Food"), "")]
-        assert [e["name"] for e in listing_for(str(stages))] == ["Tea.png",
-                                                                "Truffles.png"]
+        assert [e["name"] for e in listing_for(str(stages))] == [
+            "Drinks/Tea.png", "Food/Truffles.png"]
+
+    def test_a_project_root_is_walked_to_the_bottom(self, tmp_path):
+        """"we have the bakery root folder and i want to navigate to
+        dataset/food" — four levels down, and one level answered that with an
+        empty grid."""
+        root = tmp_path / "bakery"
+        deep = root / "datasets" / "dataset-single" / "Food - 3 stages" / "Food"
+        renders(str(deep), ("Blossom Tower.png",))
+        assert [e["name"] for e in listing_for(str(root))] == [
+            "datasets/dataset-single/Food - 3 stages/Food/Blossom Tower.png"]
+
+    def test_the_same_filename_in_two_buckets_is_two_tiles(self, tmp_path):
+        stages = tmp_path / "Food - 3 stages"
+        renders(str(stages / "Food"), ("Cake.png",))
+        renders(str(stages / "Drinks"), ("Cake.png",))
+        assert [e["name"] for e in listing_for(str(stages))] == [
+            "Drinks/Cake.png", "Food/Cake.png"]
 
     def test_a_folder_with_its_own_images_ignores_its_sub_folders(self,
                                                                  tmp_path):
@@ -483,3 +506,47 @@ class TestNarrowingBeforeTheCap:
         renders(str(tmp_path), ("zzz.png",))
         names = [e["name"] for e in listing_for(str(tmp_path), only=["zzz.png"])]
         assert names == ["zzz.png"]
+
+
+# --- the breadcrumb: standing on one step of the folder you were given -------
+
+class TestNavigatingTheFolder:
+    def test_no_crumb_is_the_root(self, tmp_path):
+        assert under(str(tmp_path), "") == str(tmp_path)
+
+    def test_a_crumb_is_the_folder_under_the_root(self, tmp_path):
+        (tmp_path / "datasets" / "Food").mkdir(parents=True)
+        assert under(str(tmp_path), "datasets/Food") == str(
+            tmp_path / "datasets" / "Food")
+
+    def test_a_crumb_that_leaves_the_root_is_refused(self, tmp_path):
+        """The crumb is saved in the workflow and arrives on a query string —
+        a `..` walk must show the root again, not someone else's tree."""
+        (tmp_path / "inside").mkdir()
+        root = str(tmp_path / "inside")
+        assert under(root, "../..") == root
+        assert under(root, "/etc") == root
+
+    def test_a_crumb_naming_nothing_is_the_root(self, tmp_path):
+        """A folder renamed since the graph was saved shows the root, not an
+        empty grid with no way back."""
+        assert under(str(tmp_path), "gone/missing") == str(tmp_path)
+
+    def test_the_next_step_down_is_offered_sorted(self, tmp_path):
+        (tmp_path / "orders").mkdir()
+        (tmp_path / "datasets").mkdir()
+        (tmp_path / "discarded").mkdir()
+        (tmp_path / ".hidden").mkdir()
+        renders(str(tmp_path / "loose.png").replace("/loose.png", ""),
+                ("loose.png",))
+        assert subfolders_in(str(tmp_path)) == ["datasets", "orders"]
+
+    def test_a_folder_that_is_not_there_offers_nothing(self, tmp_path):
+        assert subfolders_in(str(tmp_path / "nope")) == []
+
+    def test_standing_on_a_step_lists_only_that_step(self, tmp_path):
+        root = tmp_path / "bakery"
+        renders(str(root / "datasets" / "Food"), ("Cake.png",))
+        renders(str(root / "datasets" / "Drinks"), ("Tea.png",))
+        here = under(str(root), "datasets/Food")
+        assert [e["name"] for e in listing_for(here)] == ["Cake.png"]
