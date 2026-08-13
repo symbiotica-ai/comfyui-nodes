@@ -37,6 +37,16 @@ function widgetOf(node, name) {
     return (node.widgets ?? []).find((w) => w.name === name);
 }
 
+// A widget's value is not always the type its schema promises. Wiring an input
+// leaves a number behind in the widget it replaced, and a saved graph whose node
+// gained a widget deserialises the old list one slot across — his Prompt Recipe
+// came back with `project_path = 1`. `.trim()` on that throws, and the throw
+// killed the whole refresh, so the panel just sat there empty with the reason
+// only in the console. Text is text; anything else is nothing.
+function valueText(widget) {
+    return typeof widget?.value === "string" ? widget.value.trim() : "";
+}
+
 // The project a panel edits: this node's own widget, else the node feeding its
 // project_path or order input.
 //
@@ -49,7 +59,7 @@ function widgetOf(node, name) {
 function projectOf(node, seen = new Set()) {
     if (!node || seen.has(node.id)) return "";
     seen.add(node.id);
-    const typed = widgetOf(node, "project_path")?.value?.trim();
+    const typed = valueText(widgetOf(node, "project_path"));
     if (typed) return typed;
     const OURS = new Set([BOOK, BLOCK, COMPOSE, RECIPE]);
     for (const name of ["project_path", "order"]) {
@@ -450,7 +460,7 @@ function blockPanel(node) {
         try {
             const book = await getJson(
                 `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`);
-            const keep = blockW?.value?.trim() || picker.value;
+            const keep = valueText(blockW) || picker.value;
             picker.replaceChildren();
             groupInto(picker, "Game rules — apply to every type", book.rules);
             const image = book.image ?? [];
@@ -579,7 +589,7 @@ function composePanel(node) {
         try {
             const book = await getJson(
                 `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`);
-            const keep = catW?.value?.trim() || picker.value;
+            const keep = valueText(catW) || picker.value;
             picker.replaceChildren();
             groupInto(picker, "Asset type", (book.types ?? []).map(
                 (row) => ({ name: row.title, title: row.title,
@@ -785,7 +795,7 @@ function recipePanel(node) {
             ]);
             blocks = versions.blocks ?? [];
             saved = new Map((list.recipes ?? []).map((r) => [r.name, r.slots]));
-            const keep = recipeW?.value?.trim() || picker.value;
+            const keep = valueText(recipeW) || picker.value;
             picker.replaceChildren();
             groupInto(picker, "Recipes",
                       [...saved.keys()].map((n) => ({
