@@ -4,8 +4,8 @@ import os
 
 import pytest
 
-from pipeline.layouts import (layouts_dir, list_layouts, newest_for,
-                              pick_layout)
+from pipeline.layouts import (built_dir, layouts_dir, list_layouts,
+                              newest_for, newest_in, pick_layout)
 
 
 def project_with(tmp_path, *names):
@@ -114,3 +114,73 @@ class TestPinningOneByName:
     def test_a_pin_that_is_gone_names_nothing_rather_than_guessing(self, tmp_path):
         project = project_with(tmp_path, "Chair.png")
         assert pick_layout(project, "Chair", "", "deleted.png") == ""
+
+
+class TestAssetkitsOwnFolders:
+    """assetkit builds them into `datasets/dataset-single/<Category> Layout/`
+    and names them its own way. Read in place rather than copied here — the
+    file is already on disk, and a second copy is a second thing to keep in
+    step."""
+
+    def built(self, tmp_path, folder, *names):
+        root = tmp_path / "bakery"
+        where = root / "datasets" / "dataset-single" / folder
+        where.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (where / name).write_bytes(b"")
+        return str(root)
+
+    def test_the_built_folder_answers_for_the_category(self, tmp_path):
+        project = self.built(tmp_path, "Chair Layout", "Chair-layout-01.png")
+        assert os.path.basename(
+            pick_layout(project, "Chair")) == "Chair-layout-01.png"
+
+    def test_assetkit_s_underscores_still_match(self, tmp_path):
+        """`Chair Layout` beside `Food_-_3_stages Layout` — matching on the
+        exact string finds one and misses the other."""
+        project = self.built(tmp_path, "Food_-_3_stages Layout",
+                             "Food_-_3_stages-layout-01.png")
+        assert os.path.basename(pick_layout(project, "Food - 3 stages")) \
+            == "Food_-_3_stages-layout-01.png"
+
+    def test_the_highest_numbered_sheet_wins(self, tmp_path):
+        project = self.built(tmp_path, "Chair Layout", "Chair-layout-01.png",
+                             "Chair-layout-06.png", "Chair-layout-10.png")
+        assert os.path.basename(
+            pick_layout(project, "Chair")) == "Chair-layout-10.png"
+
+    def test_a_hand_placed_file_beats_the_built_one(self, tmp_path):
+        """`datasets/layouts/` is the override — how a grid gets tried without
+        rebuilding the set."""
+        project = self.built(tmp_path, "Chair Layout", "Chair-layout-01.png")
+        layouts = tmp_path / "bakery" / "datasets" / "layouts"
+        layouts.mkdir(parents=True)
+        (layouts / "Chair.png").write_bytes(b"")
+        assert os.path.basename(pick_layout(project, "Chair")) == "Chair.png"
+
+    def test_a_bucket_folder_beats_the_plain_category(self, tmp_path):
+        project = self.built(tmp_path, "Food - 3 stages Layout",
+                             "Food-layout-01.png")
+        self.built(tmp_path, "Food - 3 stages - Drinks Layout",
+                   "Drinks-layout-01.png")
+        assert os.path.basename(
+            pick_layout(project, "Food - 3 stages", "Drinks")
+        ) == "Drinks-layout-01.png"
+
+    def test_a_bucket_with_no_built_folder_falls_back(self, tmp_path):
+        project = self.built(tmp_path, "Chair Layout", "Chair-layout-01.png")
+        assert os.path.basename(
+            pick_layout(project, "Chair", "Drinks")) == "Chair-layout-01.png"
+
+    def test_a_category_with_no_folder_finds_nothing(self, tmp_path):
+        project = self.built(tmp_path, "Chair Layout", "Chair-layout-01.png")
+        assert pick_layout(project, "Wallpaper") == ""
+
+    def test_a_folder_of_non_images_finds_nothing(self, tmp_path):
+        project = self.built(tmp_path, "Chair Layout", "notes.txt")
+        assert pick_layout(project, "Chair") == ""
+
+    def test_no_category_never_matches_a_bare_layout_folder(self, tmp_path):
+        """An empty category must not resolve to a folder called "Layout"."""
+        project = self.built(tmp_path, "Layout", "anything-01.png")
+        assert pick_layout(project, "") == ""

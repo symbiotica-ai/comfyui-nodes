@@ -67,6 +67,82 @@ def newest_for(project_path: str, name: str) -> str:
     return os.path.join(layouts_dir(project_path), best) if best else ""
 
 
+# Where assetkit builds them: one folder per category under the dataset it
+# derived them from, `<Category> Layout/`, holding `<slug>-layout-NN.png`.
+# Read in place rather than copied here — the file is already on disk under a
+# name assetkit chose, and a second copy is a second thing to keep in step.
+BUILT_DIR = ("datasets", "dataset-single")
+BUILT_SUFFIX = " layout"
+
+
+def _loose(name: str) -> str:
+    """A folder or category name with the differences that do not matter gone.
+
+    assetkit slugs some names and not others — `Chair Layout` beside
+    `Food_-_3_stages Layout` — so matching on the exact string finds one and
+    misses the other. Underscores are spaces, runs of space are one, case is
+    nothing.
+    """
+    return " ".join(str(name or "").replace("_", " ").split()).casefold()
+
+
+def built_dir(project_path: str, name: str) -> str:
+    """assetkit's layout folder for `name`, or "".
+
+    Matched loosely against every folder in the dataset, because the exact
+    spelling is assetkit's to choose and this side only knows the order
+    sheet's.
+    """
+    wanted = _loose(f"{name}{BUILT_SUFFIX}")
+    if not _loose(name):
+        return ""
+    root = os.path.join(str(project_path or ""), *BUILT_DIR)
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        return ""
+    for entry in entries:
+        found = os.path.join(root, entry)
+        if _loose(entry) == wanted and os.path.isdir(found):
+            return found
+    return ""
+
+
+def newest_in(folder: str) -> str:
+    """The highest-numbered image in `folder`, or "".
+
+    Every file in an assetkit layout folder belongs to that one category, so
+    the category is not re-read off the filename — the trailing number is all
+    that separates `…-layout-01` from `…-layout-06`. Sorted numerically: as
+    text, `-10` lands before `-9`.
+    """
+    best, best_version = "", -1
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return ""
+    for file_name in names:
+        if file_name.startswith("."):
+            continue
+        if os.path.splitext(file_name)[1].lower() not in LAYOUT_EXTS:
+            continue
+        tail = _VERSION_TAIL.search(os.path.splitext(file_name)[0])
+        version = int(tail.group(1)) if tail else 0
+        if version >= best_version:
+            best, best_version = file_name, version
+    return os.path.join(folder, best) if best else ""
+
+
+def for_name(project_path: str, name: str) -> str:
+    """The layout answering to `name`, hand-placed first, then assetkit's.
+
+    `datasets/layouts/` is the override: a file dropped there by hand beats a
+    built one, which is how a grid gets tried without rebuilding the set.
+    """
+    return (newest_for(project_path, name)
+            or newest_in(built_dir(project_path, name)))
+
+
 def pick_layout(project_path: str, category: str = "", bucket: str = "",
                 pinned: str = "") -> str:
     """The layout file to draw on, as an absolute path, or "".
@@ -88,7 +164,7 @@ def pick_layout(project_path: str, category: str = "", bucket: str = "",
     category = str(category or "").strip()
     bucket = str(bucket or "").strip()
     if category and bucket:
-        found = newest_for(project_path, f"{category} - {bucket}")
+        found = for_name(project_path, f"{category} - {bucket}")
         if found:
             return found
-    return newest_for(project_path, category)
+    return for_name(project_path, category)
