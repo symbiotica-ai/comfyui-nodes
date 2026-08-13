@@ -6,6 +6,34 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.25
+
+**Panels stay inside their node, for good this time.** Every earlier attempt
+wrote the DOM widget wrapper's `width` — and so does ComfyUI, from its own
+layout pass, so whoever wrote last won and it was never us. The cap now goes on
+`max-width`, which the frontend never touches and which constrains an inline
+`width` whatever order the two arrive in; the width is still written for the
+widening case. Measured against the live frontend at 300/340/620/780/900px.
+
+**Panels follow ComfyUI's theme.** The palette was a fixed dark set, so on the
+light theme every panel was a black island. Colour tokens are CSS variables now
+and resolve to ComfyUI's own — `--comfy-input-bg`, `--input-text`,
+`--border-color`, the menu backgrounds — so a field in one of our panels looks
+like a field in any other node, and a theme switch repaints with no reload.
+Brand colours (the coral accent, the selected and danger fills) stay ours.
+
+**Prompt Recipe is a saved set of blocks**, not a list of version indexes:
+each slot names the block it fills and which of that block's versions to use,
+and the choice is stored with the node.
+
+**A dataset type folder may hold subfolders.** `dataset-single/Food - 3 stages`
+holds `Drinks/` and `Food/` rather than images, and the reader looked one level
+only, so the type reported no references and the node failed on a folder that
+plainly has art in it. Such a folder is now read one level deeper.
+
+**`docs/unused-nodes.md`** lists which of the pack's 131 nodes are still in a
+workflow, counted against all 115 known graphs, so the dead ones can go.
+
 ## 2026.8.24
 
 **Nothing reports always-changed any more.** Asset Focus answered its change

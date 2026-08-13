@@ -658,7 +658,9 @@ function recipePanel(node) {
         label.textContent = `${index + 1}`;
         label.style.cssText = "opacity:.55;width:12px;text-align:right;";
         const block = document.createElement("select");
-        block.style.cssText = "flex:1;min-width:0;font-size:11px;";
+        block.style.cssText = "flex:1;min-width:0;font-size:11px;"
+            + `background:${HUB.surface1};color:${HUB.ink};`
+            + `border:1px solid ${HUB.hairlineStrong};border-radius:4px;`;
         keepEvents(block);
         const empty = document.createElement("option");
         empty.value = "";
@@ -684,7 +686,9 @@ function recipePanel(node) {
             block.appendChild(g);
         }
         const version = document.createElement("select");
-        version.style.cssText = "width:96px;font-size:11px;";
+        version.style.cssText = "width:96px;font-size:11px;"
+            + `background:${HUB.surface1};color:${HUB.ink};`
+            + `border:1px solid ${HUB.hairlineStrong};border-radius:4px;`;
         keepEvents(version);
 
         const fillVersions = () => {
