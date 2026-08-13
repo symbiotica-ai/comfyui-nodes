@@ -5,9 +5,11 @@ from __future__ import annotations
 import os
 import re
 
-# Where the layouts live. Under `datasets/`, not under `prompts/`: they are
-# artwork, made in assetkit alongside the reference sets, and the prompt book
-# holds text.
+# Where the layouts live, and the ONLY place they are read from. One folder,
+# the same project path as everything else. Reading them out of the dataset
+# folders instead was tried and reverted: assetkit writes a `<Category> Layout`
+# beside every `<Category>` there, so every picker that lists that directory
+# showed each category twice.
 LAYOUTS_DIR = ("datasets", "layouts")
 
 LAYOUT_EXTS = (".png", ".jpg", ".jpeg", ".webp")
@@ -17,6 +19,12 @@ LAYOUT_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 # old one rather than a rename that would silently change what every past run
 # used.
 _VERSION_TAIL = re.compile(r"[\s._-]+v?(\d+)$", re.I)
+
+# assetkit splits a category by tile footprint — `Appliance 1x2` for a category
+# the order sheet calls plain `Appliance`. A size tag is the ONLY extra part
+# tolerated after the category, so `Appliance Part` stays its own category and
+# can never answer for `Appliance`.
+_SIZE_TAG = re.compile(r"^\d+\s*x\s*\d+$", re.I)
 
 
 def layouts_dir(project_path: str) -> str:
@@ -34,130 +42,61 @@ def list_layouts(project_path: str) -> list[str]:
             and os.path.splitext(n)[1].lower() in LAYOUT_EXTS]
 
 
-def _version_of(stem: str, name: str):
-    """How this file answers to `name`: (rank, version), or None for no match.
+def _loose(name: str) -> str:
+    """A name with the differences that do not matter gone — underscores are
+    spaces, runs of space are one, case is nothing. assetkit slugs some names
+    and not others, so matching on the exact string finds one and misses the
+    next."""
+    return " ".join(str(name or "").replace("_", " ").split()).casefold()
+
+
+def _rank(stem: str, name: str):
+    """How this file answers to `name`, as (sized, version), or None.
 
     An exact stem is version 0 and a numbered one is its number, so the highest
-    number wins and a bare name is the floor rather than a competitor.
+    number wins and a bare name is the floor rather than a competitor. A size
+    tag ranks BELOW an unsized match, so `Appliance.png` beats
+    `Appliance 1x2.png` while the sized one still answers when it is all there
+    is.
     """
-    if stem == name:
-        return 0
-    if not stem.startswith(name):
+    stem, name = _loose(stem), _loose(name)
+    if not name or not stem.startswith(name):
         return None
-    tail = _VERSION_TAIL.match(stem[len(name):])
-    return int(tail.group(1)) if tail else None
+    rest = stem[len(name):]
+    tail = _VERSION_TAIL.search(rest)
+    version = int(tail.group(1)) if tail else 0
+    if tail:
+        rest = rest[: tail.start()]
+    rest = rest.strip()
+    if not rest:
+        return (0, version)
+    if _SIZE_TAG.match(rest):
+        return (1, version)
+    return None
 
 
 def newest_for(project_path: str, name: str) -> str:
-    """The highest-numbered layout answering to `name`, or "".
+    """The best layout answering to `name`, or "".
 
-    "add grid-food7 without renaming anything" is the whole point: a new
-    version is a new file, and the newest one is what runs. Ties cannot happen
-    — two files with the same number differ by extension, and the sorted
-    listing settles it.
+    "add grid-food7 without renaming anything" is the point: a new version is a
+    new file, and the newest one is what runs. An unsized name beats a sized
+    one; among equals the highest version wins, numerically, so `-10` beats
+    `-9` rather than losing to it as text.
     """
     name = str(name or "").strip()
     if not name:
         return ""
-    best, best_version = "", -1
+    best, best_key = "", None
     for file_name in list_layouts(project_path):
-        version = _version_of(os.path.splitext(file_name)[0], name)
-        if version is not None and version > best_version:
-            best, best_version = file_name, version
+        rank = _rank(os.path.splitext(file_name)[0], name)
+        if rank is None:
+            continue
+        # Lower `sized` wins, then higher version; the file name settles ties
+        # so the answer is the same on every run.
+        key = (rank[0], -rank[1], file_name)
+        if best_key is None or key < best_key:
+            best, best_key = file_name, key
     return os.path.join(layouts_dir(project_path), best) if best else ""
-
-
-# Where assetkit builds them: one folder per category under the dataset it
-# derived them from, `<Category> Layout/`, holding `<slug>-layout-NN.png`.
-# Read in place rather than copied here — the file is already on disk under a
-# name assetkit chose, and a second copy is a second thing to keep in step.
-BUILT_DIR = ("datasets", "dataset-single")
-BUILT_SUFFIX = " layout"
-
-
-def _loose(name: str) -> str:
-    """A folder or category name with the differences that do not matter gone.
-
-    assetkit slugs some names and not others — `Chair Layout` beside
-    `Food_-_3_stages Layout` — so matching on the exact string finds one and
-    misses the other. Underscores are spaces, runs of space are one, case is
-    nothing.
-    """
-    return " ".join(str(name or "").replace("_", " ").split()).casefold()
-
-
-# assetkit splits a category by tile footprint — `Appliance 1x2 Layout` for a
-# category the order sheet calls plain `Appliance`. A size tag is the ONLY
-# extra part tolerated between the two, so `Appliance Part Layout` still
-# belongs to `Appliance Part` and can never answer for `Appliance`.
-_SIZE_TAG = re.compile(r"^\d+\s*x\s*\d+$", re.I)
-
-
-def built_dir(project_path: str, name: str) -> str:
-    """assetkit's layout folder for `name`, or "".
-
-    Matched loosely against every folder in the dataset, because the exact
-    spelling is assetkit's to choose and this side only knows the order
-    sheet's. An exact match wins; failing that, the same name with a size tag
-    on it, shortest first so a plain category never loses to a bigger one.
-    """
-    wanted = _loose(name)
-    if not wanted:
-        return ""
-    root = os.path.join(str(project_path or ""), *BUILT_DIR)
-    try:
-        entries = sorted(os.listdir(root))
-    except OSError:
-        return ""
-    sized = []
-    for entry in entries:
-        found = os.path.join(root, entry)
-        if not os.path.isdir(found):
-            continue
-        loose = _loose(entry)
-        if not loose.endswith(BUILT_SUFFIX):
-            continue
-        stem = loose[: -len(BUILT_SUFFIX)].strip()
-        if stem == wanted:
-            return found
-        if stem.startswith(wanted + " ") and _SIZE_TAG.match(stem[len(wanted):].strip()):
-            sized.append((len(stem), entry, found))
-    return sorted(sized)[0][2] if sized else ""
-
-
-def newest_in(folder: str) -> str:
-    """The highest-numbered image in `folder`, or "".
-
-    Every file in an assetkit layout folder belongs to that one category, so
-    the category is not re-read off the filename — the trailing number is all
-    that separates `…-layout-01` from `…-layout-06`. Sorted numerically: as
-    text, `-10` lands before `-9`.
-    """
-    best, best_version = "", -1
-    try:
-        names = sorted(os.listdir(folder))
-    except OSError:
-        return ""
-    for file_name in names:
-        if file_name.startswith("."):
-            continue
-        if os.path.splitext(file_name)[1].lower() not in LAYOUT_EXTS:
-            continue
-        tail = _VERSION_TAIL.search(os.path.splitext(file_name)[0])
-        version = int(tail.group(1)) if tail else 0
-        if version >= best_version:
-            best, best_version = file_name, version
-    return os.path.join(folder, best) if best else ""
-
-
-def for_name(project_path: str, name: str) -> str:
-    """The layout answering to `name`, hand-placed first, then assetkit's.
-
-    `datasets/layouts/` is the override: a file dropped there by hand beats a
-    built one, which is how a grid gets tried without rebuilding the set.
-    """
-    return (newest_for(project_path, name)
-            or newest_in(built_dir(project_path, name)))
 
 
 def pick_layout(project_path: str, category: str = "", bucket: str = "",
@@ -181,7 +120,7 @@ def pick_layout(project_path: str, category: str = "", bucket: str = "",
     category = str(category or "").strip()
     bucket = str(bucket or "").strip()
     if category and bucket:
-        found = for_name(project_path, f"{category} - {bucket}")
+        found = newest_for(project_path, f"{category} - {bucket}")
         if found:
             return found
-    return for_name(project_path, category)
+    return newest_for(project_path, category)

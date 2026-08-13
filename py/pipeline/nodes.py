@@ -4898,8 +4898,7 @@ class SymbioticaGridLayout(io.ComfyNode):
                 bucket="") -> io.NodeOutput:
         from PIL import Image, UnidentifiedImageError
 
-        from .layouts import (built_dir, layouts_dir, list_layouts,
-                              pick_layout)
+        from .layouts import layouts_dir, list_layouts, pick_layout
 
         one = SymbioticaCategoryPrompts._one
         project = cls._project(project_path, order)
@@ -4916,14 +4915,10 @@ class SymbioticaGridLayout(io.ComfyNode):
             # indistinguishable from "wrong project", and the fix is different.
             held = list_layouts(project)
             asked = pinned or wanted_category or "(nothing wired)"
-            built = built_dir(project, wanted_category)
             raise ValueError(
-                f"no layout for {asked!r}. {layouts_dir(project)} "
+                f"no layout for {asked!r} in {layouts_dir(project)} — it "
                 + (f"holds: {', '.join(held)}" if held
-                   else "is empty or missing")
-                + (f"; assetkit's {built} holds nothing readable" if built
-                   else f"; assetkit has no {wanted_category!r} Layout folder "
-                        "under datasets/dataset-single"))
+                   else "is empty or missing"))
         try:
             with Image.open(found) as opened:
                 opened.load()
