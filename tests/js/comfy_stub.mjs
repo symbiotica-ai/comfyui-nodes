@@ -212,11 +212,16 @@ function makeNode(comfyClass, widgets) {
     return node;
 }
 
-export function link(from, to, inputName) {
+// `originSlot` is which OUTPUT of `from` the wire leaves — real links carry it
+// and code that reads it (a Block asking which recipe slot fed it) is testing
+// nothing without it.
+export function link(from, to, inputName, originSlot = 0) {
     const id = nextLink++;
-    app.graph.links[id] = { origin_id: from.id, target_id: to.id, id };
+    app.graph.links[id] = { origin_id: from.id, target_id: to.id, id,
+                            origin_slot: originSlot };
     to.inputs.push({ name: inputName, link: id });
-    const out = from.outputs[0] ?? (from.outputs[0] = { links: [] });
+    const out = from.outputs[originSlot]
+        ?? (from.outputs[originSlot] = { links: [] });
     out.links.push(id);
     return id;
 }

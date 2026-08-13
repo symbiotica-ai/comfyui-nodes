@@ -231,6 +231,86 @@ def test_the_widgets_keep_their_order_and_the_wires_are_optional(nodes_mod):
     schema = nodes_mod.SymbioticaPromptRecipe.GET_SCHEMA()
     ids = [i.id for i in schema.inputs]
     assert ids[:3] == ["recipe", "slots", "project_path"]
-    assert set(ids[3:]) == {"order", "category"}
-    for wire in ("order", "category"):
+    assert set(ids[3:]) == {"order", "category", "bucket"}
+    for wire in ("order", "category", "bucket"):
         assert next(i for i in schema.inputs if i.id == wire).optional is True
+
+
+# --- a bucket narrows the category -------------------------------------------
+
+def _book(tmp_path, **recipes):
+    """A book with the named recipes, each naming one block of its own name."""
+    project = tmp_path / "project"
+    book = project / "prompts"
+    (book / "_rules").mkdir(parents=True, exist_ok=True)
+    (book / "_recipes").mkdir(parents=True, exist_ok=True)
+    for name, body in recipes.items():
+        block = f"_rules/{body.lower()}.md"
+        (book / "_rules" / f"{body.lower()}.md").write_text(body)
+        (book / "_recipes" / f"{name}.json").write_text(
+            json.dumps({"slots": [{"block": block, "version": ""}]}))
+    return project
+
+
+def test_a_bucket_serves_the_narrowed_recipe(nodes_mod, tmp_path):
+    """One category, drawn two ways: `Food - 3 stages` is a chopping board for
+    a cake and an empty cup for a tea, and the bucket says which."""
+    project = _book(tmp_path, **{"Food - 3 stages": "FOOD",
+                                 "Food - 3 stages - Drinks": "DRINKS"})
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        project_path=str(project), slots="1", category="Food - 3 stages",
+        bucket="Drinks")
+    assert out.args[0] == "DRINKS"
+
+
+def test_no_bucket_serves_the_plain_category(nodes_mod, tmp_path):
+    project = _book(tmp_path, **{"Food - 3 stages": "FOOD",
+                                 "Food - 3 stages - Drinks": "DRINKS"})
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        project_path=str(project), slots="1", category="Food - 3 stages",
+        bucket="")
+    assert out.args[0] == "FOOD"
+
+
+def test_a_bucket_the_book_has_no_recipe_for_falls_back(nodes_mod, tmp_path):
+    """A bucket is a narrowing, never a demand: a category whose sub-kind has
+    no recipe is drawn the ordinary way rather than failing the queue."""
+    project = _book(tmp_path, **{"Decoration": "DECOR"})
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        project_path=str(project), slots="1", category="Decoration",
+        bucket="Drinks")
+    assert out.args[0] == "DECOR"
+
+
+def test_the_bucket_is_part_of_the_fingerprint(nodes_mod, tmp_path):
+    """Without it, switching from a cake to a tea under one category served the
+    cached cake prompts with nothing on the canvas saying why."""
+    project = _book(tmp_path, **{"Food - 3 stages": "FOOD",
+                                 "Food - 3 stages - Drinks": "DRINKS"})
+    fp = nodes_mod.SymbioticaPromptRecipe.fingerprint_inputs
+    assert (fp(project_path=str(project), category="Food - 3 stages", bucket="")
+            != fp(project_path=str(project), category="Food - 3 stages",
+                  bucket="Drinks"))
+
+
+def test_it_is_queueable_on_its_own(nodes_mod):
+    """Which recipe a wired category and bucket pick is decided in Python, so
+    without a run of its own the panel sits on the last name it was told and
+    there is no way to find out what the graph would send short of rendering
+    the whole thing. "Queue Selected Output Node" needs this flag."""
+    assert nodes_mod.SymbioticaPromptRecipe.GET_SCHEMA().is_output_node is True
+
+
+def test_the_run_reports_the_size_of_every_block_it_served(nodes_mod, tmp_path,
+                                                           monkeypatch):
+    """"i have no idea what the actual prompt this sends out" — the names say
+    which blocks, the sizes say they were read and not empty."""
+    seen = []
+    monkeypatch.setattr(nodes_mod, "_push",
+                        lambda event, payload: seen.append((event, payload)))
+    project = make_book(tmp_path)
+    nodes_mod.SymbioticaPromptRecipe.execute(
+        recipe="Decoration", slots="2", project_path=str(project))
+    served = [p for e, p in seen if e == "symbiotica.recipe"]
+    assert served, "the run said nothing about what it served"
+    assert served[-1]["chars"] == [len("ARCHITECT"), len("IMAGE RULES")]

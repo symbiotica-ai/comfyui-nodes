@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, fire, link, reset, setResponder, tick } from "./comfy_stub.mjs";
+import { app, create, emit, fire, link, reset, setResponder, tick } from "./comfy_stub.mjs";
 import "../../web/js/prompt_book.js";
 
 const BOOK = {
@@ -286,4 +286,85 @@ test("changing a row writes the recipe — the node serves the file, not the DOM
     const call = seen.find((s) => s.route.startsWith("/symbiotica/recipe-write"));
     assert.ok(call, "a row change did not write the recipe");
     assert.equal(JSON.parse(call.init.body).slots[2].block, "Chair.md");
+});
+
+// --- a Prompt Block fed by the Recipe ---------------------------------------
+
+async function blockNode(seen, { originSlot = 0, wire = true } = {}) {
+    reset();
+    app.graph._nodes = [];
+    setResponder(router(seen));
+    const recipe = await create("SymbioticaPromptRecipe", { recipe: "Appliance" });
+    recipe.outputs = [];
+    const block = await create("SymbioticaPromptBlock",
+                               { project_path: "/p/bakery", block: "Chair.md",
+                                 slot: "1" });
+    block.inputs = [];
+    if (wire) link(recipe, block, "text_in", originSlot);
+    app.graph._nodes = [recipe, block];
+    await block.onNodeCreated?.call(block);
+    for (let i = 0; i < 20; i++) await tick();
+    return block;
+}
+
+const slotOf = (node) => node.widgets.find((w) => w.name === "slot")?.value;
+
+// The Block's panel widget is `prompt_block`, not the Book's `prompt_book` —
+// same chrome, different node.
+const blockParts = (node) => {
+    const [bar, blocks, status, editor] =
+        node.widgets.find((w) => w.name === "prompt_block").element.children;
+    return { picker: bar.children[0], save: bar.children[1], blocks, status,
+             editor };
+};
+
+test("the recipe output it is wired to names the slot it edits", async () => {
+    // Wiring `text_3` in IS the statement "this node edits slot 3" — nothing
+    // else on the canvas says it, and a typed second control could disagree.
+    const node = await blockNode([], { originSlot: 2 });
+    assert.equal(slotOf(node), "3");
+});
+
+test("wired to text_1, the block edits slot 1", async () => {
+    const node = await blockNode([], { originSlot: 0 });
+    assert.equal(slotOf(node), "1");
+});
+
+test("an unwired block keeps its slot", async () => {
+    const node = await blockNode([], { wire: false });
+    assert.equal(slotOf(node), "1");
+});
+
+test("the block panel follows the block the run served", async () => {
+    // With a category wired the RECIPE names the block, in Python, at run
+    // time: without the push the panel sits on the pick made by hand.
+    const seen = [];
+    const node = await blockNode(seen);
+    emit("symbiotica.block", { node_id: String(node.id),
+                               name: "_rules/03-light.md" });
+    for (let i = 0; i < 20; i++) await tick();
+    assert.equal(blockParts(node).picker.value, "_rules/03-light.md");
+    assert.equal(blockParts(node).editor.value, "TEXT OF _rules/03-light.md");
+    assert.equal(node.widgets.find((w) => w.name === "block").value,
+                 "_rules/03-light.md");
+});
+
+test("a served block nobody has written yet stays pickable", async () => {
+    const node = await blockNode([]);
+    emit("symbiotica.block", { node_id: String(node.id),
+                               name: "_flip/09-flip-wallpaper.md" });
+    for (let i = 0; i < 20; i++) await tick();
+    assert.equal(blockParts(node).picker.value, "_flip/09-flip-wallpaper.md");
+    assert.match(blockParts(node).status.textContent, /new block/);
+});
+
+test("an unsaved edit is not overwritten by the run's block", async () => {
+    const node = await blockNode([]);
+    const { editor } = blockParts(node);
+    editor.value = "MY UNSAVED REWRITE";
+    emit("symbiotica.block", { node_id: String(node.id),
+                               name: "_rules/03-light.md" });
+    for (let i = 0; i < 20; i++) await tick();
+    assert.equal(blockParts(node).editor.value, "MY UNSAVED REWRITE");
+    assert.match(blockParts(node).status.textContent, /save or discard/);
 });

@@ -114,6 +114,9 @@ const ALL_CATEGORIES = "All";
 // The `asset` combo cannot offer an empty label, so "no narrowing" is
 // spelled out on screen and emptied on the way to the node.
 const ALL_ASSETS = "All assets";
+// Same trick for the reference: "" means the asset's first, which is also what
+// every other asset gets in an all-assets run.
+const FIRST_REF = "First reference";
 
 function comboify(node, widgetName, valuesFn) {
     const i = node.widgets?.findIndex((x) => x.name === widgetName);
@@ -134,16 +137,20 @@ function comboify(node, widgetName, valuesFn) {
     return w;
 }
 
-// The categories the wired order actually holds, in the order they appear in
-// it — the same first-appearance order `assets_by_category` groups by, so the
-// dropdown reads down the order sheet rather than alphabetically.
+// The categories the wired order actually holds, A-Z under "All". A dropdown
+// is read by hunting for a name, and seventeen of them in the order the
+// spreadsheet happens to list them is a list you have to scan every time.
+// Compared with `localeCompare` so "Cashier's Desk" files where a person looks
+// for it rather than where its apostrophe's code point puts it.
 function categoriesOf(node) {
-    const out = [ALL_CATEGORIES];
+    const found = [];
     for (const asset of publishedAssets(node)?.assets ?? []) {
         const category = String(asset.category ?? "").trim();
-        if (category && !out.includes(category)) out.push(category);
+        if (category && !found.includes(category)) found.push(category);
     }
-    return out;
+    return [ALL_CATEGORIES,
+            ...found.sort((a, b) => a.localeCompare(b, undefined,
+                                                    { sensitivity: "base" }))];
 }
 
 // Put the order-reading widgets above the ones that narrow it. Order on screen
@@ -215,11 +222,52 @@ function focusPanel(node) {
         return value === ALL_CATEGORIES ? "" : value;
     };
 
+    // Every reference filename one named asset has, from whichever list holds
+    // them: a run's payload carries them and so does the source's publish, and
+    // between a restart and the first queue only one of the two exists.
+    const refsOf = (name) => {
+        if (!name) return [];
+        for (const pool of [node._symFocusAssets ?? [],
+                            publishedAssets(node)?.assets ?? []]) {
+            const hit = pool.find((a) => a.name === name);
+            if (hit?.refs?.length) return hit.refs.map(String);
+        }
+        return [];
+    };
+
+    // Which reference file is armed. "" is the asset's first.
+    const armed = () => {
+        const value = widgetOf(node, "ref")?.value?.trim?.() || "";
+        return value === FIRST_REF ? "" : value;
+    };
+    // A filename belongs to ONE asset, so it cannot survive leaving that
+    // asset — carried over, it would name nothing in the new one's list and
+    // silently mean "the first" while the tile it points at is still lit.
+    function dropRef() {
+        const w = widgetOf(node, "ref");
+        if (w && armed()) w.value = FIRST_REF;
+    }
+
     function choose(name) {
         const w = widgetOf(node, "asset");
         // Clicking the current one clears it, which is how you get back to
         // "the first" without knowing what the first is called.
         if (w) w.value = w.value === name ? "" : name;
+        dropRef();
+        node.setDirtyCanvas?.(true, true);
+        render();
+    }
+
+    // One click does the whole selection: the asset AND which of its
+    // references. "i select the category, the asset and then i have to select
+    // the asset again in Pick. this is an extra click that is not necessary.
+    // how about i click on the thing in asset focus? and it sends the freaking
+    // image too" — so the thumbnail is the pick, and `ref_image` carries it.
+    function chooseRef(assetName, file) {
+        const w = widgetOf(node, "asset");
+        if (w) w.value = assetName;
+        const rw = widgetOf(node, "ref");
+        if (rw) rw.value = file;
         node.setDirtyCanvas?.(true, true);
         render();
     }
@@ -227,19 +275,28 @@ function focusPanel(node) {
     // One reference image, at strip size, big under the pointer. The tile is
     // the asset's own art, so hovering it is how you tell two similar assets
     // apart without leaving the node.
-    function refThumb(asset, refsRoot, file) {
+    function refThumb(asset, refsRoot, file, lit) {
         const path = `${refsRoot}/${file}`;
         const img = el("img",
             `width:${THUMB_PX}px;height:${THUMB_PX}px;object-fit:contain;`
             + `background:${HUB.surface1};border-radius:3px;flex:none;`
-            + `border:1px solid ${HUB.hairline};`);
+            + `border:1px solid ${lit ? HUB.accent : HUB.hairline};`
+            + (lit ? `outline:1px solid ${HUB.accent};outline-offset:1px;` : ""));
         img.src = imageThumbUrl(path, THUMB_PX * 2);   // crisp on a retina panel
         img.loading = "lazy";
         img.draggable = false;
-        img.title = file;
+        img.title = lit ? `${file} — sent on ref_image` : file;
         // A missing or unreadable reference must not leave a broken-image glyph
         // sitting in the strip; an empty slot reads as "no art for this one".
         img.addEventListener("error", () => { img.style.visibility = "hidden"; });
+        // Stopped from reaching the row, which picks the asset and CLEARS the
+        // reference — the two handlers would otherwise undo each other.
+        img.addEventListener("pointerdown", (e) => e.stopPropagation());
+        img.addEventListener("click", (e) => {
+            e.stopPropagation();
+            hideHoverZoom();
+            chooseRef(asset.name, file);
+        });
         attachHoverZoom(img, () => ({
             w: img.naturalWidth, h: img.naturalHeight,
             label: asset.name,
@@ -274,7 +331,15 @@ function focusPanel(node) {
         if (refs.length && refsRoot) {
             const strip = el("div",
                 "display:flex;gap:4px;flex-wrap:wrap;min-width:0;");
-            for (const file of refs) strip.appendChild(refThumb(asset, refsRoot, file));
+            // Lit only on the picked asset: `ref` is a filename, and the same
+            // one on a row that is not what runs would claim an image nothing
+            // is going to send. Its first is what an unarmed pick emits, so
+            // that is the one lit.
+            const chosenFile = armed() || refs[0];
+            for (const file of refs) {
+                strip.appendChild(refThumb(asset, refsRoot, file,
+                                           on && file === chosenFile));
+            }
             row.appendChild(strip);
         }
         row.title = `${asset.name}${asset.category ? ` · ${asset.category}` : ""}`;
@@ -301,6 +366,40 @@ function focusPanel(node) {
         // A preview left floating over a list that is being replaced points at
         // a tile that no longer exists.
         hideHoverZoom();
+        // The pick he made last session, put back now that there is something
+        // to pick FROM. `category` and `asset` are combos whose choices only
+        // exist once the order has been read, and a combo restored with a
+        // value outside its options does not survive the load — so every
+        // restart lost the narrowing and he re-clicked the same widgets. The
+        // wanted values are snapshotted off the saved graph in onConfigure and
+        // only dropped once a list has arrived to look in.
+        const wanted = node._symWanted;
+        if (wanted) {
+            const categories = categoriesOf(node);
+            const cw = widgetOf(node, "category");
+            if (cw && wanted.category && categories.includes(wanted.category)) {
+                cw.value = wanted.category;
+            }
+            const offered = new Set([
+                ...(publishedAssets(node)?.assets ?? []),
+                ...(node._symFocusAssets ?? []),
+            ].map((a) => a.name));
+            const aw = widgetOf(node, "asset");
+            if (aw && wanted.asset && offered.has(wanted.asset)) {
+                aw.value = wanted.asset;
+            }
+            // The reference rides with the asset it belongs to — the tile he
+            // left lit is part of the pick, not a separate setting.
+            const rw = widgetOf(node, "ref");
+            if (rw && wanted.ref && refsOf(wanted.asset).includes(wanted.ref)) {
+                rw.value = wanted.ref;
+            }
+            // Give up only once the choices are known: before that, "not in
+            // the list" means the list has not arrived, not that the pick is
+            // stale — which is the whole bug, one layer down.
+            if (offered.size) node._symWanted = null;
+        }
+
         // What a run reported wins — it is the list the node actually chose
         // from, already narrowed by `category`. Otherwise fall back to what the
         // wired source published, so the choices are there before any run.
@@ -341,6 +440,14 @@ function focusPanel(node) {
             const w = widgetOf(node, "asset");
             if (w) w.value = "";
             pick = "";
+            node.setDirtyCanvas?.(true, true);
+        }
+        // And the same for the reference under it: a filename the picked asset
+        // does not have means the first anyway, so leaving it on the widget
+        // only makes the node claim a file it is not sending.
+        const listedRefs = assets.find((a) => a.name === pick)?.refs ?? [];
+        if (armed() && listedRefs.length && !listedRefs.includes(armed())) {
+            dropRef();
             node.setDirtyCanvas?.(true, true);
         }
 
@@ -424,6 +531,7 @@ function focusPanel(node) {
             if (!keep) {
                 const w = widgetOf(node, "asset");
                 if (w) w.value = "";
+                dropRef();
             }
             render();
         };
@@ -448,6 +556,8 @@ function focusPanel(node) {
             // The combo cannot hold "" as a label, so the sentinel is spelled
             // out on screen and emptied on the way to the node.
             if (assetWidget.value === ALL_ASSETS) assetWidget.value = "";
+            // A reference belongs to the asset it was clicked on.
+            dropRef();
             render();
         };
         // What reaches the node is the empty string the sentinel stands for.
@@ -456,6 +566,26 @@ function focusPanel(node) {
         // A saved graph restores the empty string; show the sentinel instead
         // of a blank row.
         if (!assetWidget.value) assetWidget.value = ALL_ASSETS;
+    }
+
+    // Which reference the click armed, said in words. The tile is how you pick
+    // one, but a lit border on a 30px thumbnail is not a filename — and this is
+    // the only widget that says which image `ref_image` is about to send.
+    const refWidget = comboify(node, "ref",
+                               () => [FIRST_REF, ...refsOf(chosen())]);
+    if (refWidget) {
+        const previous = refWidget.callback;
+        refWidget.callback = function (value) {
+            previous?.apply(this, arguments);
+            // Kept as the label rather than emptied on the spot: this widget
+            // is read to find out what is armed, and a blank row answers
+            // nothing. `serializeValue` is where it becomes "".
+            if (!refWidget.value) refWidget.value = FIRST_REF;
+            render();
+        };
+        refWidget.serializeValue = () =>
+            (refWidget.value === FIRST_REF ? "" : refWidget.value);
+        if (!refWidget.value) refWidget.value = FIRST_REF;
     }
 
     node._symRenderFocus = render;
@@ -514,7 +644,23 @@ registerSymbioticaExtension(app, {
         };
 
         const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function () {
+        nodeType.prototype.onConfigure = function (info) {
+            // Snapshot the saved narrowing BEFORE it is applied. `category`
+            // and `asset` are combos fed by the order, which has not been read
+            // yet at this point, so what lands on the widget does not stay
+            // there — the panel puts it back once the choices exist.
+            const saved = info?.widgets_values;
+            if (Array.isArray(saved)) {
+                const at = (name) =>
+                    this.widgets?.findIndex((w) => w.name === name) ?? -1;
+                const value = (name) => {
+                    const i = at(name);
+                    return i >= 0 ? String(saved[i] ?? "").trim() : "";
+                };
+                this._symWanted = { category: value("category"),
+                                    asset: value("asset"),
+                                    ref: value("ref") };
+            }
             onConfigure?.apply(this, arguments);
             queueMicrotask(() => this._symRenderFocus?.());
         };

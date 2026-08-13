@@ -415,19 +415,30 @@ export function wireOrderSpecs(node) {
             return r;
         };
     }
-    // Fire now, and — only if the project could not be resolved yet — once more
-    // after the graph settles: on load a wired project_path (a Local/Modal
-    // switch) is not resolvable until the links are restored, so this deferred
-    // pass populates the month + feature dropdowns and registers the refs root
-    // without needing the button. When the project already resolved, the settled
-    // parse stands — re-asking would reopen a cached failure and reflood.
+    // Fire now, and — only while the project cannot be resolved yet — again on
+    // a backing-off ladder: on load a wired project_path (a Local/Modal switch)
+    // is not resolvable until the links are restored, and how long that takes
+    // is not ours to know. One deferred pass at 400 ms was a guess, and when it
+    // missed nothing retried — which is the whole reason "Read folder" had to
+    // be pressed by hand ("Asset focus should read the folder without me
+    // clicking on it mate"). Four attempts, 400/800/1200 ms, stopping the
+    // moment the project resolves. When it already resolved the settled parse
+    // stands — re-asking would reopen a cached failure and reflood.
     refreshOrderSpecs(node, { explicit: true });
-    if (!resolveProjectPath(node)) {
+    let tries = 0;
+    const settle = () => {
+        if (resolveProjectPath(node) || tries >= 3) return;
+        tries += 1;
         setTimeout(() => {
-            node._symRefreshMonths?.();
-            refreshOrderSpecs(node, { explicit: true });
-        }, 400);
-    }
+            if (resolveProjectPath(node)) {
+                node._symRefreshMonths?.();
+                refreshOrderSpecs(node, { explicit: true });
+                return;
+            }
+            settle();
+        }, 400 * tries);
+    };
+    settle();
 }
 
 // The Auto Packer's asset source: its upstream Order Specs (wired on `order`),

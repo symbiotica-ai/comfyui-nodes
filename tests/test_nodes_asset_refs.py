@@ -171,13 +171,13 @@ def test_output_size_offers_the_sizes_worth_sending(nodes_mod):
 
 def test_outputs_are_lists_so_the_lane_fans_out(nodes_mod):
     schema = nodes_mod.SymbioticaAssetRefs.define_schema()
-    assert [o.display_name for o in schema.outputs] == ["images", "names",
-                                                        "masks", "save_path"]
-    # The three that fan out are per-reference; `save_path` is the one place
+    assert [o.display_name for o in schema.outputs] == ["images", "asset_names",
+                                                        "masks", "refs_path"]
+    # The three that fan out are per-reference; `refs_path` is the one place
     # they were all read from, so it is deliberately NOT a list — a picker
     # takes a directory, not one directory per file.
     # getattr, not attribute access: the stub keeps only the kwargs an output
-    # passes, and `save_path` never mentions `is_output_list` at all.
+    # passes, and `refs_path` never mentions `is_output_list` at all.
     assert all(o.is_output_list for o in schema.outputs[:3])
     assert not getattr(schema.outputs[3], "is_output_list", False)
     # Widgets are APPENDED — ComfyUI restores widgets_values positionally, so a

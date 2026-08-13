@@ -47,6 +47,7 @@ def test_decodes_xml_entities_and_char_refs():
 
 
 from pipeline.order_sheet import (
+    bucket_of,
     canvas_spec_of,
     compact_asset_name,
     extract_order_rows,
@@ -187,3 +188,53 @@ def test_canvas_spec_of():
     assert canvas_spec_of(" 200 X 100 ") == {"w": 200, "h": 100}
     assert canvas_spec_of("-") is None
     assert canvas_spec_of("") is None
+
+
+# --- the bucket: one category drawn two ways ---------------------------------
+
+class TestWhichSubKindARowIs:
+    """A `Food - 3 stages` row is a chopping board for a cake and an empty cup
+    on a saucer for a tea. The client's own Prep) line already says which, so
+    the bucket is read rather than guessed off the asset name — which would
+    have caught "Skull Tea" and missed "Fox Cocoa Float"."""
+
+    def test_a_prep_line_with_a_board_is_not_a_drink(self):
+        assert bucket_of(
+            "Prep) Rolled croissant dough and chocolate wings lay on a wooden "
+            "chopping board.\nReady) Three croissants.") == ""
+
+    def test_an_empty_cup_on_a_saucer_is_a_drink(self):
+        assert bucket_of(
+            "Prep) A white teacup with gold trim sits empty on a matching "
+            "saucer.\nReady) Three white teacups.") == "Drinks"
+
+    def test_a_board_beats_a_cup_on_it(self):
+        # Food preps name bowls and cups on the board all the time; a drink
+        # prep never has a board at all.
+        assert bucket_of(
+            "Prep) Ingredients on a chopping board alongside a cup of icing "
+            "and a bowl of dough.") == ""
+
+    def test_a_row_that_says_neither_keeps_the_plain_category(self):
+        assert bucket_of("Prep) Dough rolled out flat on a surface.") == ""
+        assert bucket_of("") == ""
+
+    def test_the_prep_line_is_found_without_newlines(self):
+        # A sheet cell is one string whose newlines survive inconsistently.
+        assert bucket_of(
+            "Prep) An empty mug. Ready) Three mugs on a tray.") == "Drinks"
+
+    def test_a_ready_line_does_not_decide(self):
+        # Only PREP separates them: a food row's Ready can name a teacup too.
+        assert bucket_of(
+            "Prep) Ingredients on a chopping board.\n"
+            "Ready) A cake beside a teacup on a saucer.") == ""
+
+    def test_every_row_carries_its_bucket(self):
+        grid = [["Feature", "Asset Name", "Asset Category", "Prompt"],
+                ["Mini 1", "Bat Brew", "Food - 3 stages",
+                 "Prep) A vintage teacup, empty inside."],
+                ["Mini 1", "Spookies", "Food - 3 stages",
+                 "Prep) Dough on a chopping board."]]
+        rows = extract_order_rows(grid)
+        assert [r["bucket"] for r in rows] == ["Drinks", ""]

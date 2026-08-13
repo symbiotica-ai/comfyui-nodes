@@ -70,7 +70,7 @@ class TestSchema:
         schema = nodes_mod.SymbioticaPick.GET_SCHEMA()
         widgets = [i.id for i in schema.inputs if i.id != "images"]
         assert widgets == ["save_path", "selection", "view", "mode", "stage",
-                           "names", "show", "edit_selection"]
+                           "names", "show", "edit_selection", "subfolder"]
 
     def test_every_input_is_optional(self, nodes_mod):
         """The other half of surviving a saved workflow: `optional`, not order.

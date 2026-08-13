@@ -32,7 +32,7 @@ from .regional_prompt import (
 )
 from .skeleton import build_client_prompts, build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
-from .order_sheet import slugify
+from .order_sheet import bucket_of, slugify
 from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import (assets_by_category, dataset_dir,
                            pick_reference_per_category, save_paths)
@@ -65,6 +65,11 @@ _RESOLUTIONS = ["0.5K", "1K", "2K", "4K"]
 _MODELS = [m["id"] for m in MODEL_PRESETS] + ["custom"]
 _ASPECTS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5",
             "21:9", "4:1", "1:4", "8:1", "1:8"]
+
+# How many blocks a recipe serves. Shared by the Recipe (one output per slot)
+# and the Prompt Block (which slot of the recipe it edits) so a wire from
+# `text_N` and a `slot` of N cannot mean different things.
+SLOT_MAX = 6
 
 
 def _push(event: str, payload: dict) -> None:
@@ -1192,6 +1197,54 @@ class SymbioticaClientExamples(io.ComfyNode):
         return io.NodeOutput("\n\n".join(parts), len(kept))
 
 
+def _focus_reference(order, asset_record, asset_name, wanted_file):
+    """(image, mask, name) — ONE of an asset's client references, chosen by
+    filename, as the tensors Asset Focus hands out.
+
+    Which one is `wanted_file` if this asset has it and its FIRST otherwise:
+    the name comes off a thumbnail he clicked on one asset, and an "all" run
+    passes the same string by every other asset in the event.
+
+    Nothing to send — no art in the order, no references folder, a file the
+    order names and the disk has lost — is a one-pixel plate and an EMPTY name,
+    never a raise. Two reasons: the outputs are index-aligned lists, so a
+    dropped entry would pair every later asset with the wrong picture; and this
+    lane is optional. Asset Focus names, files and fans out assets whether or
+    not any art arrived, and refusing would take that down over a reference
+    nobody wired. The empty `ref_name` is what says there was none — the panel
+    shows the same thing by drawing no thumbnail.
+    """
+    from PIL import Image
+    from .asset_refs import alpha_of, flatten, parse_hex, reference_files
+    plate = torch.tensor(parse_hex(DEFAULT_BACKGROUND),
+                         dtype=torch.float32).div(255.0)
+    nothing = (plate.reshape(1, 1, 1, 3), torch.zeros(1, 1, 1), "")
+    files = [str(n) for n in ((asset_record or {}).get("refFiles") or [])
+             if str(n).strip()]
+    if not files:
+        return nothing
+
+    try:
+        paths, names = reference_files(order, asset_name)
+        want = str(wanted_file or "").strip()
+        index = names.index(want) if want in names else 0
+        with Image.open(paths[index]) as im:
+            alpha = alpha_of(im)
+            # Composited, never converted: these files keep live pixels under
+            # their transparent areas, so dropping the alpha lights up every
+            # soft edge — the same reason Asset Refs flattens.
+            flat = flatten(im, DEFAULT_BACKGROUND)
+            image = _pil_to_tensor(flat)
+            if alpha is None:
+                mask = torch.ones(1, flat.height, flat.width)
+            else:
+                mask = torch.from_numpy(
+                    np.asarray(alpha, dtype=np.float32) / 255.0)[None, ...]
+    except (ValueError, OSError):
+        return nothing
+    return image, mask, names[index]
+
+
 class SymbioticaAssetFocus(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1233,6 +1286,17 @@ class SymbioticaAssetFocus(io.ComfyNode):
                 io.String.Input("feature", default="", optional=True,
                                 tooltip="Which event of that month. Empty "
                                         "means the order's first."),
+                # APPENDED for the same positional reason. Set by clicking a
+                # reference thumbnail on the node — "i select the category, the
+                # asset and then i have to select the asset again in Pick. this
+                # is an extra click that is not necessary".
+                io.String.Input("ref", default="", optional=True,
+                                tooltip="Which of the asset's client "
+                                        "references to emit, by filename. Set "
+                                        "by clicking a thumbnail on the node. "
+                                        "Empty means the first, which is also "
+                                        "what every OTHER asset gets in an "
+                                        "all-assets run."),
             ],
             # Lists, but normally of one. A single-element list behaves exactly
             # like a scalar downstream — it runs once — so choosing an asset
@@ -1267,6 +1331,41 @@ class SymbioticaAssetFocus(io.ComfyNode):
                                      "want the event rather than the asset, "
                                      "and they must not change every time you "
                                      "focus a different one."),
+                # APPENDED for the same reason. A NARROWING of the category,
+                # not a second one: one category can be drawn two ways —
+                # `Food - 3 stages` is a chopping board for a cake and an empty
+                # cup on a saucer for a tea — and the client's own Prep) line
+                # already says which. Emitted beside the category so the
+                # sheets, the dataset folders and the save paths keep seeing
+                # the one name the order sheet gives them.
+                io.String.Output(display_name="bucket", is_output_list=True,
+                                 tooltip="Which sub-kind of its category this "
+                                         "asset is — `Drinks` for a Food row "
+                                         "whose Prep line is an empty cup, "
+                                         "empty for everything else. Wire it "
+                                         "into the Prompt Recipe beside "
+                                         "`category` and it serves "
+                                         "`<category> - <bucket>` when the "
+                                         "book has one."),
+                # APPENDED, all three: the reference the click chose, so the
+                # lane that used to run Asset Focus → Pick Client Reference is
+                # one node. Same shape Asset Refs emits — flattened image and
+                # its alpha — so either can feed the same downstream.
+                io.Image.Output(display_name="ref_image", is_output_list=True,
+                                tooltip="The client reference you clicked, one "
+                                        "per focused asset. Composited onto "
+                                        "the sheet grey, like Asset Refs. An "
+                                        "asset the client sent no art for "
+                                        "gets a one-pixel plate and an empty "
+                                        "`ref_name`."),
+                io.Mask.Output(display_name="ref_mask", is_output_list=True,
+                               tooltip="That reference's alpha, opaque where "
+                                       "the art is."),
+                io.String.Output(display_name="ref_name", is_output_list=True,
+                                 tooltip="Its filename — what Save Render "
+                                         "records as the reference drawn. "
+                                         "Empty when the asset has no "
+                                         "references at all."),
             ],
             hidden=[io.Hidden.unique_id],
             # An output node so it can be queued on its own. Without that there
@@ -1277,7 +1376,7 @@ class SymbioticaAssetFocus(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, order=None, category="", asset="",
-                           project_path="", month="", feature=""):
+                           project_path="", month="", feature="", ref=""):
         """When this node makes its own order it inherits Order Specs' change
         check — the order file and the references folder move without the graph
         moving. With one WIRED IN, the wire already carries that, and the
@@ -1286,13 +1385,14 @@ class SymbioticaAssetFocus(io.ComfyNode):
         queue re-ran the whole graph even with the seed untouched."""
         if not str(project_path or "").strip():
             return hashlib.sha256(
-                f"{category}|{asset}".encode()).hexdigest()
+                f"{category}|{asset}|{ref}".encode()).hexdigest()
         return SymbioticaOrderSpecs.fingerprint_inputs(
             project_path=project_path, month=month, feature=feature)
 
     @classmethod
     def execute(cls, order=None, category="", asset="",
-                project_path="", month="", feature="") -> io.NodeOutput:
+                project_path="", month="", feature="",
+                ref="") -> io.NodeOutput:
         # Its own selection when nothing is wired in: month, feature, category
         # and asset are one act, and doing half of it on another node is what
         # made this two nodes.
@@ -1363,12 +1463,26 @@ class SymbioticaAssetFocus(io.ComfyNode):
         # in — Asset Refs downstream reads references off exactly that key.
         narrowed = [{**order,
                      "assets": [raw.get(i["assetName"], i)]} for i in picked]
+        # The reference he clicked, resolved here rather than by a Pick node
+        # downstream: clicking the thumbnail already said which one, and being
+        # asked the same question again on another node is the click he wanted
+        # gone.
+        chosen_refs = [_focus_reference(order, raw.get(i["assetName"]),
+                                        i["assetName"], ref) for i in picked]
         return io.NodeOutput([i["assetName"] for i in picked],
                              [i["category"] for i in picked],
                              [i["prompt"] for i in picked],
                              save_paths(order, picked),
                              narrowed,
-                             order)
+                             order,
+                             # Re-read rather than taken off the row: an order
+                             # parsed before buckets existed carries no key,
+                             # and the answer is the same either way.
+                             [i.get("bucket") or bucket_of(i.get("prompt", ""))
+                              for i in picked],
+                             [r[0] for r in chosen_refs],
+                             [r[1] for r in chosen_refs],
+                             [r[2] for r in chosen_refs])
 
 
 class SymbioticaSaveRender(io.ComfyNode):
@@ -1593,7 +1707,10 @@ class SymbioticaPromptBlock(io.ComfyNode):
                         "<project>/prompts/ where every queue reads it. Wire "
                         "the Prompt Book's `project_path` output in, and chain "
                         "block to block through `project` so one wire feeds "
-                        "the row.",
+                        "the row. Wire a Prompt Recipe's `text_N` into "
+                        "`text_in` and Asset Focus's `category` in, and this "
+                        "becomes a window onto that recipe's slot: the asset "
+                        "picks the block, you read it, edit it and pass it on.",
             inputs=[
                 io.String.Input("project_path", default="",
                                 tooltip="Client project folder holding the "
@@ -1605,13 +1722,32 @@ class SymbioticaPromptBlock(io.ComfyNode):
                                         "block (Chair.md), a shared rule "
                                         "(_rules/02-inputs.md) or an image "
                                         "block (_image/01-image-model.md). "
-                                        "The panel's picker fills this in."),
+                                        "The panel's picker fills this in. "
+                                        "Ignored while `category` is wired — "
+                                        "then the recipe names the block."),
+                io.Combo.Input("slot",
+                               options=[str(i) for i in
+                                        range(1, SLOT_MAX + 1)],
+                               default="1",
+                               tooltip="Which slot of the category's recipe "
+                                       "this node edits. Set for you when "
+                                       "`text_in` comes from a Prompt "
+                                       "Recipe — wiring `text_3` in makes "
+                                       "this 3."),
+                io.String.Input("category", optional=True, force_input=True,
+                                tooltip="Wire Asset Focus's `category` here "
+                                        "and this node edits whatever "
+                                        "`_recipes/<category>.json` names in "
+                                        "`slot` — switch asset type and the "
+                                        "block on screen follows, with "
+                                        "nothing to pick."),
                 io.String.Input("text_in", force_input=True, optional=True,
-                                tooltip="Chain input: wire the PREVIOUS "
-                                        "block's `text` output here and this "
-                                        "node appends its own block — a row "
-                                        "of Blocks combines like Join String "
-                                        "Multi, in wire order."),
+                                tooltip="Wire the Prompt Recipe's `text_N` "
+                                        "here to preview and edit that "
+                                        "prompt. With no `category` wired it "
+                                        "is the old chain input instead: the "
+                                        "previous block's `text`, which this "
+                                        "node appends its own block to."),
             ],
             outputs=[
                 io.String.Output(display_name="project_path",
@@ -1620,22 +1756,65 @@ class SymbioticaPromptBlock(io.ComfyNode):
                                          "fanning every node back to the "
                                          "book."),
                 io.String.Output(display_name="text",
-                                 tooltip="Everything chained so far: text_in "
-                                         "plus this node's block, blank-line "
-                                         "separated. The LAST block in a row "
-                                         "carries the full combined prompt — "
-                                         "wire that into the LLM."),
+                                 tooltip="This node's block, ready for the "
+                                         "LLM. Chained (no `category` wired) "
+                                         "it is everything so far: text_in "
+                                         "plus this block, blank-line "
+                                         "separated, so the LAST block in a "
+                                         "row carries the whole prompt."),
             ],
+            # A push needs the node id to reach the right panel: which block a
+            # wired category names is decided at run time, and without the id
+            # the panel keeps showing whatever was last picked by hand.
+            hidden=[io.Hidden.unique_id],
         )
 
+    @staticmethod
+    def _slot_index(slot):
+        """`slot` as a 0-based index, clamped. Never raises: the widget is
+        written by the panel from a wire, and a stray value must not kill the
+        queue."""
+        try:
+            n = int(str(slot or "1").strip() or 1)
+        except ValueError:
+            n = 1
+        return max(1, min(n, SLOT_MAX)) - 1
+
     @classmethod
-    def fingerprint_inputs(cls, project_path="", block="", text_in=None):
+    def _pick(cls, project, block="", slot="1", category=""):
+        """Which block this node edits, as `(name, version, from_recipe)`.
+
+        A wired category beats the picker: the whole point is that switching
+        asset type re-points this editor with nothing to choose. It only wins
+        when the recipe actually names something in this slot — an absent
+        recipe or a short one falls back to the picked block rather than
+        blanking the panel the user is typing into.
+        """
+        cat = str(category or "").strip()
+        if not cat:
+            return str(block or "").strip(), "", False
+        from .prompt_book import read_recipe
+        picked = read_recipe(project, cat)
+        i = cls._slot_index(slot)
+        if i < len(picked) and picked[i].get("block"):
+            return picked[i]["block"], picked[i].get("version", ""), True
+        return str(block or "").strip(), "", False
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", block="", slot="1",
+                           category="", text_in=None):
         # Widgets only — a linked project reads as None here (see Category
         # Prompts), so fall back to the projects executions registered. Hash
         # the one file this node edits; never raise — a raise becomes NaN and
         # re-bills every descendant on each queue press.
-        name = str(block or "").strip()
-        h = hashlib.sha256(f"block:{name}".encode())
+        one = SymbioticaCategoryPrompts._one
+        cat = str(one(category) or "").strip()
+        # The category and the slot are what NAME the file when a recipe
+        # drives this node, so they belong in the hash even though the name
+        # below is derived from them — a recipe edited to point slot 2 at a
+        # different block changes nothing else here.
+        h = hashlib.sha256(
+            f"block:{str(block or '').strip()}:{cat}:{one(slot, '1')}".encode())
         candidates = [str(project_path or "").strip()]
         if not candidates[0]:
             candidates = _executed_projects()
@@ -1644,35 +1823,63 @@ class SymbioticaPromptBlock(io.ComfyNode):
                 continue
             h.update(project.encode())
             try:
+                name, version, _ = cls._pick(project, block, one(slot, "1"),
+                                             cat)
+                h.update(f"{name}:{version}".encode())
                 st = os.stat(resolve_block(project, name))
                 h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
-            except (PromptPathError, OSError):
+            except (PromptPathError, OSError, ValueError):
                 pass
         return h.hexdigest()
 
     @classmethod
-    def execute(cls, project_path="", block="", text_in=None) -> io.NodeOutput:
+    def execute(cls, project_path="", block="", slot="1", category="",
+                text_in=None) -> io.NodeOutput:
+        from .prompt_book import pick_version
+
+        one = SymbioticaCategoryPrompts._one
         project = _prompt_node_project(project_path)
         if not project:
             raise ValueError(
                 "no project folder to read the prompt book from — wire the "
                 "Prompt Book's `project_path` output, or set project_path")
-        name = str(block or "").strip()
+        name, version, from_recipe = cls._pick(
+            project, block, one(slot, "1"), one(category))
         if not name:
-            raise ValueError("no block picked — choose one in the panel")
+            raise ValueError(
+                "no block picked — choose one in the panel, or wire a "
+                "`category` whose recipe names one")
         # Empty rather than a raise when the file is not there yet: this node
         # is the editor the block is written in, so it has to run before its
         # first save. The composed architect prompts still raise on absence —
         # they are read by nodes that can do nothing without them.
         try:
-            text = read_block(project, name).strip()
+            body = read_block(project, name)
         except PromptPathError:
-            text = ""
-        # Chained: this node's output is everything so far. The join is the
-        # same blank line compose_prompt uses, so a hand-chained row reads the
-        # same as the book-composed prompt.
-        parts = [p for p in (str(text_in or "").strip(), text) if p]
-        return io.NodeOutput(project, "\n\n".join(parts))
+            body = ""
+        text = pick_version(body, version) if from_recipe else body.strip()
+        if from_recipe:
+            # Recipe-driven, so `text_in` is the SAME prompt arriving off the
+            # wire — appending it would emit the block twice. This node is a
+            # window onto the recipe's slot here, not a link in a chain.
+            out = text
+        else:
+            # Chained: this node's output is everything so far. The join is the
+            # same blank line compose_prompt uses, so a hand-chained row reads
+            # the same as the book-composed prompt.
+            out = "\n\n".join(
+                p for p in (str(text_in or "").strip(), text) if p)
+        # The panel cannot know which block a wired category named — that is
+        # decided here, at run time — so it is told, the same way the Recipe
+        # tells its own panel which recipe it served.
+        if from_recipe:
+            _push("symbiotica.block", {
+                "node_id": str(getattr(getattr(cls, "hidden", None),
+                                       "unique_id", "")),
+                "name": name,
+                "version": version,
+            })
+        return io.NodeOutput(project, out)
 
 
 class SymbioticaPromptCompose(io.ComfyNode):
@@ -2263,7 +2470,8 @@ class SymbioticaAssetRefs(io.ComfyNode):
                                 tooltip="One image per reference the client "
                                         "sent for this asset, in the order the "
                                         "order sheet pairs them."),
-                io.String.Output(display_name="names", is_output_list=True,
+                io.String.Output(display_name="asset_names",
+                                 is_output_list=True,
                                  tooltip="Filename of each reference, so a "
                                          "wrong pick is traceable to its file. "
                                          "Wire into a Pick node's `names` to "
@@ -2275,11 +2483,15 @@ class SymbioticaAssetRefs(io.ComfyNode):
                                        "transparency is kept, so a reference "
                                        "can always be composited onto "
                                        "something else downstream."),
-                io.String.Output(display_name="save_path",
+                # Shown as `refs_path`: this node READS that folder, it
+                # saves nothing. Only the printed label changes — a link
+                # addresses an output by slot index, so saved graphs are
+                # untouched.
+                io.String.Output(display_name="refs_path",
                                  tooltip="The folder these references were "
                                          "read from — the order's own "
                                          "references root. Wire it into a "
-                                         "Pick node's `save_path` to tick the "
+                                         "Pick node's `input_path` to tick the "
                                          "client's references by eye instead "
                                          "of taking every one of them."),
             ],
@@ -4071,6 +4283,10 @@ class SymbioticaPick(io.ComfyNode):
                 # restore positionally: the files marked ✎ on the panel, a
                 # second set beside the approve ticks with its own output.
                 io.String.Input("edit_selection", default="", optional=True),
+                # Canvas state, appended for the same reason: which step of the
+                # folder the panel's breadcrumb is standing on, as a path
+                # relative to the wired one. Empty is the whole tree.
+                io.String.Input("subfolder", default="", optional=True),
             ],
             outputs=[
                 io.Image.Output(display_name="picked", is_output_list=True),
@@ -4116,7 +4332,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def fingerprint_inputs(cls, images=None, save_path="", selection="",
                            view="", mode="multiple", stage="", names="",
-                           show="approved", edit_selection=""):
+                           show="approved", edit_selection="", subfolder=""):
         """Change only when what LEAVES the node could have.
 
         The first version returned NaN — always changed — so the panel would
@@ -4134,7 +4350,7 @@ class SymbioticaPick(io.ComfyNode):
         change. A file replaced under the same name changes mtime and size,
         which is why the stat is part of the stamp rather than just the name.
         """
-        from .pick_folder import listing_for, picked_paths, resolved
+        from .pick_folder import listing_for, picked_paths, resolved, under
 
         one = SymbioticaCategoryPrompts._one
         node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
@@ -4142,6 +4358,9 @@ class SymbioticaPick(io.ComfyNode):
         target, only, derived = resolved(node_id) if node_id else ("", None, None)
         if not target:
             return float("nan")
+        # The breadcrumb names a different folder, so what leaves the node can
+        # change with nothing else touched.
+        target = under(target, str(one(subfolder, "") or ""))
         picked_one = str(one(mode, "multiple") or "multiple") == "single"
         ticks = _pick_ids(str(one(selection, "")))
         edit_ticks = _pick_ids(str(one(edit_selection, "")))
@@ -4178,7 +4397,7 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def check_lazy_status(cls, images=None, save_path="", selection="",
                           view="", mode="multiple", stage="", names="",
-                          show="approved", edit_selection=""):
+                          show="approved", edit_selection="", subfolder=""):
         """Ask for the wire when there is one — for its ORDER, not its value.
 
         The images are read off disk, and `execute` ignores whatever arrives
@@ -4258,11 +4477,12 @@ class SymbioticaPick(io.ComfyNode):
     @classmethod
     def execute(cls, images=None, save_path="", selection="", view="",
                 mode="multiple", stage="", names="",
-                show="approved", edit_selection="") -> io.NodeOutput:
+                show="approved", edit_selection="",
+                subfolder="") -> io.NodeOutput:
         from PIL import Image
 
         from .pick_folder import (edit_prefix, listing_for, picked_paths,
-                                  remember, resolved)
+                                  remember, resolved, under)
 
         one = SymbioticaCategoryPrompts._one
         node_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
@@ -4314,11 +4534,14 @@ class SymbioticaPick(io.ComfyNode):
         if wanted:
             only = wanted if only is None else [n for n in only
                                                 if n in set(wanted)]
-        entries = listing_for(target, only=only, derived_from=derived_from)
         # The panel lists the same thing this run resolved; it cannot work it
         # out for itself, because asset and category arrive on wires and a
-        # wired input has no value on the canvas.
+        # wired input has no value on the canvas. What is remembered is the
+        # ROOT — the breadcrumb walks down from it, and the panel applies its
+        # own step the same way this does, so navigating needs no re-queue.
         remember(node_id, target, only, derived_from)
+        here = under(target, str(one(subfolder, "") or ""))
+        entries = listing_for(here, only=only, derived_from=derived_from)
 
         # Nothing ticked is a legitimate state, not a failure: it is what the
         # node looks like before the images have been looked at. An empty list
@@ -4411,7 +4634,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
     # Outputs are fixed because a schema is; `slots` decides how many of them
     # carry text. Six because the chain that motivated this is three, and a
     # type that grows a fourth and fifth prompt must not need a release.
-    MAX_SLOTS = 6
+    MAX_SLOTS = SLOT_MAX
 
     # Pick this instead of a name and the recipe is the one named after the
     # asset's own category: choosing a Food asset upstream serves
@@ -4492,6 +4715,13 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                                         "one served — picking the asset then "
                                         "picks its prompts, with nothing to "
                                         "set here."),
+                io.String.Input("bucket", optional=True, force_input=True,
+                                tooltip="Asset Focus's `bucket` — how this row "
+                                        "of the category is drawn. With one "
+                                        "wired, `<category> - <bucket>` is "
+                                        "served when the book has such a "
+                                        "recipe (`Food - 3 stages - Drinks`), "
+                                        "and the plain category otherwise."),
             ],
             outputs=[
                 io.String.Output(display_name=f"text_{i}",
@@ -4503,11 +4733,18 @@ class SymbioticaPromptRecipe(io.ComfyNode):
             # id to reach the right panel. Without this the id went over empty
             # and the node kept its old title while serving the new prompts.
             hidden=[io.Hidden.unique_id],
+            # Queueable on its own — "Queue Selected Output Node" on this node
+            # resolves the wired category and bucket and tells the panel what
+            # it served. Which recipe a wire picks is decided in Python, so
+            # without a run of its own the panel sits on the last name it was
+            # told and there is no way to find out what the graph would send
+            # short of rendering the whole thing.
+            is_output_node=True,
         )
 
     @classmethod
     def fingerprint_inputs(cls, recipe="", slots=3, project_path="",
-                           order=None, category=""):
+                           order=None, category="", bucket=""):
         # Widgets plus the book's file mtimes, and never raise: a raise becomes
         # NaN, which re-bills every model under this node on each queue press.
         one = SymbioticaCategoryPrompts._one
@@ -4520,6 +4757,10 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         # prompts and nothing on the canvas said why.
         h.update("|".join(cls._order_category(order)).encode())
         h.update(str(one(category) or "").strip().encode())
+        # The bucket names a DIFFERENT recipe, so switching from a cake to a
+        # tea under one category has to miss the cache the same way switching
+        # category does.
+        h.update(str(one(bucket) or "").strip().encode())
         candidates = [str(one(project_path)).strip()]
         if not candidates[0]:
             candidates = _executed_projects()
@@ -4545,7 +4786,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
 
     @classmethod
     def execute(cls, recipe="", slots=3, project_path="",
-                order=None, category="") -> io.NodeOutput:
+                order=None, category="", bucket="") -> io.NodeOutput:
         from .prompt_book import pick_version, read_recipe
         from .prompt_store import PromptPathError, read_block
 
@@ -4566,7 +4807,16 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         # what the picked asset is, and that names the recipe.
         wired = str(SymbioticaCategoryPrompts._one(category) or "").strip()
         cats = [wired] if wired else cls._order_category(order)
-        if len(cats) == 1 and read_recipe(project, cats[0]):
+        # A bucket narrows the category: one category can be drawn two ways —
+        # `Food - 3 stages` is a chopping board for a cake and an empty cup for
+        # a tea — so `<category> - <bucket>` is preferred when the book holds
+        # one, and the plain category answers for everything else. Never an
+        # error on its own: a bucket with no recipe means that row is drawn the
+        # ordinary way.
+        sub = str(SymbioticaCategoryPrompts._one(bucket) or "").strip()
+        if len(cats) == 1 and sub and read_recipe(project, f"{cats[0]} - {sub}"):
+            name = f"{cats[0]} - {sub}"
+        elif len(cats) == 1 and read_recipe(project, cats[0]):
             name = cats[0]
         elif name == cls.FOLLOW:
             if not cats:
@@ -4611,8 +4861,172 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                                    "unique_id", "")),
             "name": name,
             "blocks": [str(s.get("block", "")) for s in picked[:want]],
+            # How big each served block actually is. "i have no idea what the
+            # actual prompt this sends out" — the names say which blocks, the
+            # sizes say they were read and not empty.
+            "chars": [len(t) for t in texts[:want]],
         })
         return io.NodeOutput(*texts)
+
+
+class SymbioticaGridLayout(io.ComfyNode):
+    """The grid an asset type is drawn on, picked the way its recipe is.
+
+    The layout stopped being scenery the day the prompts started describing it —
+    three grey slots, a diamond grid in each, black everywhere else — so a
+    category that gets its own prompts needs its own grid, and switching asset
+    had to switch both.
+    """
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaGridLayout",
+            display_name="Symbiotica Grid Layout",
+            category="symbiotica/pipeline",
+            description="The layout image an asset type is drawn on, out of "
+                        "<project>/datasets/layouts/. Wire Asset Focus's "
+                        "`category` and `bucket` in and it picks "
+                        "`<category> - <bucket>` then `<category>`, newest "
+                        "version first — the same ladder the Prompt Recipe "
+                        "climbs, so one naming rule covers the prompts and the "
+                        "grid. A new version is a new file (`Food - 3 "
+                        "stages-7.png`), never a rename.",
+            inputs=[
+                io.String.Input("project_path", default="",
+                                tooltip="Client project folder. Unneeded when "
+                                        "`order` is wired."),
+                io.String.Input("layout", default="",
+                                tooltip="Pin one file by name and it wins over "
+                                        "the category. Empty follows the "
+                                        "category — the panel's picker fills "
+                                        "this in."),
+                Order.Input("order", optional=True,
+                            tooltip="Any order from the pipeline — it carries "
+                                    "the project, so project_path can stay "
+                                    "empty."),
+                io.String.Input("category", optional=True, force_input=True,
+                                tooltip="Asset Focus's `category`. Names the "
+                                        "layout the same way it names the "
+                                        "recipe."),
+                io.String.Input("bucket", optional=True, force_input=True,
+                                tooltip="Asset Focus's `bucket`. Narrows to "
+                                        "`<category> - <bucket>` when the "
+                                        "folder holds one, and falls back to "
+                                        "the plain category when it does not."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="image",
+                                tooltip="The layout, ready for the image "
+                                        "model's first input."),
+                io.Mask.Output(display_name="mask",
+                               tooltip="Its alpha, opaque where the layout has "
+                                       "pixels. Fully opaque for a layout "
+                                       "saved without transparency."),
+                io.String.Output(display_name="name",
+                                 tooltip="Which file was used — the answer to "
+                                         "\"which grid did that render "
+                                         "stand on\"."),
+            ],
+            hidden=[io.Hidden.unique_id],
+            # Queueable on its own, for the same reason the Recipe is: which
+            # file a wired category picks is decided here, so without a run of
+            # its own the canvas cannot say which grid it would send.
+            is_output_node=True,
+        )
+
+    @classmethod
+    def _project(cls, project_path, order):
+        one = SymbioticaCategoryPrompts._one
+        project = str(one(project_path) or "").strip()
+        if project:
+            return project
+        wired = one(order, None)
+        if isinstance(wired, dict):
+            return str(wired.get("project_path", "") or "").strip()
+        return ""
+
+    @classmethod
+    def fingerprint_inputs(cls, project_path="", layout="", order=None,
+                           category="", bucket=""):
+        # Never raise: a raise is NaN, which re-bills every model under this
+        # node on each queue press.
+        from .layouts import pick_layout
+
+        one = SymbioticaCategoryPrompts._one
+        h = hashlib.sha256(
+            f"layout:{str(one(layout) or '').strip()}:"
+            f"{str(one(category) or '').strip()}:"
+            f"{str(one(bucket) or '').strip()}".encode())
+        # A WIRED order or project_path reads as unset here — this runs before
+        # upstream outputs exist — so the widget alone cannot find the file, and
+        # without the fallback a layout redrawn under the same name was
+        # invisible: nothing in the stamp changed and the cached render stood.
+        candidates = [cls._project(project_path, order)]
+        if not candidates[0]:
+            candidates = _executed_projects()
+        for project in candidates:
+            if not project:
+                continue
+            try:
+                found = pick_layout(project, str(one(category) or ""),
+                                    str(one(bucket) or ""),
+                                    str(one(layout) or ""))
+                h.update(found.encode())
+                st = os.stat(found)
+                # A layout redrawn under the same name is a different grid, and
+                # the render standing on it has to be made again.
+                h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
+            except (OSError, ValueError):
+                pass
+        return h.hexdigest()
+
+    @classmethod
+    def execute(cls, project_path="", layout="", order=None, category="",
+                bucket="") -> io.NodeOutput:
+        from PIL import Image, UnidentifiedImageError
+
+        from .layouts import layouts_dir, list_layouts, pick_layout
+
+        one = SymbioticaCategoryPrompts._one
+        project = cls._project(project_path, order)
+        if not project:
+            raise ValueError(
+                "no project folder to read layouts from — wire an `order`, or "
+                "set project_path")
+        wanted_category = str(one(category) or "").strip()
+        pinned = str(one(layout) or "").strip()
+        found = pick_layout(project, wanted_category,
+                            str(one(bucket) or ""), pinned)
+        if not found:
+            # Name the folder AND what is in it: "no layout" is otherwise
+            # indistinguishable from "wrong project", and the fix is different.
+            held = list_layouts(project)
+            asked = pinned or wanted_category or "(nothing wired)"
+            raise ValueError(
+                f"no layout for {asked!r} in {layouts_dir(project)} — it "
+                + (f"holds: {', '.join(held)}" if held
+                   else "is empty or missing"))
+        try:
+            with Image.open(found) as opened:
+                opened.load()
+                image = opened.convert("RGBA")
+        except (OSError, UnidentifiedImageError, ValueError) as exc:
+            raise ValueError(f"{found} could not be read as an image") from exc
+        arr = np.asarray(image, dtype=np.float32) / 255.0
+        pixels = torch.from_numpy(arr[..., :3])[None, ...]
+        mask = torch.from_numpy(arr[..., 3])[None, ...]
+        name = os.path.basename(found)
+        # The canvas cannot know which file a wired category picked — that is
+        # decided here — so it is told, the same way the Recipe reports the
+        # recipe it served.
+        _push("symbiotica.layout", {
+            "node_id": str(getattr(getattr(cls, "hidden", None),
+                                   "unique_id", "")),
+            "name": name,
+            "layouts": list_layouts(project),
+        })
+        return io.NodeOutput(pixels, mask, name)
 
 
 class SymbioticaOrderTracker(io.ComfyNode):
@@ -4717,6 +5131,7 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaPromptBlock,
     SymbioticaPromptCompose,
     SymbioticaPromptRecipe,
+    SymbioticaGridLayout,
     SymbioticaSaveRender,
     SymbioticaDatasetReference,
     SymbioticaSliceCells,

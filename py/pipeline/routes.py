@@ -710,6 +710,18 @@ async def prompt_versions(request):
     return web.json_response({"ok": True, "blocks": list_versions(project)})
 
 
+@PromptServer.instance.routes.get("/symbiotica/layouts")
+async def layouts_list(request):
+    """The layout images a project holds — what the Grid Layout node's picker
+    offers beside "(follow category)"."""
+    from .layouts import list_layouts
+
+    project = _expand_project(request.query.get("project", ""))
+    if not project:
+        return web.json_response({"error": "project required"}, status=400)
+    return web.json_response({"ok": True, "layouts": list_layouts(project)})
+
+
 @PromptServer.instance.routes.get("/symbiotica/recipe-list")
 async def recipe_list(request):
     """Every saved recipe with its slots — one request fills the panel's
@@ -816,10 +828,18 @@ async def pick_list(request):
     which is why a picker shows a new generation the moment it is queued and
     why looking at one costs nothing.
     """
-    from .pick_folder import LISTING_LIMIT, listing_for, read_folders
+    from .pick_folder import (LISTING_LIMIT, listing_for, read_folders,
+                              subfolders_in, under)
 
     named = str(request.query.get("folder", "") or "").strip()
-    target, only, derived = _pick_target(request.query.get("node_id", ""), named)
+    root, only, derived = _pick_target(request.query.get("node_id", ""), named)
+    # Where the panel's breadcrumb is standing, as a path under the folder the
+    # run resolved. Applied here rather than at the node so a click walks the
+    # tree without a re-queue; `under` refuses anything that leaves the root.
+    crumb = str(request.query.get("subfolder", "") or "").strip().strip("/")
+    target = under(root, crumb)
+    if target == root:
+        crumb = ""
     if not target:
         # A folder that was asked for by name and could not be resolved is a
         # refusal and has to say so. Silence is only right for a picker that
@@ -854,11 +874,17 @@ async def pick_list(request):
                 {"error": f"{target} is not inside a folder this install serves"},
                 status=403)
         return web.json_response({"ok": True, "folder": target, "images": [],
+                                  "root": root, "subfolder": crumb,
+                                  "folders": subfolders_in(target),
                                   "shortlist": only is not None})
     entries = await asyncio.to_thread(listing_for, target, LISTING_LIMIT, only,
                                       derived)
     return web.json_response({
         "ok": True, "folder": target, "shortlist": only is not None,
+        # What the breadcrumb draws: where the root is, which step of it this
+        # listing is, and the folders one click further down.
+        "root": root, "subfolder": crumb,
+        "folders": subfolders_in(target),
         "images": [{"id": e["id"], "name": e["name"], "index": e["index"],
                     "path": e["path"], "w": e["w"], "h": e["h"],
                     "at": e["at"]} for e in entries],
@@ -879,15 +905,19 @@ async def pick_discard(request):
     node actually shows, so a request can no more discard by path than it can
     read by path.
     """
-    from .pick_folder import discard, read_folders
+    from .pick_folder import discard, read_folders, under
 
     try:
         body = await request.json()
     except Exception:
         body = {}
     names = [str(n) for n in (body.get("names") or [])]
-    target, _only, _derived = _pick_target(str(body.get("node_id") or ""),
+    root, _only, _derived = _pick_target(str(body.get("node_id") or ""),
                                  str(body.get("folder") or ""))
+    # Discard what the grid IS SHOWING. A picker navigated into a sub-folder
+    # lists names relative to that step, and matching them against the root's
+    # listing would silently discard nothing.
+    target = under(root, str(body.get("subfolder") or "").strip().strip("/"))
     if not target:
         return web.json_response(
             {"error": "queue this picker once before discarding from it"},

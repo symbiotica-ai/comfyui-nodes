@@ -419,6 +419,10 @@ function bookPanel(node) {
 // --- the Prompt Block node: one block, big on the canvas ---------------------
 function blockPanel(node) {
     const blockW = hideBackingWidget(node, "block");
+    // Which slot of the recipe this node edits. Derived from the wire, never
+    // typed: wiring `text_3` in IS the statement "this edits slot 3", and a
+    // second control saying the same thing could disagree with it.
+    const slotW = hideBackingWidget(node, "slot");
     const ui = panelChrome(node, "prompt_block");
     const { picker, saveBtn, editor, setStatus, setEditable } = ui;
     setEditable(true);
@@ -426,6 +430,18 @@ function blockPanel(node) {
     let loaded = { name: "", text: "" };
     let existing = new Set();
     const dirty = () => editor.value !== loaded.text;
+
+    // `text_in` from a Prompt Recipe means this node is a window onto that
+    // recipe's slot — the output index it is wired to names the slot.
+    function followRecipeWire() {
+        if (!slotW) return;
+        const link = node.inputs?.find((i) => i.name === "text_in")?.link;
+        if (link == null) return;
+        const wire = app.graph.links[link];
+        const origin = app.graph.getNodeById(wire?.origin_id);
+        if (origin?.comfyClass !== RECIPE) return;
+        slotW.value = String((wire.origin_slot ?? 0) + 1);
+    }
 
     async function load(name) {
         const project = projectOf(node);
@@ -449,6 +465,7 @@ function blockPanel(node) {
     }
 
     async function refresh() {
+        followRecipeWire();
         const project = projectOf(node);
         if (!project) {
             picker.replaceChildren();
@@ -548,6 +565,32 @@ function blockPanel(node) {
     });
 
     node._symRefreshBook = refresh;
+    // Which block the last run actually edited. With a category wired the
+    // RECIPE names it, and that name is only known in Python at run time — so
+    // the panel is told rather than guessing, and stops showing the block that
+    // was last picked by hand while serving a different one.
+    node._symShowServed = async (name) => {
+        if (!name || name === picker.value) return;
+        // An unsaved edit is his typing; the served name is only a view of the
+        // file, so it waits rather than overwriting him.
+        if (dirty()) {
+            setStatus(`the run served ${name} — save or discard your edit to `
+                      + `${loaded.name} to follow it`, true);
+            return;
+        }
+        // Selectable even when the recipe names a block nobody has written
+        // yet: `load` then offers it as a new block, which is the only way to
+        // create the file the recipe is already asking for.
+        if (!existing.has(name)) {
+            groupInto(picker, "Not on disk",
+                      [{ name, title: name, chars: "new" }]);
+        }
+        picker.value = name;
+        if (blockW) blockW.value = name;
+        node.title = `Block — ${name.replace(/\.md$/, "")}`;
+        node.setDirtyCanvas?.(true, true);
+        await load(name);
+    };
     onBookSaved(node, refresh);
     queueMicrotask(refresh);
 }
@@ -924,10 +967,16 @@ function recipePanel(node) {
     // showing the name that lost — otherwise the rows on screen are not the
     // blocks the render used. The widget is left alone: it is the fallback for
     // a category the book has no recipe for.
-    node._symShowServed = (name) => {
+    node._symShowServed = (name, served = {}) => {
         if (!name || !saved.has(name)) return;
         picker.value = name;
-        setStatus(`${showRecipe(name).length} blocks · from the asset's category`);
+        const blocks = showRecipe(name).length;
+        // The sizes of what actually went out, not of what the file names: a
+        // row that reads right over an empty block is the failure this line
+        // exists to show.
+        const chars = (served.chars ?? []).filter((n) => Number.isFinite(n));
+        setStatus(`${blocks} blocks · from the asset's category`
+                  + (chars.length ? ` · ${chars.join(" + ")} chars` : ""));
     };
     onBookSaved(node, refresh);
     queueMicrotask(refresh);
@@ -951,8 +1000,19 @@ api.addEventListener("symbiotica.recipe", (event) => {
     if (!node || !detail.name) return;
     node._symServedRecipe = String(detail.name);
     node.title = `Recipe — ${detail.name}`;
-    node._symShowServed?.(String(detail.name));
+    node._symShowServed?.(String(detail.name), detail);
     node.setDirtyCanvas?.(true, true);
+});
+
+// The block a Prompt Block actually edited. Same reason as the recipe push
+// above: with a `category` wired the recipe names the block, in Python, at run
+// time — the panel has no way to know it and would sit on a stale pick.
+api.addEventListener("symbiotica.block", (event) => {
+    const detail = event?.detail ?? {};
+    if (detail.node_id == null || !detail.name) return;
+    const node = app.graph?.getNodeById?.(Number(detail.node_id))
+        ?? app.graph?.getNodeById?.(detail.node_id);
+    node?._symShowServed?.(String(detail.name));
 });
 
 registerSymbioticaExtension(app, {
