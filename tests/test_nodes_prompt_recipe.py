@@ -119,6 +119,43 @@ def test_the_orders_category_beats_a_pinned_recipe(nodes_mod, tmp_path):
     assert out.args[2].strip() == "MIRROR RULES"
 
 
+def test_a_wired_category_beats_the_whole_events_categories(nodes_mod,
+                                                           tmp_path):
+    """Wiring Asset Focus's `event_order` hands over the WHOLE month, every
+    category in it — ambiguous, so the node fell back to the pinned name and
+    served Appliance prompts under a Food asset. Asset Focus's `category`
+    output says which asset is picked; wired here, it decides."""
+    project = make_book(tmp_path, name="Food - 3 stages")
+    (project / "prompts" / "_recipes" / "Appliance.json").write_text(
+        json.dumps({"slots": [{"block": "_image/01-image-model.md",
+                               "version": ""}]}))
+    event = {"project_path": str(project),
+             "assets": [{"assetName": "Oven", "category": "Appliance"},
+                        {"assetName": "Dark Depths Brew",
+                         "category": "Food - 3 stages"},
+                        {"assetName": "Bunting", "category": "Decoration"}]}
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        order=event, category="Food - 3 stages", recipe="Appliance", slots=3)
+    assert out.args[0].strip() == "ARCHITECT"
+    assert out.args[2].strip() == "MIRROR RULES"
+
+
+def test_a_wired_category_arrives_as_a_list(nodes_mod, tmp_path):
+    """Asset Focus's `category` is a LIST output — one entry per focused asset
+    — so the value lands here wrapped, exactly as `_one` unwraps elsewhere."""
+    project = make_book(tmp_path, name="Food - 3 stages")
+    out = nodes_mod.SymbioticaPromptRecipe.execute(
+        project_path=str(project), category=["Food - 3 stages"], slots=1)
+    assert out.args[0].strip() == "ARCHITECT"
+
+
+def test_a_wired_category_changes_the_change_check(nodes_mod, tmp_path):
+    project = make_book(tmp_path, name="Food - 3 stages")
+    r = nodes_mod.SymbioticaPromptRecipe
+    assert (r.fingerprint_inputs(project_path=str(project), category="Food - 3 stages")
+            != r.fingerprint_inputs(project_path=str(project), category="Appliance"))
+
+
 def test_a_pinned_recipe_answers_for_a_category_the_book_has_none_for(
         nodes_mod, tmp_path):
     """Refusing to render because one category has no recipe yet would stop
@@ -186,9 +223,14 @@ def test_follow_category_without_an_order_says_so(nodes_mod, tmp_path):
             recipe=nodes_mod.SymbioticaPromptRecipe.FOLLOW)
 
 
-def test_the_order_input_is_appended_and_optional(nodes_mod):
-    """Widgets restore positionally in saved graphs, so the order input stays
-    on the end; and a Recipe with no order must keep working from widgets."""
+def test_the_widgets_keep_their_order_and_the_wires_are_optional(nodes_mod):
+    """Widgets restore POSITIONALLY in saved graphs, so the three of them stay
+    first and in this order — his Recipe already came back once with
+    `project_path = 1` because a list shifted. The wired-only inputs sit after
+    them, and both are optional: a Recipe with no wires must still work."""
     schema = nodes_mod.SymbioticaPromptRecipe.GET_SCHEMA()
-    assert schema.inputs[-1].id == "order"
-    assert schema.inputs[-1].optional is True
+    ids = [i.id for i in schema.inputs]
+    assert ids[:3] == ["recipe", "slots", "project_path"]
+    assert set(ids[3:]) == {"order", "category"}
+    for wire in ("order", "category"):
+        assert next(i for i in schema.inputs if i.id == wire).optional is True

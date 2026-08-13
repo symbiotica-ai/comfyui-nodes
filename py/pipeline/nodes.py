@@ -4434,6 +4434,16 @@ class SymbioticaPromptRecipe(io.ComfyNode):
             orders = [o for o in order if isinstance(o, dict)]
         else:
             return []
+        # What Asset Focus is focused on beats what the event happens to hold:
+        # `event_order` carries all 61 assets of the month, so counting their
+        # categories says "several" and the node would fall back to whatever
+        # was pinned — the whole complaint. The narrowed `order` output has no
+        # focus key and needs none: it holds the one asset already.
+        focused = {str((one.get("focus") or {}).get("category", "") or "").strip()
+                   for one in orders}
+        focused.discard("")
+        if len(focused) == 1:
+            return sorted(focused)
         cats = set()
         for one in orders:
             for asset in one.get("assets", []) or []:
@@ -4473,6 +4483,12 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                             tooltip="Any order from the pipeline — it carries "
                                     "the project, so project_path can stay "
                                     "empty."),
+                io.String.Input("category", optional=True, force_input=True,
+                                tooltip="Wire Asset Focus's `category` here "
+                                        "and the recipe named after it is the "
+                                        "one served — picking the asset then "
+                                        "picks its prompts, with nothing to "
+                                        "set here."),
             ],
             outputs=[
                 io.String.Output(display_name=f"text_{i}",
@@ -4484,7 +4500,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, recipe="", slots=3, project_path="",
-                           order=None):
+                           order=None, category=""):
         # Widgets plus the book's file mtimes, and never raise: a raise becomes
         # NaN, which re-bills every model under this node on each queue press.
         one = SymbioticaCategoryPrompts._one
@@ -4496,6 +4512,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         # from an Appliance asset to a Food one served the cached Appliance
         # prompts and nothing on the canvas said why.
         h.update("|".join(cls._order_category(order)).encode())
+        h.update(str(one(category) or "").strip().encode())
         candidates = [str(one(project_path)).strip()]
         if not candidates[0]:
             candidates = _executed_projects()
@@ -4521,7 +4538,7 @@ class SymbioticaPromptRecipe(io.ComfyNode):
 
     @classmethod
     def execute(cls, recipe="", slots=3, project_path="",
-                order=None) -> io.NodeOutput:
+                order=None, category="") -> io.NodeOutput:
         from .prompt_book import pick_version, read_recipe
         from .prompt_store import PromptPathError, read_block
 
@@ -4538,7 +4555,10 @@ class SymbioticaPromptRecipe(io.ComfyNode):
         # serving Appliance under a Food asset is the bug, not the feature.
         # A pinned name still answers for a category the book has no recipe
         # for, and for a Recipe with no order wired at all.
-        cats = cls._order_category(order)
+        # A wired category is the plainest statement of all: Asset Focus says
+        # what the picked asset is, and that names the recipe.
+        wired = str(SymbioticaCategoryPrompts._one(category) or "").strip()
+        cats = [wired] if wired else cls._order_category(order)
         if len(cats) == 1 and read_recipe(project, cats[0]):
             name = cats[0]
         elif name == cls.FOLLOW:
