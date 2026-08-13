@@ -2361,7 +2361,8 @@ class SymbioticaAssetRefs(io.ComfyNode):
                                 tooltip="One image per reference the client "
                                         "sent for this asset, in the order the "
                                         "order sheet pairs them."),
-                io.String.Output(display_name="names", is_output_list=True,
+                io.String.Output(display_name="asset_names",
+                                 is_output_list=True,
                                  tooltip="Filename of each reference, so a "
                                          "wrong pick is traceable to its file. "
                                          "Wire into a Pick node's `names` to "
@@ -2373,11 +2374,15 @@ class SymbioticaAssetRefs(io.ComfyNode):
                                        "transparency is kept, so a reference "
                                        "can always be composited onto "
                                        "something else downstream."),
-                io.String.Output(display_name="save_path",
+                # Shown as `refs_path`: this node READS that folder, it
+                # saves nothing. Only the printed label changes — a link
+                # addresses an output by slot index, so saved graphs are
+                # untouched.
+                io.String.Output(display_name="refs_path",
                                  tooltip="The folder these references were "
                                          "read from — the order's own "
                                          "references root. Wire it into a "
-                                         "Pick node's `save_path` to tick the "
+                                         "Pick node's `input_path` to tick the "
                                          "client's references by eye instead "
                                          "of taking every one of them."),
             ],
