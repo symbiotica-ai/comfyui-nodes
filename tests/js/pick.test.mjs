@@ -243,7 +243,7 @@ test("the controls and the folder stay put while the grid scrolls", async () => 
     assert.match(top.style.cssText, /position:sticky/);
     assert.match(top.style.cssText, /top:0/);
     // Opaque, or the thumbnails show through the counts as they pass under.
-    assert.match(top.style.cssText, /background:#/);
+    assert.match(top.style.cssText, /background:var\(--sym-surface1/);
     const stuck = walk(top).map((e) => e.textContent).join(" ");
     assert.match(stuck, /3 in folder/);
     assert.match(stuck, /Food - 3 stages\/Spookies/);
@@ -681,7 +681,7 @@ test("an empty folder offers nothing to check", async () => {
     assert.equal(buttonNamed(node, "check all"), undefined);
 });
 
-test("the panel's wrapper is pinned to the node width", async () => {
+test("the panel's wrapper is capped to the node width", async () => {
     // ComfyUI's own layout pass follows a WIDENING but lags a SHRINK, so a
     // narrowed node keeps a too-wide wrapper and the grid paints over the
     // canvas. `width:100%` cannot save it: 100% of too wide is too wide.
@@ -691,25 +691,32 @@ test("the panel's wrapper is pinned to the node width", async () => {
     container.parent = wrap;
     node.size[0] = 340;
     node.onResize();
-    assert.equal(wrap.style.width, "320px");   // node width minus the inset
+    assert.equal(wrap.style.maxWidth, "320px");   // node width minus the inset
 });
 
-test("the wrapper is re-pinned on every draw, not just on resize", async () => {
-    // ComfyUI re-writes the wrapper from its own layout pass, so a one-shot pin
-    // set before that pass is overwritten and the panel goes back to hanging
-    // off the node. This is the thing that made four separate fixes look like
-    // they had not landed.
+test("a stale wrapper width cannot widen the panel past the node", async () => {
+    // ComfyUI re-writes the wrapper's `width` from its own layout pass, so any
+    // width we set there is overwritten and the panel goes back to hanging off
+    // the node — the thing that made four separate fixes look like they had not
+    // landed. The cap lives on `max-width`, which the frontend never writes and
+    // which beats an inline `width` however late that width arrives.
     const node = await panelNode([], [ONE]);
     const container = node.widgets.find((w) => w.name === "pick_panel").element;
     const wrap = { style: { width: "900px" } };
     container.parent = wrap;
     node.size[0] = 340;
     node.onDrawForeground?.();
-    assert.equal(wrap.style.width, "320px");
+    assert.equal(wrap.style.maxWidth, "320px");
     // And nothing inside may paint past it either way.
     assert.equal(wrap.style.overflow, "hidden");
-    // A later stomp by ComfyUI is undone on the next frame.
-    wrap.style.width = "900px";
+    // A later stomp by ComfyUI leaves the cap standing, and the next frame
+    // takes the width back too.
+    wrap.style.width = "1200px";
     node.onDrawForeground?.();
+    assert.equal(wrap.style.maxWidth, "320px");
     assert.equal(wrap.style.width, "320px");
+    // Widening the node lifts the cap on the next frame.
+    node.size[0] = 700;
+    node.onDrawForeground?.();
+    assert.equal(wrap.style.maxWidth, "680px");
 });

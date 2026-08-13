@@ -5,6 +5,7 @@ import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { resolveProjectPath } from "./order_pipeline.js";
 import { pinPanelWidth } from "./browser_chrome.js";
+import { HUB, injectHubStyles } from "./hub_theme.js";
 
 const BOOK = "SymbioticaPromptBook";
 const BLOCK = "SymbioticaPromptBlock";
@@ -99,6 +100,7 @@ function keepEvents(el) {
 // line, a status line, and the editor. State (what is loaded, what is dirty)
 // stays with each panel — this is chrome only.
 function panelChrome(node, widgetName, { save = true } = {}) {
+    injectHubStyles();
     const container = document.createElement("div");
     container.style.cssText = "box-sizing:border-box;width:100%;height:100%;"
         + "display:flex;flex-direction:column;gap:4px;font-size:11px;"
@@ -107,15 +109,18 @@ function panelChrome(node, widgetName, { save = true } = {}) {
     const bar = document.createElement("div");
     bar.style.cssText = "display:flex;gap:4px;align-items:center;min-width:0;";
     const picker = document.createElement("select");
-    picker.style.cssText = "flex:1;min-width:0;background:#222;color:#ddd;"
-        + "border:1px solid #555;border-radius:4px;padding:2px 4px;";
+    picker.style.cssText = `flex:1;min-width:0;background:${HUB.surface1};`
+        + `color:${HUB.ink};border:1px solid ${HUB.hairlineStrong};`
+        + "border-radius:4px;padding:2px 4px;";
     bar.append(picker);
     let saveBtn = null;
     if (save) {
         saveBtn = document.createElement("button");
         saveBtn.textContent = "Save";
-        saveBtn.style.cssText = "padding:2px 10px;border-radius:4px;"
-            + "cursor:pointer;border:1px solid #555;background:#333;color:#ddd;";
+        saveBtn.style.cssText = "padding:2px 10px;border-radius:4px;cursor:pointer;"
+            + `border:1px solid ${HUB.hairlineStrong};background:${HUB.surface2};`
+            + `color:${HUB.ink};`;
+        saveBtn.className = "sym-btn";
         bar.append(saveBtn);
     }
 
@@ -132,7 +137,8 @@ function panelChrome(node, widgetName, { save = true } = {}) {
     const editor = document.createElement("textarea");
     editor.spellcheck = false;
     editor.style.cssText = "width:100%;box-sizing:border-box;flex:1;resize:none;"
-        + "background:#1b1b1b;color:#ddd;border:1px solid #444;border-radius:4px;"
+        + `background:${HUB.surface1};color:${HUB.ink};`
+        + `border:1px solid ${HUB.hairline};border-radius:4px;`
         + "padding:5px;font-family:ui-monospace,monospace;font-size:11px;"
         + "line-height:1.35;";
     keepEvents(editor);
@@ -169,25 +175,9 @@ function panelChrome(node, widgetName, { save = true } = {}) {
     // the fallback is corrected before the user notices it.
     requestAnimationFrame(() => node.setDirtyCanvas?.(true, true));
 
-    // The wrapper ComfyUI sizes from the node width follows a widening at once
-    // but lags a shrink, leaving the panel hanging off the node's right edge —
-    // same trap as the Auto Packer's assets panel. Pin it instead of waiting.
-    const PANEL_INSET = 20;
-    const syncWidth = () => {
-        const wrap = container.parentElement;
-        if (!wrap) return;
-        const want = Math.max(0, node.size[0] - PANEL_INSET);
-        if (parseFloat(wrap.style.width) !== want) wrap.style.width = `${want}px`;
-    };
-    const prevResize = node.onResize;
-    node.onResize = function () {
-        prevResize?.apply(this, arguments);
-        syncWidth();
-    };
-
     const setStatus = (msg, bad) => {
         status.textContent = msg;
-        status.style.color = bad ? "#e08585" : "#8fbf8f";
+        status.style.color = bad ? HUB.danger : HUB.ok;
     };
 
     // Read-only is enforced on the widget, not just by hiding Save: a composed
@@ -199,7 +189,7 @@ function panelChrome(node, widgetName, { save = true } = {}) {
             saveBtn.disabled = !on;
             saveBtn.style.opacity = on ? "1" : ".4";
         }
-        editor.style.background = on ? "#1b1b1b" : "#171a17";
+        editor.style.background = on ? HUB.surface1 : HUB.surface2;
         blocksBar.style.display = on ? "none" : "block";
     };
 
@@ -668,7 +658,9 @@ function recipePanel(node) {
         label.textContent = `${index + 1}`;
         label.style.cssText = "opacity:.55;width:12px;text-align:right;";
         const block = document.createElement("select");
-        block.style.cssText = "flex:1;min-width:0;font-size:11px;";
+        block.style.cssText = "flex:1;min-width:0;font-size:11px;"
+            + `background:${HUB.surface1};color:${HUB.ink};`
+            + `border:1px solid ${HUB.hairlineStrong};border-radius:4px;`;
         keepEvents(block);
         const empty = document.createElement("option");
         empty.value = "";
@@ -694,7 +686,9 @@ function recipePanel(node) {
             block.appendChild(g);
         }
         const version = document.createElement("select");
-        version.style.cssText = "width:96px;font-size:11px;";
+        version.style.cssText = "width:96px;font-size:11px;"
+            + `background:${HUB.surface1};color:${HUB.ink};`
+            + `border:1px solid ${HUB.hairlineStrong};border-radius:4px;`;
         keepEvents(version);
 
         const fillVersions = () => {

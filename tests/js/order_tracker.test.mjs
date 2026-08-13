@@ -264,14 +264,14 @@ test("a refused reject leaves the slot filled", async () => {
     assert.match(headOf(node).children[0].textContent, /1\/3 done/);
 });
 
-test("the panel's wrapper is pinned to the node width", async () => {
+test("the panel's wrapper is capped to the node width", async () => {
     const node = await trackerNode();
     const container = node.widgets.find((w) => w.name === "tracker_panel").element;
     const wrap = { style: { width: "900px" } };
     container.parent = wrap;
     node.size[0] = 400;
     node.onResize();
-    assert.equal(wrap.style.width, "380px");
+    assert.equal(wrap.style.maxWidth, "380px");
 });
 
 test("the count and bar stay put while the slots scroll", async () => {

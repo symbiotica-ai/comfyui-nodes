@@ -655,15 +655,30 @@ test("it lists its own parse when no order is wired", async () => {
     assert.deepEqual(names(node), ["Bunting"]);
 });
 
-test("the panel's wrapper is pinned to the node width", async () => {
+test("the panel's wrapper is capped to the node width", async () => {
     // The rows are contained, but they live in a wrapper ComfyUI sizes on its
-    // own pass — one that follows a widening and lags a shrink. Pinning the
-    // wrapper is the only thing that survives a narrowed node.
+    // own pass — one that follows a widening and lags a shrink. Its `width` is
+    // the frontend's to write, so the cap goes on `max-width`, which wins over
+    // an inline width whatever order the two are written in.
     const node = await focusNode();
     const container = node.widgets.find((w) => w.name === "focus_panel").element;
     const wrap = { style: { width: "900px" } };
     container.parent = wrap;
     node.size[0] = 320;
     node.onResize();
+    assert.equal(wrap.style.maxWidth, "300px");
     assert.equal(wrap.style.width, "300px");
+    assert.equal(wrap.style.overflow, "hidden");
+});
+
+test("the panel element itself is capped to the node width", async () => {
+    // Which box ComfyUI sizes has moved between frontend versions — sometimes
+    // a wrapper, sometimes the element. Capping the element cannot miss.
+    const node = await focusNode();
+    const el = node.widgets.find((w) => w.name === "focus_panel").element;
+    node.size[0] = 320;
+    node.onDrawForeground?.();
+    assert.equal(el.style.width, "100%");
+    assert.equal(el.style.maxWidth, "300px");
+    assert.equal(el.style.overflowX, "hidden");
 });

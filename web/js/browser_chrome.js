@@ -32,26 +32,49 @@ export const imageFullUrl = (path) => api.apiURL(
 // themselves are contained.
 //
 // `width:100%` on the content cannot help: 100% of a wrapper that is too wide
-// is too wide. The wrapper is the thing to pin, and pinning it is the only fix
-// that survives a shrink. The inset is a constant 20px at every width
+// is too wide. The wrapper is the thing to constrain, and WRITING ITS WIDTH
+// does not work: the frontend owns that property and re-writes it from its own
+// layout every frame, so whoever writes last wins and it is never us.
+//
+// `max-width` is the property it does not touch, and CSS resolves it AFTER
+// width whatever the order — an inline `width:900px` under an inline
+// `max-width:300px` lays out at 300. So cap both boxes and leave `width` to
+// the frontend: when its value is right nothing changes, when it lags a shrink
+// the cap holds the panel inside the node, and when it culls the node to 0 the
+// cap does not force it back open. The inset is a constant 20px at every width
 // (320->300, 325->305, 520->500, 600->580).
 const PANEL_INSET = 20;
 
 /**
- * Pin `container`'s wrapper to the node's width, now and on every resize.
+ * Cap `container` and its wrapper to the node's width, now and on every resize.
  * Returns the sync function so a render path can call it too — a re-render
  * inside a node that shrank while the panel was empty needs it.
  */
 export function pinPanelWidth(node, container) {
     const sync = () => {
+        const want = `${Math.max(0, node.size[0] - PANEL_INSET)}px`;
+        // The ELEMENT first. Which box ComfyUI sizes has moved between frontend
+        // versions — sometimes a wrapper, sometimes the element itself — so
+        // capping only one fixes it on one build and does nothing on another.
+        if (container.style.maxWidth !== want) container.style.maxWidth = want;
+        // Fill whatever the wrapper gives, up to the cap, and clip our own
+        // content rather than letting a wide row push the box open.
+        if (container.style.width !== "100%") container.style.width = "100%";
+        if (container.style.boxSizing !== "border-box") {
+            container.style.boxSizing = "border-box";
+        }
+        if (container.style.overflowX !== "hidden") {
+            container.style.overflowX = "hidden";
+        }
         const wrap = container.parentElement;
         if (!wrap) return;
-        const want = Math.max(0, node.size[0] - PANEL_INSET);
-        if (parseFloat(wrap.style.width) !== want) wrap.style.width = `${want}px`;
-        // Belt and braces: whatever width the wrapper ends up with, nothing
-        // inside it may paint past it. A row that overflows a correct wrapper
-        // and a correct row inside a stale wrapper look identical on screen,
-        // and only this rules out the first.
+        // The cap first, so it is already in force whenever the frontend's own
+        // width lands. Then the width itself, which is what a WIDENING needs:
+        // the frontend can lag that too, and a cap alone cannot open a box the
+        // frontend is holding narrow. This only ever runs for a node being
+        // drawn, so a culled panel keeps the zero width that hides it.
+        if (wrap.style.maxWidth !== want) wrap.style.maxWidth = want;
+        if (wrap.style.width !== want) wrap.style.width = want;
         if (wrap.style.overflow !== "hidden") wrap.style.overflow = "hidden";
     };
     // onResize fires for a dragged shrink, but it is NOT enough on its own:
