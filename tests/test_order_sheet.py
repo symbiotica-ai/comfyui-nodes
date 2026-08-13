@@ -47,8 +47,10 @@ def test_decodes_xml_entities_and_char_refs():
 
 
 from pipeline.order_sheet import (
+    bucket_for,
     bucket_of,
     canvas_spec_of,
+    canvas_tiles,
     compact_asset_name,
     extract_order_rows,
     group_order_events,
@@ -238,3 +240,48 @@ class TestWhichSubKindARowIs:
                  "Prep) Dough on a chopping board."]]
         rows = extract_order_rows(grid)
         assert [r["bucket"] for r in rows] == ["Drinks", ""]
+
+
+class TestTheCanvasInTiles:
+    """assetkit names a grid by the tiles its canvas covers — `Appliance 1x1`
+    is a short room corner and `Appliance 1x2` is the same floor under a wall
+    twice as high."""
+
+    def test_a_canvas_is_counted_in_128px_tiles(self):
+        assert canvas_tiles("128x128") == "1x1"
+        assert canvas_tiles("128x256") == "1x2"
+        assert canvas_tiles("512x512") == "4x4"
+
+    def test_the_sheets_own_plot_column_is_a_different_number(self):
+        """The trap: October marks BOTH a 128x128 and a 128x256 Appliance as
+        plot `1x1`, and three different plots on one 256x256 Decoration canvas.
+        Reading `plot` would put two different grids under one name."""
+        grid = [["Feature", "Asset Name", "Asset Category", "Canvas", "Plot"],
+                ["Mini 1", "Squat Oven", "Appliance", "128x128", "1x1"],
+                ["Mini 1", "Tall Oven", "Appliance", "128x256", "1x1"]]
+        rows = extract_order_rows(grid)
+        assert [r["plot"] for r in rows] == ["1x1", "1x1"]
+        assert [canvas_tiles(r["canvas"]) for r in rows] == ["1x1", "1x2"]
+
+    def test_a_canvas_that_is_not_whole_tiles_has_no_grid_of_its_own(self):
+        assert canvas_tiles("200x200") == ""      # Crate Icon
+        assert canvas_tiles("128x129") == ""      # a Wallpaper typo
+        assert canvas_tiles("") == ""
+
+
+class TestTheBucketOneWireCarries:
+    def test_the_prep_line_wins_over_the_canvas(self):
+        """A drink is a drink whatever size it is drawn at."""
+        assert bucket_for({"canvas": "128x128",
+                           "prompt": "Prep) An empty teacup."}) == "Drinks"
+
+    def test_a_row_with_nothing_in_its_prep_line_falls_back_to_the_canvas(self):
+        assert bucket_for({"canvas": "128x256",
+                           "prompt": "Prep) Dough on a board."}) == "1x2"
+
+    def test_a_bucket_already_on_the_row_is_kept(self):
+        assert bucket_for({"bucket": "Drinks", "canvas": "512x512"}) == "Drinks"
+
+    def test_a_row_with_neither_has_no_bucket(self):
+        assert bucket_for({"canvas": "200x200", "prompt": ""}) == ""
+        assert bucket_for({}) == ""

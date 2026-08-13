@@ -120,7 +120,16 @@ def pick_layout(project_path: str, category: str = "", bucket: str = "",
     category = str(category or "").strip()
     bucket = str(bucket or "").strip()
     if category and bucket:
-        found = newest_for(project_path, f"{category} - {bucket}")
-        if found:
-            return found
+        # A size bucket is looked up the way assetkit WRITES it — `Appliance
+        # 1x2.png`, a space and no dash — before the book's own `<category> -
+        # <bucket>` form. Its export path is theirs to name and ours to read.
+        # This lookup also settles a tie the plain category cannot: with
+        # `Appliance 1x1.png` and `Appliance 1x2.png` both on disk and nothing
+        # to choose between them, asking for the category alone answered
+        # `1x1` for every appliance, including the tall ones.
+        names = ([f"{category} {bucket}"] if _SIZE_TAG.match(bucket) else [])
+        for name in [*names, f"{category} - {bucket}"]:
+            found = newest_for(project_path, name)
+            if found:
+                return found
     return newest_for(project_path, category)

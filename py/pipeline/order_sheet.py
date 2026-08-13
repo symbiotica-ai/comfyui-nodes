@@ -181,6 +181,54 @@ def bucket_of(prompt: str) -> str:
     return "Drinks" if _PREP_VESSEL.search(line) else ""
 
 
+# One floor tile, in pixels. The Canvas column is a pixel size and assetkit
+# names a grid by the tiles that size covers — `128x256` is the sheet it calls
+# `Appliance 1x2` — so the two only meet through this number.
+TILE_PX = 128
+
+
+def canvas_tiles(canvas: str) -> str:
+    """The asset's CANVAS measured in floor tiles, as `<w>x<h>`, or "".
+
+    This is what assetkit's grid tag counts, and it is the distinction that
+    matters when drawing: `Appliance 1x1` is a short room corner with two
+    courses of wall and `Appliance 1x2` is the same floor under a wall twice as
+    high, so "the 1x1 one appliance must fit in the grid box and not be taller
+    than the grid walls".
+
+    NOT the sheet's own `plot` column. That one is the game footprint and does
+    not follow the canvas at all — the October sheet has both a 128x128 and a
+    128x256 Appliance marked plot `1x1`, and Decoration rows on one 256x256
+    canvas marked `1x2`, `2x2` and `3x3`. Reading `plot` here would put two
+    different grids under one name.
+
+    A canvas that is not a whole number of tiles — `200x200` (Crate Icon),
+    `128x129` (a Wallpaper typo) — has no grid of its own and says so.
+    """
+    spec = canvas_spec_of(str(canvas or ""))
+    if not spec or not spec["w"] or not spec["h"]:
+        return ""
+    if spec["w"] % TILE_PX or spec["h"] % TILE_PX:
+        return ""
+    return f"{spec['w'] // TILE_PX}x{spec['h'] // TILE_PX}"
+
+
+def bucket_for(asset: dict) -> str:
+    """The bucket of one asset ROW — how this row is drawn within its category.
+
+    Two narrowings, one wire: what the Prep line says (`Drinks`) wins, and a
+    row with nothing to read there falls back to its canvas in tiles. Both end
+    up as `<category> - <bucket>` in the recipe book and in
+    `datasets/layouts/`, so one name resolves the prompt AND the grid, and
+    neither is ever a demand — a bucket with no recipe of its own is drawn the
+    category's ordinary way.
+    """
+    asset = asset or {}
+    return (str(asset.get("bucket") or "").strip()
+            or bucket_of(asset.get("prompt", ""))
+            or canvas_tiles(asset.get("canvas", "")))
+
+
 def extract_order_rows(grid: list[list[str]]) -> list[dict]:
     """Find the header row (contains both "Feature" and "Asset Name"), map
     columns by header text, and type every data row below it. Rows with neither

@@ -207,6 +207,24 @@ class TestWhatThePanelIsTold:
         assert [a["name"] for a in self.detail(pushed)["assets"]] == ["Bunting"]
 
 
+class TestTheBucketOnTheWire:
+    def test_a_row_with_no_prep_bucket_carries_its_canvas_in_tiles(
+            self, nodes_mod):
+        """One wire picks the prompt AND the grid: `Appliance 1x1` is a short
+        room corner and `Appliance 1x2` is the same floor under a wall twice as
+        high, so they are two different drawings of one category."""
+        order = {**ORDER, "assets": [
+            {"assetName": "Tall Oven", "category": "Appliance",
+             "canvas": "128x256", "prompt": "a cast iron range"}]}
+        assert run(nodes_mod, order=order).args[6] == ["1x2"]
+
+    def test_the_prep_line_still_wins(self, nodes_mod):
+        order = {**ORDER, "assets": [
+            {"assetName": "Bat Brew", "category": "Food - 3 stages",
+             "canvas": "128x128", "prompt": "Prep) An empty teacup."}]}
+        assert run(nodes_mod, order=order).args[6] == ["Drinks"]
+
+
 class TestTheClickedReference:
     """"i select the category, the asset and then i have to select the asset
     again in Pick. this is an extra click that is not necessary. how about i

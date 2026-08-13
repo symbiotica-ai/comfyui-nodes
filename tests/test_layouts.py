@@ -51,6 +51,39 @@ class TestWhichFileACategoryNames:
             pick_layout(project, "Food - 3 stages", "Drinks")
         ) == "Food - 3 stages.png"
 
+    def test_a_size_bucket_reads_assetkits_own_spelling(self, tmp_path):
+        """assetkit writes `Appliance 1x2.png` — a space, no dash. Its export
+        path is theirs to name and ours to read."""
+        project = project_with(tmp_path, "Appliance 1x1.png",
+                               "Appliance 1x2.png")
+        assert os.path.basename(
+            pick_layout(project, "Appliance", "1x2")) == "Appliance 1x2.png"
+
+    def test_two_sized_files_and_no_bucket_is_the_tie_that_answered_wrong(
+            self, tmp_path):
+        """With both sizes on disk and nothing to choose between them, the
+        plain category answered `1x1` for every appliance, tall ones included.
+        The bucket is what settles it."""
+        project = project_with(tmp_path, "Appliance 1x1.png",
+                               "Appliance 1x2.png")
+        assert os.path.basename(
+            pick_layout(project, "Appliance")) == "Appliance 1x1.png"
+        assert os.path.basename(
+            pick_layout(project, "Appliance", "1x2")) == "Appliance 1x2.png"
+
+    def test_the_books_own_dash_form_still_wins_when_it_exists(self, tmp_path):
+        project = project_with(tmp_path, "Appliance 1x2.png",
+                               "Appliance - 1x2.png")
+        assert os.path.basename(
+            pick_layout(project, "Appliance", "1x2")) == "Appliance 1x2.png"
+
+    def test_a_size_bucket_with_no_sized_file_falls_back(self, tmp_path):
+        """Decoration has one sheet for every canvas today; a bucket must not
+        turn that into no layout at all."""
+        project = project_with(tmp_path, "Decoration.png")
+        assert os.path.basename(
+            pick_layout(project, "Decoration", "4x4")) == "Decoration.png"
+
     def test_a_category_with_nothing_is_empty(self, tmp_path):
         project = project_with(tmp_path, "Chair.png")
         assert pick_layout(project, "Wallpaper") == ""

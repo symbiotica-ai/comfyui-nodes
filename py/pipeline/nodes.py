@@ -32,7 +32,7 @@ from .regional_prompt import (
 )
 from .skeleton import build_client_prompts, build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
-from .order_sheet import bucket_of, slugify
+from .order_sheet import bucket_for, slugify
 from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import (assets_by_category, dataset_dir,
                            pick_reference_per_category, save_paths)
@@ -1478,8 +1478,7 @@ class SymbioticaAssetFocus(io.ComfyNode):
                              # Re-read rather than taken off the row: an order
                              # parsed before buckets existed carries no key,
                              # and the answer is the same either way.
-                             [i.get("bucket") or bucket_of(i.get("prompt", ""))
-                              for i in picked],
+                             [bucket_for(i) for i in picked],
                              [r[0] for r in chosen_refs],
                              [r[1] for r in chosen_refs],
                              [r[2] for r in chosen_refs])

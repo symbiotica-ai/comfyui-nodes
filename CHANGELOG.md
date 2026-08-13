@@ -6,6 +6,29 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.27
+
+**A canvas size is a bucket, so one category can hold two grids and two
+prompts.** `Appliance 1x1` is a short room corner with two courses of wall and
+`Appliance 1x2` is the same floor under a wall twice as high — two different
+drawings of one category, and until now both appliances were served the same
+grid and the same prompt. Asset Focus's `bucket` falls back to the asset's
+canvas measured in floor tiles (`128x256` → `1x2`) when the Prep line has
+nothing to say, so the existing `<category> - <bucket>` ladder picks the grid
+AND the recipe off one wire. A bucket with no recipe or layout of its own still
+falls back to the category, so nothing that worked before moves.
+
+**Fixes: with two sized layouts on disk, every appliance got the 1x1 one.**
+`Appliance 1x1.png` and `Appliance 1x2.png` both answered to `Appliance` and
+the tie went to the filename. A size bucket is now looked up the way assetkit
+writes it — `Appliance 1x2.png`, a space and no dash — before the book's own
+`<category> - <bucket>` form.
+
+**Not the sheet's `plot` column.** That one is the game footprint and does not
+follow the canvas: the October sheet marks both a 128x128 and a 128x256
+Appliance as plot `1x1`, and three different plots on one 256x256 Decoration
+canvas. Reading it would put two different grids under one name.
+
 ## 2026.8.26
 
 **Adds inputs and outputs to Symbiotica Asset Focus.** One appended input
