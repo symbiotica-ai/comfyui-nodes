@@ -4472,9 +4472,12 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                                         "asset's category instead, so picking "
                                         "a Food asset upstream serves the "
                                         "Food recipe."),
-                io.Int.Input("slots", default=3, min=1, max=cls.MAX_SLOTS,
-                             tooltip="How many blocks this recipe serves. "
-                                     "Outputs past it come back empty."),
+                io.Combo.Input("slots",
+                               options=[str(i) for i in
+                                        range(1, cls.MAX_SLOTS + 1)],
+                               default="3",
+                               tooltip="How many blocks this recipe serves. "
+                                       "Outputs past it come back empty."),
                 io.String.Input("project_path", default="",
                                 tooltip="Client project folder holding the "
                                         "prompt book. Unneeded when `order` "
@@ -4496,6 +4499,10 @@ class SymbioticaPromptRecipe(io.ComfyNode):
                                          "when the recipe has no such slot.")
                 for i in range(1, cls.MAX_SLOTS + 1)
             ],
+            # The run says which recipe it served, and a push needs the node
+            # id to reach the right panel. Without this the id went over empty
+            # and the node kept its old title while serving the new prompts.
+            hidden=[io.Hidden.unique_id],
         )
 
     @classmethod
@@ -4582,7 +4589,8 @@ class SymbioticaPromptRecipe(io.ComfyNode):
             raise ValueError(
                 f"recipe {name!r} names no blocks — it is missing from "
                 "prompts/_recipes/, or it was saved empty")
-        want = max(1, min(int(slots or 1), cls.MAX_SLOTS))
+        want = max(1, min(int(SymbioticaCategoryPrompts._one(slots, 3)
+                              or 3), cls.MAX_SLOTS))
         texts = []
         for i in range(cls.MAX_SLOTS):
             slot = picked[i] if i < len(picked) else None

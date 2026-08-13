@@ -774,7 +774,9 @@ function recipePanel(node) {
         const slots = saved.get(name) ?? [];
         const w = widgetOf(node, "slots");
         if (w && slots.length) {
-            w.value = Math.max(1, Math.min(slots.length, 6));
+            // A combo's value is its option, and its options are strings —
+            // writing the number leaves the dropdown blank on the next draw.
+            w.value = String(Math.max(1, Math.min(slots.length, 6)));
         }
         renderRows(slots);
         return slots;
