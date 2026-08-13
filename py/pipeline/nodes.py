@@ -4950,17 +4950,17 @@ class SymbioticaGridLayout(io.ComfyNode):
                            category="", bucket=""):
         # Never raise: a raise is NaN, which re-bills every model under this
         # node on each queue press.
-        from .layouts import pick_layout
+        from .layouts import layouts_dir, list_layouts, pick_layout
 
         one = SymbioticaCategoryPrompts._one
         h = hashlib.sha256(
             f"layout:{str(one(layout) or '').strip()}:"
             f"{str(one(category) or '').strip()}:"
             f"{str(one(bucket) or '').strip()}".encode())
-        # A WIRED order or project_path reads as unset here — this runs before
-        # upstream outputs exist — so the widget alone cannot find the file, and
-        # without the fallback a layout redrawn under the same name was
-        # invisible: nothing in the stamp changed and the cached render stood.
+        # A WIRED input reads as unset here — this runs before upstream outputs
+        # exist — so the widgets alone cannot find the file, and without the
+        # fallbacks a layout redrawn under the same name was invisible: nothing
+        # in the stamp changed and the cached render stood.
         candidates = [cls._project(project_path, order)]
         if not candidates[0]:
             candidates = _executed_projects()
@@ -4977,7 +4977,20 @@ class SymbioticaGridLayout(io.ComfyNode):
                 # the render standing on it has to be made again.
                 h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
             except (OSError, ValueError):
-                pass
+                # `category` is WIRED in every live graph — Asset Focus decides
+                # it — so it is unset here too, and the file cannot be named at
+                # all. Stamp the whole FOLDER instead: he replaces a grid under
+                # its own name and expects the next queue to draw on it. Only
+                # the layouts folder, which nothing in a run writes into, so
+                # this moves when he swaps a sheet and never on a render.
+                try:
+                    for file_name in list_layouts(project):
+                        st = os.stat(os.path.join(layouts_dir(project),
+                                                  file_name))
+                        h.update(f"{file_name}:{st.st_mtime_ns}:"
+                                 f"{st.st_size}".encode())
+                except OSError:
+                    pass
         return h.hexdigest()
 
     @classmethod

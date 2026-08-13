@@ -149,6 +149,34 @@ def test_a_redrawn_layout_invalidates_even_with_the_project_wired(
     assert fp(category="Chair") != before
 
 
+def test_a_redrawn_layout_invalidates_with_the_CATEGORY_wired_too(
+        nodes_mod, tmp_path, monkeypatch):
+    """The half that was still missing. `category` comes from Asset Focus on a
+    WIRE in every live graph, so it is unset here as well and `pick_layout`
+    cannot name a file at all — the stamp then held nothing that moves. "why
+    isnt the grid changing when i replace the file on the disk?" """
+    project = project_with(tmp_path, "Appliance 1x2.png")
+    monkeypatch.setattr(nodes_mod, "_executed_projects", lambda: [project])
+    fp = nodes_mod.SymbioticaGridLayout.fingerprint_inputs
+    before = fp()               # the live shape: every input on a wire
+    path = os.path.join(project, "datasets", "layouts", "Appliance 1x2.png")
+    Image.new("RGBA", (32, 32), (9, 9, 9, 255)).save(path)
+    os.utime(path, ns=(1, 1))
+    assert fp() != before
+
+
+def test_a_layout_added_beside_the_others_invalidates_too(
+        nodes_mod, tmp_path, monkeypatch):
+    """Dropping `Decoration 1x1.png` in changes which file a bucket picks."""
+    project = project_with(tmp_path, "Decoration.png")
+    monkeypatch.setattr(nodes_mod, "_executed_projects", lambda: [project])
+    fp = nodes_mod.SymbioticaGridLayout.fingerprint_inputs
+    before = fp()
+    Image.new("RGBA", (8, 8), (1, 2, 3, 255)).save(
+        os.path.join(project, "datasets", "layouts", "Decoration 1x1.png"))
+    assert fp() != before
+
+
 def test_the_fallback_still_never_raises(nodes_mod, monkeypatch):
     monkeypatch.setattr(nodes_mod, "_executed_projects",
                         lambda: ["/nowhere/at/all", ""])
