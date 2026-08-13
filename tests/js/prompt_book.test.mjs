@@ -268,7 +268,8 @@ test("switching to a shorter recipe drops the longer one's leftover rows",
     for (let i = 0; i < 10; i++) await tick();
     const rows = recipeParts(node).rows.children;
     assert.equal(rows.length, 2, "slot count did not follow the recipe");
-    assert.equal(node.widgets.find((w) => w.name === "slots").value, 2);
+    // `slots` is a dropdown, and a combo's value is its option — a string.
+    assert.equal(node.widgets.find((w) => w.name === "slots").value, "2");
     assert.deepEqual(rows.map((r) => r.children[1].value),
                      ["_rules/01-llm-prompt.md", "_image/01-image-model.md"]);
 });
