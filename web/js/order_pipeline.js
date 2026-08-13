@@ -169,6 +169,18 @@ export function inputString(node, inputName, seen) {
     return nodeOutputString(origin, seen);
 }
 
+// Is a switch node's toggle ON? Not `!!value`: a widget's boolean is not always
+// a boolean. LazySwitchKJ serialises its `switch` as the STRING "False", and
+// `Boolean("False")` is true — so every panel followed the on_true branch
+// whatever the toggle said, and the Modal/Local switch did nothing at all.
+// Anything a person would read as off is off.
+const OFF = new Set(["", "false", "0", "no", "off", "none", "null", "undefined"]);
+export function switchIsOn(value) {
+    if (typeof value === "string") return !OFF.has(value.trim().toLowerCase());
+    if (value == null) return false;
+    return !!value;
+}
+
 // The string a node's output carries, resolved statically from the graph: a
 // switch node (on_true/on_false + a `switch` widget) follows its selected
 // branch; a literal/primitive yields its string widget; a lone-input passthrough
@@ -181,8 +193,9 @@ export function nodeOutputString(node, seen) {
     const isSwitch = node.inputs?.some((i) => i.name === "on_true")
                   && node.inputs?.some((i) => i.name === "on_false");
     if (isSwitch) {
-        const sw = node.widgets?.find((w) => w.name === "switch");
-        return inputString(node, sw?.value ? "on_true" : "on_false", seen);
+        const sw = node.widgets?.find(
+            (w) => w.name === "switch" || w.name === "boolean" || w.name === "on");
+        return inputString(node, switchIsOn(sw?.value) ? "on_true" : "on_false", seen);
     }
     const strW = node.widgets?.find(
         (w) => typeof w.value === "string" && w.value.trim());

@@ -382,6 +382,46 @@ test("a wired project_path never overwrites the picked month", async () => {
                  "a wired-path resolution clobbered the render-feeding month");
 });
 
+test("a Modal/Local switch set to the WORD \"False\" follows on_false", async () => {
+    // LazySwitchKJ stores its toggle as a string: flipping it to off saves
+    // "False", and `Boolean("False")` is true. Every panel therefore read the
+    // on_true branch whatever the artist set, so the Modal/Local switch changed
+    // nothing on the canvas and the prompt panels kept listing the sandbox's
+    // project. Both spellings must land on the branch the person picked.
+    for (const [value, wanted] of [["False", "local"], ["True", "modal"],
+                                   [false, "local"], [true, "modal"]]) {
+        reset();
+        setLatency(1);
+        const local = ABSENT_PROJECT(), modal = ABSENT_PROJECT();
+        const asked = [];
+        setResponder((route) => {
+            if (route.includes("list-orders")) {
+                asked.push(route.includes(encodeURIComponent(local)) ? "local" : "modal");
+                return { ok: true, body: { months: [{ label: "March" }] } };
+            }
+            return { ok: false, status: 400, body: { error: "order_path required" } };
+        });
+
+        const litLocal = await create("StringLiteral", { value: local });
+        const litModal = await create("StringLiteral", { value: modal });
+        const sw = await create("LazySwitchKJ", { switch: value });
+        link(litLocal, sw, "on_false");
+        link(litModal, sw, "on_true");
+        const specs = await create("SymbioticaOrderSpecs",
+            { project_path: "", month: "October", feature: "Mini 1" });
+        link(sw, specs, "project_path");
+
+        specs.onNodeCreated();
+        for (let f = 0; f < 10; f++) await tick();
+
+        assert.ok(asked.includes(wanted),
+                  `switch=${JSON.stringify(value)} asked for ${asked.join(",") || "nothing"},`
+                  + ` not the ${wanted} project`);
+        assert.ok(!asked.includes(wanted === "local" ? "modal" : "local"),
+                  `switch=${JSON.stringify(value)} also followed the other branch`);
+    }
+});
+
 test("an unrecognized multi-input switch resolves to no project, not a guess", async () => {
     // The resolver only understands an on_true/on_false switch. A third-party
     // switch (rgthree any_01/any_02, Impact select+input1/2) has several wired
