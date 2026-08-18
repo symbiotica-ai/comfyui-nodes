@@ -38,6 +38,12 @@ class ModelLimits(NamedTuple):
     ratios: list
     min_duration: int
     max_duration: int
+    # Where the widgets open, matching ComfyUI's own node. It gives the 2.0
+    # options no resolution default at all, so they open on the first entry;
+    # opening them higher would make every freshly dropped node cost more than
+    # the one this copies.
+    default_resolution: str
+    default_duration: int
     max_images: int
     max_audios: int
     output_formats: list
@@ -56,6 +62,7 @@ def _limits_20(resolutions, max_audios=0):
     the other two do not, and sending one to Fast is refused outright."""
     return ModelLimits(resolutions=resolutions, ratios=RATIOS_20,
                        min_duration=4, max_duration=12,
+                       default_resolution=resolutions[0], default_duration=7,
                        max_images=4, max_audios=max_audios,
                        output_formats=[], max_reference_seconds=15)
 
@@ -64,6 +71,7 @@ LIMITS = {
     "Seedance 2.5": ModelLimits(
         resolutions=["480p", "720p"], ratios=RATIOS_25,
         min_duration=4, max_duration=30,
+        default_resolution="720p", default_duration=5,
         max_images=30, max_audios=10,
         output_formats=["mp4", "mov"], max_reference_seconds=30),
     "Seedance 2.0": _limits_20(["480p", "720p", "1080p", "4k"]),

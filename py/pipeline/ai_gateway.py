@@ -340,7 +340,11 @@ def resolve_rest_transport(environ) -> Transport:
         # Without this the call runs through the account's default gateway,
         # where its log lands somewhere nobody reads and the studio tag with
         # it.
-        "cf-aig-gateway-id": parts["SYMBIOTICA_AIG_GATEWAY_ID"],
+        # Quoted on failure, unlike the token: a gateway name is not a secret,
+        # and seeing the value is most of the diagnosis.
+        "cf-aig-gateway-id": usable_as_header(
+            parts["SYMBIOTICA_AIG_GATEWAY_ID"], "SYMBIOTICA_AIG_GATEWAY_ID",
+            quote_it=True),
         "cf-aig-metadata": studio_tag(
             studio, environ.get("SYMBIOTICA_AIG_SURFACE") or ""),
         "Content-Type": "application/json",

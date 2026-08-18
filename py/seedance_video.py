@@ -31,11 +31,12 @@ def _model_inputs(label):
                         tooltip="What to make. Put spoken lines in double "
                                 "quotes to steer the generated dialogue."),
         io.Combo.Input("resolution", options=limits.resolutions,
-                       default="720p",
+                       default=limits.default_resolution,
                        tooltip="Resolution of the output video."),
         io.Combo.Input("ratio", options=limits.ratios, default="16:9",
                        tooltip="Aspect ratio of the output video."),
-        io.Int.Input("duration", default=5, min=limits.min_duration,
+        io.Int.Input("duration", default=limits.default_duration,
+                     min=limits.min_duration,
                      max=limits.max_duration, step=1,
                      display_mode=io.NumberDisplay.slider,
                      tooltip=f"Length of the output video in seconds "

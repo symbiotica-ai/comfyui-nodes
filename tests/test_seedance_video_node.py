@@ -107,3 +107,25 @@ def test_the_seed_and_watermark_sit_outside_the_model_combo(node_module):
 def test_the_node_hands_back_a_video(node_module):
     schema = node_module.SymbioticaSeedanceReference.define_schema()
     assert len(schema.outputs) == 1
+
+
+def default_of(node_module, label, name):
+    return getattr(widgets(node_module, label)[name], "default", None)
+
+
+def test_25_starts_where_comfyuis_own_node_starts_it(node_module):
+    assert default_of(node_module, "Seedance 2.5", "resolution") == "720p"
+    assert default_of(node_module, "Seedance 2.5", "duration") == 5
+
+
+def test_the_20_family_starts_at_the_cheapest_resolution_it_offers(node_module):
+    """ComfyUI's node gives the 2.0 options no resolution default, so they open
+    on the first entry — 480p. Opening on 720p instead would make every
+    freshly dropped node cost more than the one it copies."""
+    for label in ("Seedance 2.0", "Seedance 2.0 Fast", "Seedance 2.0 Mini"):
+        assert default_of(node_module, label, "resolution") == "480p", label
+
+
+def test_the_20_family_starts_at_the_duration_comfyui_starts_it(node_module):
+    for label in ("Seedance 2.0", "Seedance 2.0 Fast", "Seedance 2.0 Mini"):
+        assert default_of(node_module, label, "duration") == 7, label

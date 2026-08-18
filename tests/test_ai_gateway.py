@@ -655,3 +655,13 @@ def test_the_cloudflare_token_is_scrubbed_out_of_a_failure():
         secrets=ai_gateway.header_secrets(sent.headers))
     assert "cf-api-token-not-a-real-one" not in said
     assert "[redacted]" in said
+
+
+def test_a_gateway_id_with_a_stray_newline_is_refused_before_it_is_sent():
+    """It rides in a header like the others, so it gets the same check. Left to
+    the transport library this raises with the value quoted, from a message
+    written for a credential rather than for a gateway name."""
+    environ = dict(REST_ENV, SYMBIOTICA_AIG_GATEWAY_ID="hub\ndev")
+    with pytest.raises(ValueError) as raised:
+        ai_gateway.resolve_rest_transport(environ)
+    assert "SYMBIOTICA_AIG_GATEWAY_ID" in str(raised.value)
