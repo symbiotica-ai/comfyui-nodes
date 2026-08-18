@@ -81,6 +81,29 @@ Wrappers around Wavespeed's hosted endpoints.
   wins, and a gateway URL missing either its token or its studio is an error
   rather than a quiet fall back to a personal or shared key.
 
+### Video generation (ByteDance Seedance)
+- **Seedance Reference to Video (Symbiotica)** — reference images, clips and
+  audio become a video on Seedance 2.5, 2.0, 2.0 Fast or 2.0 Mini, billed
+  through Cloudflare AI Gateway rather than to a ComfyUI account.
+
+  Each model offers only the slots it can carry, because the four differ and a
+  shared input list could only offer the union: 2.5 takes thirty reference
+  images, ten clips and ten audio tracks and can edit or extend a clip; the 2.0
+  family takes four images and one clip, 2.0 Mini alone takes one audio track,
+  and 2.0 reaches 4k where the others stop at 720p. Enabling `video_editing` on
+  2.5 hands the length and shape back to the source clip.
+
+  These are the limits of Cloudflare's own ByteDance catalog, which are tighter
+  than ByteDance's — through BytePlus directly the 2.0 family takes nine images
+  and three clips each. Routing through the gateway is what buys per-studio
+  accounting, and this is what it costs.
+
+  References ride inside the request as base64, so no upload host is needed —
+  but the set is refused above 8 MB, because Cloudflare stores no gateway log
+  above 10 MB and a call with no log is spend that reaches no cockpit row. A few
+  seconds of 720p footage is most of that budget, so 2.5's ten clip slots are
+  more than this ceiling will let you fill in practice.
+
 ### Video generation (Wavespeed)
 - **Sora 2** — text-to-video, image-to-video, Pro variants
 - **Veo 3.1** — text-to-video, image-to-video, reference-to-video, fast variants
@@ -382,6 +405,28 @@ key is consulted:
 | `SYMBIOTICA_AIG_TOKEN` | AI Gateway token, sent as `cf-aig-authorization`. Not a provider key — provider keys are stored in the gateway as BYOK and injected there. |
 | `ORDER_STUDIO` | The studio slug. Selects that studio's own stored provider key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
 | `SYMBIOTICA_AIG_SURFACE` | What kind of run this is, tagged alongside the studio. Optional, and `order` when unset, which is what every existing sandbox reports. A box that is not running orders should set its own value, or its spend joins the order totals under a label that reads correctly. |
+
+The Seedance node reaches the gateway a different way, because ByteDance has no
+provider-passthrough slug on AI Gateway at all — its models live in
+Cloudflare's own catalog, and the call goes to the account's `/ai/run`:
+
+| Variable | Content |
+|---|---|
+| `SYMBIOTICA_CF_ACCOUNT_ID` | The Cloudflare account tag whose `/ai/run` is called. |
+| `SYMBIOTICA_CF_API_TOKEN` | A Cloudflare API token, sent as `Authorization: Bearer`. **This is not the AI Gateway token and is a much broader credential** — it authenticates to the Cloudflare account rather than to one model vendor. Scope it to the minimum the catalog needs. |
+| `SYMBIOTICA_AIG_GATEWAY_ID` | Which gateway to route through, sent as `cf-aig-gateway-id`. Without it the call takes the account's default gateway, where its log lands somewhere nobody reads and the studio tag with it. |
+
+`ORDER_STUDIO` and `SYMBIOTICA_AIG_SURFACE` mean the same thing on this path and
+are equally required. All three of the variables above are required together;
+there is no personal-key fall back, because a catalog model has no provider
+endpoint of its own to call.
+
+**Spend on this path is not separable by studio.** Cloudflare consults only the
+`default` BYOK alias on its own AI endpoints, so whichever single ByteDance key
+is stored there pays for every studio. The `cf-aig-metadata` tag still rides on
+every call, so spend remains *attributable* in analytics — it is the paying key
+that is shared, not the accounting. That is a narrower gap than it sounds, but
+it is a real one, and it does not apply to the Gemini or Claude nodes.
 
 Setting the base without the token is an error, not a fall back: a call that
 succeeds on somebody's personal key while its spend leaves the gateway is a
