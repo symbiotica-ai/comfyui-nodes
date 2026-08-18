@@ -223,6 +223,13 @@ def encode_jpeg(image, edge: int) -> str:
 # ByteDance refuses a reference clip under this, on every model. The per-model
 # ceiling is the model's own `max_reference_seconds` below.
 MIN_REFERENCE_SECONDS = 2.0
+# Defaults for the pure half, which must stay importable without ComfyUI.
+# The node passes comfy_api's own VideoContainer and VideoCodec instead: they
+# are str enums, so these strings compare equal to them, but ComfyUI branches
+# on `isinstance(format, VideoContainer)` when choosing what to tell ffmpeg —
+# and a bare string takes the other branch.
+MP4 = "mp4"
+H264 = "h264"
 PCM_FULL_SCALE = 32767
 
 
@@ -267,3 +274,29 @@ def _check_reference_seconds(seconds: float, label: str, kind: str) -> None:
         raise ValueError(
             f"A reference {kind} is {seconds:.1f}s, over the {ceiling}s "
             f"{label} takes. Trim it, or choose a model with more room.")
+
+
+def video_data_uri(video, label: str, container=MP4, codec=H264) -> str:
+    """One reference clip as the data URI the catalog accepts.
+
+    Re-encoded to h264 in mp4 whatever it arrived as. A ComfyUI VIDEO may be
+    holding any container ffmpeg reads, and ByteDance takes mp4 and mov alone
+    — so passing the source bytes through would work for most clips and fail
+    for the ones somebody had to go and convert."""
+    _check_reference_seconds(_seconds(video), label, "video")
+    buffer = io.BytesIO()
+    video.save_to(buffer, format=container, codec=codec)
+    return ("data:video/mp4;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii"))
+
+
+def _seconds(video) -> float:
+    """How long the clip runs, or 0 when it will not say.
+
+    A container the reader cannot seek gives no duration, and refusing the
+    clip for that would refuse it for the reader's limitation rather than for
+    anything about the clip. ByteDance still checks its own bounds."""
+    try:
+        return float(video.get_duration())
+    except Exception:
+        return 0.0

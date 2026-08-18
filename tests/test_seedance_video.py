@@ -301,3 +301,51 @@ def test_an_audio_longer_than_the_model_takes_is_refused_by_model():
     with pytest.raises(ValueError) as raised:
         core.audio_data_uri(an_audio(20.0), "Seedance 2.0 Mini")
     assert "Seedance 2.0 Mini" in str(raised.value)
+
+
+class FakeVideo:
+    """A ComfyUI VIDEO, as far as this module ever touches one."""
+
+    def __init__(self, payload=b"\x00\x01mp4bytes", seconds=5.0):
+        self.payload = payload
+        self.seconds = seconds
+        self.saved_as = None
+
+    def get_duration(self):
+        return self.seconds
+
+    def save_to(self, buffer, format=None, codec=None):
+        self.saved_as = (format, codec)
+        buffer.write(self.payload)
+
+
+def test_a_reference_video_is_encoded_as_the_data_uri_the_catalog_reads():
+    uri = core.video_data_uri(FakeVideo(), "Seedance 2.5")
+    assert uri.startswith("data:video/mp4;base64,")
+
+
+def test_the_encoded_video_carries_the_clips_own_bytes():
+    import base64
+    uri = core.video_data_uri(FakeVideo(b"framedata"), "Seedance 2.5")
+    assert base64.b64decode(uri.split(",", 1)[1]) == b"framedata"
+
+
+def test_a_reference_video_is_written_as_the_container_seedance_takes():
+    """ByteDance takes mp4 and mov. Whatever the clip arrived as, it leaves
+    here as h264 in mp4 — a VIDEO input may be holding anything ffmpeg reads."""
+    clip = FakeVideo()
+    core.video_data_uri(clip, "Seedance 2.5")
+    assert clip.saved_as is not None
+
+
+def test_a_reference_video_too_short_is_refused_by_length():
+    with pytest.raises(ValueError) as raised:
+        core.video_data_uri(FakeVideo(seconds=1.0), "Seedance 2.5")
+    assert "1.0" in str(raised.value)
+
+
+def test_a_reference_video_longer_than_the_model_takes_is_refused_by_model():
+    core.video_data_uri(FakeVideo(seconds=25.0), "Seedance 2.5")
+    with pytest.raises(ValueError) as raised:
+        core.video_data_uri(FakeVideo(seconds=25.0), "Seedance 2.0")
+    assert "Seedance 2.0" in str(raised.value)

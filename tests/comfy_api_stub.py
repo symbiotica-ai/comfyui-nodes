@@ -157,12 +157,22 @@ def build_modules():
         # Every hidden a node may declare belongs here: a missing one raises
         # from define_schema, which reads as the node being broken rather than
         # as the stub being short.
+        NumberDisplay=types.SimpleNamespace(
+            number="number", slider="slider",
+            gradient_slider="gradient_slider"),
         Hidden=types.SimpleNamespace(
             unique_id="unique_id", prompt="prompt", dynprompt="dynprompt",
             extra_pnginfo="extra_pnginfo", auth_token_comfy_org="auth_token_comfy_org",
             api_key_comfy_org="api_key_comfy_org"))
     latest = types.ModuleType("comfy_api.latest")
     latest.io = io_ns
+    # The container and codec a node names when re-encoding a VIDEO. Real ones
+    # are str enums, and ComfyUI branches on their type rather than their
+    # value, so a node that hands over bare strings silently takes a different
+    # path through ffmpeg than the one it asked for.
+    latest.Types = types.SimpleNamespace(
+        VideoContainer=types.SimpleNamespace(AUTO="auto", MP4="mp4"),
+        VideoCodec=types.SimpleNamespace(AUTO="auto", H264="h264"))
     # Keeps the text the node meant to show, so a test can assert on what lands
     # on the canvas rather than only on the wire.
     latest.ui = types.SimpleNamespace(
