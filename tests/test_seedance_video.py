@@ -71,3 +71,86 @@ def test_duration_stops_where_the_catalog_stops_it():
             core.LIMITS["Seedance 2.5"].max_duration) == (4, 30)
     assert (core.LIMITS["Seedance 2.0"].min_duration,
             core.LIMITS["Seedance 2.0"].max_duration) == (4, 12)
+
+
+def a_request(label="Seedance 2.5", images=(), videos=(), audios=(), **over):
+    values = {"prompt": "a cat", "resolution": "720p", "ratio": "16:9",
+              "duration": 5, "generate_audio": True, "output_format": "mp4"}
+    values.update(over)
+    return core.build_request(label, values, seed=7, watermark=False,
+                              images=list(images), videos=list(videos),
+                              audios=list(audios))
+
+
+def test_the_request_names_the_catalog_slug_and_nests_everything_under_input():
+    body = a_request()
+    assert body["model"] == "bytedance/seedance-2.5"
+    assert set(body) == {"model", "input"}
+    assert body["input"]["prompt"] == "a cat"
+
+
+def test_the_ratio_widget_is_sent_under_the_name_the_catalog_reads():
+    """ComfyUI's node calls it `ratio`; the catalog calls it `aspect_ratio`
+    and refuses `ratio` as an unsupported field."""
+    assert a_request()["input"]["aspect_ratio"] == "16:9"
+    assert "ratio" not in a_request()["input"]
+
+
+def test_25_sends_its_references_as_the_three_arrays():
+    body = a_request(images=["data:image/png;base64,AA"],
+                     videos=["data:video/mp4;base64,BB"],
+                     audios=["data:audio/mp3;base64,CC"])
+    assert body["input"]["reference_images"] == ["data:image/png;base64,AA"]
+    assert body["input"]["reference_videos"] == ["data:video/mp4;base64,BB"]
+    assert body["input"]["reference_audios"] == ["data:audio/mp3;base64,CC"]
+
+
+def test_the_20_family_sends_its_single_video_as_a_bare_string():
+    """`reference_videos` does not exist on these models — the catalog refuses
+    the whole request naming it as an unsupported field, so a list here is not
+    a near miss, it is a failed render."""
+    body = a_request("Seedance 2.0", videos=["data:video/mp4;base64,BB"])
+    assert body["input"]["reference_video"] == "data:video/mp4;base64,BB"
+    assert "reference_videos" not in body["input"]
+
+
+def test_mini_sends_its_single_audio_as_a_bare_string():
+    body = a_request("Seedance 2.0 Mini", audios=["data:audio/mp3;base64,CC"])
+    assert body["input"]["reference_audio"] == "data:audio/mp3;base64,CC"
+    assert "reference_audios" not in body["input"]
+
+
+def test_a_reference_kind_with_nothing_wired_is_left_out_entirely():
+    """An empty array is a claim that references were considered. Omitting the
+    key leaves the model's own default behaviour untouched."""
+    body = a_request()
+    for key in ("reference_images", "reference_videos", "reference_audios",
+                "reference_video", "reference_audio"):
+        assert key not in body["input"], key
+
+
+def test_output_format_rides_only_on_the_model_that_has_it():
+    assert a_request(output_format="mov")["input"]["output_format"] == "mov"
+    assert "output_format" not in a_request(
+        "Seedance 2.0", output_format="mov")["input"]
+
+
+def test_video_editing_hands_the_length_and_shape_back_to_the_source_clip():
+    """ComfyUI's node says this as ratio='adaptive' with duration=-1. The
+    catalog rejects -1 (duration must be >= 4) but leaves duration optional,
+    so the same thing is said here by omitting it."""
+    body = a_request(video_editing=True,
+                     videos=["data:video/mp4;base64,BB"])
+    assert body["input"]["aspect_ratio"] == "adaptive"
+    assert "duration" not in body["input"]
+
+
+def test_without_video_editing_the_duration_widget_is_sent_as_set():
+    assert a_request(duration=12)["input"]["duration"] == 12
+
+
+def test_seed_and_watermark_ride_alongside_the_per_model_widgets():
+    body = a_request()
+    assert body["input"]["seed"] == 7
+    assert body["input"]["watermark"] is False
+    assert body["input"]["generate_audio"] is True

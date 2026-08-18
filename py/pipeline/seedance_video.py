@@ -61,3 +61,56 @@ LIMITS = {
     "Seedance 2.0 Fast": _limits_20(["480p", "720p"]),
     "Seedance 2.0 Mini": _limits_20(["480p", "720p"], max_audios=1),
 }
+
+
+def build_request(label: str, values: dict, seed: int, watermark: bool,
+                  images: list, videos: list, audios: list) -> dict:
+    """One `/ai/run` body: which model, and everything it is being asked for.
+
+    `values` is the per-model combo's own widgets, so what is present here is
+    already what that model offers — this decides only how each is named on the
+    wire and which of them the model will accept.
+
+    References are omitted rather than sent empty. An empty array is a claim
+    that references were considered and none applied; leaving the key out
+    leaves the model's own default untouched, and the two are not the same
+    request to a model that branches on whether a reference kind is present."""
+    limits = LIMITS[label]
+    payload = {
+        "prompt": values["prompt"],
+        "resolution": values["resolution"],
+        "seed": seed,
+        "watermark": watermark,
+        "generate_audio": values["generate_audio"],
+    }
+    # ComfyUI's node calls this `ratio`; the catalog calls it `aspect_ratio`
+    # and refuses `ratio` outright as an unsupported field.
+    editing = bool(values.get("video_editing"))
+    payload["aspect_ratio"] = "adaptive" if editing else values["ratio"]
+    if not editing:
+        # An edit takes its length from the clip being edited. ComfyUI's node
+        # says that with duration=-1, which this wrapper rejects for being
+        # below the minimum of 4 — but duration is optional here, and an
+        # absent duration is the same statement in the wrapper's own grammar.
+        payload["duration"] = values["duration"]
+    if limits.output_formats:
+        payload["output_format"] = values["output_format"]
+    _attach(payload, "reference_image", images, limits.max_images)
+    _attach(payload, "reference_video", videos, limits.max_videos)
+    _attach(payload, "reference_audio", audios, limits.max_audios)
+    return {"model": MODELS[label], "input": payload}
+
+
+def _attach(payload: dict, singular: str, refs: list, cap: int) -> None:
+    """The references of one kind, under the name this model knows them by.
+
+    A model that takes many gets the plural array; one that takes a single
+    reference gets a bare string under the singular name, and does not have
+    the plural key at all — sending it fails the whole request rather than
+    being ignored."""
+    if not refs or cap < 1:
+        return
+    if cap == 1:
+        payload[singular] = refs[0]
+    else:
+        payload[singular + "s"] = list(refs)
