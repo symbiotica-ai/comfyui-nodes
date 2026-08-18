@@ -145,3 +145,18 @@ def check_reference_size(refs) -> None:
             f"this size would render without its spend ever being attributed "
             f"to the studio. Send fewer references, shorter clips, or smaller "
             f"images.")
+
+
+def video_url(body: dict) -> str:
+    """Where the finished render can be fetched, or what came back instead.
+
+    The catalog answers 200 with its own envelope even for a run that failed,
+    so a refusal arrives here rather than as an HTTP error. The whole reply is
+    quoted on the way out: a bare "no video in the response" sends the reader
+    looking at our request when the answer is usually in theirs."""
+    result = body.get("result") or {}
+    url = result.get("video")
+    if url:
+        return url
+    raise RuntimeError(
+        f"The gateway returned no video for this run: {body}")

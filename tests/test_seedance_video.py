@@ -192,3 +192,28 @@ def test_the_ceiling_is_read_across_every_reference_not_each_one():
     apiece. Checking them one at a time would let the set through."""
     with pytest.raises(ValueError):
         core.check_reference_size(["z" * 2_000_000] * 5)
+
+
+def test_the_video_url_is_read_from_where_the_catalog_puts_it():
+    body = {"result": {"video": "https://ark.example/out.mp4"},
+            "success": True}
+    assert core.video_url(body) == "https://ark.example/out.mp4"
+
+
+def test_a_reply_without_a_video_says_what_came_back_instead():
+    """The catalog answers 200 with its own envelope, so a refusal that is not
+    an HTTP error still arrives here. Quoting the reply is most of the
+    diagnosis; a bare 'no video' sends the reader to the wrong system."""
+    with pytest.raises(RuntimeError) as raised:
+        core.video_url({"result": {}, "state": "Failed",
+                        "error": "content policy"})
+    assert "content policy" in str(raised.value)
+
+
+def test_an_unfinished_run_is_not_read_as_a_finished_one():
+    """`state` is the catalog's own word for whether the run completed. A body
+    that carries a state other than Completed and no video is a run that did
+    not finish, not a malformed reply."""
+    with pytest.raises(RuntimeError) as raised:
+        core.video_url({"result": {}, "state": "Queued"})
+    assert "Queued" in str(raised.value)
