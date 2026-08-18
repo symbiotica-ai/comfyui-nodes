@@ -233,3 +233,28 @@ def test_a_clip_longer_than_the_model_takes_names_the_model():
     with pytest.raises(ValueError) as raised:
         fal.video_data_uri(FakeVideo(seconds=25.0), "Seedance 2.0")
     assert "Seedance 2.0" in str(raised.value)
+
+
+def test_a_configured_gateway_is_never_passed_over_for_a_personal_key():
+    """The failure nobody detects afterwards: the render succeeds on somebody's
+    own fal key while the spend leaves the studio's gateway. `resolve_transport`
+    is what enforces this, and it enforces it by never asking for the key — so
+    the ladder is a callable that raises if it is ever walked here."""
+    def must_not_be_asked():
+        raise AssertionError("the personal key ladder was walked")
+
+    sent = fal.resolve_transport(dict(GATEWAY), "Seedance 2.5",
+                                 must_not_be_asked)
+    assert "cf-aig-authorization" in sent.headers
+    assert sent.studio == "example-studio"
+
+
+def test_a_gateway_holding_no_fal_key_fails_rather_than_falling_back():
+    """A studio with no fal key stored refuses at the gateway with its own
+    internal code, and `gateway_remedy` turns that into the sentence naming
+    what to fix. Falling back to the catalog here would quietly move the spend
+    outside the BYOK boundary, which is the one outcome worth failing over."""
+    from pipeline import ai_gateway
+    said = ai_gateway.gateway_remedy('{"internalCode": 2040}')
+    assert "no key stored" in said
+    assert fal.chosen_arm(dict(GATEWAY, **CATALOG), has_key=False) == "fal"
