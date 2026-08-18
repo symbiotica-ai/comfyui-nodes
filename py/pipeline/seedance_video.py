@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import base64
 import io
+import wave
 from typing import NamedTuple
 
+import numpy as np
 from PIL import Image
 
 # What the canvas shows against the slug Cloudflare's catalog answers to, in
@@ -37,6 +39,7 @@ class ModelLimits(NamedTuple):
     max_videos: int
     max_audios: int
     output_formats: list
+    max_reference_seconds: int
 
 
 # 9:21 is the catalog's own addition on the 2.0 family — ComfyUI's node does
@@ -52,7 +55,7 @@ def _limits_20(resolutions, max_audios=0):
     return ModelLimits(resolutions=resolutions, ratios=RATIOS_20,
                        min_duration=4, max_duration=12,
                        max_images=4, max_videos=1, max_audios=max_audios,
-                       output_formats=[])
+                       output_formats=[], max_reference_seconds=15)
 
 
 LIMITS = {
@@ -60,7 +63,7 @@ LIMITS = {
         resolutions=["480p", "720p"], ratios=RATIOS_25,
         min_duration=4, max_duration=30,
         max_images=30, max_videos=10, max_audios=10,
-        output_formats=["mp4", "mov"]),
+        output_formats=["mp4", "mov"], max_reference_seconds=30),
     "Seedance 2.0": _limits_20(["480p", "720p", "1080p", "4k"]),
     "Seedance 2.0 Fast": _limits_20(["480p", "720p"]),
     "Seedance 2.0 Mini": _limits_20(["480p", "720p"], max_audios=1),
@@ -215,3 +218,52 @@ def encode_jpeg(image, edge: int) -> str:
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, format="JPEG", quality=JPEG_QUALITY)
     return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+# ByteDance refuses a reference clip under this, on every model. The per-model
+# ceiling is the model's own `max_reference_seconds` below.
+MIN_REFERENCE_SECONDS = 2.0
+PCM_FULL_SCALE = 32767
+
+
+def audio_data_uri(audio, label: str) -> str:
+    """One reference audio as the data URI the catalog accepts.
+
+    WAV rather than mp3: it needs no encoder beyond the standard library, and
+    reference audio is short enough by definition that the size it costs is
+    spent inside the request budget rather than against it."""
+    waveform = np.asarray(audio["waveform"])
+    rate = int(audio["sample_rate"])
+    seconds = waveform.shape[-1] / rate
+    _check_reference_seconds(seconds, label, "audio")
+    # (batch, channels, samples) -> interleaved frames, which is what WAV
+    # stores. A file written straight from the array plays every channel in
+    # sequence instead of together.
+    channels = waveform[0] if waveform.ndim == 3 else waveform
+    frames = np.clip(np.asarray(channels).T, -1.0, 1.0)
+    pcm = (frames * PCM_FULL_SCALE).round().astype("<i2")
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(pcm.shape[1] if pcm.ndim > 1 else 1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(pcm.tobytes())
+    return ("data:audio/wav;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii"))
+
+
+def _check_reference_seconds(seconds: float, label: str, kind: str) -> None:
+    """Raise unless this clip is a length the chosen model will take.
+
+    The model is named because the same clip is fine on 2.5 and refused on
+    Mini — a message that only gave the number would read as a bug in the
+    clip rather than as a consequence of the model chosen."""
+    if seconds < MIN_REFERENCE_SECONDS:
+        raise ValueError(
+            f"A reference {kind} is {seconds:.1f}s. Seedance takes nothing "
+            f"under {MIN_REFERENCE_SECONDS:.0f}s.")
+    ceiling = LIMITS[label].max_reference_seconds
+    if seconds > ceiling:
+        raise ValueError(
+            f"A reference {kind} is {seconds:.1f}s, over the {ceiling}s "
+            f"{label} takes. Trim it, or choose a model with more room.")

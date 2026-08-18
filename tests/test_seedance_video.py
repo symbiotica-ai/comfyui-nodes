@@ -261,3 +261,43 @@ def test_an_image_too_long_and_thin_is_refused_by_name():
     with pytest.raises(ValueError) as raised:
         core.image_data_uri(a_pil(3000, 400))
     assert "aspect" in str(raised.value).lower()
+
+
+def an_audio(seconds=5.0, rate=16000, channels=1):
+    import numpy as np
+    samples = int(seconds * rate)
+    tone = np.sin(np.linspace(0, 220 * 2 * np.pi * seconds, samples))
+    return {"waveform": np.tile(tone, (1, channels, 1)).astype("float32"),
+            "sample_rate": rate}
+
+
+def test_a_reference_audio_is_encoded_as_the_data_uri_the_catalog_reads():
+    assert core.audio_data_uri(an_audio(), "Seedance 2.5").startswith(
+        "data:audio/wav;base64,")
+
+
+def test_the_encoded_audio_keeps_its_own_rate_and_length():
+    import base64, io, wave
+    uri = core.audio_data_uri(an_audio(3.0, rate=22050), "Seedance 2.5")
+    raw = base64.b64decode(uri.split(",", 1)[1])
+    with wave.open(io.BytesIO(raw)) as handle:
+        assert handle.getframerate() == 22050
+        assert handle.getnframes() == int(3.0 * 22050)
+
+
+def test_an_audio_shorter_than_seedance_accepts_is_refused_by_length():
+    """Under two seconds ByteDance refuses the clip outright. Caught here the
+    message says how long it was and how long it must be."""
+    with pytest.raises(ValueError) as raised:
+        core.audio_data_uri(an_audio(1.0), "Seedance 2.5")
+    assert "1.0" in str(raised.value)
+
+
+def test_an_audio_longer_than_the_model_takes_is_refused_by_model():
+    """2.5 takes thirty seconds of reference audio; Mini takes fifteen. The
+    same clip is fine on one and refused on the other, so the message has to
+    name which model it was measured against."""
+    core.audio_data_uri(an_audio(20.0), "Seedance 2.5")
+    with pytest.raises(ValueError) as raised:
+        core.audio_data_uri(an_audio(20.0), "Seedance 2.0 Mini")
+    assert "Seedance 2.0 Mini" in str(raised.value)
