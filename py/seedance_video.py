@@ -5,9 +5,10 @@ import os
 import tempfile
 
 import requests
-from comfy_api.latest import io
+from comfy_api.latest import io, Types
 
-from .pipeline import seedance_video as core
+from .pipeline import seedance_video as catalog
+from .pipeline import fal_seedance as fal
 from .pipeline.reference_images import to_pil, slot_order
 from .pipeline import ai_gateway
 
@@ -18,41 +19,78 @@ from .pipeline import ai_gateway
 REQUEST_TIMEOUT_S = 900
 
 
+LABEL_25 = "Seedance 2.5"
+
+# ComfyUI's own names, kept verbatim so a graph reads the same on either node.
+# `adaptive` is what it calls the ratio a reference clip decides; fal spells the
+# same thing `auto`, and the mapping happens on the way out.
+RATIOS = ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+ADAPTIVE = "adaptive"
+
+
+def _default_resolution(label):
+    """Where the resolution widget opens, as ComfyUI's own node opens it.
+
+    It gives the 2.0 options no default at all, so they open on the first entry
+    — the cheapest one. Opening them higher would make a freshly dropped node
+    cost more per render than the node this copies."""
+    return "720p" if label == LABEL_25 else "480p"
+
+
+def _default_ratio(label):
+    """ComfyUI defaults the 2.0 options to `adaptive` and 2.5 to 16:9."""
+    return "16:9" if label == LABEL_25 else ADAPTIVE
+
+
+def _default_duration(label):
+    return 5 if label == LABEL_25 else 7
+
+
 def _model_inputs(label):
     """The widgets one model carries, and only the ones it will accept.
 
     Built per option rather than shared: the four models differ in what they
     take, and a single flat input list can only offer the union — every widget
     in it that the chosen model does not have is a render refused before it
-    starts."""
-    limits = core.LIMITS[label]
+    starts.
+
+    Sized to fal, which is the route this node is for. Where a box can only
+    reach the Cloudflare catalog the slots are the same and fewer of them can
+    be filled, which `check_catalog_can_carry` says by name at render time
+    rather than by hiding sockets that exist everywhere else."""
+    limits = fal.LIMITS[label]
+    longest = int(limits.durations[-1])
     inputs = [
         io.String.Input("prompt", multiline=True, default="",
                         tooltip="What to make. Put spoken lines in double "
                                 "quotes to steer the generated dialogue."),
         io.Combo.Input("resolution", options=limits.resolutions,
-                       default=limits.default_resolution,
+                       default=_default_resolution(label),
                        tooltip="Resolution of the output video."),
-        io.Combo.Input("ratio", options=limits.ratios, default="16:9",
-                       tooltip="Aspect ratio of the output video."),
-        io.Int.Input("duration", default=limits.default_duration,
-                     min=limits.min_duration,
-                     max=limits.max_duration, step=1,
+        io.Combo.Input("ratio", options=RATIOS, default=_default_ratio(label),
+                       tooltip="Aspect ratio of the output video. 'adaptive' "
+                               "takes it from the reference clip."),
+        io.Int.Input("duration", default=_default_duration(label), min=4,
+                     max=longest, step=1,
                      display_mode=io.NumberDisplay.slider,
                      tooltip=f"Length of the output video in seconds "
-                             f"({limits.min_duration}-{limits.max_duration})."),
+                             f"(4-{longest})."),
         io.Boolean.Input("generate_audio", default=True,
                          tooltip="Generate a soundtrack along with the video."),
     ]
-    if limits.output_formats:
-        inputs.append(io.Combo.Input(
-            "output_format", options=limits.output_formats, default="mp4",
-            tooltip="Container format of the output video."))
+    if label == LABEL_25:
+        inputs.append(io.Boolean.Input(
+            "video_editing", default=False,
+            tooltip="Enable when the prompt edits a connected reference "
+                    "video, for example replacing an object in it. The output "
+                    "then keeps the source clip's own length and shape, and "
+                    "the duration and ratio widgets are ignored."))
     inputs.append(_slots("images", io.Image.Input("reference_image"),
                          "image", limits.max_images))
-    if limits.max_audios:
-        inputs.append(_slots("audios", io.Audio.Input("reference_audio"),
-                             "audio", limits.max_audios))
+    inputs.append(_slots("videos", io.Video.Input("reference_video"),
+                         "video", limits.max_videos))
+    inputs.append(_slots("audios", io.Audio.Input("reference_audio"),
+                         "audio", limits.max_audios))
     return inputs
 
 
@@ -94,10 +132,10 @@ class SymbioticaSeedanceReference(io.ComfyNode):
                     "model",
                     options=[io.DynamicCombo.Option(label,
                                                     _model_inputs(label))
-                             for label in core.MODELS],
-                    tooltip="2.5 is the newest and takes the most references; "
-                            "2.0 reaches 4k; Fast trades quality for speed and "
-                            "Mini is the cheap lever."),
+                             for label in fal.ENDPOINTS],
+                    tooltip="2.5 is the newest, takes the most references "
+                            "and runs to 30s; 2.0 reaches 4k; Fast trades "
+                            "quality for speed and Mini is the cheap lever."),
                 io.Int.Input("seed", default=0, min=0, max=2147483647, step=1,
                              display_mode=io.NumberDisplay.number,
                              control_after_generate=True,
@@ -122,51 +160,104 @@ class SymbioticaSeedanceReference(io.ComfyNode):
                 "Seedance needs a prompt. Reference images say what is in the "
                 "shot; the prompt is what happens in it.")
 
+        def interactive_key():
+            from ._settings import resolve_provider_key
+            return resolve_provider_key("", ["FAL_KEY", "FAL_API_KEY"], "fal")
+
         # Before any encoding: the references cost a device copy and a full
-        # re-encode apiece, and a box with no gateway configured cannot send
-        # them anywhere.
-        transport = ai_gateway.resolve_rest_transport(os.environ)
+        # re-encode apiece, and a box with no route configured cannot send them
+        # anywhere.
+        arm = fal.chosen_arm(os.environ, has_key=_has_fal_key())
 
-        images = [core.image_data_uri(image)
+        images = [catalog.image_data_uri(image)
                   for image in to_pil(model.get("images"))]
-        audios = [core.audio_data_uri(audio, label)
+        videos = _wired(model.get("videos"))
+        audios = [catalog.audio_data_uri(audio, label)
                   for audio in _wired(model.get("audios"))]
-        core.check_reference_size(images + audios)
+        if arm == "catalog":
+            fal.check_catalog_can_carry(label, len(images), len(videos),
+                                        len(audios))
+            return cls._through_catalog(label, model, seed, watermark,
+                                        images, audios)
+        return cls._through_fal(label, model, seed, watermark, images,
+                                videos, audios, interactive_key)
 
-        body = core.build_request(label, model, seed, watermark,
-                                  images, audios)
+    @classmethod
+    def _through_fal(cls, label, model, seed, watermark, images, videos,
+                     audios, interactive_key) -> io.NodeOutput:
+        """The route the node is for: the studio's own key, by alias."""
+        transport = fal.resolve_transport(os.environ, label, interactive_key)
+        clips = [fal.video_data_uri(video, label, Types.VideoContainer.MP4,
+                                    Types.VideoCodec.H264)
+                 for video in videos]
+        catalog.check_reference_size(images + clips + audios)
+        values = dict(model)
+        if values.get("ratio") == ADAPTIVE:
+            values["ratio"] = "auto"
+        values["duration"] = str(values["duration"])
+        body = fal.build_request(values, images, clips, audios, seed=seed)
+        payload = _post(transport, body, "fal")
+        return io.NodeOutput(_fetch(fal.video_url(payload)))
 
-        def failure(status, text):
-            return RuntimeError(ai_gateway.http_error(
-                status, text,
-                secrets=ai_gateway.header_secrets(transport.headers),
-                studio=transport.studio, service="Seedance"))
-
-        try:
-            response = requests.post(
-                transport.url, json=body, headers=transport.headers,
-                timeout=(ai_gateway.CONNECT_TIMEOUT_S, REQUEST_TIMEOUT_S))
-        except requests.RequestException as exc:
-            # No response ever existed, so nothing downstream can add the
-            # context. A bare ReadTimeout here cannot be told apart from "the
-            # render is slow" and "this box has no egress".
-            raise failure("no response",
-                          f"{type(exc).__name__}: {exc}") from exc
-        if response.status_code != 200:
-            raise failure(response.status_code, response.text)
-        try:
-            payload = response.json()
-        except ValueError:
-            # A gateway interstitial or a challenge page answers 200 with HTML.
-            raise failure(response.status_code,
-                          f"reply was not JSON: {response.text}") from None
-        left_byok = core.key_source_warning(payload)
+    @classmethod
+    def _through_catalog(cls, label, model, seed, watermark, images,
+                         audios) -> io.NodeOutput:
+        """The fall back, where a shared key pays and clips cannot ride."""
+        transport = ai_gateway.resolve_rest_transport(os.environ)
+        catalog.check_reference_size(images + audios)
+        values = dict(model)
+        if values.get("ratio") == ADAPTIVE:
+            # The catalog spells it `adaptive` too, but only on 2.5; the 2.0
+            # options reject it, and they are the ones ComfyUI defaults to it.
+            values["ratio"] = ADAPTIVE if label == LABEL_25 else "16:9"
+        body = catalog.build_request(label, values, seed, watermark, images,
+                                     audios)
+        payload = _post(transport, body, "Seedance")
+        left_byok = catalog.key_source_warning(payload)
         if left_byok:
             # Logged rather than raised: the render succeeded and throwing it
             # away would cost the spend twice. This is the only place the fact
             # is ever visible.
             logging.warning("[Symbiotica] Seedance: %s", left_byok)
-        return io.NodeOutput(_fetch(core.video_url(payload)))
+        return io.NodeOutput(_fetch(catalog.video_url(payload)))
+
+
+def _has_fal_key() -> bool:
+    """Whether a personal fal key is reachable, without walking the ladder far.
+
+    Only consulted on a box with no gateway, so the ladder's file read never
+    happens on the route that would ignore the answer."""
+    return bool((os.environ.get("FAL_KEY")
+                 or os.environ.get("FAL_API_KEY") or "").strip())
+
+
+def _post(transport, body, service):
+    """One call, with every failure carrying the same account of it."""
+    def failure(status, text):
+        return RuntimeError(ai_gateway.http_error(
+            status, text,
+            secrets=ai_gateway.header_secrets(transport.headers),
+            studio=transport.studio,
+            alias=transport.headers.get("cf-aig-byok-alias"),
+            service=service))
+
+    try:
+        response = requests.post(
+            transport.url, json=body, headers=transport.headers,
+            timeout=(ai_gateway.CONNECT_TIMEOUT_S, REQUEST_TIMEOUT_S))
+    except requests.RequestException as exc:
+        # No response ever existed, so nothing downstream can add the context.
+        # A bare ReadTimeout cannot be told apart from "the render is slow" and
+        # "this box has no egress".
+        raise failure("no response", f"{type(exc).__name__}: {exc}") from exc
+    if response.status_code != 200:
+        raise failure(response.status_code, response.text)
+    try:
+        return response.json()
+    except ValueError:
+        # A gateway interstitial or a challenge page answers 200 with HTML.
+        raise failure(response.status_code,
+                      f"reply was not JSON: {response.text}") from None
 
 
 def _wired(slots):

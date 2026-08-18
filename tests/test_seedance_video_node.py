@@ -65,35 +65,38 @@ def test_every_model_the_catalog_serves_is_offered(node_module):
         "Seedance 2.0 Mini"]
 
 
-def test_only_25_offers_the_widgets_only_25_has(node_module):
-    """output_format does not exist on the 2.0 family at all — offered there,
-    it is a widget whose every render is refused."""
-    assert "output_format" in widgets(node_module, "Seedance 2.5")
-    assert "output_format" not in widgets(node_module, "Seedance 2.0")
+def test_only_25_offers_the_editing_switch_comfyui_gives_only_25(node_module):
+    assert "video_editing" in widgets(node_module, "Seedance 2.5")
+    assert "video_editing" not in widgets(node_module, "Seedance 2.0")
 
 
-def test_no_model_offers_a_reference_video_slot(node_module):
-    """ByteDance takes a reference video only as a web URL, and this node sends
-    its references inline. A VIDEO socket here would be one a user can wire and
-    every render then refuses."""
+def test_every_model_offers_reference_clips(node_module):
+    """Through fal a reference clip rides like any other reference, so all four
+    models carry the slots. On the Cloudflare catalog fall back none of them
+    can, which is said at render time rather than by hiding sockets that exist
+    everywhere else."""
     for label in ("Seedance 2.5", "Seedance 2.0", "Seedance 2.0 Fast",
                   "Seedance 2.0 Mini"):
-        assert "videos" not in widgets(node_module, label), label
+        assert "videos" in widgets(node_module, label), label
 
 
-def test_an_audio_slot_is_offered_only_where_one_can_be_sent(node_module):
-    assert "audios" in widgets(node_module, "Seedance 2.5")
-    assert "audios" in widgets(node_module, "Seedance 2.0 Mini")
-    assert "audios" not in widgets(node_module, "Seedance 2.0 Fast")
+def test_every_model_offers_reference_audio(node_module):
+    """fal gives the whole 2.0 family three audio slots, where the Cloudflare
+    catalog gives Mini one and the other two none."""
+    for label in ("Seedance 2.5", "Seedance 2.0", "Seedance 2.0 Fast",
+                  "Seedance 2.0 Mini"):
+        assert "audios" in widgets(node_module, label), label
 
 
 def test_each_model_offers_exactly_the_reference_slots_it_accepts(node_module):
     """Autogrow names the slots up front, so a slot list longer than the model
     takes is a socket the user can wire and the call cannot carry."""
-    from pipeline import seedance_video as core
-    for label, limits in core.LIMITS.items():
+    from pipeline import fal_seedance as fal
+    for label, limits in fal.LIMITS.items():
         slots = widgets(node_module, label)
         assert len(slots["images"].template.names) == limits.max_images, label
+        assert len(slots["videos"].template.names) == limits.max_videos, label
+        assert len(slots["audios"].template.names) == limits.max_audios, label
 
 
 def test_the_seed_and_watermark_sit_outside_the_model_combo(node_module):

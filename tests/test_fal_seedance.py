@@ -141,3 +141,95 @@ def test_the_direct_arm_presents_the_key_the_way_fal_wants_it():
     assert sent.url == ("https://fal.run/bytedance/seedance-2.0/"
                         "reference-to-video")
     assert sent.headers["Authorization"] == "Key fal-key-not-a-real-one"
+
+
+GATEWAY = {"SYMBIOTICA_AIG_BASE": "https://gw.example.invalid/v1/a/g",
+           "SYMBIOTICA_AIG_TOKEN": "gateway-token-not-a-real-one",
+           "ORDER_STUDIO": "example-studio"}
+CATALOG = {"SYMBIOTICA_CF_ACCOUNT_ID": "acct-tag",
+           "SYMBIOTICA_CF_API_TOKEN": "cf-api-token-not-a-real-one",
+           "SYMBIOTICA_AIG_GATEWAY_ID": "symbiotica-hub-dev",
+           "ORDER_STUDIO": "example-studio"}
+
+
+def test_a_configured_gateway_goes_to_fal_not_the_catalog():
+    """Both are reachable on an order sandbox, and fal is the one where the
+    studio's own key pays. Choosing the catalog there would take the spend out
+    of the BYOK boundary while a perfectly good fal route sat unused."""
+    assert fal.chosen_arm(dict(GATEWAY, **CATALOG), has_key=False) == "fal"
+
+
+def test_a_box_with_only_a_personal_fal_key_still_goes_to_fal():
+    assert fal.chosen_arm({}, has_key=True) == "fal"
+
+
+def test_a_box_with_only_the_catalog_configured_falls_back_to_it():
+    assert fal.chosen_arm(dict(CATALOG), has_key=False) == "catalog"
+
+
+def test_a_box_with_neither_says_so_naming_both_ways_in():
+    with pytest.raises(ValueError) as raised:
+        fal.chosen_arm({}, has_key=False)
+    assert "SYMBIOTICA_AIG_BASE" in str(raised.value)
+    assert "SYMBIOTICA_CF_ACCOUNT_ID" in str(raised.value)
+
+
+def test_the_catalog_arm_refuses_the_reference_videos_it_cannot_carry():
+    """The schema offers fal's slots, so a graph wired for fal can reach a box
+    that has only the catalog. Refused by name rather than dropped: a render
+    that silently ignored the clips would come back looking finished."""
+    with pytest.raises(ValueError) as raised:
+        fal.check_catalog_can_carry("Seedance 2.5", images=1, videos=2,
+                                    audios=0)
+    assert "reference video" in str(raised.value).lower()
+
+
+def test_the_catalog_arm_refuses_more_images_than_it_takes():
+    with pytest.raises(ValueError) as raised:
+        fal.check_catalog_can_carry("Seedance 2.0", images=9, videos=0,
+                                    audios=0)
+    assert "4" in str(raised.value)
+
+
+def test_the_catalog_arm_accepts_what_it_can_carry():
+    assert fal.check_catalog_can_carry("Seedance 2.5", images=3, videos=0,
+                                       audios=1) is None
+
+
+class FakeVideo:
+    """A ComfyUI VIDEO, as far as this module ever touches one."""
+
+    def __init__(self, payload=b"mp4bytes", seconds=5.0):
+        self.payload = payload
+        self.seconds = seconds
+        self.saved_as = None
+
+    def get_duration(self):
+        return self.seconds
+
+    def save_to(self, buffer, format=None, codec=None):
+        self.saved_as = (format, codec)
+        buffer.write(self.payload)
+
+
+def test_a_reference_clip_is_encoded_as_a_data_uri():
+    assert fal.video_data_uri(FakeVideo(), "Seedance 2.5").startswith(
+        "data:video/mp4;base64,")
+
+
+def test_a_clip_shorter_than_the_provider_takes_is_refused():
+    """1.8s is the floor fal documents and the provider enforces."""
+    with pytest.raises(ValueError) as raised:
+        fal.video_data_uri(FakeVideo(seconds=1.0), "Seedance 2.5")
+    assert "1.8" in str(raised.value)
+
+
+def test_a_clip_of_one_point_nine_seconds_is_accepted():
+    assert fal.video_data_uri(FakeVideo(seconds=1.9), "Seedance 2.5")
+
+
+def test_a_clip_longer_than_the_model_takes_names_the_model():
+    fal.video_data_uri(FakeVideo(seconds=25.0), "Seedance 2.5")
+    with pytest.raises(ValueError) as raised:
+        fal.video_data_uri(FakeVideo(seconds=25.0), "Seedance 2.0")
+    assert "Seedance 2.0" in str(raised.value)

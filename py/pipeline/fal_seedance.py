@@ -2,6 +2,8 @@
 # ABOUTME: each model is, what it accepts, and the request and reply fal speaks.
 from __future__ import annotations
 
+import base64
+import io
 from typing import NamedTuple
 
 from . import ai_gateway
@@ -128,3 +130,101 @@ def resolve_transport(environ, label: str, interactive_key) -> ai_gateway.Transp
             # `Key`, not `Bearer`. Sent as Bearer it is a 401 that reads like a
             # key which has been revoked.
             lambda key: {"Authorization": f"Key {key}"}))
+
+
+def chosen_arm(environ, has_key: bool) -> str:
+    """Which route this box should take: "fal" or "catalog".
+
+    fal wins wherever it is reachable. On an order sandbox both are, and fal is
+    the one where the studio's own stored key pays — taking the catalog there
+    would move the spend outside the BYOK boundary while a perfectly good fal
+    route sat unused.
+
+    The catalog is the fall back rather than the choice because it bills a
+    single shared key, cannot carry a reference video at all, and cuts the 2.0
+    family's reference counts by more than half."""
+    if (environ.get("SYMBIOTICA_AIG_BASE") or "").strip() or has_key:
+        return "fal"
+    if (environ.get("SYMBIOTICA_CF_ACCOUNT_ID") or "").strip():
+        return "catalog"
+    raise ValueError(
+        "This box has no way to reach Seedance. Either give it "
+        "SYMBIOTICA_AIG_BASE and SYMBIOTICA_AIG_TOKEN from the "
+        "symbiotica-comfy-aigateway secret, which routes through fal on the "
+        "studio's own key, or a personal fal key on the node or in the "
+        "environment — or SYMBIOTICA_CF_ACCOUNT_ID, SYMBIOTICA_CF_API_TOKEN "
+        "and SYMBIOTICA_AIG_GATEWAY_ID for the Cloudflare catalog, which is "
+        "the poorer route and bills a shared key.")
+
+
+def check_catalog_can_carry(label: str, images: int, videos: int,
+                            audios: int) -> None:
+    """Raise unless the catalog arm can carry what has been wired.
+
+    The schema offers fal's slots, because fal is the route the node is for. So
+    a graph built against it can reach a box that has only the catalog, and
+    what fits there is smaller. Refused by name rather than quietly dropped: a
+    render that ignored the clips would come back looking finished."""
+    from . import seedance_video as catalog
+    limits = catalog.LIMITS[label]
+    if videos:
+        raise ValueError(
+            f"{videos} reference video(s) are wired, and this box reaches "
+            f"Seedance through the Cloudflare catalog, which takes none — "
+            f"ByteDance accepts a reference video only as a public URL there. "
+            f"Give this box the gateway's fal route, or unwire the clips.")
+    if images > limits.max_images:
+        raise ValueError(
+            f"{images} reference images are wired and the Cloudflare catalog "
+            f"takes {limits.max_images} for {label}. Through fal it takes "
+            f"{LIMITS[label].max_images}; give this box the gateway's fal "
+            f"route, or wire fewer.")
+    if audios > limits.max_audios:
+        raise ValueError(
+            f"{audios} reference audio track(s) are wired and the Cloudflare "
+            f"catalog takes {limits.max_audios} for {label}. Through fal it "
+            f"takes {LIMITS[label].max_audios}.")
+
+
+# Defaults for this module, which must stay importable without ComfyUI. The node
+# passes comfy_api's own VideoContainer and VideoCodec: they are str enums, so
+# these compare equal, but ComfyUI branches on `isinstance(format,
+# VideoContainer)` when deciding what to tell ffmpeg.
+MP4 = "mp4"
+H264 = "h264"
+
+
+def video_data_uri(video, label: str, container=MP4, codec=H264) -> str:
+    """One reference clip as a data URI.
+
+    Re-encoded to h264 in mp4 whatever it arrived as: a ComfyUI VIDEO may hold
+    any container ffmpeg reads, and fal documents mp4 and mov alone — so passing
+    the source bytes through would work for most clips and fail for the ones
+    somebody had to convert in the first place."""
+    from . import seedance_video as media
+    seconds = _seconds(video)
+    ceiling = LIMITS[label].max_reference_seconds
+    if seconds and seconds < media.MIN_REFERENCE_SECONDS:
+        raise ValueError(
+            f"A reference clip is {seconds:.1f}s. Seedance takes nothing under "
+            f"{media.MIN_REFERENCE_SECONDS}s.")
+    if seconds > ceiling:
+        raise ValueError(
+            f"A reference clip is {seconds:.1f}s, over the {ceiling}s "
+            f"{label} takes. Trim it, or choose a model with more room.")
+    buffer = io.BytesIO()
+    video.save_to(buffer, format=container, codec=codec)
+    return ("data:video/mp4;base64,"
+            + base64.b64encode(buffer.getvalue()).decode("ascii"))
+
+
+def _seconds(video) -> float:
+    """How long the clip runs, or 0 when it will not say.
+
+    A container the reader cannot seek gives no duration, and refusing the clip
+    for that would refuse it for the reader's limitation rather than for
+    anything about the clip. fal still checks its own bounds."""
+    try:
+        return float(video.get_duration())
+    except Exception:
+        return 0.0
