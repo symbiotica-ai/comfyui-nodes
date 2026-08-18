@@ -154,3 +154,28 @@ def test_seed_and_watermark_ride_alongside_the_per_model_widgets():
     assert body["input"]["seed"] == 7
     assert body["input"]["watermark"] is False
     assert body["input"]["generate_audio"] is True
+
+
+def test_a_reference_set_over_the_log_ceiling_is_refused_rather_than_trimmed():
+    """Cloudflare stores no log above 10 MB and AI Gateway analytics reads the
+    log, so an oversized call renders without its spend ever reaching the
+    studio's row — the one outcome routing through the gateway exists to
+    prevent. Same ceiling and same reasoning as the Claude node."""
+    huge = "data:video/mp4;base64," + "A" * core.MAX_REQUEST_BYTES
+    with pytest.raises(ValueError) as raised:
+        core.check_reference_size([huge])
+    assert "attributed" in str(raised.value)
+
+
+def test_a_reference_set_inside_the_ceiling_passes_silently():
+    assert core.check_reference_size(["data:image/png;base64,AA"]) is None
+
+
+def test_the_refusal_says_how_far_over_it_went():
+    """A ceiling the message does not quantify leaves the reader guessing
+    whether to drop one clip or nine."""
+    huge = "data:video/mp4;base64," + "A" * core.MAX_REQUEST_BYTES
+    with pytest.raises(ValueError) as raised:
+        core.check_reference_size([huge])
+    assert str(len(huge)) in str(raised.value)
+    assert str(core.MAX_REQUEST_BYTES) in str(raised.value)

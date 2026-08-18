@@ -114,3 +114,34 @@ def _attach(payload: dict, singular: str, refs: list, cap: int) -> None:
         payload[singular] = refs[0]
     else:
         payload[singular + "s"] = list(refs)
+
+
+# Cloudflare stores no log above 10 MB, and AI Gateway analytics reads the log
+# — so a request past that ceiling is spend that reaches no cockpit row, which
+# is the whole reason this node routes through the gateway at all. The margin
+# under 10 MB is for what JSON encoding adds on top of the bytes counted here.
+# Same number and same reasoning as the Claude node's MAX_REQUEST_BYTES.
+#
+# This binds hard on video. A few seconds of 720p mp4 encodes to most of the
+# budget on its own, so the ten video slots 2.5 offers are ten slots the log
+# ceiling will not let you fill — the cap is real, the budget is what you have.
+MAX_REQUEST_BYTES = 8_000_000
+
+
+def check_reference_size(refs) -> None:
+    """Raise if the references will not fit inside one loggable request.
+
+    Refuses rather than dropping references to fit. A video generated from two
+    of five references is a wrong result that looks right, and that is the
+    failure this pack exists not to ship. Measured on the encoded strings that
+    actually cross the wire, because a check written against durations or
+    dimensions cannot tell a static shot from a busy one at the same length."""
+    size = sum(len(ref) for ref in refs)
+    if size > MAX_REQUEST_BYTES:
+        raise ValueError(
+            f"The references encode to {size} bytes, over the "
+            f"{MAX_REQUEST_BYTES} this node sends. Cloudflare stores no log "
+            f"above 10 MB and AI Gateway analytics reads the log, so a request "
+            f"this size would render without its spend ever being attributed "
+            f"to the studio. Send fewer references, shorter clips, or smaller "
+            f"images.")
