@@ -217,3 +217,47 @@ def test_an_unfinished_run_is_not_read_as_a_finished_one():
     with pytest.raises(RuntimeError) as raised:
         core.video_url({"result": {}, "state": "Queued"})
     assert "Queued" in str(raised.value)
+
+
+def a_pil(width, height, colour=(120, 40, 200)):
+    from PIL import Image
+    return Image.new("RGB", (width, height), colour)
+
+
+def test_a_reference_image_is_encoded_as_the_data_uri_the_catalog_reads():
+    uri = core.image_data_uri(a_pil(800, 600))
+    assert uri.startswith("data:image/jpeg;base64,")
+
+
+def test_an_oversized_image_is_brought_under_the_long_side_ceiling():
+    """Seedance renders 720p at most on 2.5. A 5000px reference adds no detail
+    the model can use and spends the whole request budget saying so."""
+    import base64, io
+    from PIL import Image
+    uri = core.image_data_uri(a_pil(5000, 2500))
+    raw = base64.b64decode(uri.split(",", 1)[1])
+    assert max(Image.open(io.BytesIO(raw)).size) == core.MAX_IMAGE_EDGE
+
+
+def test_a_small_image_is_left_at_its_own_size():
+    import base64, io
+    from PIL import Image
+    uri = core.image_data_uri(a_pil(640, 480))
+    raw = base64.b64decode(uri.split(",", 1)[1])
+    assert Image.open(io.BytesIO(raw)).size == (640, 480)
+
+
+def test_an_image_too_small_for_seedance_is_refused_by_name():
+    """ByteDance takes nothing under 300px a side. Sent anyway it fails at the
+    provider, where the message names neither the node nor the slot."""
+    with pytest.raises(ValueError) as raised:
+        core.image_data_uri(a_pil(200, 400))
+    assert "300" in str(raised.value)
+
+
+def test_an_image_too_long_and_thin_is_refused_by_name():
+    """The accepted aspect range is 0.4 to 2.5; a panorama outside it is
+    refused here rather than at the provider."""
+    with pytest.raises(ValueError) as raised:
+        core.image_data_uri(a_pil(3000, 400))
+    assert "aspect" in str(raised.value).lower()

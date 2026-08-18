@@ -2,7 +2,11 @@
 # ABOUTME: which models it offers, what each one accepts, and the request it sends.
 from __future__ import annotations
 
+import base64
+import io
 from typing import NamedTuple
+
+from PIL import Image
 
 # What the canvas shows against the slug Cloudflare's catalog answers to, in
 # ComfyUI's own order and wording so a graph built against its node reads the
@@ -160,3 +164,54 @@ def video_url(body: dict) -> str:
         return url
     raise RuntimeError(
         f"The gateway returned no video for this run: {body}")
+
+
+# ByteDance's own bounds on a reference image, which the catalog forwards.
+MIN_IMAGE_EDGE = 300
+MAX_IMAGE_ASPECT = 2.5
+MIN_IMAGE_ASPECT = 0.4
+# Well under ByteDance's 6000px ceiling, and deliberately so. Seedance 2.5
+# renders 720p at most, so detail past this is detail the model cannot use —
+# and with thirty reference slots sharing one 8 MB budget, the ceiling that
+# matters is ours, not theirs.
+MAX_IMAGE_EDGE = 2048
+# JPEG, unlike the Claude node's PNG. That node carries at most a couple of
+# references and chose PNG so artifacts never reach a model being asked to
+# read fine detail. Thirty references inside 8 MB is not a budget PNG can be
+# spent on: one 2048px PNG photograph is most of it. The quality is high
+# enough that the difference does not survive being resampled into 720p video.
+JPEG_QUALITY = 90
+
+
+def image_data_uri(image) -> str:
+    """One reference image as the data URI the catalog accepts.
+
+    Bounds are checked before encoding, so a graph wired to an unusable
+    reference fails naming the slot rather than at ByteDance, whose message
+    knows neither this node nor which of thirty images it meant."""
+    width, height = image.size
+    aspect = width / height
+    if not MIN_IMAGE_ASPECT <= aspect <= MAX_IMAGE_ASPECT:
+        raise ValueError(
+            f"A reference image is {width}x{height}, an aspect ratio of "
+            f"{aspect:.2f}. Seedance takes {MIN_IMAGE_ASPECT} to "
+            f"{MAX_IMAGE_ASPECT}; crop it to something nearer the frame.")
+    if min(width, height) < MIN_IMAGE_EDGE:
+        raise ValueError(
+            f"A reference image is {width}x{height}. Seedance takes nothing "
+            f"under {MIN_IMAGE_EDGE}px on a side, and upscaling it here would "
+            f"add pixels rather than detail.")
+    return "data:image/jpeg;base64," + encode_jpeg(image, MAX_IMAGE_EDGE)
+
+
+def encode_jpeg(image, edge: int) -> str:
+    """The image as base64 JPEG, no larger than `edge` on its long side.
+
+    Never enlarged — `thumbnail` guarantees that, and the guard above has
+    already refused anything too small to be worth sending."""
+    if max(image.size) > edge:
+        image = image.copy()
+        image.thumbnail((edge, edge), Image.LANCZOS)
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, format="JPEG", quality=JPEG_QUALITY)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
