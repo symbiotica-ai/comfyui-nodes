@@ -1,5 +1,6 @@
 # ABOUTME: Seedance reference-to-video node — reference images, clips and audio
 # ABOUTME: become a video, billed through Cloudflare AI Gateway rather than Comfy.
+import logging
 import os
 import tempfile
 
@@ -158,6 +159,12 @@ class SymbioticaSeedanceReference(io.ComfyNode):
             # A gateway interstitial or a challenge page answers 200 with HTML.
             raise failure(response.status_code,
                           f"reply was not JSON: {response.text}") from None
+        left_byok = core.key_source_warning(payload)
+        if left_byok:
+            # Logged rather than raised: the render succeeded and throwing it
+            # away would cost the spend twice. This is the only place the fact
+            # is ever visible.
+            logging.warning("[Symbiotica] Seedance: %s", left_byok)
         return io.NodeOutput(_fetch(core.video_url(payload)))
 
 

@@ -152,12 +152,17 @@ def check_reference_size(refs) -> None:
 def video_url(body: dict) -> str:
     """Where the finished render can be fetched, or what came back instead.
 
-    The catalog answers 200 with its own envelope even for a run that failed,
-    so a refusal arrives here rather than as an HTTP error. The whole reply is
-    quoted on the way out: a bare "no video in the response" sends the reader
-    looking at our request when the answer is usually in theirs."""
-    result = body.get("result") or {}
-    url = result.get("video")
+    Two envelopes deep. Cloudflare's own reply carries `result`, and the run
+    inside it carries a `result` of its own alongside its `state` — so the URL
+    is at `result.result.video`. Read one level too high it is simply absent,
+    on every successful render.
+
+    The catalog answers 200 even for a run that failed, so a refusal arrives
+    here rather than as an HTTP error. The whole reply is quoted on the way
+    out: a bare "no video in the response" sends the reader looking at our
+    request when the answer is usually in theirs."""
+    run = body.get("result") or {}
+    url = (run.get("result") or {}).get("video")
     if url:
         return url
     raise RuntimeError(
@@ -264,3 +269,31 @@ def _check_reference_seconds(seconds: float, label: str, kind: str) -> None:
         raise ValueError(
             f"A reference {kind} is {seconds:.1f}s, over the {ceiling}s "
             f"{label} takes. Trim it, or choose a model with more room.")
+
+
+# What Cloudflare calls it when its own balance paid, rather than a key stored
+# in the gateway.
+UNIFIED_KEY_SOURCE = "Unified"
+
+
+def key_source_warning(body: dict) -> str:
+    """A line worth logging when this render's spend left the BYOK boundary.
+
+    Every reply says which key paid, and on this path the answer is `Unified`
+    until a ByteDance key is stored under the gateway's `default` alias. The
+    render succeeds either way and nothing else in the system would ever
+    mention it — so an unattributed render that looks perfect is exactly the
+    thing worth saying out loud.
+
+    Absent is not the same as Unified: warning about a field Cloudflare did not
+    send would teach the reader to ignore the warning."""
+    run = body.get("result") or {}
+    source = (run.get("gatewayMetadata") or {}).get("keySource")
+    if source != UNIFIED_KEY_SOURCE:
+        return ""
+    return (f"This render was billed with keySource={UNIFIED_KEY_SOURCE}: no "
+            f"ByteDance key stored in the gateway paid for it, Cloudflare's "
+            f"own balance did. The studio tag still rode on the call, so the "
+            f"spend is attributable — but it is outside the BYOK boundary. "
+            f"Store a ByteDance key under the gateway's `default` alias to "
+            f"bring it back inside.")

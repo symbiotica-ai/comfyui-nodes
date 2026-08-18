@@ -180,10 +180,28 @@ def test_the_ceiling_is_read_across_every_reference_not_each_one():
         core.check_reference_size(["z" * 2_000_000] * 5)
 
 
+# One real reply, trimmed. The URL sits under `result.result`, not `result`:
+# Cloudflare's own envelope wraps the run, and the run carries a `result` of
+# its own. Written out from a render rather than inferred, because inferring it
+# is exactly how the first version of this reader got it wrong.
+A_FINISHED_RUN = {
+    "success": True, "errors": [], "messages": [],
+    "result": {"state": "Completed",
+               "result": {"video": "https://ark.example/out.mp4?X-Tos-Expires=86400"},
+               "gatewayMetadata": {"keySource": "Unified"}},
+}
+
+
 def test_the_video_url_is_read_from_where_the_catalog_puts_it():
-    body = {"result": {"video": "https://ark.example/out.mp4"},
-            "success": True}
-    assert core.video_url(body) == "https://ark.example/out.mp4"
+    assert core.video_url(A_FINISHED_RUN) == (
+        "https://ark.example/out.mp4?X-Tos-Expires=86400")
+
+
+def test_the_url_is_not_looked_for_one_level_too_high():
+    """The run's own envelope carries `state` and `gatewayMetadata` alongside
+    its result. A reader that treats the outer `result` as the run's result
+    finds no video and throws on every successful render."""
+    assert "video" not in A_FINISHED_RUN["result"]
 
 
 def test_a_reply_without_a_video_says_what_came_back_instead():
@@ -294,3 +312,24 @@ def test_an_audio_longer_than_the_model_takes_is_refused_by_model():
     with pytest.raises(ValueError) as raised:
         core.audio_data_uri(an_audio(20.0), "Seedance 2.0 Mini")
     assert "Seedance 2.0 Mini" in str(raised.value)
+
+
+def test_a_render_that_left_the_byok_boundary_says_so():
+    """`keySource: Unified` means no stored ByteDance key paid — Cloudflare's
+    own balance did. The render succeeds either way, so nothing else in the
+    system would ever mention it, and unattributed spend that renders fine is
+    the failure this pack exists to make loud."""
+    said = core.key_source_warning(A_FINISHED_RUN)
+    assert "Unified" in said
+
+
+def test_a_render_billed_to_a_stored_key_says_nothing():
+    billed = {"result": {"state": "Completed", "result": {"video": "u"},
+                         "gatewayMetadata": {"keySource": "BYOK"}}}
+    assert core.key_source_warning(billed) == ""
+
+
+def test_a_reply_that_names_no_key_source_is_not_reported_as_one():
+    """Absent is not the same as Unified. Warning on a field Cloudflare simply
+    did not send would train the reader to ignore the warning."""
+    assert core.key_source_warning({"result": {"state": "Completed"}}) == ""
