@@ -433,6 +433,12 @@ every call, so spend remains *attributable* in analytics — it is the paying ke
 that is shared, not the accounting. That is a narrower gap than it sounds, but
 it is a real one, and it does not apply to the Gemini or Claude nodes.
 
+Every reply names the key that paid, and until a ByteDance key is stored under
+the gateway's `default` alias the answer is `keySource: Unified` — Cloudflare's
+own balance, outside the BYOK boundary entirely. The node logs a warning saying
+so on any render billed that way, because nothing else in the system would
+mention it and the render itself looks perfect.
+
 Setting the base without the token is an error, not a fall back: a call that
 succeeds on somebody's personal key while its spend leaves the gateway is a
 failure nobody can detect afterwards.
