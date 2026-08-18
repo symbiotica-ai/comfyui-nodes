@@ -156,26 +156,39 @@ def test_seed_and_watermark_ride_alongside_the_per_model_widgets():
     assert body["input"]["generate_audio"] is True
 
 
+def test_the_ceiling_is_the_one_the_gateways_log_limit_dictates():
+    """Anchored to the literal rather than derived: Cloudflare's log ceiling is
+    10 MB, and the margin below it is for what JSON encoding adds on top of the
+    bytes counted. A test that recomputed this from the constant would pass
+    whatever the constant said."""
+    assert core.MAX_REQUEST_BYTES == 8_000_000
+
+
 def test_a_reference_set_over_the_log_ceiling_is_refused_rather_than_trimmed():
     """Cloudflare stores no log above 10 MB and AI Gateway analytics reads the
     log, so an oversized call renders without its spend ever reaching the
     studio's row — the one outcome routing through the gateway exists to
     prevent. Same ceiling and same reasoning as the Claude node."""
-    huge = "data:video/mp4;base64," + "A" * core.MAX_REQUEST_BYTES
     with pytest.raises(ValueError) as raised:
-        core.check_reference_size([huge])
+        core.check_reference_size(["x" * 8_000_001])
     assert "attributed" in str(raised.value)
 
 
 def test_a_reference_set_inside_the_ceiling_passes_silently():
-    assert core.check_reference_size(["data:image/png;base64,AA"]) is None
+    assert core.check_reference_size(["x" * 8_000_000]) is None
 
 
 def test_the_refusal_says_how_far_over_it_went():
     """A ceiling the message does not quantify leaves the reader guessing
     whether to drop one clip or nine."""
-    huge = "data:video/mp4;base64," + "A" * core.MAX_REQUEST_BYTES
     with pytest.raises(ValueError) as raised:
-        core.check_reference_size([huge])
-    assert str(len(huge)) in str(raised.value)
-    assert str(core.MAX_REQUEST_BYTES) in str(raised.value)
+        core.check_reference_size(["x" * 5_000_000, "y" * 5_000_000])
+    assert "10000000" in str(raised.value)
+    assert "8000000" in str(raised.value)
+
+
+def test_the_ceiling_is_read_across_every_reference_not_each_one():
+    """Five clips of two megabytes each are over budget together and inside it
+    apiece. Checking them one at a time would let the set through."""
+    with pytest.raises(ValueError):
+        core.check_reference_size(["z" * 2_000_000] * 5)
