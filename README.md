@@ -88,26 +88,27 @@ Wrappers around Wavespeed's hosted endpoints.
 
   Each model offers only the slots it can carry, because the four differ and a
   shared input list could only offer the union: 2.5 takes thirty reference
-  images and ten audio tracks, the 2.0 family takes four images, 2.0 Mini alone
-  takes one audio track, and 2.0 reaches 4k where the others stop at 720p.
+  images, ten clips and ten audio tracks and runs to 30s; the 2.0 family takes
+  nine images, three clips and three audio tracks and stops at 15s; 2.0 reaches
+  4k and 2.5 reaches 1080p where Fast and Mini stop at 720p. Enabling
+  `video_editing` on 2.5 hands the length and shape back to the source clip.
 
-  **Reference videos are not offered on any model.** ByteDance accepts a
-  reference video only as a public web URL, and this node sends its references
-  inline as base64. Cloudflare's own request validator accepts a `data:video/…`
-  URI, which is misleading — the call is then refused upstream with
-  `reference_video must be provided as a web url`. A VIDEO socket here would be
-  one you could wire and every render would refuse, so there is none. Video
-  editing and extension go with it, since both need a source clip.
+  **Two routes, and the node prefers the better one.** Where the studio gateway
+  is configured the call goes through AI Gateway's **fal** passthrough, which is
+  the same arm the Gemini and Claude nodes take — the studio's own stored key
+  pays, selected by alias, and the spend stays inside the BYOK boundary. This is
+  the route the node is built for and the one that carries the counts above.
 
-  Reference images and audio do work inline, verified against the provider
-  rather than against that validator. The set is refused above 8 MB, because
-  Cloudflare stores no gateway log above 10 MB and a call with no log is spend
-  that reaches no cockpit row.
+  Where only the Cloudflare **model catalog** is configured the node falls back
+  to it, and it is a poorer route: a shared key pays, reference clips cannot
+  ride at all, and the 2.0 family is cut to four images with no audio. The
+  sockets do not change — a graph is shared between boxes — so what the fall
+  back cannot carry is refused by name at render time rather than hidden.
 
-  The counts above are Cloudflare's catalog limits, tighter than ByteDance's own
-  — through BytePlus directly the 2.0 family takes nine images each. Routing
-  through the gateway is what buys per-studio accounting, and this is what it
-  costs.
+  References ride inside the request as base64. The set is refused above 8 MB,
+  because Cloudflare stores no gateway log above 10 MB and a call with no log is
+  spend that reaches no cockpit row. A few seconds of 720p footage is most of
+  that budget, so the clip slots are more than this ceiling will let you fill.
 
 ### Video generation (Wavespeed)
 - **Sora 2** — text-to-video, image-to-video, Pro variants
@@ -411,9 +412,14 @@ key is consulted:
 | `ORDER_STUDIO` | The studio slug. Selects that studio's own stored provider key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
 | `SYMBIOTICA_AIG_SURFACE` | What kind of run this is, tagged alongside the studio. Optional, and `order` when unset, which is what every existing sandbox reports. A box that is not running orders should set its own value, or its spend joins the order totals under a label that reads correctly. |
 
-The Seedance node reaches the gateway a different way, because ByteDance has no
-provider-passthrough slug on AI Gateway at all — its models live in
-Cloudflare's own catalog, and the call goes to the account's `/ai/run`:
+The Seedance node prefers fal, which is a passthrough provider like the two
+above and needs nothing beyond `SYMBIOTICA_AIG_BASE`, `SYMBIOTICA_AIG_TOKEN` and
+`ORDER_STUDIO` — the studio's fal key is stored in the gateway as BYOK and
+injected there. Its direct arm takes `FAL_KEY` or `FAL_API_KEY`.
+
+Its fall back is Cloudflare's own model catalog, reached at the account's
+`/ai/run` rather than through a provider path, because ByteDance has no
+passthrough slug of its own:
 
 | Variable | Content |
 |---|---|
