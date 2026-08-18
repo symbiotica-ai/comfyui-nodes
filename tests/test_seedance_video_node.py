@@ -66,13 +66,19 @@ def test_every_model_the_catalog_serves_is_offered(node_module):
 
 
 def test_only_25_offers_the_widgets_only_25_has(node_module):
-    """video_editing needs the `adaptive` ratio and output_format does not
-    exist on the 2.0 family at all — offered there, both are widgets whose
-    every render is refused."""
-    assert "video_editing" in widgets(node_module, "Seedance 2.5")
+    """output_format does not exist on the 2.0 family at all — offered there,
+    it is a widget whose every render is refused."""
     assert "output_format" in widgets(node_module, "Seedance 2.5")
-    assert "video_editing" not in widgets(node_module, "Seedance 2.0")
     assert "output_format" not in widgets(node_module, "Seedance 2.0")
+
+
+def test_no_model_offers_a_reference_video_slot(node_module):
+    """ByteDance takes a reference video only as a web URL, and this node sends
+    its references inline. A VIDEO socket here would be one a user can wire and
+    every render then refuses."""
+    for label in ("Seedance 2.5", "Seedance 2.0", "Seedance 2.0 Fast",
+                  "Seedance 2.0 Mini"):
+        assert "videos" not in widgets(node_module, label), label
 
 
 def test_an_audio_slot_is_offered_only_where_one_can_be_sent(node_module):
@@ -88,7 +94,6 @@ def test_each_model_offers_exactly_the_reference_slots_it_accepts(node_module):
     for label, limits in core.LIMITS.items():
         slots = widgets(node_module, label)
         assert len(slots["images"].template.names) == limits.max_images, label
-        assert len(slots["videos"].template.names) == limits.max_videos, label
 
 
 def test_the_seed_and_watermark_sit_outside_the_model_combo(node_module):

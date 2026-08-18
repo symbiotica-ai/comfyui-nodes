@@ -88,21 +88,26 @@ Wrappers around Wavespeed's hosted endpoints.
 
   Each model offers only the slots it can carry, because the four differ and a
   shared input list could only offer the union: 2.5 takes thirty reference
-  images, ten clips and ten audio tracks and can edit or extend a clip; the 2.0
-  family takes four images and one clip, 2.0 Mini alone takes one audio track,
-  and 2.0 reaches 4k where the others stop at 720p. Enabling `video_editing` on
-  2.5 hands the length and shape back to the source clip.
+  images and ten audio tracks, the 2.0 family takes four images, 2.0 Mini alone
+  takes one audio track, and 2.0 reaches 4k where the others stop at 720p.
 
-  These are the limits of Cloudflare's own ByteDance catalog, which are tighter
-  than ByteDance's — through BytePlus directly the 2.0 family takes nine images
-  and three clips each. Routing through the gateway is what buys per-studio
-  accounting, and this is what it costs.
+  **Reference videos are not offered on any model.** ByteDance accepts a
+  reference video only as a public web URL, and this node sends its references
+  inline as base64. Cloudflare's own request validator accepts a `data:video/…`
+  URI, which is misleading — the call is then refused upstream with
+  `reference_video must be provided as a web url`. A VIDEO socket here would be
+  one you could wire and every render would refuse, so there is none. Video
+  editing and extension go with it, since both need a source clip.
 
-  References ride inside the request as base64, so no upload host is needed —
-  but the set is refused above 8 MB, because Cloudflare stores no gateway log
-  above 10 MB and a call with no log is spend that reaches no cockpit row. A few
-  seconds of 720p footage is most of that budget, so 2.5's ten clip slots are
-  more than this ceiling will let you fill in practice.
+  Reference images and audio do work inline, verified against the provider
+  rather than against that validator. The set is refused above 8 MB, because
+  Cloudflare stores no gateway log above 10 MB and a call with no log is spend
+  that reaches no cockpit row.
+
+  The counts above are Cloudflare's catalog limits, tighter than ByteDance's own
+  — through BytePlus directly the 2.0 family takes nine images each. Routing
+  through the gateway is what buys per-studio accounting, and this is what it
+  costs.
 
 ### Video generation (Wavespeed)
 - **Sora 2** — text-to-video, image-to-video, Pro variants

@@ -4,7 +4,7 @@ import os
 import tempfile
 
 import requests
-from comfy_api.latest import io, Types
+from comfy_api.latest import io
 
 from .pipeline import seedance_video as core
 from .pipeline.reference_images import to_pil, slot_order
@@ -42,21 +42,12 @@ def _model_inputs(label):
         io.Boolean.Input("generate_audio", default=True,
                          tooltip="Generate a soundtrack along with the video."),
     ]
-    if "adaptive" in limits.ratios:
-        inputs.append(io.Boolean.Input(
-            "video_editing", default=False,
-            tooltip="Enable when the prompt edits a connected reference "
-                    "video, for example replacing an object in it. The output "
-                    "then keeps the source clip's own length and shape, and "
-                    "the duration and ratio widgets are ignored."))
     if limits.output_formats:
         inputs.append(io.Combo.Input(
             "output_format", options=limits.output_formats, default="mp4",
             tooltip="Container format of the output video."))
     inputs.append(_slots("images", io.Image.Input("reference_image"),
                          "image", limits.max_images))
-    inputs.append(_slots("videos", io.Video.Input("reference_video"),
-                         "video", limits.max_videos))
     if limits.max_audios:
         inputs.append(_slots("audios", io.Audio.Input("reference_audio"),
                              "audio", limits.max_audios))
@@ -136,15 +127,12 @@ class SymbioticaSeedanceReference(io.ComfyNode):
 
         images = [core.image_data_uri(image)
                   for image in to_pil(model.get("images"))]
-        videos = [core.video_data_uri(video, label, Types.VideoContainer.MP4,
-                                      Types.VideoCodec.H264)
-                  for video in _wired(model.get("videos"))]
         audios = [core.audio_data_uri(audio, label)
                   for audio in _wired(model.get("audios"))]
-        core.check_reference_size(images + videos + audios)
+        core.check_reference_size(images + audios)
 
         body = core.build_request(label, model, seed, watermark,
-                                  images, videos, audios)
+                                  images, audios)
 
         def failure(status, text):
             return RuntimeError(ai_gateway.http_error(

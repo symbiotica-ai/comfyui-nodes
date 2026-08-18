@@ -24,18 +24,15 @@ def test_seedance_25_carries_the_reference_counts_the_official_node_offers():
     accepts, so the 2.5 option loses nothing to routing through us."""
     limits = core.LIMITS["Seedance 2.5"]
     assert limits.max_images == 30
-    assert limits.max_videos == 10
     assert limits.max_audios == 10
 
 
 def test_the_20_family_is_capped_where_the_catalog_caps_it_not_where_bytedance_does():
-    """BytePlus itself takes 9 images, 3 videos and 3 audios for these, but the
-    catalog wrapper we route through takes 4 and a single video. Offering the
-    larger numbers would be offering slots the call cannot carry."""
+    """BytePlus itself takes 9 reference images for these, but the catalog
+    wrapper we route through takes 4. Offering the larger number would be
+    offering slots the call cannot carry."""
     for label in ("Seedance 2.0", "Seedance 2.0 Fast", "Seedance 2.0 Mini"):
-        limits = core.LIMITS[label]
-        assert limits.max_images == 4, label
-        assert limits.max_videos == 1, label
+        assert core.LIMITS[label].max_images == 4, label
 
 
 def test_mini_alone_among_the_20_family_takes_a_reference_audio():
@@ -73,13 +70,12 @@ def test_duration_stops_where_the_catalog_stops_it():
             core.LIMITS["Seedance 2.0"].max_duration) == (4, 12)
 
 
-def a_request(label="Seedance 2.5", images=(), videos=(), audios=(), **over):
+def a_request(label="Seedance 2.5", images=(), audios=(), **over):
     values = {"prompt": "a cat", "resolution": "720p", "ratio": "16:9",
               "duration": 5, "generate_audio": True, "output_format": "mp4"}
     values.update(over)
     return core.build_request(label, values, seed=7, watermark=False,
-                              images=list(images), videos=list(videos),
-                              audios=list(audios))
+                              images=list(images), audios=list(audios))
 
 
 def test_the_request_names_the_catalog_slug_and_nests_everything_under_input():
@@ -96,22 +92,22 @@ def test_the_ratio_widget_is_sent_under_the_name_the_catalog_reads():
     assert "ratio" not in a_request()["input"]
 
 
-def test_25_sends_its_references_as_the_three_arrays():
+def test_25_sends_its_references_as_the_two_arrays():
     body = a_request(images=["data:image/png;base64,AA"],
-                     videos=["data:video/mp4;base64,BB"],
                      audios=["data:audio/mp3;base64,CC"])
     assert body["input"]["reference_images"] == ["data:image/png;base64,AA"]
-    assert body["input"]["reference_videos"] == ["data:video/mp4;base64,BB"]
     assert body["input"]["reference_audios"] == ["data:audio/mp3;base64,CC"]
 
 
-def test_the_20_family_sends_its_single_video_as_a_bare_string():
-    """`reference_videos` does not exist on these models — the catalog refuses
-    the whole request naming it as an unsupported field, so a list here is not
-    a near miss, it is a failed render."""
-    body = a_request("Seedance 2.0", videos=["data:video/mp4;base64,BB"])
-    assert body["input"]["reference_video"] == "data:video/mp4;base64,BB"
-    assert "reference_videos" not in body["input"]
+def test_no_model_is_sent_a_reference_video_at_all():
+    """ByteDance takes a reference video only as a web URL. A data URI passes
+    Cloudflare's own schema check and is then refused upstream —
+    "reference_video must be provided as a web url" — and everything this node
+    can encode is inline, so there is nothing to put in the field."""
+    for label in core.MODELS:
+        body = a_request(label)
+        assert "reference_video" not in body["input"], label
+        assert "reference_videos" not in body["input"], label
 
 
 def test_mini_sends_its_single_audio_as_a_bare_string():
@@ -133,16 +129,6 @@ def test_output_format_rides_only_on_the_model_that_has_it():
     assert a_request(output_format="mov")["input"]["output_format"] == "mov"
     assert "output_format" not in a_request(
         "Seedance 2.0", output_format="mov")["input"]
-
-
-def test_video_editing_hands_the_length_and_shape_back_to_the_source_clip():
-    """ComfyUI's node says this as ratio='adaptive' with duration=-1. The
-    catalog rejects -1 (duration must be >= 4) but leaves duration optional,
-    so the same thing is said here by omitting it."""
-    body = a_request(video_editing=True,
-                     videos=["data:video/mp4;base64,BB"])
-    assert body["input"]["aspect_ratio"] == "adaptive"
-    assert "duration" not in body["input"]
 
 
 def test_without_video_editing_the_duration_widget_is_sent_as_set():
@@ -286,11 +272,18 @@ def test_the_encoded_audio_keeps_its_own_rate_and_length():
 
 
 def test_an_audio_shorter_than_seedance_accepts_is_refused_by_length():
-    """Under two seconds ByteDance refuses the clip outright. Caught here the
-    message says how long it was and how long it must be."""
+    """ByteDance refuses anything under 1.8s, which it says in those words:
+    "audio duration (seconds) ... must be greater than or equal to 1.8". Caught
+    here the message says how long the clip was as well."""
     with pytest.raises(ValueError) as raised:
         core.audio_data_uri(an_audio(1.0), "Seedance 2.5")
     assert "1.0" in str(raised.value)
+
+
+def test_a_clip_between_one_point_eight_and_two_seconds_is_accepted():
+    """The floor is 1.8, not 2. Rounding it up to a tidier number refuses
+    clips the provider takes, and does it silently."""
+    assert core.audio_data_uri(an_audio(1.9), "Seedance 2.5")
 
 
 def test_an_audio_longer_than_the_model_takes_is_refused_by_model():
@@ -301,51 +294,3 @@ def test_an_audio_longer_than_the_model_takes_is_refused_by_model():
     with pytest.raises(ValueError) as raised:
         core.audio_data_uri(an_audio(20.0), "Seedance 2.0 Mini")
     assert "Seedance 2.0 Mini" in str(raised.value)
-
-
-class FakeVideo:
-    """A ComfyUI VIDEO, as far as this module ever touches one."""
-
-    def __init__(self, payload=b"\x00\x01mp4bytes", seconds=5.0):
-        self.payload = payload
-        self.seconds = seconds
-        self.saved_as = None
-
-    def get_duration(self):
-        return self.seconds
-
-    def save_to(self, buffer, format=None, codec=None):
-        self.saved_as = (format, codec)
-        buffer.write(self.payload)
-
-
-def test_a_reference_video_is_encoded_as_the_data_uri_the_catalog_reads():
-    uri = core.video_data_uri(FakeVideo(), "Seedance 2.5")
-    assert uri.startswith("data:video/mp4;base64,")
-
-
-def test_the_encoded_video_carries_the_clips_own_bytes():
-    import base64
-    uri = core.video_data_uri(FakeVideo(b"framedata"), "Seedance 2.5")
-    assert base64.b64decode(uri.split(",", 1)[1]) == b"framedata"
-
-
-def test_a_reference_video_is_written_as_the_container_seedance_takes():
-    """ByteDance takes mp4 and mov. Whatever the clip arrived as, it leaves
-    here as h264 in mp4 — a VIDEO input may be holding anything ffmpeg reads."""
-    clip = FakeVideo()
-    core.video_data_uri(clip, "Seedance 2.5")
-    assert clip.saved_as is not None
-
-
-def test_a_reference_video_too_short_is_refused_by_length():
-    with pytest.raises(ValueError) as raised:
-        core.video_data_uri(FakeVideo(seconds=1.0), "Seedance 2.5")
-    assert "1.0" in str(raised.value)
-
-
-def test_a_reference_video_longer_than_the_model_takes_is_refused_by_model():
-    core.video_data_uri(FakeVideo(seconds=25.0), "Seedance 2.5")
-    with pytest.raises(ValueError) as raised:
-        core.video_data_uri(FakeVideo(seconds=25.0), "Seedance 2.0")
-    assert "Seedance 2.0" in str(raised.value)

@@ -27,16 +27,18 @@ class ModelLimits(NamedTuple):
     """What one model will accept, as the catalog wrapper accepts it.
 
     These are the wrapper's numbers, not BytePlus's. BytePlus itself takes 9
-    reference images, 3 videos and 3 audios for the 2.0 family and offers
-    `adaptive` on all four models; the catalog takes 4, one and none, and
-    confines `adaptive` to 2.5. A schema built from the larger set would offer
-    slots whose every render is refused before it starts."""
+    reference images for the 2.0 family and offers `adaptive` on all four
+    models; the catalog takes 4 and confines `adaptive` to 2.5. A schema built
+    from the larger set would offer slots whose every render is refused before
+    it starts.
+
+    There is no video count. ByteDance takes a reference video only as a web
+    URL, and everything this node can encode is inline."""
     resolutions: list
     ratios: list
     min_duration: int
     max_duration: int
     max_images: int
-    max_videos: int
     max_audios: int
     output_formats: list
     max_reference_seconds: int
@@ -54,7 +56,7 @@ def _limits_20(resolutions, max_audios=0):
     the other two do not, and sending one to Fast is refused outright."""
     return ModelLimits(resolutions=resolutions, ratios=RATIOS_20,
                        min_duration=4, max_duration=12,
-                       max_images=4, max_videos=1, max_audios=max_audios,
+                       max_images=4, max_audios=max_audios,
                        output_formats=[], max_reference_seconds=15)
 
 
@@ -62,7 +64,7 @@ LIMITS = {
     "Seedance 2.5": ModelLimits(
         resolutions=["480p", "720p"], ratios=RATIOS_25,
         min_duration=4, max_duration=30,
-        max_images=30, max_videos=10, max_audios=10,
+        max_images=30, max_audios=10,
         output_formats=["mp4", "mov"], max_reference_seconds=30),
     "Seedance 2.0": _limits_20(["480p", "720p", "1080p", "4k"]),
     "Seedance 2.0 Fast": _limits_20(["480p", "720p"]),
@@ -71,7 +73,7 @@ LIMITS = {
 
 
 def build_request(label: str, values: dict, seed: int, watermark: bool,
-                  images: list, videos: list, audios: list) -> dict:
+                  images: list, audios: list) -> dict:
     """One `/ai/run` body: which model, and everything it is being asked for.
 
     `values` is the per-model combo's own widgets, so what is present here is
@@ -92,18 +94,11 @@ def build_request(label: str, values: dict, seed: int, watermark: bool,
     }
     # ComfyUI's node calls this `ratio`; the catalog calls it `aspect_ratio`
     # and refuses `ratio` outright as an unsupported field.
-    editing = bool(values.get("video_editing"))
-    payload["aspect_ratio"] = "adaptive" if editing else values["ratio"]
-    if not editing:
-        # An edit takes its length from the clip being edited. ComfyUI's node
-        # says that with duration=-1, which this wrapper rejects for being
-        # below the minimum of 4 — but duration is optional here, and an
-        # absent duration is the same statement in the wrapper's own grammar.
-        payload["duration"] = values["duration"]
+    payload["aspect_ratio"] = values["ratio"]
+    payload["duration"] = values["duration"]
     if limits.output_formats:
         payload["output_format"] = values["output_format"]
     _attach(payload, "reference_image", images, limits.max_images)
-    _attach(payload, "reference_video", videos, limits.max_videos)
     _attach(payload, "reference_audio", audios, limits.max_audios)
     return {"model": MODELS[label], "input": payload}
 
@@ -129,9 +124,9 @@ def _attach(payload: dict, singular: str, refs: list, cap: int) -> None:
 # under 10 MB is for what JSON encoding adds on top of the bytes counted here.
 # Same number and same reasoning as the Claude node's MAX_REQUEST_BYTES.
 #
-# This binds hard on video. A few seconds of 720p mp4 encodes to most of the
-# budget on its own, so the ten video slots 2.5 offers are ten slots the log
-# ceiling will not let you fill — the cap is real, the budget is what you have.
+# Reference images are the whole of what this budget carries, and thirty of
+# them at 2048px will not fit inside it. The images that do fit are the ones
+# the render gets; the rest are refused rather than dropped.
 MAX_REQUEST_BYTES = 8_000_000
 
 
@@ -220,16 +215,11 @@ def encode_jpeg(image, edge: int) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-# ByteDance refuses a reference clip under this, on every model. The per-model
-# ceiling is the model's own `max_reference_seconds` below.
-MIN_REFERENCE_SECONDS = 2.0
-# Defaults for the pure half, which must stay importable without ComfyUI.
-# The node passes comfy_api's own VideoContainer and VideoCodec instead: they
-# are str enums, so these strings compare equal to them, but ComfyUI branches
-# on `isinstance(format, VideoContainer)` when choosing what to tell ffmpeg —
-# and a bare string takes the other branch.
-MP4 = "mp4"
-H264 = "h264"
+# ByteDance refuses a reference clip under this, on every model, and says so in
+# these words: "audio duration (seconds) ... must be greater than or equal to
+# 1.8". Not rounded up to 2: that would refuse clips the provider takes, and
+# refuse them silently. The per-model ceiling is `max_reference_seconds` below.
+MIN_REFERENCE_SECONDS = 1.8
 PCM_FULL_SCALE = 32767
 
 
@@ -268,35 +258,9 @@ def _check_reference_seconds(seconds: float, label: str, kind: str) -> None:
     if seconds < MIN_REFERENCE_SECONDS:
         raise ValueError(
             f"A reference {kind} is {seconds:.1f}s. Seedance takes nothing "
-            f"under {MIN_REFERENCE_SECONDS:.0f}s.")
+            f"under {MIN_REFERENCE_SECONDS}s.")
     ceiling = LIMITS[label].max_reference_seconds
     if seconds > ceiling:
         raise ValueError(
             f"A reference {kind} is {seconds:.1f}s, over the {ceiling}s "
             f"{label} takes. Trim it, or choose a model with more room.")
-
-
-def video_data_uri(video, label: str, container=MP4, codec=H264) -> str:
-    """One reference clip as the data URI the catalog accepts.
-
-    Re-encoded to h264 in mp4 whatever it arrived as. A ComfyUI VIDEO may be
-    holding any container ffmpeg reads, and ByteDance takes mp4 and mov alone
-    — so passing the source bytes through would work for most clips and fail
-    for the ones somebody had to go and convert."""
-    _check_reference_seconds(_seconds(video), label, "video")
-    buffer = io.BytesIO()
-    video.save_to(buffer, format=container, codec=codec)
-    return ("data:video/mp4;base64,"
-            + base64.b64encode(buffer.getvalue()).decode("ascii"))
-
-
-def _seconds(video) -> float:
-    """How long the clip runs, or 0 when it will not say.
-
-    A container the reader cannot seek gives no duration, and refusing the
-    clip for that would refuse it for the reader's limitation rather than for
-    anything about the clip. ByteDance still checks its own bounds."""
-    try:
-        return float(video.get_duration())
-    except Exception:
-        return 0.0
