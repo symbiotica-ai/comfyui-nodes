@@ -143,3 +143,21 @@ def test_the_settings_ui_offers_the_fal_key_the_seedance_node_asks_for():
     source = (pathlib.Path(__file__).parent.parent
               / "web" / "js" / "symbiotica_settings.js").read_text()
     assert '"FAL_KEY"' in source
+
+
+def test_no_gateway_node_asks_the_bare_environment_where_to_route():
+    """Five call sites, one for each way a node reaches the gateway. Any one of
+    them reading `os.environ` instead answers a desktop box with nothing, and
+    that node alone quietly falls to its direct arm on a personal key while the
+    others route — which reads on the canvas as one node being broken."""
+    import pathlib
+    py = pathlib.Path(__file__).parent.parent / "py"
+    routing = ("resolve_transport(", "resolve_rest_transport(", "chosen_arm(",
+               "queue_transport(")
+    offenders = []
+    for path in sorted(py.glob("*.py")):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if "os.environ" in line and any(c in line for c in routing):
+                offenders.append(f"{path.name}:{number}: {line.strip()}")
+    assert offenders == [], (
+        "these route on the bare environment:\n" + "\n".join(offenders))
