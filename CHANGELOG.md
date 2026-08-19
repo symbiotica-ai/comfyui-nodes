@@ -6,6 +6,28 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.28
+
+**Seedance reference-to-video, billed to the studio rather than to a ComfyUI
+account.** A new node, `Seedance Reference to Video (Symbiotica)`: reference
+images and audio become a video on Seedance 2.5, 2.0, 2.0 Fast or 2.0 Mini,
+with reference clips on the fal route. It reproduces ComfyUI's own
+`ByteDance2ReferenceNode`, which reaches ByteDance through comfy.org's paid
+proxy — this one goes through Cloudflare AI Gateway, so an order render works
+headless and its spend reaches the cockpit.
+
+Two routes, and the node prefers the better one. Where the studio gateway is
+configured it goes through AI Gateway's **fal** passthrough, the same arm the
+Gemini and Claude nodes take: the studio's own stored key pays, by alias.
+Renders are submitted to fal's queue and polled, because four seconds of 480p
+on 2.5 measured at 221 seconds and the node offers thirty at 720p; Cancel stops
+the wait. Where only the Cloudflare **model catalog** is configured it falls
+back to that, and says by name what the poorer route cannot carry — no
+reference clips, four images instead of nine, a shared key rather than the
+studio's.
+
+Nothing else changes. No existing node's inputs, outputs or id moved.
+
 ## 2026.8.27
 
 **A canvas size is a bucket, so one category can hold two grids and two

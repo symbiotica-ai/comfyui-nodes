@@ -569,3 +569,99 @@ def test_a_hostile_surface_cannot_break_the_metadata_header():
         assert tag.isprintable(), f"{hostile!r} left a control character"
         tag.encode("latin-1")
         assert json.loads(tag)["surface"] == hostile
+
+
+# The REST arm — Cloudflare's own AI API rather than provider passthrough.
+# It exists because some catalog models (ByteDance's Seedance among them) have
+# no passthrough provider slug at all, so there is no /bytedance path to route.
+REST_ENV = {"SYMBIOTICA_CF_ACCOUNT_ID": "acct-tag",
+            "SYMBIOTICA_CF_API_TOKEN": "cf-api-token-not-a-real-one",
+            "SYMBIOTICA_AIG_GATEWAY_ID": "symbiotica-hub-dev",
+            "ORDER_STUDIO": STUDIO}
+
+
+def test_the_rest_arm_posts_to_the_accounts_own_ai_run():
+    sent = ai_gateway.resolve_rest_transport(dict(REST_ENV))
+    assert sent.url == ("https://api.cloudflare.com/client/v4/accounts/"
+                        "acct-tag/ai/run")
+
+
+def test_the_rest_arm_names_the_gateway_its_spend_belongs_to():
+    """Without this header the call runs through the account's default
+    gateway, so its log lands somewhere nobody reads and the studio tag with
+    it."""
+    sent = ai_gateway.resolve_rest_transport(dict(REST_ENV))
+    assert sent.headers["cf-aig-gateway-id"] == "symbiotica-hub-dev"
+
+
+def test_the_rest_arm_presents_the_cloudflare_token_as_a_bearer():
+    sent = ai_gateway.resolve_rest_transport(dict(REST_ENV))
+    assert sent.headers["Authorization"] == "Bearer cf-api-token-not-a-real-one"
+
+
+def test_the_rest_arm_tags_its_spend_with_the_studio_like_the_other_one():
+    sent = ai_gateway.resolve_rest_transport(dict(REST_ENV))
+    assert json.loads(sent.headers["cf-aig-metadata"])["studio"] == STUDIO
+    assert sent.studio == STUDIO
+
+
+def test_the_rest_arm_sends_no_byok_alias_because_this_path_ignores_it():
+    """Cloudflare consults only the `default` alias on Unified Billing
+    endpoints. A header saying otherwise would read, to anyone auditing this,
+    as a per-studio key that is not in fact being used."""
+    sent = ai_gateway.resolve_rest_transport(dict(REST_ENV))
+    assert "cf-aig-byok-alias" not in sent.headers
+
+
+@pytest.mark.parametrize("missing", ["SYMBIOTICA_CF_ACCOUNT_ID",
+                                     "SYMBIOTICA_CF_API_TOKEN",
+                                     "SYMBIOTICA_AIG_GATEWAY_ID"])
+def test_a_rest_arm_missing_any_of_its_three_parts_says_which(missing):
+    environ = dict(REST_ENV)
+    del environ[missing]
+    with pytest.raises(ValueError) as raised:
+        ai_gateway.resolve_rest_transport(environ)
+    assert missing in str(raised.value)
+
+
+def test_the_rest_arm_refuses_to_run_for_no_studio_at_all():
+    """Same reasoning as the passthrough arm: spend that reaches no studio row
+    is spend nobody can account for, and this path has no alias to fall back
+    on either."""
+    environ = dict(REST_ENV)
+    del environ["ORDER_STUDIO"]
+    with pytest.raises(ValueError) as raised:
+        ai_gateway.resolve_rest_transport(environ)
+    assert "studio" in str(raised.value).lower()
+
+
+def test_a_cloudflare_token_with_a_stray_newline_is_refused_before_it_is_sent():
+    """A trailing newline is the commonest artifact in a secret store, and the
+    transport library would raise with the whole credential quoted in its
+    message — by a path that never reaches the scrubber."""
+    environ = dict(REST_ENV, SYMBIOTICA_CF_API_TOKEN="tok\nen-value-here")
+    with pytest.raises(ValueError) as raised:
+        ai_gateway.resolve_rest_transport(environ)
+    assert "en-value-here" not in str(raised.value)
+
+
+def test_the_cloudflare_token_is_scrubbed_out_of_a_failure():
+    """It is a broader credential than any provider key — it authenticates to
+    the Cloudflare account, not to one model vendor. Leaking it into a toast
+    is worse than leaking the provider key it stands in for."""
+    sent = ai_gateway.resolve_rest_transport(dict(REST_ENV))
+    said = ai_gateway.http_error(
+        403, "rejected token cf-api-token-not-a-real-one",
+        secrets=ai_gateway.header_secrets(sent.headers))
+    assert "cf-api-token-not-a-real-one" not in said
+    assert "[redacted]" in said
+
+
+def test_a_gateway_id_with_a_stray_newline_is_refused_before_it_is_sent():
+    """It rides in a header like the others, so it gets the same check. Left to
+    the transport library this raises with the value quoted, from a message
+    written for a credential rather than for a gateway name."""
+    environ = dict(REST_ENV, SYMBIOTICA_AIG_GATEWAY_ID="hub\ndev")
+    with pytest.raises(ValueError) as raised:
+        ai_gateway.resolve_rest_transport(environ)
+    assert "SYMBIOTICA_AIG_GATEWAY_ID" in str(raised.value)

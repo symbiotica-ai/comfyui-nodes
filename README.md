@@ -81,6 +81,52 @@ Wrappers around Wavespeed's hosted endpoints.
   wins, and a gateway URL missing either its token or its studio is an error
   rather than a quiet fall back to a personal or shared key.
 
+### Video generation (ByteDance Seedance)
+- **Seedance Reference to Video (Symbiotica)** — reference images, clips and
+  audio become a video on Seedance 2.5, 2.0, 2.0 Fast or 2.0 Mini, billed
+  through Cloudflare AI Gateway rather than to a ComfyUI account.
+
+  Each model offers only the slots it can carry, because the four differ and a
+  shared input list could only offer the union: 2.5 takes thirty reference
+  images, ten clips and ten audio tracks and runs to 30s; the 2.0 family takes
+  nine images, three clips and three audio tracks and stops at 15s; 2.0 reaches
+  4k and 2.5 reaches 1080p where Fast and Mini stop at 720p. Enabling
+  `video_editing` on 2.5 hands the length and shape back to the source clip.
+
+  **Two routes, and the node prefers the better one.** Where the studio gateway
+  is configured the call goes through AI Gateway's **fal** passthrough, which is
+  the same arm the Gemini and Claude nodes take — the studio's own stored key
+  pays, selected by alias, and the spend stays inside the BYOK boundary. This is
+  the route the node is built for and the one that carries the counts above.
+
+  Where only the Cloudflare **model catalog** is configured the node falls back
+  to it, and it is a poorer route: a shared key pays, reference clips cannot
+  ride at all, and the 2.0 family is cut to four images with no audio. The
+  sockets do not change — a graph is shared between boxes — so what the fall
+  back cannot carry is refused by name at render time rather than hidden.
+
+  `watermark` is offered because ComfyUI's node offers it, and the fal route has
+  no such parameter — asked for there it is refused rather than dropped, so the
+  same graph never renders watermarked on one box and clean on another.
+
+  Two things ComfyUI's node has that this one does not: `output_format`, because
+  fal writes mp4 and offers no such field; and `asset_1..30`, because the
+  digital-character library is reachable only through ByteDance's own API.
+  Reference images are resampled to 2048px JPEG before sending, where ComfyUI
+  sends up to 6000px — the difference is invisible at 720p and shows on 2.0 at
+  4k.
+
+  References ride inside the request as base64, which fal accepts on every
+  reference field. The set is refused above 8 MB, because Cloudflare stores no
+  gateway log above 10 MB and a call with no log is spend that reaches no
+  cockpit row. A few seconds of 720p footage is most of that budget, so the clip
+  slots are more than this ceiling will let you fill.
+
+  Renders take minutes — four seconds of 480p on 2.5 measured at 221s
+  synchronously — so the fal route submits to fal's queue and polls, which is
+  what fal's own clients do for these models. Cancel stops the wait. The
+  Cloudflare catalog route has no queue and holds the connection open instead.
+
 ### Video generation (Wavespeed)
 - **Sora 2** — text-to-video, image-to-video, Pro variants
 - **Veo 3.1** — text-to-video, image-to-video, reference-to-video, fast variants
@@ -382,6 +428,39 @@ key is consulted:
 | `SYMBIOTICA_AIG_TOKEN` | AI Gateway token, sent as `cf-aig-authorization`. Not a provider key — provider keys are stored in the gateway as BYOK and injected there. |
 | `ORDER_STUDIO` | The studio slug. Selects that studio's own stored provider key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
 | `SYMBIOTICA_AIG_SURFACE` | What kind of run this is, tagged alongside the studio. Optional, and `order` when unset, which is what every existing sandbox reports. A box that is not running orders should set its own value, or its spend joins the order totals under a label that reads correctly. |
+
+The Seedance node prefers fal, which is a passthrough provider like the two
+above and needs nothing beyond `SYMBIOTICA_AIG_BASE`, `SYMBIOTICA_AIG_TOKEN` and
+`ORDER_STUDIO` — the studio's fal key is stored in the gateway as BYOK and
+injected there. Its direct arm takes `FAL_KEY` or `FAL_API_KEY`.
+
+Its fall back is Cloudflare's own model catalog, reached at the account's
+`/ai/run` rather than through a provider path, because ByteDance has no
+passthrough slug of its own:
+
+| Variable | Content |
+|---|---|
+| `SYMBIOTICA_CF_ACCOUNT_ID` | The Cloudflare account tag whose `/ai/run` is called. |
+| `SYMBIOTICA_CF_API_TOKEN` | A Cloudflare API token, sent as `Authorization: Bearer`. **This is not the AI Gateway token and is a much broader credential** — it authenticates to the Cloudflare account rather than to one model vendor. Scope it to the minimum the catalog needs. |
+| `SYMBIOTICA_AIG_GATEWAY_ID` | Which gateway to route through, sent as `cf-aig-gateway-id`. Without it the call takes the account's default gateway, where its log lands somewhere nobody reads and the studio tag with it. |
+
+`ORDER_STUDIO` and `SYMBIOTICA_AIG_SURFACE` mean the same thing on this path and
+are equally required. All three of the variables above are required together;
+there is no personal-key fall back, because a catalog model has no provider
+endpoint of its own to call.
+
+**Spend on this path is not separable by studio.** Cloudflare consults only the
+`default` BYOK alias on its own AI endpoints, so whichever single ByteDance key
+is stored there pays for every studio. The `cf-aig-metadata` tag still rides on
+every call, so spend remains *attributable* in analytics — it is the paying key
+that is shared, not the accounting. That is a narrower gap than it sounds, but
+it is a real one, and it does not apply to the Gemini or Claude nodes.
+
+Every reply names the key that paid, and until a ByteDance key is stored under
+the gateway's `default` alias the answer is `keySource: Unified` — Cloudflare's
+own balance, outside the BYOK boundary entirely. The node logs a warning saying
+so on any render billed that way, because nothing else in the system would
+mention it and the render itself looks perfect.
 
 Setting the base without the token is an error, not a fall back: a call that
 succeeds on somebody's personal key while its spend leaves the gateway is a

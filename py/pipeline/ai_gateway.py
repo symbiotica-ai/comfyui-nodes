@@ -237,8 +237,15 @@ def header_secrets(headers) -> list:
     and the exact reason the strip is there. The two would disagree only in
     the case each of them exists to handle."""
     secrets = []
-    authorization = headers.get("cf-aig-authorization")
-    if authorization:
+    # Both gateway credentials: `cf-aig-authorization` on the passthrough arm
+    # and `Authorization` on the REST one. The second is a Cloudflare API
+    # token, which authenticates to the whole account rather than to one model
+    # vendor — leaking it into a toast is worse than leaking the provider key
+    # it stands in for.
+    for name in ("cf-aig-authorization", "Authorization"):
+        authorization = headers.get(name)
+        if not authorization:
+            continue
         # Both forms: a gateway may quote back the whole header or just the
         # token it could not verify.
         secrets.append(authorization)
@@ -276,3 +283,71 @@ def http_error(status, body: str, secrets=(), studio=None, alias=None,
     said = f" {remedy}." if remedy else ""
     failed = f"{service} request failed" if service else "Request failed"
     return f"{failed} ({status}){whose}:{said} {text}"
+
+
+# Cloudflare's own AI API, which is where the model catalog lives. Some
+# catalog models have no provider-passthrough slug at all — ByteDance's
+# Seedance among them — so for those there is no `{base}/{provider}` path to
+# route and this is the only way through the gateway.
+CF_API_BASE = "https://api.cloudflare.com/client/v4/accounts"
+
+
+def resolve_rest_transport(environ) -> Transport:
+    """The account's own /ai/run, routed through our gateway and tagged.
+
+    Unlike `resolve_transport` there is no second arm to fall back to. A
+    catalog model has no provider endpoint to call directly, so a box without
+    these three variables cannot make this call at all — and saying so is the
+    whole of the honest answer.
+
+    No `cf-aig-byok-alias`. Cloudflare consults only the `default` alias on
+    Unified Billing endpoints, so whatever single key is stored there pays for
+    every studio. Sending an alias would not change who pays; it would only
+    read, to anyone auditing this later, as a per-studio key that is not in
+    fact being used — which is the more expensive kind of wrong.
+
+    The studio still rides in `cf-aig-metadata`, so spend remains attributable
+    in analytics even though it is not separable by key. That distinction is
+    the one thing about this arm worth keeping straight."""
+    parts = {}
+    for name in ("SYMBIOTICA_CF_ACCOUNT_ID", "SYMBIOTICA_CF_API_TOKEN",
+                 "SYMBIOTICA_AIG_GATEWAY_ID"):
+        value = (environ.get(name) or "").strip()
+        if not value:
+            raise ValueError(
+                f"{name} is empty, so this box cannot reach the model catalog "
+                f"through the gateway. All three of SYMBIOTICA_CF_ACCOUNT_ID, "
+                f"SYMBIOTICA_CF_API_TOKEN and SYMBIOTICA_AIG_GATEWAY_ID come "
+                f"from the symbiotica-comfy-aigateway secret. There is no "
+                f"personal-key fallback here: a catalog model has no provider "
+                f"endpoint of its own to call.")
+        parts[name] = value
+    studio = (environ.get("ORDER_STUDIO") or "").strip()
+    if not studio:
+        # Same reasoning as the passthrough arm, and it binds harder here:
+        # that arm at least had an alias naming who paid. This one has only
+        # the metadata tag, so an untagged call is spend attributable to
+        # nobody by any route at all.
+        raise ValueError(
+            "ORDER_STUDIO is empty, so this call would be spend that reaches "
+            "no studio's row. On this path the metadata tag is the only thing "
+            "that attributes it — there is no key alias to fall back on.")
+    studio = usable_as_header(studio, "ORDER_STUDIO", quote_it=True)
+    token = usable_as_header(parts["SYMBIOTICA_CF_API_TOKEN"],
+                             "SYMBIOTICA_CF_API_TOKEN", quote_it=False)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        # Without this the call runs through the account's default gateway,
+        # where its log lands somewhere nobody reads and the studio tag with
+        # it.
+        # Quoted on failure, unlike the token: a gateway name is not a secret,
+        # and seeing the value is most of the diagnosis.
+        "cf-aig-gateway-id": usable_as_header(
+            parts["SYMBIOTICA_AIG_GATEWAY_ID"], "SYMBIOTICA_AIG_GATEWAY_ID",
+            quote_it=True),
+        "cf-aig-metadata": studio_tag(
+            studio, environ.get("SYMBIOTICA_AIG_SURFACE") or ""),
+        "Content-Type": "application/json",
+    }
+    url = f"{CF_API_BASE}/{parts['SYMBIOTICA_CF_ACCOUNT_ID']}/ai/run"
+    return Transport(url, headers, studio)
