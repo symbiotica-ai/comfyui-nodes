@@ -109,6 +109,15 @@ Wrappers around Wavespeed's hosted endpoints.
   no such parameter — asked for there it is refused rather than dropped, so the
   same graph never renders watermarked on one box and clean on another.
 
+  `auto_downscale` and `auto_upscale` do what they do on ComfyUI's node. A
+  reference clip has a pixel budget set by the model and the chosen resolution,
+  and an ordinary 1920x1080 clip is over it on every 2.0 model — 2,073,600
+  pixels against a ceiling of 927,408. With downscaling on such a clip is
+  re-encoded to fit, keeping its aspect ratio; with it off the clip goes as it
+  is and the provider refuses it. A clip already inside its budget is not
+  re-encoded at all. Upscaling is off, because enlarging a small clip adds no
+  detail it did not have.
+
   Two things ComfyUI's node has that this one does not: `output_format`, because
   fal writes mp4 and offers no such field; and `asset_1..30`, because the
   digital-character library is reachable only through ByteDance's own API.

@@ -95,6 +95,18 @@ def _model_inputs(label):
                     "video, for example replacing an object in it. The output "
                     "then keeps the source clip's own length and shape, and "
                     "the duration and ratio widgets are ignored."))
+    inputs.append(io.Boolean.Input(
+        "auto_downscale", default=True, optional=True,
+        tooltip="Shrink reference clips that are over the model's pixel "
+                "budget for the chosen resolution. An ordinary 1080p clip is "
+                "over it on every 2.0 model, so with this off such a clip is "
+                "simply refused. Aspect ratio is kept, and clips already "
+                "inside the budget are not re-encoded."))
+    inputs.append(io.Boolean.Input(
+        "auto_upscale", default=False, advanced=True, optional=True,
+        tooltip="Enlarge reference clips that fall under the model's minimum "
+                "pixel count. Aspect ratio is kept. Enlarging a small clip "
+                "adds no detail it did not have, which is why it is off."))
     inputs.append(_slots("images", io.Image.Input("reference_image"),
                          "image", limits.max_images))
     inputs.append(_slots("videos", io.Video.Input("reference_video"),
@@ -226,8 +238,10 @@ class SymbioticaSeedanceReference(io.ComfyNode):
         221s — and a synchronous call spends all of it holding a connection
         open, with no way to report progress and no way to notice a cancel."""
         fal.check_fal_can_carry(watermark)
-        clips = [fal.video_data_uri(video, label, Types.VideoContainer.MP4,
-                                    Types.VideoCodec.H264)
+        budget = fal.pixel_budget(label, model["resolution"])
+        clips = [fal.video_data_uri(
+                     video, label, Types.VideoContainer.MP4,
+                     Types.VideoCodec.H264, budget, _resizer(model, budget))
                  for video in videos]
         catalog.check_reference_size(images + clips + audios)
         values = dict(model)
@@ -310,6 +324,51 @@ def _await_job(transport, label):
         time.sleep(POLL_INTERVAL_S)
 
 
+def _resizer(model, budget):
+    """The re-encoder for reference clips, or None to leave them alone.
+
+    Which direction is allowed is the caller's choice: a clip over the ceiling
+    is only shrunk when auto_downscale is on, and one under the floor only
+    enlarged when auto_upscale is on. Off in the direction that matters means
+    the clip goes as it is, for the provider to judge."""
+    if not budget:
+        return None
+    down = model.get("auto_downscale", True)
+    up = model.get("auto_upscale", False)
+    if not down and not up:
+        return None
+
+    def resize(payload, width, height):
+        shrinking = width * height <= budget[1]
+        if (shrinking and not down) or (not shrinking and not up):
+            return payload
+        return _reencode(payload, width, height)
+
+    return resize
+
+
+def _reencode(payload: bytes, width: int, height: int) -> bytes:
+    """The clip at exactly this size, through ffmpeg.
+
+    Written to a file rather than piped: mp4 places its index by seeking, and
+    ffmpeg writing mp4 to a pipe either fails or produces a file nothing
+    plays."""
+    import subprocess
+    from . import _bins
+    with tempfile.TemporaryDirectory() as work:
+        source = os.path.join(work, "in.mp4")
+        target = os.path.join(work, "out.mp4")
+        with open(source, "wb") as handle:
+            handle.write(payload)
+        subprocess.run(
+            [_bins.FFMPEG, "-y", "-v", "error", "-i", source,
+             "-vf", f"scale={width}:{height}", "-c:v", "libx264",
+             "-pix_fmt", "yuv420p", "-c:a", "copy", target],
+            check=True, capture_output=True)
+        with open(target, "rb") as handle:
+            return handle.read()
+
+
 def _audio_seconds(audio) -> float:
     """How long one reference audio runs, from the waveform itself."""
     import numpy as np
@@ -389,17 +448,26 @@ def _wired(slots):
 
 
 def _fetch(url):
-    """The finished render, downloaded to a file ComfyUI can hand on."""
-    from comfy_api.latest import Input
+    """The finished render, downloaded to a file ComfyUI can hand on.
+
+    `InputImpl` holds the concrete video class. `Input.Video` is the abstract
+    VideoInput and carries no VideoFromFile at all, so reaching for it there
+    raised only after the render had been paid for and fetched."""
+    from comfy_api.latest import InputImpl
     handle, path = tempfile.mkstemp(suffix=".mp4")
     os.close(handle)
+    _download(url, path)
+    return InputImpl.VideoFromFile(path)
+
+
+def _download(url, path):
+    """The bytes at `url`, streamed to `path`."""
     with requests.get(url, stream=True, timeout=(
             ai_gateway.CONNECT_TIMEOUT_S, REQUEST_TIMEOUT_S)) as response:
         response.raise_for_status()
         with open(path, "wb") as out:
             for chunk in response.iter_content(chunk_size=1 << 20):
                 out.write(chunk)
-    return Input.Video.VideoFromFile(path)
 
 
 NODE_CLASS_MAPPINGS = {

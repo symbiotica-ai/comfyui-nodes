@@ -450,3 +450,87 @@ def test_a_failed_job_is_raised_rather_than_polled_forever():
     with pytest.raises(RuntimeError) as raised:
         fal.is_finished({"status": "FAILED", "error": "content policy"})
     assert "content policy" in str(raised.value)
+
+
+def test_the_pixel_budget_is_the_models_own_not_one_number_for_all():
+    """ByteDance keys the budget by model AND output resolution. The 2.0
+    family stops at 927,408 pixels — 834x1112 — where 2.5 takes eight million,
+    so the same clip is fine on one and refused on the other."""
+    assert fal.pixel_budget("Seedance 2.0", "720p") == (409_600, 927_408)
+    assert fal.pixel_budget("Seedance 2.0", "1080p") == (409_600, 2_073_600)
+    assert fal.pixel_budget("Seedance 2.5", "720p") == (409_600, 8_295_044)
+    assert fal.pixel_budget("Seedance 2.0 Mini", "480p") == (409_600, 927_408)
+
+
+def test_a_resolution_the_table_does_not_cover_asks_for_no_scaling():
+    """4k on 2.0 has no published budget. Guessing one would scale a clip on a
+    number nobody stated; leaving it alone lets the provider rule."""
+    assert fal.pixel_budget("Seedance 2.0", "4k") is None
+
+
+def test_an_ordinary_1080p_clip_is_over_budget_on_the_20_family():
+    """The case that makes this switch load-bearing: 1920x1080 is 2,073,600
+    pixels against a 927,408 ceiling, so an unscaled clip is simply refused."""
+    low, high = fal.pixel_budget("Seedance 2.0", "720p")
+    assert 1920 * 1080 > high
+
+
+def test_a_clip_inside_the_budget_is_left_alone():
+    assert fal.scale_for_budget(854, 480, (409_600, 927_408)) is None
+
+
+def test_an_oversized_clip_is_brought_under_the_ceiling_keeping_its_shape():
+    scaled = fal.scale_for_budget(1920, 1080, (409_600, 927_408))
+    assert scaled is not None
+    width, height = scaled
+    assert width * height <= 927_408
+    # Aspect kept within a pixel of 16:9, and both sides even for h264.
+    assert abs(width / height - 1920 / 1080) < 0.01
+    assert width % 2 == 0 and height % 2 == 0
+
+
+def test_an_undersized_clip_is_brought_up_to_the_floor():
+    scaled = fal.scale_for_budget(640, 360, (409_600, 927_408))
+    assert scaled is not None
+    width, height = scaled
+    assert width * height >= 409_600
+
+
+def test_scaling_never_moves_a_clip_past_the_far_bound():
+    """Raising a small clip to the floor must not push it over the ceiling,
+    which on a narrow budget is a real possibility rather than a theoretical
+    one."""
+    width, height = fal.scale_for_budget(320, 180, (409_600, 927_408))
+    assert 409_600 <= width * height <= 927_408
+
+
+def test_a_clip_in_budget_is_not_re_encoded_at_all():
+    """Re-encoding costs a generation of quality. A clip already inside the
+    budget is handed on as it came."""
+    calls = []
+    out = fal.fit_to_budget(b"original", (854, 480), (409_600, 927_408),
+                            resize=lambda *a: calls.append(a) or b"resized")
+    assert out == b"original"
+    assert calls == []
+
+
+def test_an_oversized_clip_is_re_encoded_at_the_size_that_fits():
+    sizes = []
+
+    def resize(payload, width, height):
+        sizes.append((width, height))
+        return b"resized"
+
+    out = fal.fit_to_budget(b"big", (1920, 1080), (409_600, 927_408),
+                            resize=resize)
+    assert out == b"resized"
+    width, height = sizes[0]
+    assert width * height <= 927_408
+
+
+def test_scaling_off_leaves_an_oversized_clip_for_the_provider_to_judge():
+    """With the switch off the clip goes as it is, which is what the official
+    node does too — the widget exists so the caller can choose."""
+    out = fal.fit_to_budget(b"big", (1920, 1080), (409_600, 927_408),
+                            resize=None)
+    assert out == b"big"

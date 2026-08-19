@@ -6,6 +6,23 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.29
+
+**The Seedance node hands its render back, and scales reference clips to fit.**
+Two things 2026.8.28 got wrong, both found by running it on a canvas.
+
+The node raised `AttributeError` on its very last line — the concrete video
+class lives in `InputImpl`, not on `Input.Video` — so every render was paid
+for, generated and downloaded, and then thrown away. Nothing before that line
+was at fault.
+
+`auto_downscale` and `auto_upscale` were missing. A reference clip has a pixel
+budget set by the model and the chosen resolution, and an ordinary 1920x1080
+clip is over it on every 2.0 model: 2,073,600 pixels against a ceiling of
+927,408. They were dropped back when the node had no reference clips at all,
+which made them moot, and never reinstated when the fal route brought clips
+back — so such a clip was refused with nothing in the node able to fix it.
+
 ## 2026.8.28
 
 **Seedance reference-to-video, billed to the studio rather than to a ComfyUI
