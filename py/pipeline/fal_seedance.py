@@ -202,15 +202,15 @@ def video_data_uri(video, label: str, container=MP4, codec=H264) -> str:
     the source bytes through would work for most clips and fail for the ones
     somebody had to convert in the first place."""
     from . import seedance_video as media
-    seconds = _seconds(video)
+    length = seconds(video)
     ceiling = LIMITS[label].max_reference_seconds
-    if seconds and seconds < media.MIN_REFERENCE_SECONDS:
+    if length and length < media.MIN_REFERENCE_SECONDS:
         raise ValueError(
-            f"A reference clip is {seconds:.1f}s. Seedance takes nothing under "
+            f"A reference clip is {length:.1f}s. Seedance takes nothing under "
             f"{media.MIN_REFERENCE_SECONDS}s.")
-    if seconds > ceiling:
+    if length > ceiling:
         raise ValueError(
-            f"A reference clip is {seconds:.1f}s, over the {ceiling}s "
+            f"A reference clip is {length:.1f}s, over the {ceiling}s "
             f"{label} takes. Trim it, or choose a model with more room.")
     buffer = io.BytesIO()
     video.save_to(buffer, format=container, codec=codec)
@@ -218,7 +218,7 @@ def video_data_uri(video, label: str, container=MP4, codec=H264) -> str:
             + base64.b64encode(buffer.getvalue()).decode("ascii"))
 
 
-def _seconds(video) -> float:
+def seconds(video) -> float:
     """How long the clip runs, or 0 when it will not say.
 
     A container the reader cannot seek gives no duration, and refusing the clip
@@ -228,3 +228,43 @@ def _seconds(video) -> float:
         return float(video.get_duration())
     except Exception:
         return 0.0
+
+
+# The one model that will run on a reference audio with nothing else, which is
+# the exception ComfyUI's own node makes and makes only here.
+AUDIO_ONLY_MODEL = "Seedance 2.5"
+
+
+def check_has_references(label: str, images: int, videos: int,
+                         audios: int) -> None:
+    """Raise unless something was actually wired in to reference.
+
+    Without this a reference node quietly becomes a text-to-video node, which
+    the pack already ships separately — and the render succeeds, so nobody
+    finds out they were using the wrong node."""
+    if images or videos:
+        return
+    if audios and label == AUDIO_ONLY_MODEL:
+        return
+    kinds = ("image, video or audio" if label == AUDIO_ONLY_MODEL
+             else "image or video")
+    raise ValueError(
+        f"{label} needs at least one reference {kinds} — that is what this "
+        f"node is for. For a video from the prompt alone, use a text-to-video "
+        f"node instead.")
+
+
+def check_total_seconds(label: str, lengths, kind: str) -> None:
+    """Raise if these references are over budget taken together.
+
+    Each clip inside its own bounds says nothing about the set: three five
+    second clips are individually fine and collectively over on some models.
+    Checked here because the alternative is discovering it after the whole
+    encoded set has crossed the wire."""
+    total = sum(lengths)
+    ceiling = LIMITS[label].max_reference_seconds
+    if total > ceiling:
+        raise ValueError(
+            f"The reference {kind}s run to {total:.1f}s together, over the "
+            f"{ceiling}s {label} takes across all of them. Each one is inside "
+            f"its own limit; it is the total that is over.")

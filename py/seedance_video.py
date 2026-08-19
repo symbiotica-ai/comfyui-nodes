@@ -169,12 +169,30 @@ class SymbioticaSeedanceReference(io.ComfyNode):
         # anywhere.
         arm = fal.chosen_arm(os.environ, has_key=_has_fal_key())
 
-        images = [catalog.image_data_uri(image)
-                  for image in to_pil(model.get("images"))]
-        videos = _wired(model.get("videos"))
-        audios = [catalog.audio_data_uri(audio, label)
-                  for audio in _wired(model.get("audios"))]
+        wired_images = to_pil(model.get("images"))
+        wired_videos = _wired(model.get("videos"))
+        wired_audios = _wired(model.get("audios"))
+        # Before any encoding: each reference costs a device copy and a full
+        # re-encode, and none of these checks needs the encoded bytes.
+        fal.check_has_references(label, len(wired_images), len(wired_videos),
+                                 len(wired_audios))
+        fal.check_total_seconds(label, [fal.seconds(v) for v in wired_videos],
+                                "clip")
+        fal.check_total_seconds(label, [_audio_seconds(a)
+                                        for a in wired_audios], "audio")
+
+        images = [catalog.image_data_uri(image) for image in wired_images]
+        videos = wired_videos
+        audios = [catalog.audio_data_uri(audio, label) for audio in wired_audios]
         if arm == "catalog":
+            if model.get("video_editing"):
+                # It needs a source clip, and this arm cannot carry one. Left
+                # unsaid it is simply ignored, and the render comes back the
+                # length the widgets asked for rather than the clip's.
+                raise ValueError(
+                    "video_editing needs a reference clip, and this box "
+                    "reaches Seedance through the Cloudflare catalog, which "
+                    "carries none. Give it the gateway's fal route.")
             fal.check_catalog_can_carry(label, len(images), len(videos),
                                         len(audios))
             return cls._through_catalog(label, model, seed, watermark,
@@ -220,6 +238,13 @@ class SymbioticaSeedanceReference(io.ComfyNode):
             # is ever visible.
             logging.warning("[Symbiotica] Seedance: %s", left_byok)
         return io.NodeOutput(_fetch(catalog.video_url(payload)))
+
+
+def _audio_seconds(audio) -> float:
+    """How long one reference audio runs, from the waveform itself."""
+    import numpy as np
+    waveform = np.asarray(audio["waveform"])
+    return waveform.shape[-1] / int(audio["sample_rate"])
 
 
 def _has_fal_key() -> bool:

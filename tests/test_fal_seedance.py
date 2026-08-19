@@ -258,3 +258,42 @@ def test_a_gateway_holding_no_fal_key_fails_rather_than_falling_back():
     said = ai_gateway.gateway_remedy('{"internalCode": 2040}')
     assert "no key stored" in said
     assert fal.chosen_arm(dict(GATEWAY, **CATALOG), has_key=False) == "fal"
+
+
+def test_a_reference_node_with_no_references_is_refused():
+    """ComfyUI's node raises "At least one reference image or video or asset is
+    required". Without this the reference node quietly becomes a text-to-video
+    node, which the pack ships separately."""
+    with pytest.raises(ValueError) as raised:
+        fal.check_has_references("Seedance 2.0", images=0, videos=0, audios=0)
+    assert "reference" in str(raised.value).lower()
+
+
+def test_25_alone_may_run_on_a_reference_audio_by_itself():
+    """The one exception ComfyUI's node makes, and it makes it only for 2.5."""
+    assert fal.check_has_references("Seedance 2.5", 0, 0, 1) is None
+    with pytest.raises(ValueError):
+        fal.check_has_references("Seedance 2.0", 0, 0, 1)
+
+
+def test_a_single_reference_of_any_kind_satisfies_it():
+    assert fal.check_has_references("Seedance 2.0", 1, 0, 0) is None
+    assert fal.check_has_references("Seedance 2.0", 0, 1, 0) is None
+
+
+def test_the_clips_are_measured_together_not_only_one_by_one():
+    """fal caps the combined duration, not just each clip. Three clips inside
+    the per-clip bound can be over the budget together, so checking them one at
+    a time lets the set through to fail after the whole upload."""
+    with pytest.raises(ValueError) as raised:
+        fal.check_total_seconds("Seedance 2.0", [5.0, 5.0, 6.0], kind="video")
+    assert "16.0" in str(raised.value)
+
+
+def test_a_set_inside_the_combined_budget_passes():
+    assert fal.check_total_seconds("Seedance 2.0", [5.0, 5.0], "video") is None
+
+
+def test_25_carries_a_longer_combined_budget_than_the_20_family():
+    assert fal.check_total_seconds("Seedance 2.5", [10.0, 10.0, 9.0],
+                                   "video") is None

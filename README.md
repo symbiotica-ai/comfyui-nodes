@@ -105,6 +105,13 @@ Wrappers around Wavespeed's hosted endpoints.
   sockets do not change — a graph is shared between boxes — so what the fall
   back cannot carry is refused by name at render time rather than hidden.
 
+  Two things ComfyUI's node has that this one does not: `output_format`, because
+  fal writes mp4 and offers no such field; and `asset_1..30`, because the
+  digital-character library is reachable only through ByteDance's own API.
+  Reference images are resampled to 2048px JPEG before sending, where ComfyUI
+  sends up to 6000px — the difference is invisible at 720p and shows on 2.0 at
+  4k.
+
   References ride inside the request as base64. The set is refused above 8 MB,
   because Cloudflare stores no gateway log above 10 MB and a call with no log is
   spend that reaches no cockpit row. A few seconds of 720p footage is most of
