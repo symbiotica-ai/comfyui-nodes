@@ -8,6 +8,7 @@ from comfy_api.latest import io
 from .pipeline import claude_text as core
 from .pipeline.reference_images import to_pil
 from .pipeline import ai_gateway
+from ._settings import gateway_environ
 
 
 def _model_inputs(label):
@@ -135,7 +136,7 @@ class SymbioticaClaude(io.ComfyNode):
         # First, because everything below it is wasted otherwise: the ladder
         # can reach a file on disk and the encoding runs once per reference.
         core.require_prompt(prompt)
-        transport = core.resolve_transport(os.environ, interactive_key)
+        transport = core.resolve_transport(gateway_environ(), interactive_key)
         body = core.request_body(
             prompt, core.image_blocks(to_pil(model.get("images")), model_id),
             model_id, max_tokens, system_prompt, thinking=thinking,

@@ -9,6 +9,7 @@ from comfy_api.latest import io
 from .pipeline import gemini_image as core
 from .pipeline.reference_images import to_pil
 from .pipeline import ai_gateway
+from ._settings import gateway_environ
 
 
 def _model_inputs(resolutions):
@@ -145,7 +146,7 @@ class SymbioticaGeminiImage(io.ComfyNode):
         # can reach a file on disk, and every reference costs a device copy
         # and three full-size temporaries before it is even a PIL image.
         core.require_prompt(prompt)
-        transport = core.resolve_transport(os.environ, model_id,
+        transport = core.resolve_transport(gateway_environ(), model_id,
                                            interactive_key)
         parts = (core.image_parts(to_pil(model.get("images")))
                  + core.file_parts(model.get("files")))

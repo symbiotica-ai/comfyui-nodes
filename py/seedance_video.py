@@ -12,6 +12,7 @@ from .pipeline import seedance_video as catalog
 from .pipeline import fal_seedance as fal
 from .pipeline.reference_images import to_pil, slot_order
 from .pipeline import ai_gateway
+from ._settings import gateway_environ
 
 # A 720p Seedance render is minutes of work and /ai/run holds the connection
 # open for all of it — background mode would need a public webhook this box has
@@ -189,7 +190,8 @@ class SymbioticaSeedanceReference(io.ComfyNode):
         # Before any encoding: the references cost a device copy and a full
         # re-encode apiece, and a box with no route configured cannot send them
         # anywhere.
-        arm = fal.chosen_arm(os.environ, has_key=_has_fal_key())
+        environ = gateway_environ()
+        arm = fal.chosen_arm(environ, has_key=_has_fal_key())
 
         wired_images = to_pil(model.get("images"))
         wired_videos = _wired(model.get("videos"))
@@ -223,14 +225,14 @@ class SymbioticaSeedanceReference(io.ComfyNode):
                     "video_editing needs a reference clip, and this box "
                     "reaches Seedance through the Cloudflare catalog, which "
                     "carries none. Give it the gateway's fal route.")
-            return cls._through_catalog(label, model, seed, watermark,
-                                        images, audios)
-        return cls._through_fal(label, model, seed, watermark, images,
-                                videos, audios, interactive_key)
+            return cls._through_catalog(environ, label, model, seed,
+                                        watermark, images, audios)
+        return cls._through_fal(environ, label, model, seed, watermark,
+                                images, videos, audios, interactive_key)
 
     @classmethod
-    def _through_fal(cls, label, model, seed, watermark, images, videos,
-                     audios, interactive_key) -> io.NodeOutput:
+    def _through_fal(cls, environ, label, model, seed, watermark, images,
+                     videos, audios, interactive_key) -> io.NodeOutput:
         """The route the node is for: the studio's own key, by alias.
 
         Submitted to fal's queue rather than its synchronous host. Thirty
@@ -251,7 +253,7 @@ class SymbioticaSeedanceReference(io.ComfyNode):
         body = fal.build_request(values, images, clips, audios, seed=seed)
 
         def aimed_at(target):
-            return fal.queue_transport(os.environ, target, interactive_key)
+            return fal.queue_transport(environ, target, interactive_key)
 
         submitted = _post(aimed_at(fal.queue_target(label)), body, "fal")
         fal.request_id(submitted)
@@ -260,10 +262,10 @@ class SymbioticaSeedanceReference(io.ComfyNode):
         return io.NodeOutput(_fetch(fal.video_url(finished)))
 
     @classmethod
-    def _through_catalog(cls, label, model, seed, watermark, images,
-                         audios) -> io.NodeOutput:
+    def _through_catalog(cls, environ, label, model, seed, watermark,
+                         images, audios) -> io.NodeOutput:
         """The fall back, where a shared key pays and clips cannot ride."""
-        transport = ai_gateway.resolve_rest_transport(os.environ)
+        transport = ai_gateway.resolve_rest_transport(environ)
         catalog.check_reference_size(images + audios)
         body = catalog.build_request(label, model, seed, watermark, images,
                                      audios)
@@ -377,12 +379,16 @@ def _audio_seconds(audio) -> float:
 
 
 def _has_fal_key() -> bool:
-    """Whether a personal fal key is reachable, without walking the ladder far.
+    """Whether a personal fal key is reachable, from Settings or the
+    environment.
 
     Only consulted on a box with no gateway, so the ladder's file read never
-    happens on the route that would ignore the answer."""
-    return bool((os.environ.get("FAL_KEY")
-                 or os.environ.get("FAL_API_KEY") or "").strip())
+    happens on the route that would ignore the answer. It has to read the same
+    Settings the key ladder does: a desktop box has nowhere else to put a key,
+    and a route dismissed as unreachable here fails claiming there is no way to
+    reach Seedance at all."""
+    from ._settings import resolve_key
+    return bool(resolve_key(["FAL_KEY", "FAL_API_KEY"]))
 
 
 def _is_ok(status) -> bool:
