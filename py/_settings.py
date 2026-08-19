@@ -111,13 +111,13 @@ def gateway_environ() -> dict:
     base = key_from_settings("SYMBIOTICA_AIG_BASE") or ""
     if not base:
         return environ
-    group = {name: (key_from_settings(name) or "")
-             for name in GATEWAY_SETTINGS}
-    group["SYMBIOTICA_AIG_BASE"] = base
+    group = dict({name: (key_from_settings(name) or "")
+                  for name in GATEWAY_SETTINGS},
+                 SYMBIOTICA_AIG_BASE=base)
     for name in GATEWAY_SETTINGS:
         if not group[name]:
             raise ValueError(
-                f"Settings \u2192 Symbiotica \u2192 AI Gateway has a gateway base "
+                f"Settings → Symbiotica → AI Gateway has a gateway base "
                 f"but no {name}. All three go together: a base on its own "
                 f"either fails asking for a credential this box does not hold, "
                 f"or bills spend that reaches no studio's row.")
