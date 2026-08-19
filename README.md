@@ -438,6 +438,33 @@ key is consulted:
 | `ORDER_STUDIO` | The studio slug. Selects that studio's own stored provider key (`cf-aig-byok-alias`) and tags the call so its spend can be grouped (`cf-aig-metadata`). Already set in order sandboxes. |
 | `SYMBIOTICA_AIG_SURFACE` | What kind of run this is, tagged alongside the studio. Optional, and `order` when unset, which is what every existing sandbox reports. A box that is not running orders should set its own value, or its spend joins the order totals under a label that reads correctly. |
 
+### On Comfy Desktop, where there is no environment
+
+Comfy Desktop is an Electron app that launches its own Python, so there is
+nowhere to put any of the variables above. **Settings → Symbiotica → AI
+Gateway** holds the same three — base URL, token, studio slug — and a box with
+them filled in routes every gateway node exactly as a sandbox does. The studio
+slug defaults to `comfy-desktop`; whatever it says must exist in the gateway as
+a BYOK alias, or every call fails with internal code 2040 naming it.
+
+The three are read as a group and only when the environment says nothing about
+the gateway at all:
+
+- An environment carrying `SYMBIOTICA_AIG_BASE` is used whole. A Settings token
+  pairing with a sandbox's base fails as code 2009, which reads as the gateway
+  rejecting our own credential and sends the reader to the wrong system.
+- An environment carrying `ORDER_STUDIO` and no base is a sandbox whose secret
+  did not populate, and still says so. Answering it with a desktop's own
+  credentials would let the render succeed while the studio's spend left its
+  own key.
+- A base filled in with either of the other two left empty is refused by name,
+  rather than routed on.
+
+Runs from here are tagged `surface: canvas` rather than `order`, so canvas
+spend does not join the order totals under a label that reads correctly. The
+per-provider keys in **Settings → Symbiotica → API Keys** — `FAL_KEY` among
+them — are ignored wherever a gateway route is configured.
+
 The Seedance node prefers fal, which is a passthrough provider like the two
 above and needs nothing beyond `SYMBIOTICA_AIG_BASE`, `SYMBIOTICA_AIG_TOKEN` and
 `ORDER_STUDIO` — the studio's fal key is stored in the gateway as BYOK and
