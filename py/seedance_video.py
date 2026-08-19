@@ -3,6 +3,7 @@
 import logging
 import os
 import tempfile
+import time
 
 import requests
 from comfy_api.latest import io, Types
@@ -16,7 +17,16 @@ from .pipeline import ai_gateway
 # open for all of it — background mode would need a public webhook this box has
 # not got. So the read timeout is sized for the longest render the node can ask
 # for rather than for a normal HTTP call.
-REQUEST_TIMEOUT_S = 900
+# How long a render may take before this node stops waiting for it. Measured:
+# four seconds of 480p on 2.5 took 221s, and the node offers thirty seconds at
+# 720p — so the ceiling is generous rather than tight.
+REQUEST_TIMEOUT_S = 3600
+# Each individual request is short now that the render happens behind the
+# queue: a submission, then a status read every few seconds.
+READ_TIMEOUT_S = 120
+# Long enough that a minutes-long render does not fill the gateway log with
+# polls, short enough that a finished render is picked up promptly.
+POLL_INTERVAL_S = 5
 
 
 LABEL_25 = "Seedance 2.5"
@@ -209,9 +219,13 @@ class SymbioticaSeedanceReference(io.ComfyNode):
     @classmethod
     def _through_fal(cls, label, model, seed, watermark, images, videos,
                      audios, interactive_key) -> io.NodeOutput:
-        """The route the node is for: the studio's own key, by alias."""
+        """The route the node is for: the studio's own key, by alias.
+
+        Submitted to fal's queue rather than its synchronous host. Thirty
+        seconds of 2.5 is minutes of work — a four-second 480p clip measured at
+        221s — and a synchronous call spends all of it holding a connection
+        open, with no way to report progress and no way to notice a cancel."""
         fal.check_fal_can_carry(watermark)
-        transport = fal.resolve_transport(os.environ, label, interactive_key)
         clips = [fal.video_data_uri(video, label, Types.VideoContainer.MP4,
                                     Types.VideoCodec.H264)
                  for video in videos]
@@ -221,8 +235,15 @@ class SymbioticaSeedanceReference(io.ComfyNode):
             values["ratio"] = "auto"
         values["duration"] = str(values["duration"])
         body = fal.build_request(values, images, clips, audios, seed=seed)
-        payload = _post(transport, body, "fal")
-        return io.NodeOutput(_fetch(fal.video_url(payload)))
+
+        def aimed_at(target):
+            return fal.queue_transport(os.environ, target, interactive_key)
+
+        submitted = _post(aimed_at(fal.queue_target(label)), body, "fal")
+        fal.request_id(submitted)
+        _await_job(aimed_at(fal.status_target(submitted)), label)
+        finished = _get(aimed_at(fal.result_target(submitted)), "fal")
+        return io.NodeOutput(_fetch(fal.video_url(finished)))
 
     @classmethod
     def _through_catalog(cls, label, model, seed, watermark, images,
@@ -242,6 +263,53 @@ class SymbioticaSeedanceReference(io.ComfyNode):
         return io.NodeOutput(_fetch(catalog.video_url(payload)))
 
 
+def _interrupted():
+    """Whether the user has pressed Cancel.
+
+    ComfyUI sets a flag and expects the node to notice; a node that never looks
+    runs to its own timeout, which here is the user watching a button they
+    already pressed for as long as the render takes."""
+    try:
+        from comfy import model_management
+        return model_management.processing_interrupted()
+    except Exception:
+        return False
+
+
+def _interrupted_base():
+    """Raised as ComfyUI's own interrupt type, which it logs quietly and does
+    not mark the node red for — a cancel reads as a cancel, not a failure."""
+    try:
+        from comfy.model_management import InterruptProcessingException
+        return InterruptProcessingException
+    except Exception:
+        return Exception
+
+
+class SeedanceInterrupted(_interrupted_base()):
+    """Raised when the user cancels while a render is being polled."""
+
+
+def _await_job(transport, label):
+    """Poll until fal says the render is done, or the user gives up.
+
+    The interval is generous because these renders are minutes long and each
+    poll is a gateway request that lands in the log like any other."""
+    deadline = time.monotonic() + REQUEST_TIMEOUT_S
+    while True:
+        if _interrupted():
+            raise SeedanceInterrupted(
+                f"Cancelled while waiting for the {label} render.")
+        if fal.is_finished(_get(transport, "fal")):
+            return
+        if time.monotonic() > deadline:
+            raise RuntimeError(
+                f"The {label} render was still running after "
+                f"{REQUEST_TIMEOUT_S}s. It may yet finish at fal; this node "
+                f"stopped waiting.")
+        time.sleep(POLL_INTERVAL_S)
+
+
 def _audio_seconds(audio) -> float:
     """How long one reference audio runs, from the waveform itself."""
     import numpy as np
@@ -258,8 +326,25 @@ def _has_fal_key() -> bool:
                  or os.environ.get("FAL_API_KEY") or "").strip())
 
 
+def _is_ok(status) -> bool:
+    """Whether this status carries an answer rather than a refusal.
+
+    Not just 200: fal answers a status read with 202 for as long as the job is
+    still running, which is most of the life of every render this node makes."""
+    return 200 <= status < 300
+
+
+def _get(transport, service):
+    """One read, told apart from a submission only by the verb."""
+    return _call(transport, service, body=None)
+
+
 def _post(transport, body, service):
     """One call, with every failure carrying the same account of it."""
+    return _call(transport, service, body)
+
+
+def _call(transport, service, body):
     def failure(status, text):
         return RuntimeError(ai_gateway.http_error(
             status, text,
@@ -269,15 +354,17 @@ def _post(transport, body, service):
             service=service))
 
     try:
-        response = requests.post(
-            transport.url, json=body, headers=transport.headers,
-            timeout=(ai_gateway.CONNECT_TIMEOUT_S, REQUEST_TIMEOUT_S))
+        send = requests.post if body is not None else requests.get
+        kwargs = {"json": body} if body is not None else {}
+        response = send(
+            transport.url, headers=transport.headers,
+            timeout=(ai_gateway.CONNECT_TIMEOUT_S, READ_TIMEOUT_S), **kwargs)
     except requests.RequestException as exc:
         # No response ever existed, so nothing downstream can add the context.
         # A bare ReadTimeout cannot be told apart from "the render is slow" and
         # "this box has no egress".
         raise failure("no response", f"{type(exc).__name__}: {exc}") from exc
-    if response.status_code != 200:
+    if not _is_ok(response.status_code):
         raise failure(response.status_code, response.text)
     try:
         return response.json()

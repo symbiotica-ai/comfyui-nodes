@@ -375,3 +375,78 @@ def test_the_catalog_takes_adaptive_on_the_model_that_has_it():
     assert fal.check_catalog_can_carry("Seedance 2.5", 1, 0, 0,
                                        resolution="720p", duration=5,
                                        ratio="adaptive") is None
+
+
+def test_the_queue_submits_to_the_endpoints_own_queue_url():
+    assert fal.queue_target("Seedance 2.5") == (
+        "https://queue.fal.run/bytedance/seedance-2.5/reference-to-video")
+
+
+# One real submission reply, trimmed. Note the URLs fal hands back drop the
+# `/reference-to-video` the job was submitted to — a status URL built from the
+# endpoint path instead of read from here answers 405.
+A_SUBMISSION = {
+    "status": "IN_QUEUE",
+    "request_id": "01a018bc-248a-76d1-b166-373b152a17fb",
+    "response_url": "https://queue.fal.run/bytedance/seedance-2.5/requests/01a018bc",
+    "status_url": "https://queue.fal.run/bytedance/seedance-2.5/requests/01a018bc/status",
+    "cancel_url": "https://queue.fal.run/bytedance/seedance-2.5/requests/01a018bc/cancel",
+}
+
+
+def test_the_status_and_result_are_taken_from_what_fal_answered():
+    """Constructed from the endpoint they are wrong: fal drops the model's
+    sub-path in the URLs it hands back, and the constructed form answers 405."""
+    assert fal.status_target(A_SUBMISSION) == A_SUBMISSION["status_url"]
+    assert fal.result_target(A_SUBMISSION) == A_SUBMISSION["response_url"]
+
+
+def test_a_submission_that_names_no_status_url_says_so():
+    with pytest.raises(RuntimeError):
+        fal.status_target({"request_id": "abc"})
+
+
+def test_the_gateway_carries_the_real_target_in_a_header():
+    """AI Gateway's fal passthrough takes the queue URL in `x-fal-target-url`
+    rather than in the path, so the gateway URL stays `/fal` and the studio's
+    key is still injected by alias."""
+    target = fal.queue_target("Seedance 2.5")
+    sent = fal.queue_transport(dict(GATEWAY), target, lambda: "unused")
+    assert sent.url == "https://gw.example.invalid/v1/a/g/fal"
+    assert sent.headers["x-fal-target-url"] == target
+    assert sent.headers["cf-aig-byok-alias"] == "example-studio"
+
+
+def test_without_a_gateway_the_queue_url_is_called_directly():
+    sent = fal.queue_transport({}, fal.queue_target("Seedance 2.0"),
+                               lambda: "fal-key-not-a-real-one")
+    assert sent.url == ("https://queue.fal.run/bytedance/seedance-2.0/"
+                        "reference-to-video")
+    assert sent.headers["Authorization"] == "Key fal-key-not-a-real-one"
+
+
+def test_the_request_id_is_read_from_what_the_queue_answers():
+    assert fal.request_id({"request_id": "abc", "status": "IN_QUEUE"}) == "abc"
+
+
+def test_a_submission_that_names_no_request_says_what_came_back():
+    with pytest.raises(RuntimeError) as raised:
+        fal.request_id({"detail": "rejected"})
+    assert "rejected" in str(raised.value)
+
+
+def test_a_completed_run_is_recognised_as_finished():
+    assert fal.is_finished({"status": "COMPLETED"}) is True
+
+
+def test_a_queued_or_running_job_is_not_finished():
+    assert fal.is_finished({"status": "IN_QUEUE"}) is False
+    assert fal.is_finished({"status": "IN_PROGRESS"}) is False
+
+
+def test_a_failed_job_is_raised_rather_than_polled_forever():
+    """Without this the loop waits out the whole timeout on a job fal has
+    already given up on, and the error the user sees is a timeout."""
+    with pytest.raises(RuntimeError) as raised:
+        fal.is_finished({"status": "FAILED", "error": "content policy"})
+    assert "content policy" in str(raised.value)

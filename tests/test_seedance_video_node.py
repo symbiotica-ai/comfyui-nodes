@@ -167,3 +167,13 @@ def test_each_arm_can_build_a_request_from_what_the_node_actually_sends(
     if fal_values["ratio"] == "adaptive":
         fal_values["ratio"] = "auto"
     assert fal.build_request(fal_values, ["i"], [], [])["prompt"] == "a cat"
+
+
+def test_a_status_poll_answering_202_is_not_read_as_a_failure(node_module):
+    """fal answers a status read with 202 while the job is still running. Read
+    as a failure the node dies on its first poll of every render that does not
+    finish instantly — which is every render."""
+    assert node_module._is_ok(202)
+    assert node_module._is_ok(200)
+    assert not node_module._is_ok(400)
+    assert not node_module._is_ok(500)

@@ -309,3 +309,77 @@ def check_total_seconds(label: str, lengths, kind: str) -> None:
             f"The reference {kind}s run to {total:.1f}s together, over the "
             f"{ceiling}s {label} takes across all of them. Each one is inside "
             f"its own limit; it is the total that is over.")
+
+
+# fal's queue host. The synchronous host holds the connection for the whole
+# render, and a thirty-second 2.5 clip takes long enough that fal's own clients
+# use the queue for these models rather than treating it as an optimisation.
+QUEUE_BASE = "https://queue.fal.run"
+
+FINISHED = "COMPLETED"
+# Everything else fal reports is either still running or already lost.
+RUNNING = ("IN_QUEUE", "IN_PROGRESS")
+
+
+def queue_target(label: str) -> str:
+    """Where a job for this model is submitted."""
+    return f"{QUEUE_BASE}/{ENDPOINTS[label]}"
+
+
+def status_target(submitted: dict) -> str:
+    """Where to ask how the job is going, as fal itself named it.
+
+    Read from the reply rather than built from the endpoint: fal drops the
+    model's sub-path in the URLs it hands back, so a constructed
+    `/reference-to-video/requests/{id}/status` answers 405."""
+    return _named(submitted, "status_url")
+
+
+def result_target(submitted: dict) -> str:
+    """Where the finished render will be, as fal itself named it."""
+    return _named(submitted, "response_url")
+
+
+def _named(submitted: dict, key: str) -> str:
+    found = submitted.get(key)
+    if found:
+        return found
+    raise RuntimeError(
+        f"fal's reply carries no {key}, so there is nowhere to follow this "
+        f"job: {submitted}")
+
+
+def queue_transport(environ, target: str, interactive_key):
+    """A transport aimed at one fal URL, through the gateway or straight at it.
+
+    The gateway's fal passthrough takes the real destination in
+    `x-fal-target-url` rather than in the path, so the URL stays `{base}/fal`
+    and the studio's key is still injected by alias. Without a gateway the
+    target is simply the URL."""
+    return ai_gateway.resolve_transport(
+        environ, PROVIDER, "", interactive_key,
+        ai_gateway.DirectArm(target, "The fal API key",
+                             lambda key: {"Authorization": f"Key {key}"}),
+        extra_headers={"x-fal-target-url": target})
+
+
+def request_id(body: dict) -> str:
+    """The id of the job just submitted, or what came back instead."""
+    found = body.get("request_id")
+    if found:
+        return found
+    raise RuntimeError(f"fal accepted no job for this request: {body}")
+
+
+def is_finished(body: dict) -> bool:
+    """Whether the job is done, raising if fal has given up on it.
+
+    A failed job left to the polling loop would wait out the whole timeout and
+    then report a timeout, which sends the reader looking at the network rather
+    than at the refusal fal already sent."""
+    status = body.get("status")
+    if status == FINISHED:
+        return True
+    if status in RUNNING:
+        return False
+    raise RuntimeError(f"fal stopped working on this render: {body}")

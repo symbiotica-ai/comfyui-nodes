@@ -122,9 +122,10 @@ Wrappers around Wavespeed's hosted endpoints.
   cockpit row. A few seconds of 720p footage is most of that budget, so the clip
   slots are more than this ceiling will let you fill.
 
-  A render holds the connection open for its whole length — a four-second 480p
-  Mini clip took a little over two minutes — so the node waits rather than
-  polls, and its read timeout is sized for the longest render it can ask for.
+  Renders take minutes — four seconds of 480p on 2.5 measured at 221s
+  synchronously — so the fal route submits to fal's queue and polls, which is
+  what fal's own clients do for these models. Cancel stops the wait. The
+  Cloudflare catalog route has no queue and holds the connection open instead.
 
 ### Video generation (Wavespeed)
 - **Sora 2** — text-to-video, image-to-video, Pro variants
