@@ -103,6 +103,19 @@ def resolve_transport(environ, provider: str, path: str,
                 f"token is a bearer credential for this studio's whole spend "
                 f"and would cross the wire in the clear."
             )
+        # Cloudflare's dashboard shows the OpenAI-compatibility URL, and it
+        # is one copy button away from the one every node here wants. Sent as
+        # it stands, each node appends its own provider and the gateway
+        # answers 2019 naming the compatibility endpoint — never the field
+        # that has to change, which on a desktop box is a text input its owner
+        # is looking straight at.
+        root = base.split(COMPAT_PATH)[0]
+        if root != base:
+            raise ValueError(
+                f"SYMBIOTICA_AIG_BASE ends in {COMPAT_PATH}, which is "
+                f"Cloudflare's OpenAI-compatibility endpoint. These nodes each "
+                f"append their own provider, so the base has to stop at the "
+                f"gateway: {root}")
         token = (environ.get("SYMBIOTICA_AIG_TOKEN") or "").strip()
         if not token:
             raise ValueError(
@@ -150,6 +163,11 @@ def resolve_transport(environ, provider: str, path: str,
     headers.update(extra_headers or {})
     return Transport(direct.base + path, headers, None)
 
+
+# Cloudflare's OpenAI drop-in endpoint. It hangs off the same gateway these
+# nodes route through, which is why it is a base somebody arrives at honestly
+# and why the wrong one has to be named rather than merely refused.
+COMPAT_PATH = "/compat/chat/completions"
 
 DEFAULT_SURFACE = "order"
 

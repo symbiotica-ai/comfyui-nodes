@@ -26,10 +26,12 @@ const GATEWAY = [
     {
         env: "SYMBIOTICA_AIG_BASE",
         name: "Gateway base URL",
-        tooltip: "The AI Gateway endpoint WITHOUT a provider slug, e.g. "
+        tooltip: "The AI Gateway endpoint, stopping at the gateway name: "
             + "https://gateway.ai.cloudflare.com/v1/<account>/<gateway> — each "
-            + "node appends its own provider. Leave empty to send every call "
-            + "straight to the provider on a personal key instead.",
+            + "node appends its own provider. NOT the OpenAI-compatibility "
+            + "URL Cloudflare's dashboard offers alongside it; anything ending "
+            + "in /compat/chat/completions is refused. Leave empty to send "
+            + "every call straight to the provider on a personal key instead.",
     },
     {
         env: "SYMBIOTICA_AIG_TOKEN",

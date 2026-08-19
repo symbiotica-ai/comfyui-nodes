@@ -684,3 +684,35 @@ def test_an_unusable_credential_names_both_places_it_could_live():
     message = str(err.value)
     assert "Settings" in message
     assert "secret" in message
+
+
+def test_a_base_pasted_from_the_compatibility_page_is_refused():
+    """Cloudflare's dashboard shows the OpenAI-compatibility URL, and it is one
+    copy button away from the one every node here wants. Left to go out, it
+    reaches the gateway as `/compat/chat/completions/<provider>` and comes back
+    as internal code 2019 — which names the compatibility endpoint, not the
+    field that has to change."""
+    compat = ("https://gateway.ai.cloudflare.com/v1/acct/gw"
+              "/compat/chat/completions")
+    with pytest.raises(ValueError) as err:
+        ai_gateway.resolve_transport(
+            {"SYMBIOTICA_AIG_BASE": compat,
+             "SYMBIOTICA_AIG_TOKEN": "a-token", "ORDER_STUDIO": "a-studio"},
+            "fal", "", lambda: "unused",
+            ai_gateway.DirectArm("https://fal.invalid", "The fal API key",
+                                 lambda key: {"Authorization": f"Key {key}"}))
+    message = str(err.value)
+    assert "/compat/chat/completions" in message
+    assert "https://gateway.ai.cloudflare.com/v1/acct/gw" in message
+
+
+def test_the_bare_gateway_base_is_still_accepted():
+    """The guard must not reach a base that is simply correct."""
+    base = "https://gateway.ai.cloudflare.com/v1/acct/gw"
+    transport = ai_gateway.resolve_transport(
+        {"SYMBIOTICA_AIG_BASE": base, "SYMBIOTICA_AIG_TOKEN": "a-token",
+         "ORDER_STUDIO": "a-studio"},
+        "fal", "", lambda: "unused",
+        ai_gateway.DirectArm("https://fal.invalid", "The fal API key",
+                             lambda key: {"Authorization": f"Key {key}"}))
+    assert transport.url == f"{base}/fal"

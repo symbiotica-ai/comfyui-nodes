@@ -22,6 +22,13 @@ Settings token can never pair with a sandbox's base; an environment carrying
 not populate, rather than answered with a desktop's own credentials. A base
 filled in with either of the other two left empty is refused by name.
 
+A base pasted from Cloudflare's OpenAI-compatibility page is refused by name.
+Each node appends its own provider, so a base ending in
+`/compat/chat/completions` reaches the gateway as
+`/compat/chat/completions/<provider>` and comes back as internal code 2019 —
+which names the compatibility endpoint rather than the field that has to
+change.
+
 Runs from a desktop box are tagged `surface: canvas`, so canvas spend does not
 join the order totals. `FAL_KEY` is offered in Settings alongside the other
 provider keys, and the Seedance node's route choice now consults it there —
