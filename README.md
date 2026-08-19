@@ -423,13 +423,14 @@ Two ways, checked in this order (after any per-node `api_key` widget):
 | `WAVESPEED_API_KEY` | Wavespeed (image + video) |
 | `ELEVENLABS_API_KEY` | ElevenLabs (sound effects) |
 | `SUBMAGIC_API_KEY` | Submagic (captions) |
+| `FAL_KEY` | fal.ai, for the Seedance node's direct arm (`FAL_API_KEY` also accepted) |
 | `GOOGLE_API_KEY` | Google Speech-to-Text, and the Gemini image node's second choice after `GEMINI_API_KEY` |
 
 Per-node `api_key` widget overrides the env var.
 
-**The Gemini and Claude nodes are the exception.** On a box that carries
-these two, every one of their calls goes through the gateway and no personal
-key is consulted:
+**The Claude, Gemini and Seedance nodes are the exception.** On a box that
+carries these, every one of their calls goes through the gateway and no
+personal key is consulted:
 
 | Variable | Content |
 |---|---|
