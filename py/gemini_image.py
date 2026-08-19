@@ -1,6 +1,5 @@
 # ABOUTME: Gemini image node — a prompt and up to fourteen reference images
 # ABOUTME: become a render, routed through Cloudflare AI Gateway when configured.
-import os
 
 import numpy as np
 import requests

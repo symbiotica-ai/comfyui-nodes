@@ -170,7 +170,7 @@ def run_execute(node_module, monkeypatch, response, env=None, **kwargs):
         return response
 
     monkeypatch.setattr(node_module.requests, "post", fake_post)
-    monkeypatch.setattr(node_module.os, "environ", env or {})
+    monkeypatch.setattr(os, "environ", env or {})
     call = dict(prompt="describe this", seed=0, api_key="an-anthropic-key")
     # The per-model inputs arrive inside the combo's value rather than as
     # keywords of their own, so a caller still names them flatly and they are
@@ -305,7 +305,7 @@ def test_a_call_that_never_reached_the_gateway_still_names_the_studio(
         raise node_module.requests.ConnectTimeout("timed out")
 
     monkeypatch.setattr(node_module.requests, "post", explode)
-    monkeypatch.setattr(node_module.os, "environ", dict(GATEWAY_ENV))
+    monkeypatch.setattr(os, "environ", dict(GATEWAY_ENV))
     with pytest.raises(RuntimeError) as caught:
         node_module.SymbioticaClaude.execute(
             prompt="describe this", seed=0,
@@ -322,7 +322,7 @@ def test_the_prompt_is_checked_before_the_key_ladder_is_walked(node_module,
         raise AssertionError("a request was built for a blank prompt")
 
     monkeypatch.setattr(node_module.requests, "post", never)
-    monkeypatch.setattr(node_module.os, "environ", {})
+    monkeypatch.setattr(os, "environ", {})
     with pytest.raises(ValueError, match="prompt is required"):
         node_module.SymbioticaClaude.execute(
             prompt="   ", seed=0, model=chosen_model(max_tokens=4096))

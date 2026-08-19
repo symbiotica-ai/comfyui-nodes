@@ -83,17 +83,14 @@ def test_a_base_without_its_token_names_the_field_to_fill(settings):
     assert "symbiotica-comfy-aigateway" not in message
 
 
-def test_a_base_without_a_studio_names_the_field_to_fill(settings):
-    # The field carries a default, so an empty one means somebody cleared it.
-    # Left alone it reaches the gateway arm's own refusal, which talks about an
-    # order sandbox setting it alongside the secret.
+def test_a_gateway_route_never_leaves_the_studio_empty(settings):
+    # Whatever the field says or fails to say, a call that reaches the gateway
+    # carries a studio: the alias picks whose stored key pays, and the tag is
+    # the only thing that attributes the spend to anyone.
     settings["Symbiotica.SYMBIOTICA_AIG_BASE"] = "https://gw.example/v1/acct/gw"
     settings["Symbiotica.SYMBIOTICA_AIG_TOKEN"] = "tok-from-settings"
-    with pytest.raises(ValueError) as err:
-        gateway_environ()
-    message = str(err.value)
-    assert "Settings" in message
-    assert "ORDER_STUDIO" in message
+    settings["Symbiotica.ORDER_STUDIO"] = "   "
+    assert gateway_environ()["ORDER_STUDIO"].strip() != ""
 
 
 def test_a_desktop_render_is_not_counted_as_an_order(settings):
@@ -161,3 +158,29 @@ def test_no_gateway_node_asks_the_bare_environment_where_to_route():
                 offenders.append(f"{path.name}:{number}: {line.strip()}")
     assert offenders == [], (
         "these route on the bare environment:\n" + "\n".join(offenders))
+
+
+def test_the_studio_slug_falls_back_to_its_default(settings):
+    """ComfyUI writes a setting into comfy.settings.json only when somebody
+    EDITS it — registering a field with a default writes nothing. So a default
+    that lives only in the Settings UI is a field that reads as filled in and
+    is invisible here, and the refusal below would name a field the reader can
+    see already has a value in it."""
+    settings["Symbiotica.SYMBIOTICA_AIG_BASE"] = "https://gw.example/v1/acct/gw"
+    settings["Symbiotica.SYMBIOTICA_AIG_TOKEN"] = "tok-from-settings"
+    assert gateway_environ()["ORDER_STUDIO"] == "comfy-desktop"
+
+
+def test_the_two_languages_agree_on_that_default():
+    """The default is a contract term like the ids are. Spelled differently on
+    the two sides, the field shows one slug and the call bills another — and
+    a BYOK alias that does not exist fails every call with code 2040."""
+    import pathlib
+    import re
+    source = (pathlib.Path(__file__).parent.parent
+              / "web" / "js" / "symbiotica_settings.js").read_text()
+    shown = re.search(
+        r'env:\s*"ORDER_STUDIO".*?defaultValue:\s*"([^"]*)"',
+        source, re.S)
+    assert shown, "the studio field declares no default"
+    assert shown.group(1) == _settings.DEFAULT_STUDIO

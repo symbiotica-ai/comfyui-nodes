@@ -92,6 +92,13 @@ GATEWAY_SETTINGS = ("SYMBIOTICA_AIG_BASE", "SYMBIOTICA_AIG_TOKEN",
 # analytics, where it must not be counted as an order.
 CANVAS_SURFACE = "canvas"
 
+# The BYOK alias a desktop box bills when nobody names another. It lives here
+# rather than only in the Settings UI because ComfyUI writes a setting into
+# comfy.settings.json only when somebody EDITS it — a field registered with a
+# default writes nothing, so a default declared only over there is one this
+# side can never read. The two spellings are held together by a test.
+DEFAULT_STUDIO = "comfy-desktop"
+
 
 def gateway_environ() -> dict:
     """`os.environ`, plus the gateway config the Settings UI holds.
@@ -114,6 +121,7 @@ def gateway_environ() -> dict:
     group = dict({name: (key_from_settings(name) or "")
                   for name in GATEWAY_SETTINGS},
                  SYMBIOTICA_AIG_BASE=base)
+    group["ORDER_STUDIO"] = group["ORDER_STUDIO"] or DEFAULT_STUDIO
     for name in GATEWAY_SETTINGS:
         if not group[name]:
             raise ValueError(

@@ -155,12 +155,14 @@ def chosen_arm(environ, has_key: bool) -> str:
         return "fal"
     raise ValueError(
         "This box has no way to reach Seedance. Either give it "
-        "SYMBIOTICA_AIG_BASE and SYMBIOTICA_AIG_TOKEN from the "
-        "symbiotica-comfy-aigateway secret, which routes through fal on the "
-        "studio's own key, or a personal fal key on the node or in the "
-        "environment — or SYMBIOTICA_CF_ACCOUNT_ID, SYMBIOTICA_CF_API_TOKEN "
-        "and SYMBIOTICA_AIG_GATEWAY_ID for the Cloudflare catalog, which is "
-        "the poorer route and bills a shared key.")
+        "SYMBIOTICA_AIG_BASE and SYMBIOTICA_AIG_TOKEN — from the "
+        "symbiotica-comfy-aigateway secret on a sandbox, or under Settings → "
+        "Symbiotica → AI Gateway on a box with no environment to set — which "
+        "routes through fal on the studio's own key, or a personal fal key "
+        "under Settings → Symbiotica → API Keys or in the environment — or "
+        "SYMBIOTICA_CF_ACCOUNT_ID, SYMBIOTICA_CF_API_TOKEN and "
+        "SYMBIOTICA_AIG_GATEWAY_ID for the Cloudflare catalog, which is the "
+        "poorer route and bills a shared key.")
 
 
 def check_fal_can_carry(watermark: bool) -> None:

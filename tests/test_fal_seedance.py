@@ -534,3 +534,12 @@ def test_scaling_off_leaves_an_oversized_clip_for_the_provider_to_judge():
     out = fal.fit_to_budget(b"big", (1920, 1080), (409_600, 927_408),
                             resize=None)
     assert out == b"big"
+
+
+def test_a_box_with_nothing_configured_is_told_where_it_can_put_it():
+    """This is now reachable on a desktop box, where the secret it names does
+    not exist and the Settings UI it does not name is the only channel there
+    is."""
+    with pytest.raises(ValueError) as err:
+        fal.chosen_arm({}, has_key=False)
+    assert "Settings" in str(err.value)

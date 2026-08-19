@@ -382,11 +382,9 @@ def _has_fal_key() -> bool:
     """Whether a personal fal key is reachable, from Settings or the
     environment.
 
-    Only consulted on a box with no gateway, so the ladder's file read never
-    happens on the route that would ignore the answer. It has to read the same
-    Settings the key ladder does: a desktop box has nowhere else to put a key,
-    and a route dismissed as unreachable here fails claiming there is no way to
-    reach Seedance at all."""
+    It has to read the same Settings the key ladder does: a desktop box has
+    nowhere else to put a key, and a route dismissed as unreachable here fails
+    claiming there is no way to reach Seedance at all."""
     from ._settings import resolve_key
     return bool(resolve_key(["FAL_KEY", "FAL_API_KEY"]))
 

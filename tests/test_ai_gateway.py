@@ -665,3 +665,22 @@ def test_a_gateway_id_with_a_stray_newline_is_refused_before_it_is_sent():
     with pytest.raises(ValueError) as raised:
         ai_gateway.resolve_rest_transport(environ)
     assert "SYMBIOTICA_AIG_GATEWAY_ID" in str(raised.value)
+
+
+def test_a_rejected_credential_names_both_places_it_could_live():
+    """Code 2009 is the gateway refusing our own token. On a sandbox that token
+    comes from a secret; on a desktop box it was typed into Settings, and a
+    remedy naming only the secret sends its owner to a system they have no
+    access to."""
+    said = ai_gateway.gateway_remedy(json.dumps({"internalCode": 2009}))
+    assert "Settings" in said
+    assert "symbiotica-comfy-aigateway" in said
+
+
+def test_an_unusable_credential_names_both_places_it_could_live():
+    with pytest.raises(ValueError) as err:
+        ai_gateway.usable_as_header("tok\nen", "SYMBIOTICA_AIG_TOKEN",
+                                    quote_it=False)
+    message = str(err.value)
+    assert "Settings" in message
+    assert "secret" in message

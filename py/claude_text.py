@@ -1,6 +1,5 @@
 # ABOUTME: Claude text node — a prompt and up to twenty reference images become
 # ABOUTME: an answer, routed through Cloudflare AI Gateway when configured.
-import os
 
 import requests
 from comfy_api.latest import io

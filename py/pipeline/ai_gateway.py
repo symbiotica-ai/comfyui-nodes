@@ -186,7 +186,8 @@ def usable_as_header(value: str, source: str, quote_it: bool) -> str:
         shown = f": {value!r}" if quote_it else ""
         raise ValueError(
             f"{source} contains characters an HTTP header cannot carry{shown}. "
-            f"Check the secret for a stray newline or a truncated paste.")
+            f"Check wherever this box keeps it — the secret, or Settings → "
+            f"Symbiotica — for a stray newline or a truncated paste.")
     return value
 
 
@@ -198,7 +199,9 @@ GATEWAY_REMEDIES = {
     2040: ("this studio has no key stored in the gateway — add one under the "
            "studio's slug as its BYOK alias"),
     2009: ("the gateway rejected our own credential — check "
-           "SYMBIOTICA_AIG_TOKEN in the symbiotica-comfy-aigateway secret"),
+           "SYMBIOTICA_AIG_TOKEN, in the symbiotica-comfy-aigateway secret on "
+           "a sandbox or under Settings → Symbiotica → AI Gateway on a box "
+           "with no environment to set"),
     # Unlike the other two this is not only a failure. Cloudflare's documented
     # credential precedence is request key, then stored BYOK key by alias, then
     # Cloudflare's own credentials billed to the account balance — so with no
