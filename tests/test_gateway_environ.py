@@ -122,3 +122,24 @@ def test_an_unconfigured_box_is_left_exactly_as_it_was(settings, monkeypatch):
     environ = gateway_environ()
     assert environ["ANTHROPIC_API_KEY"] == "personal"
     assert "SYMBIOTICA_AIG_BASE" not in environ
+
+
+def test_the_settings_ui_offers_every_field_the_resolver_reads():
+    """The setting id is the whole contract between the two languages: the UI
+    writes `Symbiotica.<NAME>` into comfy.settings.json and this module reads
+    it back by the same string. A name in one and not the other is a field that
+    accepts what you type and a box that behaves as though you typed nothing."""
+    import pathlib
+    source = (pathlib.Path(__file__).parent.parent
+              / "web" / "js" / "symbiotica_settings.js").read_text()
+    for name in _settings.GATEWAY_SETTINGS:
+        assert f'"{name}"' in source, f"{name} has no field in the Settings UI"
+
+
+def test_the_settings_ui_offers_the_fal_key_the_seedance_node_asks_for():
+    """Seedance's direct arm resolves FAL_KEY through the same ladder as every
+    other provider key, so a box with no gateway needs somewhere to put one."""
+    import pathlib
+    source = (pathlib.Path(__file__).parent.parent
+              / "web" / "js" / "symbiotica_settings.js").read_text()
+    assert '"FAL_KEY"' in source
