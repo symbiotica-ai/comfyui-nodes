@@ -177,3 +177,43 @@ def test_a_status_poll_answering_202_is_not_read_as_a_failure(node_module):
     assert node_module._is_ok(200)
     assert not node_module._is_ok(400)
     assert not node_module._is_ok(500)
+
+
+def test_every_model_offers_the_scaling_switches_comfyui_offers(node_module):
+    """ComfyUI's node carries both on every reference model, and they are not
+    cosmetic: an ordinary 1080p clip is over the pixel budget on the whole 2.0
+    family, so without auto_downscale it is simply refused."""
+    for label in ("Seedance 2.5", "Seedance 2.0", "Seedance 2.0 Fast",
+                  "Seedance 2.0 Mini"):
+        offered = widgets(node_module, label)
+        assert "auto_downscale" in offered, label
+        assert "auto_upscale" in offered, label
+
+
+def test_the_switches_open_the_way_comfyuis_own_node_opens_them(node_module):
+    """Downscaling on, because the common case needs it; upscaling off,
+    because enlarging a small clip adds no detail and can cost quality."""
+    assert default_of(node_module, "Seedance 2.5", "auto_downscale") is True
+    assert default_of(node_module, "Seedance 2.5", "auto_upscale") is False
+
+
+def test_the_finished_video_is_wrapped_with_the_type_comfyui_hands_out(
+        node_module, monkeypatch, tmp_path):
+    """`Input.Video` is the abstract VideoInput; the concrete class lives in
+    `InputImpl`. Reaching for VideoFromFile on the wrong one raised
+    AttributeError after the render had already been paid for and downloaded —
+    on the very last line of the node."""
+    import sys, types
+    made = {}
+    impl = types.SimpleNamespace(
+        VideoFromFile=lambda path: made.setdefault("path", path))
+    monkeypatch.setitem(sys.modules, "comfy_api",
+                        types.ModuleType("comfy_api"))
+    latest = sys.modules["comfy_api.latest"]
+    monkeypatch.setattr(latest, "InputImpl", impl, raising=False)
+    clip = tmp_path / "out.mp4"
+    clip.write_bytes(b"mp4")
+    monkeypatch.setattr(node_module, "_download",
+                        lambda url, path: clip.write_bytes(b"mp4"))
+    node_module._fetch("https://example.invalid/out.mp4")
+    assert made["path"].endswith(".mp4")

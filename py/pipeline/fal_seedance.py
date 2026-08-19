@@ -235,7 +235,8 @@ MP4 = "mp4"
 H264 = "h264"
 
 
-def video_data_uri(video, label: str, container=MP4, codec=H264) -> str:
+def video_data_uri(video, label: str, container=MP4, codec=H264,
+                   budget=None, resize=None) -> str:
     """One reference clip as a data URI.
 
     Re-encoded to h264 in mp4 whatever it arrived as: a ComfyUI VIDEO may hold
@@ -255,8 +256,21 @@ def video_data_uri(video, label: str, container=MP4, codec=H264) -> str:
             f"{label} takes. Trim it, or choose a model with more room.")
     buffer = io.BytesIO()
     video.save_to(buffer, format=container, codec=codec)
+    payload = fit_to_budget(buffer.getvalue(), _dimensions(video), budget,
+                            resize)
     return ("data:video/mp4;base64,"
-            + base64.b64encode(buffer.getvalue()).decode("ascii"))
+            + base64.b64encode(payload).decode("ascii"))
+
+
+def _dimensions(video):
+    """The clip's width and height, or (0, 0) when it will not say.
+
+    Unknown reads as inside every budget, so a clip whose dimensions cannot be
+    read goes unscaled rather than being scaled against a guess."""
+    try:
+        return int(video.get_dimensions()[0]), int(video.get_dimensions()[1])
+    except Exception:
+        return 0, 0
 
 
 def seconds(video) -> float:
@@ -383,3 +397,80 @@ def is_finished(body: dict) -> bool:
     if status in RUNNING:
         return False
     raise RuntimeError(f"fal stopped working on this render: {body}")
+
+
+# What ByteDance will accept as a reference clip, in total pixels, keyed by the
+# model and by the resolution being rendered. Not one number: the 2.0 family
+# stops at 927,408 — 834x1112 — where 2.5 takes eight million, so the same
+# clip is fine on one model and refused on the next. fal documents the same
+# ceiling in words ("~480p to ~720p"), which is the same 927,408.
+#
+# A 1920x1080 clip is 2,073,600 pixels, so an ordinary 1080p reference is over
+# budget on the whole 2.0 family. That is what makes auto_downscale worth a
+# widget rather than a footnote.
+PIXEL_BUDGETS = {
+    "Seedance 2.5": {"480p": (409_600, 8_295_044),
+                     "720p": (409_600, 8_295_044)},
+    "Seedance 2.0": {"480p": (409_600, 927_408),
+                     "720p": (409_600, 927_408),
+                     "1080p": (409_600, 2_073_600)},
+    "Seedance 2.0 Fast": {"480p": (409_600, 927_408),
+                          "720p": (409_600, 927_408)},
+    "Seedance 2.0 Mini": {"480p": (409_600, 927_408),
+                          "720p": (409_600, 927_408)},
+}
+
+
+def pixel_budget(label: str, resolution: str):
+    """What a reference clip may measure for this model at this resolution.
+
+    None where nothing is published — 4k on 2.0, for one. Inventing a budget
+    there would scale a clip against a number nobody stated, so the clip goes
+    as it is and the provider rules on it."""
+    return PIXEL_BUDGETS.get(label, {}).get(resolution)
+
+
+def scale_for_budget(width: int, height: int, budget):
+    """The size this clip should be re-encoded at, or None to leave it alone.
+
+    Aspect is preserved and both sides come back even, because h264 will not
+    take odd dimensions. The result is clamped to the far bound as well as the
+    near one: on a budget as narrow as the 2.0 family's, lifting a small clip
+    to the floor can carry it past the ceiling in one step."""
+    if not budget or width <= 0 or height <= 0:
+        return None
+    low, high = budget
+    pixels = width * height
+    if low <= pixels <= high:
+        return None
+    target = low if pixels < low else high
+    scale = (target / pixels) ** 0.5
+    for _ in range(4):
+        sized = (_even(width * scale), _even(height * scale))
+        if low <= sized[0] * sized[1] <= high:
+            return sized
+        # Rounding to even can step over a bound on a narrow budget; walk the
+        # scale back toward the middle of the range rather than give up.
+        scale *= ((low + high) / 2 / (sized[0] * sized[1])) ** 0.5
+    return sized
+
+
+def _even(value: float) -> int:
+    """The nearest even number at or above two, which is h264's floor."""
+    return max(2, int(round(value / 2)) * 2)
+
+
+def fit_to_budget(payload: bytes, size, budget, resize) -> bytes:
+    """The clip re-encoded to fit its model's budget, or exactly as it came.
+
+    `resize` is passed in rather than imported so the decision — which sizes
+    need changing, and to what — stays testable without ffmpeg on the box. None
+    means the caller turned the switch off, and the clip goes unscaled for the
+    provider to judge, which is what ComfyUI's own node does with it off."""
+    if resize is None:
+        return payload
+    scaled = scale_for_budget(size[0], size[1], budget)
+    if scaled is None:
+        # Re-encoding costs a generation of quality for nothing.
+        return payload
+    return resize(payload, scaled[0], scaled[1])
