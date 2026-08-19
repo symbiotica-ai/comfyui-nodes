@@ -112,10 +112,15 @@ Wrappers around Wavespeed's hosted endpoints.
   sends up to 6000px — the difference is invisible at 720p and shows on 2.0 at
   4k.
 
-  References ride inside the request as base64. The set is refused above 8 MB,
-  because Cloudflare stores no gateway log above 10 MB and a call with no log is
-  spend that reaches no cockpit row. A few seconds of 720p footage is most of
-  that budget, so the clip slots are more than this ceiling will let you fill.
+  References ride inside the request as base64, which fal accepts on every
+  reference field. The set is refused above 8 MB, because Cloudflare stores no
+  gateway log above 10 MB and a call with no log is spend that reaches no
+  cockpit row. A few seconds of 720p footage is most of that budget, so the clip
+  slots are more than this ceiling will let you fill.
+
+  A render holds the connection open for its whole length — a four-second 480p
+  Mini clip took a little over two minutes — so the node waits rather than
+  polls, and its read timeout is sized for the longest render it can ask for.
 
 ### Video generation (Wavespeed)
 - **Sora 2** — text-to-video, image-to-video, Pro variants

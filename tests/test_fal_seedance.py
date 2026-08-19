@@ -106,11 +106,30 @@ def test_the_seed_rides_along_when_one_is_asked_for():
     assert body["seed"] == 11
 
 
+# One real reply, verbatim but for the host. fal hands the output back as a File
+# object carrying its own url, size and type — written out from a render rather
+# than inferred, because inferring the catalog's reply is how that reader got
+# its nesting wrong.
+A_FINISHED_RUN = {
+    "video": {"url": "https://fal.example/f_4CiPEjqBRlV20oIsj5M_video.mp4",
+              "content_type": "video/mp4", "file_name": "video.mp4",
+              "file_size": 188953},
+    "seed": 2092133292,
+}
+
+
 def test_the_video_url_is_read_from_the_file_fal_hands_back():
     """fal returns the output as a File object with its own `url`, not as a
-    bare string."""
-    assert fal.video_url({"video": {"url": "https://fal.media/out.mp4"},
-                          "seed": 3}) == "https://fal.media/out.mp4"
+    bare string, and not nested inside a run envelope the way the catalog does."""
+    assert fal.video_url(A_FINISHED_RUN) == (
+        "https://fal.example/f_4CiPEjqBRlV20oIsj5M_video.mp4")
+
+
+def test_the_reply_is_not_wrapped_in_a_run_envelope_like_the_catalogs():
+    """The two arms differ here and the readers must not be swapped: the
+    catalog nests at result.result.video, fal answers with the file at the top
+    level."""
+    assert "result" not in A_FINISHED_RUN
 
 
 def test_a_reply_without_a_video_says_what_came_back_instead():
