@@ -217,3 +217,20 @@ def test_the_finished_video_is_wrapped_with_the_type_comfyui_hands_out(
                         lambda url, path: clip.write_bytes(b"mp4"))
     node_module._fetch("https://example.invalid/out.mp4")
     assert made["path"].endswith(".mp4")
+
+
+def test_a_fal_key_from_settings_counts_as_a_route(node_module, monkeypatch,
+                                                   tmp_path):
+    """A desktop box has nowhere but Settings to put a key. Read from the
+    environment alone, the arm choice dismisses this box as unreachable and
+    the node refuses saying there is no way to reach Seedance at all."""
+    user_dir = tmp_path / "user"
+    (user_dir / "default").mkdir(parents=True)
+    (user_dir / "default" / "comfy.settings.json").write_text(
+        '{"Symbiotica.FAL_KEY": "a-personal-fal-key"}')
+    fp = types.ModuleType("folder_paths")
+    fp.get_user_directory = lambda: str(user_dir)
+    monkeypatch.setitem(sys.modules, "folder_paths", fp)
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.delenv("FAL_API_KEY", raising=False)
+    assert node_module._has_fal_key() is True

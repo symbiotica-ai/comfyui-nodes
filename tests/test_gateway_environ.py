@@ -1,0 +1,186 @@
+# ABOUTME: Tests for gateway config on a box with no environment to set —
+# ABOUTME: Comfy Desktop, where the Settings UI is the only channel there is.
+import pytest
+
+import _settings
+from _settings import gateway_environ
+
+GATEWAY_NAMES = ("SYMBIOTICA_AIG_BASE", "SYMBIOTICA_AIG_TOKEN",
+                 "ORDER_STUDIO", "SYMBIOTICA_AIG_SURFACE")
+
+
+@pytest.fixture
+def settings(monkeypatch):
+    """The Settings UI, as a dict a test can fill in.
+
+    Patched at `get_comfy_setting` rather than by writing a
+    comfy.settings.json, because the reader needs `folder_paths` from a
+    running ComfyUI and returns the default for every id without it — which
+    would make every one of these tests pass against a resolver that read
+    nothing at all."""
+    values = {}
+    monkeypatch.setattr(_settings, "get_comfy_setting",
+                        lambda key, default=None: values.get(key, default))
+    for name in GATEWAY_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    return values
+
+
+def test_settings_supply_the_gateway_when_the_environment_has_none(settings):
+    settings["Symbiotica.SYMBIOTICA_AIG_BASE"] = "https://gw.example/v1/acct/gw"
+    settings["Symbiotica.SYMBIOTICA_AIG_TOKEN"] = "tok-from-settings"
+    settings["Symbiotica.ORDER_STUDIO"] = "comfy-desktop"
+    environ = gateway_environ()
+    assert environ["SYMBIOTICA_AIG_BASE"] == "https://gw.example/v1/acct/gw"
+    assert environ["SYMBIOTICA_AIG_TOKEN"] == "tok-from-settings"
+    assert environ["ORDER_STUDIO"] == "comfy-desktop"
+
+
+def test_a_configured_environment_is_left_whole(settings, monkeypatch):
+    # An order sandbox gets all of this from one secret. A Settings value
+    # reaching in to replace a single member of that group is how an env base
+    # comes to be paired with a stale Settings token — which the gateway
+    # refuses as 2009, "we rejected your own credential", sending whoever reads
+    # it to the secret store when the fault is a text field in the UI.
+    monkeypatch.setenv("SYMBIOTICA_AIG_BASE", "https://gw.example/v1/acct/gw")
+    monkeypatch.setenv("SYMBIOTICA_AIG_TOKEN", "tok-from-secret")
+    monkeypatch.setenv("ORDER_STUDIO", "teilor")
+    settings["Symbiotica.SYMBIOTICA_AIG_TOKEN"] = "tok-from-settings"
+    settings["Symbiotica.ORDER_STUDIO"] = "comfy-desktop"
+    environ = gateway_environ()
+    assert environ["SYMBIOTICA_AIG_TOKEN"] == "tok-from-secret"
+    assert environ["ORDER_STUDIO"] == "teilor"
+
+
+def test_a_sandbox_whose_secret_failed_is_still_reported_as_one(settings,
+                                                                monkeypatch):
+    # The launcher sets ORDER_STUDIO whether or not the secret populated, so
+    # that pair — a studio with no base — is how a broken sandbox announces
+    # itself, and `resolve_transport` refuses it by name. Letting Settings
+    # supply the missing base would answer that with a desktop's own
+    # credentials: the render succeeds, and the studio's spend silently leaves
+    # its own key.
+    monkeypatch.setenv("ORDER_STUDIO", "teilor")
+    settings["Symbiotica.SYMBIOTICA_AIG_BASE"] = "https://gw.example/v1/acct/gw"
+    settings["Symbiotica.SYMBIOTICA_AIG_TOKEN"] = "tok-from-settings"
+    settings["Symbiotica.ORDER_STUDIO"] = "comfy-desktop"
+    environ = gateway_environ()
+    assert environ.get("SYMBIOTICA_AIG_BASE", "") == ""
+    assert environ["ORDER_STUDIO"] == "teilor"
+
+
+def test_a_base_without_its_token_names_the_field_to_fill(settings):
+    # `resolve_transport` refuses this pair too, but it tells the reader to
+    # check the symbiotica-comfy-aigateway secret — a thing a desktop box has
+    # no access to and its owner has never seen.
+    settings["Symbiotica.SYMBIOTICA_AIG_BASE"] = "https://gw.example/v1/acct/gw"
+    settings["Symbiotica.ORDER_STUDIO"] = "comfy-desktop"
+    with pytest.raises(ValueError) as err:
+        gateway_environ()
+    message = str(err.value)
+    assert "Settings" in message
+    assert "SYMBIOTICA_AIG_TOKEN" in message
+    assert "symbiotica-comfy-aigateway" not in message
+
+
+def test_a_gateway_route_never_leaves_the_studio_empty(settings):
+    # Whatever the field says or fails to say, a call that reaches the gateway
+    # carries a studio: the alias picks whose stored key pays, and the tag is
+    # the only thing that attributes the spend to anyone.
+    settings["Symbiotica.SYMBIOTICA_AIG_BASE"] = "https://gw.example/v1/acct/gw"
+    settings["Symbiotica.SYMBIOTICA_AIG_TOKEN"] = "tok-from-settings"
+    settings["Symbiotica.ORDER_STUDIO"] = "   "
+    assert gateway_environ()["ORDER_STUDIO"].strip() != ""
+
+
+def test_a_desktop_render_is_not_counted_as_an_order(settings):
+    # `studio_tag` calls an untagged run an order, which is right for every
+    # sandbox and wrong for this box. Counted as orders, canvas renders inflate
+    # order spend under a label that reads correctly.
+    settings["Symbiotica.SYMBIOTICA_AIG_BASE"] = "https://gw.example/v1/acct/gw"
+    settings["Symbiotica.SYMBIOTICA_AIG_TOKEN"] = "tok-from-settings"
+    settings["Symbiotica.ORDER_STUDIO"] = "comfy-desktop"
+    assert gateway_environ()["SYMBIOTICA_AIG_SURFACE"] == "canvas"
+
+
+def test_a_surface_the_box_declares_is_kept(settings, monkeypatch):
+    monkeypatch.setenv("SYMBIOTICA_AIG_SURFACE", "smoke-test")
+    settings["Symbiotica.SYMBIOTICA_AIG_BASE"] = "https://gw.example/v1/acct/gw"
+    settings["Symbiotica.SYMBIOTICA_AIG_TOKEN"] = "tok-from-settings"
+    settings["Symbiotica.ORDER_STUDIO"] = "comfy-desktop"
+    assert gateway_environ()["SYMBIOTICA_AIG_SURFACE"] == "smoke-test"
+
+
+def test_an_unconfigured_box_is_left_exactly_as_it_was(settings, monkeypatch):
+    # Nothing in Settings, nothing in the environment: the direct arms and
+    # their own key ladders must still be reachable, and the gateway names must
+    # not appear as empty strings, which read as configured-but-blank.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "personal")
+    environ = gateway_environ()
+    assert environ["ANTHROPIC_API_KEY"] == "personal"
+    assert "SYMBIOTICA_AIG_BASE" not in environ
+
+
+def test_the_settings_ui_offers_every_field_the_resolver_reads():
+    """The setting id is the whole contract between the two languages: the UI
+    writes `Symbiotica.<NAME>` into comfy.settings.json and this module reads
+    it back by the same string. A name in one and not the other is a field that
+    accepts what you type and a box that behaves as though you typed nothing."""
+    import pathlib
+    source = (pathlib.Path(__file__).parent.parent
+              / "web" / "js" / "symbiotica_settings.js").read_text()
+    for name in _settings.GATEWAY_SETTINGS:
+        assert f'"{name}"' in source, f"{name} has no field in the Settings UI"
+
+
+def test_the_settings_ui_offers_the_fal_key_the_seedance_node_asks_for():
+    """Seedance's direct arm resolves FAL_KEY through the same ladder as every
+    other provider key, so a box with no gateway needs somewhere to put one."""
+    import pathlib
+    source = (pathlib.Path(__file__).parent.parent
+              / "web" / "js" / "symbiotica_settings.js").read_text()
+    assert '"FAL_KEY"' in source
+
+
+def test_no_gateway_node_asks_the_bare_environment_where_to_route():
+    """Five call sites, one for each way a node reaches the gateway. Any one of
+    them reading `os.environ` instead answers a desktop box with nothing, and
+    that node alone quietly falls to its direct arm on a personal key while the
+    others route — which reads on the canvas as one node being broken."""
+    import pathlib
+    py = pathlib.Path(__file__).parent.parent / "py"
+    routing = ("resolve_transport(", "resolve_rest_transport(", "chosen_arm(",
+               "queue_transport(")
+    offenders = []
+    for path in sorted(py.glob("*.py")):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if "os.environ" in line and any(c in line for c in routing):
+                offenders.append(f"{path.name}:{number}: {line.strip()}")
+    assert offenders == [], (
+        "these route on the bare environment:\n" + "\n".join(offenders))
+
+
+def test_the_studio_slug_falls_back_to_its_default(settings):
+    """ComfyUI writes a setting into comfy.settings.json only when somebody
+    EDITS it — registering a field with a default writes nothing. So a default
+    that lives only in the Settings UI is a field that reads as filled in and
+    is invisible here, and the refusal below would name a field the reader can
+    see already has a value in it."""
+    settings["Symbiotica.SYMBIOTICA_AIG_BASE"] = "https://gw.example/v1/acct/gw"
+    settings["Symbiotica.SYMBIOTICA_AIG_TOKEN"] = "tok-from-settings"
+    assert gateway_environ()["ORDER_STUDIO"] == "comfy-desktop"
+
+
+def test_the_two_languages_agree_on_that_default():
+    """The default is a contract term like the ids are. Spelled differently on
+    the two sides, the field shows one slug and the call bills another — and
+    a BYOK alias that does not exist fails every call with code 2040."""
+    import pathlib
+    import re
+    source = (pathlib.Path(__file__).parent.parent
+              / "web" / "js" / "symbiotica_settings.js").read_text()
+    shown = re.search(
+        r'env:\s*"ORDER_STUDIO".*?defaultValue:\s*"([^"]*)"',
+        source, re.S)
+    assert shown, "the studio field declares no default"
+    assert shown.group(1) == _settings.DEFAULT_STUDIO

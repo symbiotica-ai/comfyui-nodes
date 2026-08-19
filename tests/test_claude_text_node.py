@@ -170,7 +170,7 @@ def run_execute(node_module, monkeypatch, response, env=None, **kwargs):
         return response
 
     monkeypatch.setattr(node_module.requests, "post", fake_post)
-    monkeypatch.setattr(node_module.os, "environ", env or {})
+    monkeypatch.setattr(os, "environ", env or {})
     call = dict(prompt="describe this", seed=0, api_key="an-anthropic-key")
     # The per-model inputs arrive inside the combo's value rather than as
     # keywords of their own, so a caller still names them flatly and they are
@@ -305,7 +305,7 @@ def test_a_call_that_never_reached_the_gateway_still_names_the_studio(
         raise node_module.requests.ConnectTimeout("timed out")
 
     monkeypatch.setattr(node_module.requests, "post", explode)
-    monkeypatch.setattr(node_module.os, "environ", dict(GATEWAY_ENV))
+    monkeypatch.setattr(os, "environ", dict(GATEWAY_ENV))
     with pytest.raises(RuntimeError) as caught:
         node_module.SymbioticaClaude.execute(
             prompt="describe this", seed=0,
@@ -322,7 +322,7 @@ def test_the_prompt_is_checked_before_the_key_ladder_is_walked(node_module,
         raise AssertionError("a request was built for a blank prompt")
 
     monkeypatch.setattr(node_module.requests, "post", never)
-    monkeypatch.setattr(node_module.os, "environ", {})
+    monkeypatch.setattr(os, "environ", {})
     with pytest.raises(ValueError, match="prompt is required"):
         node_module.SymbioticaClaude.execute(
             prompt="   ", seed=0, model=chosen_model(max_tokens=4096))
@@ -483,3 +483,67 @@ def test_which_inputs_a_stored_payload_must_carry_is_pinned(node_module):
         "model", "model.images", "model.max_tokens", "model.reasoning_effort",
         "model.temperature", "prompt", "seed",
     ]
+
+
+@pytest.fixture
+def desktop_settings(monkeypatch, tmp_path):
+    """A real comfy.settings.json, read the way the running server reads it.
+
+    Written to disk rather than stubbed at `get_comfy_setting`, because the
+    whole point of this route is that the file is the only channel a desktop
+    box has — and a stub would pass just as well against a resolver that never
+    learned to open it."""
+    user_dir = tmp_path / "user"
+    (user_dir / "default").mkdir(parents=True)
+    fp = types.ModuleType("folder_paths")
+    fp.get_user_directory = lambda: str(user_dir)
+    monkeypatch.setitem(sys.modules, "folder_paths", fp)
+
+    def write(**values):
+        (user_dir / "default" / "comfy.settings.json").write_text(
+            json.dumps({f"Symbiotica.{k}": v for k, v in values.items()}))
+    return write
+
+
+def test_a_desktop_box_reaches_the_gateway_from_its_settings(node_module,
+                                                             monkeypatch,
+                                                             desktop_settings):
+    """Comfy Desktop launches its own Python, so there is no environment to
+    put the gateway in and every call here would otherwise go straight to
+    Anthropic on a personal key."""
+    desktop_settings(SYMBIOTICA_AIG_BASE="https://gateway.example.invalid/v1/a/b",
+                     SYMBIOTICA_AIG_TOKEN="cf-token-not-a-real-one",
+                     ORDER_STUDIO="comfy-desktop")
+    sent, _ = run_execute(node_module, monkeypatch,
+                          FakeResponse(payload=ANSWERED), env={})
+    assert sent["url"] == ("https://gateway.example.invalid/v1/a/b"
+                           "/anthropic/v1/messages")
+    assert sent["headers"]["cf-aig-byok-alias"] == "comfy-desktop"
+
+
+def test_a_settings_gateway_still_outranks_a_personal_key(node_module,
+                                                          monkeypatch,
+                                                          desktop_settings):
+    """The pack's standing rule, on the one arm that could quietly break it:
+    a key typed on the node is right there in the call, and spending it while
+    a gateway sits configured is the failure nobody detects afterwards."""
+    desktop_settings(SYMBIOTICA_AIG_BASE="https://gateway.example.invalid/v1/a/b",
+                     SYMBIOTICA_AIG_TOKEN="cf-token-not-a-real-one",
+                     ORDER_STUDIO="comfy-desktop",
+                     ANTHROPIC_API_KEY="a-personal-anthropic-key")
+    sent, _ = run_execute(node_module, monkeypatch,
+                          FakeResponse(payload=ANSWERED), env={})
+    assert "x-api-key" not in sent["headers"]
+    assert "a-personal-anthropic-key" not in json.dumps(sent["headers"])
+
+
+def test_a_desktop_render_is_not_tagged_as_an_order(node_module, monkeypatch,
+                                                    desktop_settings):
+    """Gateway analytics groups by this tag. Counted as orders, canvas renders
+    inflate order spend under a label that reads correctly."""
+    desktop_settings(SYMBIOTICA_AIG_BASE="https://gateway.example.invalid/v1/a/b",
+                     SYMBIOTICA_AIG_TOKEN="cf-token-not-a-real-one",
+                     ORDER_STUDIO="comfy-desktop")
+    sent, _ = run_execute(node_module, monkeypatch,
+                          FakeResponse(payload=ANSWERED), env={})
+    assert json.loads(sent["headers"]["cf-aig-metadata"])["surface"] == "canvas"

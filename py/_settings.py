@@ -78,3 +78,62 @@ def key_from_settings(*env_names) -> str | None:
             return str(value).strip()
     return None
 
+
+
+# The gateway config that a box with no environment to set must get from the
+# Settings UI. Read and applied as a GROUP: an env base paired with a Settings
+# token fails as gateway code 2009, which reads as "the gateway rejected our
+# own credential" and sends whoever reads it to the secret store when the fault
+# is a text field in the UI.
+GATEWAY_SETTINGS = ("SYMBIOTICA_AIG_BASE", "SYMBIOTICA_AIG_TOKEN",
+                    "ORDER_STUDIO")
+
+# What a run started by hand on somebody's own machine is called in gateway
+# analytics, where it must not be counted as an order.
+CANVAS_SURFACE = "canvas"
+
+# The BYOK alias a desktop box bills when nobody names another. It lives here
+# rather than only in the Settings UI because ComfyUI writes a setting into
+# comfy.settings.json only when somebody EDITS it — a field registered with a
+# default writes nothing, so a default declared only over there is one this
+# side can never read. The two spellings are held together by a test.
+DEFAULT_STUDIO = "comfy-desktop"
+
+
+def gateway_environ() -> dict:
+    """`os.environ`, plus the gateway config the Settings UI holds.
+
+    Comfy Desktop is an Electron app that launches its own Python, so there is
+    no environment to put `SYMBIOTICA_AIG_BASE` in. Without this, every gateway
+    node on a desktop box falls to its direct arm and spends a personal key."""
+    environ = dict(os.environ)
+    # Anything the environment already says about the gateway is the whole of
+    # what it says. A studio with no base is how a sandbox whose secret failed
+    # to populate announces itself, and `resolve_transport` refuses it by name;
+    # answering that with a desktop's own credentials would let the render
+    # succeed while the studio's spend left its own key.
+    if any((environ.get(name) or "").strip()
+           for name in ("SYMBIOTICA_AIG_BASE", "ORDER_STUDIO")):
+        return environ
+    base = key_from_settings("SYMBIOTICA_AIG_BASE") or ""
+    if not base:
+        return environ
+    group = dict({name: (key_from_settings(name) or "")
+                  for name in GATEWAY_SETTINGS},
+                 SYMBIOTICA_AIG_BASE=base)
+    group["ORDER_STUDIO"] = group["ORDER_STUDIO"] or DEFAULT_STUDIO
+    for name in GATEWAY_SETTINGS:
+        if not group[name]:
+            raise ValueError(
+                f"Settings → Symbiotica → AI Gateway has a gateway base "
+                f"but no {name}. All three go together: a base on its own "
+                f"either fails asking for a credential this box does not hold, "
+                f"or bills spend that reaches no studio's row.")
+    environ.update(group)
+    # What kind of run this is. Left unset it defaults to `order`, so a canvas
+    # render would join the order totals under a label that reads correctly —
+    # the one kind of wrong number nobody thinks to question. Not a field,
+    # because a field is a thing that can be cleared.
+    environ["SYMBIOTICA_AIG_SURFACE"] = (
+        (environ.get("SYMBIOTICA_AIG_SURFACE") or "").strip() or CANVAS_SURFACE)
+    return environ

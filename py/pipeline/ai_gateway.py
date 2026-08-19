@@ -103,6 +103,19 @@ def resolve_transport(environ, provider: str, path: str,
                 f"token is a bearer credential for this studio's whole spend "
                 f"and would cross the wire in the clear."
             )
+        # Cloudflare's dashboard shows the OpenAI-compatibility URL, and it
+        # is one copy button away from the one every node here wants. Sent as
+        # it stands, each node appends its own provider and the gateway
+        # answers 2019 naming the compatibility endpoint — never the field
+        # that has to change, which on a desktop box is a text input its owner
+        # is looking straight at.
+        root = base.split(COMPAT_PATH)[0]
+        if root != base:
+            raise ValueError(
+                f"SYMBIOTICA_AIG_BASE ends in {COMPAT_PATH}, which is "
+                f"Cloudflare's OpenAI-compatibility endpoint. These nodes each "
+                f"append their own provider, so the base has to stop at the "
+                f"gateway: {root}")
         token = (environ.get("SYMBIOTICA_AIG_TOKEN") or "").strip()
         if not token:
             raise ValueError(
@@ -151,6 +164,11 @@ def resolve_transport(environ, provider: str, path: str,
     return Transport(direct.base + path, headers, None)
 
 
+# Cloudflare's OpenAI drop-in endpoint. It hangs off the same gateway these
+# nodes route through, which is why it is a base somebody arrives at honestly
+# and why the wrong one has to be named rather than merely refused.
+COMPAT_PATH = "/compat/chat/completions"
+
 DEFAULT_SURFACE = "order"
 
 
@@ -186,7 +204,8 @@ def usable_as_header(value: str, source: str, quote_it: bool) -> str:
         shown = f": {value!r}" if quote_it else ""
         raise ValueError(
             f"{source} contains characters an HTTP header cannot carry{shown}. "
-            f"Check the secret for a stray newline or a truncated paste.")
+            f"Check wherever this box keeps it — the secret, or Settings → "
+            f"Symbiotica — for a stray newline or a truncated paste.")
     return value
 
 
@@ -198,7 +217,9 @@ GATEWAY_REMEDIES = {
     2040: ("this studio has no key stored in the gateway — add one under the "
            "studio's slug as its BYOK alias"),
     2009: ("the gateway rejected our own credential — check "
-           "SYMBIOTICA_AIG_TOKEN in the symbiotica-comfy-aigateway secret"),
+           "SYMBIOTICA_AIG_TOKEN, in the symbiotica-comfy-aigateway secret on "
+           "a sandbox or under Settings → Symbiotica → AI Gateway on a box "
+           "with no environment to set"),
     # Unlike the other two this is not only a failure. Cloudflare's documented
     # credential precedence is request key, then stored BYOK key by alias, then
     # Cloudflare's own credentials billed to the account balance — so with no

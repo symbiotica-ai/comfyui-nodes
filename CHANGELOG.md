@@ -6,6 +6,35 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.8.30
+
+**The AI Gateway nodes work on Comfy Desktop.** Comfy Desktop is an Electron
+app that launches its own Python, so a desktop box has nowhere to put
+`SYMBIOTICA_AIG_BASE` — the Claude, Gemini and Seedance nodes each read the
+bare environment, found nothing, and fell to their direct arms on a personal
+key. **Settings -> Symbiotica -> AI Gateway** now holds the base URL, the
+token and the studio slug, which defaults to `comfy-desktop`.
+
+The three are read as a group, and only when the environment says nothing
+about the gateway at all. An environment carrying a base is used whole, so a
+Settings token can never pair with a sandbox's base; an environment carrying
+`ORDER_STUDIO` and no base is still reported as the sandbox whose secret did
+not populate, rather than answered with a desktop's own credentials. A base
+filled in with either of the other two left empty is refused by name.
+
+A base pasted from Cloudflare's OpenAI-compatibility page is refused by name.
+Each node appends its own provider, so a base ending in
+`/compat/chat/completions` reaches the gateway as
+`/compat/chat/completions/<provider>` and comes back as internal code 2019 —
+which names the compatibility endpoint rather than the field that has to
+change.
+
+Runs from a desktop box are tagged `surface: canvas`, so canvas spend does not
+join the order totals. `FAL_KEY` is offered in Settings alongside the other
+provider keys, and the Seedance node's route choice now consults it there —
+without that a desktop box with a fal key was told there was no way to reach
+Seedance at all.
+
 ## 2026.8.29
 
 **The Seedance node hands its render back, and scales reference clips to fit.**

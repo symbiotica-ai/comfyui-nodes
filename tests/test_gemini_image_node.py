@@ -239,7 +239,7 @@ def run_execute(node_module, monkeypatch, response, env=None, **kwargs):
         return response
 
     monkeypatch.setattr(node_module.requests, "post", fake_post)
-    monkeypatch.setattr(node_module.os, "environ", env or {})
+    monkeypatch.setattr(os, "environ", env or {})
     call = dict(prompt="a knight", seed=0, api_key="a-google-key")
     # The per-model inputs arrive inside the combo's value rather than as
     # keywords of their own, so a caller still names them flatly and they are
@@ -370,7 +370,7 @@ def test_a_call_that_never_reached_the_gateway_still_names_the_studio(
             "HTTPSConnectionPool(host='gateway.example.invalid'): timed out")
 
     monkeypatch.setattr(node_module.requests, "post", refuse_to_connect)
-    monkeypatch.setattr(node_module.os, "environ", dict(GATEWAY_ENV))
+    monkeypatch.setattr(os, "environ", dict(GATEWAY_ENV))
     with pytest.raises(RuntimeError) as caught:
         node_module.SymbioticaGeminiImage.execute(
             prompt="a knight", model=chosen_model(), seed=0)
@@ -390,7 +390,7 @@ def test_a_transport_failure_does_not_leak_the_token_either(node_module,
             f"failed sending header Bearer {token}")
 
     monkeypatch.setattr(node_module.requests, "post", leaky)
-    monkeypatch.setattr(node_module.os, "environ", dict(GATEWAY_ENV))
+    monkeypatch.setattr(os, "environ", dict(GATEWAY_ENV))
     with pytest.raises(RuntimeError) as caught:
         node_module.SymbioticaGeminiImage.execute(
             prompt="a knight", model=chosen_model(), seed=0)
@@ -406,7 +406,7 @@ def test_an_empty_prompt_is_refused_before_the_key_ladder_is_walked(
         raise AssertionError("a request was built for an empty prompt")
 
     monkeypatch.setattr(node_module.requests, "post", exploding_post)
-    monkeypatch.setattr(node_module.os, "environ", {})
+    monkeypatch.setattr(os, "environ", {})
     with pytest.raises(ValueError, match="prompt"):
         node_module.SymbioticaGeminiImage.execute(
             prompt="   ", model=chosen_model(), seed=0, api_key="")
