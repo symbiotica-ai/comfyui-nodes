@@ -104,7 +104,10 @@ def build_request(label: str, values: dict, seed: int, watermark: bool,
     # and refuses `ratio` outright as an unsupported field.
     payload["aspect_ratio"] = values["ratio"]
     payload["duration"] = values["duration"]
-    if limits.output_formats:
+    # Only when the node offered the widget. It does not today — fal, the arm
+    # this node is built for, has no such field — and reading it unconditionally
+    # raised KeyError on 2.5 before any call was made.
+    if limits.output_formats and values.get("output_format"):
         payload["output_format"] = values["output_format"]
     _attach(payload, "reference_image", images, limits.max_images)
     _attach(payload, "reference_audio", audios, limits.max_audios)
@@ -236,7 +239,7 @@ MIN_REFERENCE_SECONDS = 1.8
 PCM_FULL_SCALE = 32767
 
 
-def audio_data_uri(audio, label: str) -> str:
+def audio_data_uri(audio, label: str, ceiling: float = 0) -> str:
     """One reference audio as the data URI the catalog accepts.
 
     WAV rather than mp3: it needs no encoder beyond the standard library, and
@@ -245,7 +248,7 @@ def audio_data_uri(audio, label: str) -> str:
     waveform = np.asarray(audio["waveform"])
     rate = int(audio["sample_rate"])
     seconds = waveform.shape[-1] / rate
-    _check_reference_seconds(seconds, label, "audio")
+    _check_reference_seconds(seconds, label, "audio", ceiling)
     # (batch, channels, samples) -> interleaved frames, which is what WAV
     # stores. A file written straight from the array plays every channel in
     # sequence instead of together.
@@ -262,7 +265,8 @@ def audio_data_uri(audio, label: str) -> str:
             + base64.b64encode(buffer.getvalue()).decode("ascii"))
 
 
-def _check_reference_seconds(seconds: float, label: str, kind: str) -> None:
+def _check_reference_seconds(seconds: float, label: str, kind: str,
+                             ceiling: float = 0) -> None:
     """Raise unless this clip is a length the chosen model will take.
 
     The model is named because the same clip is fine on 2.5 and refused on
@@ -272,7 +276,7 @@ def _check_reference_seconds(seconds: float, label: str, kind: str) -> None:
         raise ValueError(
             f"A reference {kind} is {seconds:.1f}s. Seedance takes nothing "
             f"under {MIN_REFERENCE_SECONDS}s.")
-    ceiling = LIMITS[label].max_reference_seconds
+    ceiling = ceiling or LIMITS[label].max_reference_seconds
     if seconds > ceiling:
         raise ValueError(
             f"A reference {kind} is {seconds:.1f}s, over the {ceiling}s "

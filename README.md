@@ -105,6 +105,10 @@ Wrappers around Wavespeed's hosted endpoints.
   sockets do not change — a graph is shared between boxes — so what the fall
   back cannot carry is refused by name at render time rather than hidden.
 
+  `watermark` is offered because ComfyUI's node offers it, and the fal route has
+  no such parameter — asked for there it is refused rather than dropped, so the
+  same graph never renders watermarked on one box and clean on another.
+
   Two things ComfyUI's node has that this one does not: `output_format`, because
   fal writes mp4 and offers no such field; and `asset_1..30`, because the
   digital-character library is reachable only through ByteDance's own API.

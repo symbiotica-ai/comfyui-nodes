@@ -143,10 +143,16 @@ def chosen_arm(environ, has_key: bool) -> str:
     The catalog is the fall back rather than the choice because it bills a
     single shared key, cannot carry a reference video at all, and cuts the 2.0
     family's reference counts by more than half."""
-    if (environ.get("SYMBIOTICA_AIG_BASE") or "").strip() or has_key:
+    if (environ.get("SYMBIOTICA_AIG_BASE") or "").strip():
         return "fal"
+    # A personal key ranks below every route the box was configured with, the
+    # same way `resolve_transport` ranks it below the gateway. Above them it is
+    # the failure nobody detects afterwards: the render succeeds on somebody's
+    # own key and the spend leaves the studio without an error to notice.
     if (environ.get("SYMBIOTICA_CF_ACCOUNT_ID") or "").strip():
         return "catalog"
+    if has_key:
+        return "fal"
     raise ValueError(
         "This box has no way to reach Seedance. Either give it "
         "SYMBIOTICA_AIG_BASE and SYMBIOTICA_AIG_TOKEN from the "
@@ -157,8 +163,22 @@ def chosen_arm(environ, has_key: bool) -> str:
         "the poorer route and bills a shared key.")
 
 
+def check_fal_can_carry(watermark: bool) -> None:
+    """Raise for anything the node offers that fal has no field for.
+
+    Only the watermark today. fal writes no watermark and takes no such
+    parameter, so a graph asking for one would get a clean video back and
+    differ from the same graph on the catalog arm with nothing said."""
+    if watermark:
+        raise ValueError(
+            "watermark is on, and fal has no watermark parameter — the render "
+            "would come back clean with nothing to say so. Turn it off, or "
+            "use a box that reaches Seedance through the Cloudflare catalog.")
+
+
 def check_catalog_can_carry(label: str, images: int, videos: int,
-                            audios: int) -> None:
+                            audios: int, resolution: str = "",
+                            duration: int = 0, ratio: str = "") -> None:
     """Raise unless the catalog arm can carry what has been wired.
 
     The schema offers fal's slots, because fal is the route the node is for. So
@@ -184,6 +204,27 @@ def check_catalog_can_carry(label: str, images: int, videos: int,
             f"{audios} reference audio track(s) are wired and the Cloudflare "
             f"catalog takes {limits.max_audios} for {label}. Through fal it "
             f"takes {LIMITS[label].max_audios}.")
+    # The widgets are fal's, so they offer settings this arm does not render.
+    # Passed through, each is an upstream 400 naming neither node nor widget.
+    if resolution and resolution not in limits.resolutions:
+        raise ValueError(
+            f"{label} renders {resolution} through fal, and through the "
+            f"Cloudflare catalog it renders "
+            f"{', '.join(limits.resolutions)}. Pick one of those, or give "
+            f"this box the gateway's fal route.")
+    if duration and duration > limits.max_duration:
+        raise ValueError(
+            f"{duration}s is asked for and the Cloudflare catalog stops at "
+            f"{limits.max_duration}s for {label}, where fal runs to "
+            f"{LIMITS[label].durations[-1]}s.")
+    if ratio and ratio not in limits.ratios:
+        # `adaptive` is the default on the whole 2.0 family and the catalog
+        # takes it on 2.5 alone. Substituting 16:9 gave a render nobody asked
+        # for and said nothing about it.
+        raise ValueError(
+            f"ratio '{ratio}' is asked for and the Cloudflare catalog does "
+            f"not take it on {label} — it offers "
+            f"{', '.join(limits.ratios)}. Through fal every model takes it.")
 
 
 # Defaults for this module, which must stay importable without ComfyUI. The node

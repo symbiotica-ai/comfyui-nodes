@@ -182,6 +182,15 @@ def test_a_box_with_only_a_personal_fal_key_still_goes_to_fal():
     assert fal.chosen_arm({}, has_key=True) == "fal"
 
 
+def test_a_personal_key_never_outranks_a_route_the_box_was_given():
+    """The failure this module exists to prevent, one level up. A stray
+    FAL_KEY on a box configured for the catalog used to win, so the same graph
+    rendered on somebody's own key and the spend left the studio entirely —
+    with no error, because the render succeeded."""
+    assert fal.chosen_arm(dict(CATALOG), has_key=True) == "catalog"
+    assert fal.chosen_arm(dict(GATEWAY), has_key=True) == "fal"
+
+
 def test_a_box_with_only_the_catalog_configured_falls_back_to_it():
     assert fal.chosen_arm(dict(CATALOG), has_key=False) == "catalog"
 
@@ -316,3 +325,53 @@ def test_a_set_inside_the_combined_budget_passes():
 def test_25_carries_a_longer_combined_budget_than_the_20_family():
     assert fal.check_total_seconds("Seedance 2.5", [10.0, 10.0, 9.0],
                                    "video") is None
+
+
+def test_a_watermark_asked_for_on_fal_is_refused_rather_than_dropped():
+    """fal has no watermark field at all. Dropped in silence the same graph
+    renders watermarked on one box and clean on another, which is the kind of
+    difference nobody looks for until it has shipped."""
+    with pytest.raises(ValueError) as raised:
+        fal.check_fal_can_carry(watermark=True)
+    assert "watermark" in str(raised.value)
+
+
+def test_no_watermark_asked_for_is_the_ordinary_case():
+    assert fal.check_fal_can_carry(watermark=False) is None
+
+
+def test_the_catalog_refuses_a_resolution_it_does_not_render():
+    """The widgets are fal's, so 1080p is offerable on 2.5 and the catalog
+    stops at 720p. Passed through it is an upstream 400 naming neither the node
+    nor the widget."""
+    with pytest.raises(ValueError) as raised:
+        fal.check_catalog_can_carry("Seedance 2.5", 1, 0, 0,
+                                    resolution="1080p", duration=5,
+                                    ratio="16:9")
+    assert "1080p" in str(raised.value)
+
+
+def test_the_catalog_refuses_a_duration_past_its_own_ceiling():
+    with pytest.raises(ValueError) as raised:
+        fal.check_catalog_can_carry("Seedance 2.0", 1, 0, 0,
+                                    resolution="720p", duration=14,
+                                    ratio="16:9")
+    assert "12" in str(raised.value)
+
+
+def test_the_catalog_refuses_adaptive_where_it_rejects_it_rather_than_guessing():
+    """`adaptive` is the default on the whole 2.0 family, and the catalog takes
+    it only on 2.5. Rewriting it to 16:9 gave the user a render they did not
+    ask for and said nothing — two lines from where the same module refuses
+    rather than drops."""
+    with pytest.raises(ValueError) as raised:
+        fal.check_catalog_can_carry("Seedance 2.0", 1, 0, 0,
+                                    resolution="720p", duration=7,
+                                    ratio="adaptive")
+    assert "adaptive" in str(raised.value)
+
+
+def test_the_catalog_takes_adaptive_on_the_model_that_has_it():
+    assert fal.check_catalog_can_carry("Seedance 2.5", 1, 0, 0,
+                                       resolution="720p", duration=5,
+                                       ratio="adaptive") is None

@@ -172,6 +172,9 @@ class SymbioticaSeedanceReference(io.ComfyNode):
         wired_images = to_pil(model.get("images"))
         wired_videos = _wired(model.get("videos"))
         wired_audios = _wired(model.get("audios"))
+        # fal's own ceiling, not the catalog's — 30.2s where the catalog says
+        # 30, so a 30.1s track is fine on the arm this node prefers.
+        ceiling = fal.LIMITS[label].max_reference_seconds
         # Before any encoding: each reference costs a device copy and a full
         # re-encode, and none of these checks needs the encoded bytes.
         fal.check_has_references(label, len(wired_images), len(wired_videos),
@@ -183,8 +186,13 @@ class SymbioticaSeedanceReference(io.ComfyNode):
 
         images = [catalog.image_data_uri(image) for image in wired_images]
         videos = wired_videos
-        audios = [catalog.audio_data_uri(audio, label) for audio in wired_audios]
+        audios = [catalog.audio_data_uri(audio, label, ceiling)
+                  for audio in wired_audios]
         if arm == "catalog":
+            fal.check_catalog_can_carry(
+                label, len(images), len(videos), len(audios),
+                resolution=model["resolution"], duration=model["duration"],
+                ratio=model["ratio"])
             if model.get("video_editing"):
                 # It needs a source clip, and this arm cannot carry one. Left
                 # unsaid it is simply ignored, and the render comes back the
@@ -193,8 +201,6 @@ class SymbioticaSeedanceReference(io.ComfyNode):
                     "video_editing needs a reference clip, and this box "
                     "reaches Seedance through the Cloudflare catalog, which "
                     "carries none. Give it the gateway's fal route.")
-            fal.check_catalog_can_carry(label, len(images), len(videos),
-                                        len(audios))
             return cls._through_catalog(label, model, seed, watermark,
                                         images, audios)
         return cls._through_fal(label, model, seed, watermark, images,
@@ -204,6 +210,7 @@ class SymbioticaSeedanceReference(io.ComfyNode):
     def _through_fal(cls, label, model, seed, watermark, images, videos,
                      audios, interactive_key) -> io.NodeOutput:
         """The route the node is for: the studio's own key, by alias."""
+        fal.check_fal_can_carry(watermark)
         transport = fal.resolve_transport(os.environ, label, interactive_key)
         clips = [fal.video_data_uri(video, label, Types.VideoContainer.MP4,
                                     Types.VideoCodec.H264)
@@ -223,12 +230,7 @@ class SymbioticaSeedanceReference(io.ComfyNode):
         """The fall back, where a shared key pays and clips cannot ride."""
         transport = ai_gateway.resolve_rest_transport(os.environ)
         catalog.check_reference_size(images + audios)
-        values = dict(model)
-        if values.get("ratio") == ADAPTIVE:
-            # The catalog spells it `adaptive` too, but only on 2.5; the 2.0
-            # options reject it, and they are the ones ComfyUI defaults to it.
-            values["ratio"] = ADAPTIVE if label == LABEL_25 else "16:9"
-        body = catalog.build_request(label, values, seed, watermark, images,
+        body = catalog.build_request(label, model, seed, watermark, images,
                                      audios)
         payload = _post(transport, body, "Seedance")
         left_byok = catalog.key_source_warning(payload)

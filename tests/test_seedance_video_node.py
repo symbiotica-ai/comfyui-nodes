@@ -132,3 +132,38 @@ def test_the_20_family_starts_at_the_cheapest_resolution_it_offers(node_module):
 def test_the_20_family_starts_at_the_duration_comfyui_starts_it(node_module):
     for label in ("Seedance 2.0", "Seedance 2.0 Fast", "Seedance 2.0 Mini"):
         assert default_of(node_module, label, "duration") == 7, label
+
+
+def widget_values(node_module, label):
+    """The values a freshly dropped node would hand `execute` for this model.
+
+    Read off the schema rather than written out, because a fixture written by
+    hand drifts from the widgets and then proves the request builder works
+    against inputs the node never sends."""
+    values = {"model": label}
+    for name, widget in widgets(node_module, label).items():
+        default = getattr(widget, "default", None)
+        if default is not None:
+            values[name] = default
+    return values
+
+
+@pytest.mark.parametrize("label", ["Seedance 2.5", "Seedance 2.0",
+                                   "Seedance 2.0 Fast", "Seedance 2.0 Mini"])
+def test_each_arm_can_build_a_request_from_what_the_node_actually_sends(
+        node_module, label):
+    """Both request builders, against the widgets as the schema defines them.
+
+    The catalog builder read `output_format` unconditionally for 2.5 while the
+    node had no such widget, so the flagship model raised KeyError before any
+    call — and every existing test passed, because they hand-added the key the
+    node never sends."""
+    from pipeline import seedance_video as catalog
+    from pipeline import fal_seedance as fal
+    values = dict(widget_values(node_module, label), prompt="a cat")
+    catalog_body = catalog.build_request(label, values, 7, False, ["i"], [])
+    assert catalog_body["input"]["prompt"] == "a cat"
+    fal_values = dict(values, duration=str(values["duration"]))
+    if fal_values["ratio"] == "adaptive":
+        fal_values["ratio"] = "auto"
+    assert fal.build_request(fal_values, ["i"], [], [])["prompt"] == "a cat"

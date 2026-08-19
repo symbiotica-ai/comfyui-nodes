@@ -215,11 +215,11 @@ def test_a_reply_without_a_video_says_what_came_back_instead():
 
 
 def test_an_unfinished_run_is_not_read_as_a_finished_one():
-    """`state` is the catalog's own word for whether the run completed. A body
-    that carries a state other than Completed and no video is a run that did
-    not finish, not a malformed reply."""
+    """A run that has not produced a video yet raises rather than returning
+    nothing. The state sits inside the run envelope, where the real reply puts
+    it — the same place the video does."""
     with pytest.raises(RuntimeError) as raised:
-        core.video_url({"result": {}, "state": "Queued"})
+        core.video_url({"success": True, "result": {"state": "Queued"}})
     assert "Queued" in str(raised.value)
 
 
@@ -333,3 +333,25 @@ def test_a_reply_that_names_no_key_source_is_not_reported_as_one():
     """Absent is not the same as Unified. Warning on a field Cloudflare simply
     did not send would train the reader to ignore the warning."""
     assert core.key_source_warning({"result": {"state": "Completed"}}) == ""
+
+
+def test_a_stereo_reference_keeps_its_channels_side_by_side():
+    """WAV stores frames interleaved. Written straight from the array a stereo
+    clip plays its left channel and then its right, at double length — and the
+    existing fixture tiles identical channels, so it could not tell."""
+    import base64, io, wave
+    import numpy as np
+    rate, seconds = 16000, 3.0
+    samples = int(rate * seconds)
+    left = np.full(samples, 0.5, dtype="float32")
+    right = np.full(samples, -0.5, dtype="float32")
+    audio = {"waveform": np.stack([left, right])[None, ...],
+             "sample_rate": rate}
+    uri = core.audio_data_uri(audio, "Seedance 2.5")
+    raw = base64.b64decode(uri.split(",", 1)[1])
+    with wave.open(io.BytesIO(raw)) as handle:
+        assert handle.getnchannels() == 2
+        # Not doubled: interleaved, one frame carries both channels.
+        assert handle.getnframes() == samples
+        frames = np.frombuffer(handle.readframes(2), dtype="<i2")
+    assert frames[0] > 0 and frames[1] < 0
