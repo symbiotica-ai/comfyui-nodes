@@ -6,6 +6,14 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.1
+
+**New node: Split Prompts** (Symbiotica/Text). Paste a block of prompts
+separated by empty lines and it emits them as a list, so the graph runs once
+per paragraph from a single queue press. The `remove_empty_breakline` toggle
+strips the blank line from every prompt. Off, each prompt keeps a trailing
+empty line.
+
 ## 2026.8.30
 
 **The AI Gateway nodes work on Comfy Desktop.** Comfy Desktop is an Electron
