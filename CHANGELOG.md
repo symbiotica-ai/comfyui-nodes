@@ -6,6 +6,15 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.5
+
+**Module: one row per group and subgraph, and folders.** The Module node now
+lists every group and subgraph in the graph on screen with a `folder/name`
+path, the revision and a Publish button; no more clicking title bars. A new
+**folder** input (type it, or connect a text node) prefills the path for new
+rows, and slashes in a module name are folders on disk, so `bakery/flip` and
+`fashion-story/llm` stay apart. The "Publish selected" button is gone.
+
 ## 2026.9.4
 
 **Module: groups can be modules too.** Click a group's title bar, press
