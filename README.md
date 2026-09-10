@@ -179,6 +179,20 @@ Wrappers around Wavespeed's hosted endpoints.
 - `Load Text List` — one text file's blank-line-separated blocks as a list,
   emitting the same `(prompts, names, count)` contract as `NS Prompt List`
 
+### Modules (linked subgraphs)
+- `Module` (Symbiotica/Modules) — one subgraph, edited once, updated in every
+  workflow that uses it. Select a subgraph node, press **Publish selected
+  subgraph** on the Module node and name it; the subgraph is now linked. Edit
+  it in any workflow and press Publish again: every workflow picks up the new
+  version when opened, and **Sync all workflows** rewrites the files on disk
+  right away (including ones you have not opened). The **module** dropdown
+  drops a published module below the node. Promoted values on the outside of
+  the module (a LoRA picker, a checkpoint) follow the change only when the
+  module changed them, so a prompt typed into one workflow survives a LoRA
+  change published from another. Modules live in
+  `user/default/symbiotica-modules/`. Nested subgraphs inside a module are not
+  supported yet.
+
 ### Canvas
 - **Find node by ID** — press `Ctrl+Shift+0`, or pick **Find node by ID** at the
   top of the canvas right-click menu. Type the number on the node's ID badge,
