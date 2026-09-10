@@ -6,6 +6,13 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.3
+
+**Module: Publish knows which subgraph you mean.** Pressing a button on the
+Module node deselects the subgraph, so Publish had nothing to publish. The
+node now remembers the last subgraph you clicked and the button reads
+"Publish: <its title>".
+
 ## 2026.9.2
 
 **New node: Module** (Symbiotica/Modules) — linked subgraphs. Publish a subgraph
