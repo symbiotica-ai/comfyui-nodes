@@ -142,8 +142,21 @@ class TestLibrary:
             write_module(str(tmp_path), "  ", subgraph(), {}, None)
         with pytest.raises(ModuleError):
             write_module(str(tmp_path), "edit", {"nope": 1}, {}, None)
-        assert safe_filename("../../etc/passwd") == "etc-passwd"
+        assert safe_filename("../../etc/passwd") == "etc/passwd"
+        with pytest.raises(ModuleError):
+            safe_filename("../..")
         assert read_module(str(tmp_path), "missing") is None
+
+    def test_folders_in_the_name_become_folders_on_disk(self, tmp_path):
+        lib = str(tmp_path)
+        write_module(lib, "bakery/flip", subgraph(), {}, None)
+        write_module(lib, " bakery//image gen ", subgraph(), {}, None)
+        assert (tmp_path / "bakery" / "flip.json").is_file()
+        assert (tmp_path / "bakery" / "image gen.json").is_file()
+        names = sorted(load_library(lib))
+        assert names == ["bakery/flip", "bakery/image gen"]
+        assert read_module(lib, "bakery/flip")["name"] == "bakery/flip"
+        assert write_module(lib, "bakery/flip", subgraph(), {}, None)["rev"] == 2
 
     def test_library_skips_broken_files(self, tmp_path):
         (tmp_path / "broken.json").write_text("{not json")

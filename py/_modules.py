@@ -41,13 +41,26 @@ class ModuleError(ValueError):
 # ---------------------------------------------------------------- library --
 
 def safe_filename(name: str) -> str:
-    """The file a module is stored under. Letters, digits, dash, underscore and
-    space survive; everything else becomes a dash, so a name can never walk
-    out of the library directory."""
-    cleaned = re.sub(r"[^A-Za-z0-9 _-]+", "-", str(name or "")).strip(" -")
-    if not cleaned:
+    """The path a module is stored under, relative to the library. Slashes are
+    folders: `bakery/flip` lives at `bakery/flip.json`. Within a segment only
+    letters, digits, dash, underscore, dot and space survive, and a segment
+    that is empty or only dots is refused, so a name can never walk out of
+    the library directory."""
+    segments = []
+    for raw in str(name or "").replace("\\", "/").split("/"):
+        cleaned = re.sub(r"[^A-Za-z0-9 ._-]+", "-", raw).strip(" -")
+        if not cleaned or set(cleaned) <= {"."}:
+            continue
+        segments.append(cleaned)
+    if not segments:
         raise ModuleError("module name is empty")
-    return cleaned
+    return "/".join(segments)
+
+
+def clean_name(name: str) -> str:
+    """A module name as it is stored and shown: the same segments the file
+    path uses, so `bakery//flip ` and `bakery/flip` are one module."""
+    return safe_filename(name)
 
 
 def library_dir() -> str:
@@ -68,16 +81,19 @@ def read_module(lib_dir: str, name: str) -> dict | None:
 
 
 def load_library(lib_dir: str) -> dict[str, dict]:
-    """Every module in the library, keyed by name. Unreadable files are skipped
-    rather than failing every sync for one bad file."""
+    """Every module in the library, keyed by name, folders included.
+    Unreadable files are skipped rather than failing every sync for one."""
     library: dict[str, dict] = {}
     if not os.path.isdir(lib_dir):
         return library
-    for filename in sorted(os.listdir(lib_dir)):
-        if not filename.endswith(".json"):
-            continue
+    paths = []
+    for dirpath, _dirs, files in os.walk(lib_dir, followlinks=True):
+        for filename in files:
+            if filename.endswith(".json"):
+                paths.append(os.path.join(dirpath, filename))
+    for path in sorted(paths):
         try:
-            with open(os.path.join(lib_dir, filename), "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 module = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
@@ -105,9 +121,7 @@ def write_module(lib_dir: str, name: str, subgraph: dict | None = None,
     start), its promoted values and an instance template; a group module
     stores the frame, the member nodes (positions relative to the frame) and
     the links between them."""
-    name = str(name or "").strip()
-    if not name:
-        raise ModuleError("module name is empty")
+    name = clean_name(name)
     existing = read_module(lib_dir, name)
     rev = int(existing.get("rev", 0)) + 1 if existing else 1
     module = {
@@ -144,8 +158,9 @@ def write_module(lib_dir: str, name: str, subgraph: dict | None = None,
             "values": dict(values or {}),
             "instance": instance,
         })
-    os.makedirs(lib_dir, exist_ok=True)
-    with open(_module_path(lib_dir, name), "w", encoding="utf-8") as f:
+    path = _module_path(lib_dir, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(module, f, indent=2)
     return {"name": name, "rev": rev, "kind": module["kind"]}
 

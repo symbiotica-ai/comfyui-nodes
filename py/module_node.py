@@ -27,6 +27,11 @@ class SymbioticaModule:
                 "module": ([PICK] + _module_names(), {
                     "tooltip": "Pick a published module to add it below this node.",
                 }),
+                "folder": ("STRING", {
+                    "default": "",
+                    "tooltip": "Project folder for new modules, e.g. bakery. "
+                               "Type it or connect a text node.",
+                }),
             },
         }
 
@@ -36,7 +41,7 @@ class SymbioticaModule:
     DESCRIPTION = ("Linked subgraph modules: publish a subgraph once, and every "
                    "workflow that uses it picks up the change.")
 
-    def execute(self, module=PICK):
+    def execute(self, module=PICK, folder=""):
         return ()
 
 
@@ -62,7 +67,7 @@ if PromptServer is not None:
         return web.json_response({"modules": list_modules(library_dir()),
                                   "library": LIBRARY_DIRNAME})
 
-    @routes.get("/symbiotica/modules/{name}")
+    @routes.get("/symbiotica/modules/{name:.+}")
     async def modules_read(request):
         try:
             module = read_module(library_dir(), request.match_info["name"])

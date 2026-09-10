@@ -112,3 +112,14 @@ test("a current revision, an untagged subgraph and an unknown module are left al
     assert.equal(applyModules(other, { edit: module() }).changed, false);
     assert.equal(applyModules({ nodes: [] }, { edit: module() }).changed, false);
 });
+
+import { joinPath, slug } from "../../web/js/modules.js";
+
+test("a title becomes a path segment and joins the project folder", () => {
+    assert.equal(slug("Image Model Preamble"), "image-model-preamble");
+    assert.equal(slug("  4-steps LoRA! "), "4-steps-lora");
+    assert.equal(joinPath("bakery", "flip"), "bakery/flip");
+    assert.equal(joinPath("/bakery/", "/flip"), "bakery/flip");
+    assert.equal(joinPath("", "flip"), "flip");
+    assert.equal(joinPath("fashion-story", ""), "fashion-story");
+});

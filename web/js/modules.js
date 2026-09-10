@@ -10,6 +10,8 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
+import { HUB, ghostButtonCss, injectHubStyles } from "./hub_theme.js";
+import { el, pinPanelWidth } from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaModule";
 const TAG = "symbiotica_module";
@@ -424,104 +426,13 @@ function instanceTemplate(node) {
     return data;
 }
 
-// Clicking a button on the Module node selects the Module node, so by the time
-// Publish runs the subgraph or group is no longer selected. Remember the last
-// one the user clicked instead; the button says which one it will publish.
-let lastTarget = null;
-
-const isGroup = (item) => typeof item?.recomputeInsideNodes === "function";
-
-function graphsOf(root) {
-    return [root, ...(root?.subgraphs?.values?.() ?? [])];
-}
-
-function targetAlive(target) {
-    if (!target) return false;
-    if (target.kind === "subgraph") return Boolean(target.item.graph);
-    return graphsOf(rootGraph()).some((graph) => graph?.groups?.includes?.(target.item));
-}
-
-function noteTarget(kind, item) {
-    if (lastTarget?.item === item) return;
-    lastTarget = { kind, item };
-    refreshPublishLabels();
-}
-
-function trackSelection(node) {
-    if (!node?.isSubgraphNode?.() || node._symModuleTracked) return;
-    node._symModuleTracked = true;
-    const onSelected = node.onSelected;
-    node.onSelected = function () {
-        onSelected?.apply(this, arguments);
-        noteTarget("subgraph", this);
-    };
-}
-
-function trackAllSubgraphNodes() {
-    for (const graph of graphsOf(rootGraph())) for (const node of graph?.nodes ?? []) trackSelection(node);
-}
-
-// Groups have no selection callback; the canvas repaints after every
-// selection change, so the Module node looks at the selection when it draws.
-function noteSelectedItems() {
-    const items = app.canvas?.selectedItems;
-    if (!items) return;
-    for (const item of items) {
-        if (isGroup(item)) return noteTarget("group", item);
-        if (item?.isSubgraphNode?.()) return noteTarget("subgraph", item);
-    }
-}
-
-function publishTarget(except) {
-    for (const item of app.canvas?.selectedItems ?? []) {
-        if (item === except) continue;
-        if (isGroup(item)) return { kind: "group", item };
-        if (item?.isSubgraphNode?.()) return { kind: "subgraph", item };
-    }
-    return targetAlive(lastTarget) ? lastTarget : null;
-}
-
-const publishButtons = new Set();
-
-function refreshPublishLabels() {
-    const target = publishTarget(null);
-    const title = target ? String(target.item.title ?? target.item.subgraph?.name ?? target.kind) : "";
-    const short = title.length > 24 ? title.slice(0, 23) + "…" : title;
-    const label = target
-        ? `Publish: ${short}${target.kind === "group" ? " (group)" : ""}`
-        : "Publish selected subgraph or group";
-    for (const button of publishButtons) button.name = label;
-    app.graph?.setDirtyCanvas(true, false);
-}
-
 // --------------------------------------------------------------- publish --
 
-async function askName(defaultValue) {
-    const name = await app.extensionManager.dialog.prompt({
-        title: "Publish module",
-        message: "Module name",
-        defaultValue: defaultValue ?? "",
-    });
-    return (name ?? "").trim();
-}
-
-async function publishSelected(moduleNode) {
-    const picked = publishTarget(moduleNode);
-    if (!picked) {
-        toast("warn", "Nothing picked", "Click the subgraph node or the group title you want to publish, then press Publish.");
-        return;
-    }
-    if (picked.kind === "group") return publishGroup(picked.item);
-    const target = picked.item;
+async function publishSubgraphNode(target, name) {
     const subgraph = target.subgraph;
     if (subgraph.nodes?.some((n) => n.isSubgraphNode?.())) {
         toast("error", "Nested subgraphs not supported", "Unpack the inner subgraph first.");
-        return;
-    }
-    let name = subgraph.extra?.[TAG]?.name;
-    if (!name) {
-        name = await askName(subgraph.name);
-        if (!name) return;
+        return false;
     }
     const values = liveValues(target);
     const definition = subgraph.asSerialisable();
@@ -543,8 +454,10 @@ async function publishSelected(moduleNode) {
         await refreshPickers();
         toast("success", `Published "${result.name}" r${result.rev}`,
             "Other workflows update when opened. Sync all workflows writes them now.");
+        return true;
     } catch (err) {
         toast("error", "Publish failed", String(err?.message ?? err));
+        return false;
     }
 }
 
@@ -560,21 +473,16 @@ function groupMembers(group) {
     return members.filter((n) => n.comfyClass !== NODE_CLASS && n.type !== NODE_CLASS);
 }
 
-async function publishGroup(group) {
+async function publishGroup(group, name) {
     const graph = app.canvas?.graph ?? app.graph;
     const members = groupMembers(group);
     if (!members.length) {
         toast("warn", "Empty group", "The frame has no nodes inside it.");
-        return;
+        return false;
     }
     if (members.some((n) => n.isSubgraphNode?.())) {
         toast("error", "Subgraphs inside a group are not supported", "Unpack them or publish the subgraph on its own.");
-        return;
-    }
-    let name = members.map((n) => n.properties?.[GTAG]?.name).find(Boolean);
-    if (!name) {
-        name = await askName(group.title);
-        if (!name) return;
+        return false;
     }
     const memberIds = new Set(members.map((n) => n.id));
     const [gx, gy] = [Number(group.pos?.[0] ?? 0), Number(group.pos?.[1] ?? 0)];
@@ -611,8 +519,10 @@ async function publishGroup(group) {
         await refreshPickers();
         toast("success", `Published "${result.name}" r${result.rev} (group)`,
             "Other workflows update when opened. Sync all workflows writes them now.");
+        return true;
     } catch (err) {
         toast("error", "Publish failed", String(err?.message ?? err));
+        return false;
     }
 }
 
@@ -689,7 +599,6 @@ async function insertModule(moduleNode, name) {
     }
     node.properties ??= {};
     node.properties[TAG] = { name, rev, values: structuredClone(values) };
-    trackSelection(node);
     app.canvas?.deselectAll?.();
     app.canvas?.select?.(node);
     app.graph?.setDirtyCanvas(true, true);
@@ -738,6 +647,153 @@ async function refreshPickers() {
     app.graph?.setDirtyCanvas(true, false);
 }
 
+// The project folder for new modules: typed on the node, or read off the
+// text node wired into the `folder` input. A computed string (an LLM output,
+// a concat) has no value on the canvas, so only a typed one can be read.
+function folderValue(node) {
+    const index = node.inputs?.findIndex((i) => i.name === "folder") ?? -1;
+    const input = index >= 0 ? node.inputs[index] : null;
+    if (input?.link != null) {
+        const origin = node.getInputNode?.(index);
+        const widget = origin?.widgets?.find((w) => typeof w.value === "string");
+        if (widget) return String(widget.value).trim();
+        return null;
+    }
+    return String(node.widgets?.find((w) => w.name === "folder")?.value ?? "").trim();
+}
+
+// `Image Model Preamble` -> `image-model-preamble`: the path segment a new
+// module gets from its title, editable before publishing.
+export function slug(title) {
+    return String(title ?? "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+export function joinPath(folder, name) {
+    const parts = [folder, name].map((p) => String(p ?? "").replace(/^\/+|\/+$/g, "")).filter(Boolean);
+    return parts.join("/");
+}
+
+// Everything in the graph on screen that can be a module, with its tag if it
+// already is one.
+function moduleCandidates(graph) {
+    const rows = [];
+    for (const group of graph?.groups ?? []) {
+        const tag = groupMembers(group).map((n) => n.properties?.[GTAG]).find((t) => t?.name);
+        rows.push({ kind: "group", item: group, title: String(group.title ?? "Group"),
+            name: tag?.name ?? null, rev: tag?.rev ?? null });
+    }
+    for (const node of graph?.nodes ?? []) {
+        if (!node.isSubgraphNode?.()) continue;
+        const tag = node.subgraph?.extra?.[TAG];
+        rows.push({ kind: "subgraph", item: node, title: String(node.title ?? node.subgraph?.name ?? "Subgraph"),
+            name: tag?.name ?? null, rev: tag?.rev ?? null });
+    }
+    return rows;
+}
+
+const rowSignature = (rows, folder) =>
+    `${folder}|` + rows.map((r) => `${r.kind}:${r.title}:${r.name}:${r.rev}`).join("|");
+
+function modulePanel(node) {
+    injectHubStyles();
+    const container = el("div", "box-sizing:border-box;width:100%;height:100%;"
+        + "overflow-y:auto;overflow-x:hidden;");
+    const list = el("div", "width:100%;box-sizing:border-box;overflow:hidden;"
+        + `padding:2px;font:11px ${HUB.font};color:var(--input-text, ${HUB.ink});`);
+    container.appendChild(list);
+    container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
+    // No computeSize, a constant floor: anything computeSize returns becomes a
+    // minimum height the corner cannot drag past.
+    node.addDOMWidget("modules_panel", "sym_modules", container, {
+        serialize: false, hideOnZoom: true,
+        getMinHeight: () => 44,
+    });
+    node.size[0] = Math.max(node.size[0], 360);
+    const syncPanelWidth = pinPanelWidth(node, container);
+    const refit = () => requestAnimationFrame(() => {
+        syncPanelWidth();
+        node.setDirtyCanvas?.(true, true);
+    });
+
+    // The path typed into a row survives re-renders until it is published.
+    const drafts = new Map();
+    let lastSignature = null;
+    let busy = false;
+
+    function render(force = false) {
+        const graph = app.canvas?.graph ?? app.graph;
+        const folder = folderValue(node);
+        const rows = moduleCandidates(graph);
+        const signature = rowSignature(rows, folder);
+        if (!force && signature === lastSignature) return;
+        lastSignature = signature;
+        list.replaceChildren();
+        if (folder === null) {
+            list.appendChild(el("div", `padding:4px 3px;color:${HUB.inkSubtle};`,
+                "folder is wired to a node with no typed text — type it or connect a text node."));
+        }
+        if (!rows.length) {
+            list.appendChild(el("div", `padding:6px 3px;color:${HUB.inkSubtle};`,
+                "No groups or subgraphs in this graph yet."));
+            refit();
+            return;
+        }
+        for (const row of rows) {
+            const key = `${row.kind}:${row.title}`;
+            const line = el("div", "display:flex;align-items:center;gap:6px;width:100%;"
+                + `box-sizing:border-box;padding:3px 2px;border-bottom:1px solid ${HUB.hairline};`);
+            const title = el("div", "flex:1 1 30%;min-width:0;overflow:hidden;text-overflow:ellipsis;"
+                + "white-space:nowrap;", row.title);
+            title.title = row.kind === "group" ? "group" : "subgraph";
+            const path = el("input", "flex:1 1 40%;min-width:0;box-sizing:border-box;padding:2px 4px;"
+                + `font:11px ${HUB.mono};background:var(--comfy-input-bg, transparent);`
+                + `color:var(--input-text, ${HUB.ink});border:1px solid ${HUB.hairline};`
+                + `border-radius:${HUB.radius.sm};`);
+            path.value = drafts.get(key) ?? row.name ?? joinPath(folder ?? "", slug(row.title));
+            path.placeholder = "folder/name";
+            path.addEventListener("input", () => drafts.set(key, path.value));
+            path.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") button.click(); });
+            path.addEventListener("pointerdown", (e) => e.stopPropagation());
+            const status = el("div", `flex:0 0 auto;color:${HUB.inkSubtle};font:11px ${HUB.mono};`,
+                row.rev != null ? `r${row.rev}` : "new");
+            const button = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "Publish");
+            button.addEventListener("pointerdown", (e) => e.stopPropagation());
+            button.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                if (busy) return;
+                const name = path.value.trim();
+                if (!name) { toast("warn", "Name it first", "Type folder/name in the row."); return; }
+                busy = true;
+                button.disabled = true;
+                try {
+                    const ok = row.kind === "group"
+                        ? await publishGroup(row.item, name)
+                        : await publishSubgraphNode(row.item, name);
+                    if (ok) drafts.delete(key);
+                } finally {
+                    busy = false;
+                    button.disabled = false;
+                    render(true);
+                }
+            });
+            line.append(title, path, status, button);
+            list.appendChild(line);
+        }
+        refit();
+    }
+
+    node._symRenderModules = render;
+    render(true);
+    // Groups get made, renamed and removed without any event reaching this
+    // node; the canvas repaints after each, so a cheap signature check on
+    // draw keeps the rows honest.
+    const onDrawForeground = node.onDrawForeground;
+    node.onDrawForeground = function () {
+        render();
+        return onDrawForeground?.apply(this, arguments);
+    };
+}
+
 function setupModuleNode(node) {
     node.isVirtualNode = true;
     const picker = node.widgets?.find((w) => w.name === "module");
@@ -749,32 +805,22 @@ function setupModuleNode(node) {
         picker.value = PICK;
         insertModule(node, pickerName(String(value)));
     };
-    const publish = node.addWidget("button", "Publish selected subgraph", null,
-        () => publishSelected(node), { serialize: false });
-    publish.serializeValue = () => undefined;
-    publishButtons.add(publish);
     const sync = node.addWidget("button", "Sync all workflows", null,
         () => syncAll(), { serialize: false });
     sync.serializeValue = () => undefined;
+    modulePanel(node);
+    if (node.size[1] < 220) node.setSize?.([Math.max(node.size[0], 360), 220]);
     const onRemoved = node.onRemoved;
     node.onRemoved = function () {
         pickers.delete(picker);
-        publishButtons.delete(publish);
         onRemoved?.apply(this, arguments);
     };
     const onSelected = node.onSelected;
     node.onSelected = function () {
         onSelected?.apply(this, arguments);
         refreshPickers();
-        refreshPublishLabels();
-    };
-    const onDrawForeground = node.onDrawForeground;
-    node.onDrawForeground = function () {
-        noteSelectedItems();
-        return onDrawForeground?.apply(this, arguments);
     };
     refreshPickers();
-    refreshPublishLabels();
 }
 
 // ---------------------------------------------------------- sync on open --
@@ -825,18 +871,7 @@ registerSymbioticaExtension(app, {
         }
     },
 
-    nodeCreated(node) {
-        trackSelection(node);
-    },
-
-    loadedGraphNode(node) {
-        trackSelection(node);
-    },
-
     afterConfigureGraph() {
-        lastTarget = null;
-        trackAllSubgraphNodes();
-        refreshPublishLabels();
         const report = pendingReport;
         pendingReport = null;
         if (!report) return;

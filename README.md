@@ -179,22 +179,27 @@ Wrappers around Wavespeed's hosted endpoints.
 - `Load Text List` — one text file's blank-line-separated blocks as a list,
   emitting the same `(prompts, names, count)` contract as `NS Prompt List`
 
-### Modules (linked subgraphs)
-- `Module` (Symbiotica/Modules) — one subgraph, edited once, updated in every
-  workflow that uses it. Select a subgraph node, press **Publish selected
-  subgraph** on the Module node and name it; the subgraph is now linked. Edit
-  it in any workflow and press Publish again: every workflow picks up the new
-  version when opened, and **Sync all workflows** rewrites the files on disk
-  right away (including ones you have not opened). The **module** dropdown
-  drops a published module below the node. Promoted values on the outside of
-  the module (a LoRA picker, a checkpoint) follow the change only when the
-  module changed them, so a prompt typed into one workflow survives a LoRA
-  change published from another. Modules live in
-  `user/default/symbiotica-modules/`. Nested subgraphs inside a module are not
-  supported yet.
-- **Groups work the same way.** Click a group's title bar, press Publish, name
-  it: the nodes inside the frame, their values and the links between them are
-  the module. On sync the nodes keep their ids, positions and outside links
+### Modules (linked subgraphs and groups)
+- `Module` (Symbiotica/Modules) — a subgraph or a group, edited once, updated
+  in every workflow that uses it. The node lists every group and subgraph in
+  the graph you are looking at, one row each: title, a `folder/name` path,
+  the revision, and **Publish**. Press Publish and that row becomes a module,
+  or gets a new revision if it already is one. Edit it in any workflow and
+  press Publish again: every workflow picks up the new version when opened,
+  and **Sync all workflows** rewrites the files on disk right away (including
+  ones you have not opened). The **module** dropdown drops a published module
+  below the node.
+- **folder** is the project name that prefills the path for new rows, so
+  with folder `bakery` the Flip group is offered as `bakery/flip`. Type it or
+  connect a text node. Slashes in the path are folders on disk under
+  `user/default/symbiotica-modules/`.
+- **Subgraph modules.** The definition inside plus the promoted values on the
+  outside (a LoRA picker, a checkpoint). A promoted value follows the change
+  only when the module changed it, so a prompt typed into one workflow
+  survives a LoRA change published from another. Nested subgraphs inside a
+  module are not supported yet.
+- **Group modules.** The nodes inside the frame, their values and the links
+  between them. On sync the nodes keep their ids, positions and outside links
   (relinked by slot name; a link whose node or slot is gone is dropped and the
   toast says so). Nodes you add to the module appear everywhere at their
   module position, nodes you remove disappear, and the frame grows to fit.
