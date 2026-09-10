@@ -169,18 +169,54 @@ function instanceTemplate(node) {
     return data;
 }
 
-function selectedSubgraphNode(except) {
+// Clicking a button on the Module node selects the Module node, so by the time
+// Publish runs the subgraph is no longer selected. Remember the last subgraph
+// node the user clicked instead; the button says which one it will publish.
+let lastSubgraphNode = null;
+
+function trackSelection(node) {
+    if (!node?.isSubgraphNode?.() || node._symModuleTracked) return;
+    node._symModuleTracked = true;
+    const onSelected = node.onSelected;
+    node.onSelected = function () {
+        onSelected?.apply(this, arguments);
+        lastSubgraphNode = this;
+        refreshPublishLabels();
+    };
+}
+
+function trackAllSubgraphNodes() {
+    const root = rootGraph();
+    const graphs = [root, ...(root?.subgraphs?.values?.() ?? [])];
+    for (const graph of graphs) for (const node of graph?.nodes ?? []) trackSelection(node);
+}
+
+function targetSubgraphNode(except) {
     const selected = Object.values(app.canvas?.selected_nodes ?? {})
         .filter((n) => n !== except && n.isSubgraphNode?.());
-    return selected.length === 1 ? selected[0] : null;
+    if (selected.length === 1) return selected[0];
+    if (lastSubgraphNode && lastSubgraphNode.graph) return lastSubgraphNode;
+    return null;
+}
+
+const publishButtons = new Set();
+
+function refreshPublishLabels() {
+    const target = targetSubgraphNode(null);
+    const title = target ? String(target.title ?? target.subgraph?.name ?? "subgraph") : "";
+    const label = target
+        ? `Publish: ${title.length > 28 ? title.slice(0, 27) + "…" : title}`
+        : "Publish selected subgraph";
+    for (const button of publishButtons) button.name = label;
+    app.graph?.setDirtyCanvas(true, false);
 }
 
 // --------------------------------------------------------------- publish --
 
 async function publishSelected(moduleNode) {
-    const target = selectedSubgraphNode(moduleNode);
+    const target = targetSubgraphNode(moduleNode);
     if (!target) {
-        toast("warn", "Select one subgraph", "Click the subgraph node to publish, then Publish.");
+        toast("warn", "No subgraph picked", "Click the subgraph node you want to publish first, then press Publish.");
         return;
     }
     const subgraph = target.subgraph;
@@ -266,6 +302,7 @@ async function insertModule(moduleNode, name) {
     }
     node.properties ??= {};
     node.properties[TAG] = { name, rev, values: structuredClone(values) };
+    trackSelection(node);
     app.canvas?.deselectAll?.();
     app.canvas?.select?.(node);
     app.graph?.setDirtyCanvas(true, true);
@@ -325,20 +362,24 @@ function setupModuleNode(node) {
     const publish = node.addWidget("button", "Publish selected subgraph", null,
         () => publishSelected(node), { serialize: false });
     publish.serializeValue = () => undefined;
+    publishButtons.add(publish);
     const sync = node.addWidget("button", "Sync all workflows", null,
         () => syncAll(), { serialize: false });
     sync.serializeValue = () => undefined;
     const onRemoved = node.onRemoved;
     node.onRemoved = function () {
         pickers.delete(picker);
+        publishButtons.delete(publish);
         onRemoved?.apply(this, arguments);
     };
     const onSelected = node.onSelected;
     node.onSelected = function () {
         onSelected?.apply(this, arguments);
         refreshPickers();
+        refreshPublishLabels();
     };
     refreshPickers();
+    refreshPublishLabels();
 }
 
 // ---------------------------------------------------------- sync on open --
@@ -384,7 +425,18 @@ registerSymbioticaExtension(app, {
         }
     },
 
+    nodeCreated(node) {
+        trackSelection(node);
+    },
+
+    loadedGraphNode(node) {
+        trackSelection(node);
+    },
+
     afterConfigureGraph() {
+        lastSubgraphNode = null;
+        trackAllSubgraphNodes();
+        refreshPublishLabels();
         const report = pendingReport;
         pendingReport = null;
         if (!report) return;
