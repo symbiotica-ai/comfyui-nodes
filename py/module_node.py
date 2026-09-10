@@ -76,9 +76,16 @@ if PromptServer is not None:
     async def modules_publish(request):
         body = await request.json()
         try:
-            result = write_module(library_dir(), body.get("name"),
-                                  body.get("subgraph"), body.get("values") or {},
-                                  body.get("instance"))
+            if body.get("kind") == "group":
+                result = write_module(library_dir(), body.get("name"), group={
+                    "group": body.get("group") or {},
+                    "nodes": body.get("nodes"),
+                    "links": body.get("links") or [],
+                })
+            else:
+                result = write_module(library_dir(), body.get("name"),
+                                      body.get("subgraph"), body.get("values") or {},
+                                      body.get("instance"))
         except ModuleError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(result)

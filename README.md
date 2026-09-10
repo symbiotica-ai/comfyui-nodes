@@ -192,6 +192,15 @@ Wrappers around Wavespeed's hosted endpoints.
   change published from another. Modules live in
   `user/default/symbiotica-modules/`. Nested subgraphs inside a module are not
   supported yet.
+- **Groups work the same way.** Click a group's title bar, press Publish, name
+  it: the nodes inside the frame, their values and the links between them are
+  the module. On sync the nodes keep their ids, positions and outside links
+  (relinked by slot name; a link whose node or slot is gone is dropped and the
+  toast says so). Nodes you add to the module appear everywhere at their
+  module position, nodes you remove disappear, and the frame grows to fit.
+  Widget values follow the same per-widget rule, so the image in a Load Image
+  node or the text in a prompt node changes everywhere when you change it in
+  the module.
 
 ### Canvas
 - **Find node by ID** — press `Ctrl+Shift+0`, or pick **Find node by ID** at the
