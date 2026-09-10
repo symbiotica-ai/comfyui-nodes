@@ -6,6 +6,17 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.2
+
+**New node: Module** (Symbiotica/Modules) — linked subgraphs. Publish a subgraph
+as a named module from any workflow; every workflow that contains it swaps in
+the new version when opened, and the node's **Sync all workflows** button
+rewrites every workflow file on disk right away. A promoted value on the
+outside of the module (LoRA, checkpoint) is overwritten only when the module
+changed it since that workflow last synced, so per-workflow prompts survive.
+The **module** dropdown drops a published module onto the canvas. Modules are
+stored in `user/default/symbiotica-modules/`.
+
 ## 2026.9.1
 
 **New node: Split Prompts** (Symbiotica/Text). Paste a block of prompts
