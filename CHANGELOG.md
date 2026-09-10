@@ -6,6 +6,17 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.4
+
+**Module: groups can be modules too.** Click a group's title bar, press
+Publish on the Module node, name it. The nodes inside the frame, their values
+and the links between them become the module; every workflow with that group
+updates on open or with Sync all workflows. Nodes keep their ids, positions
+and outside links across syncs (relinked by slot name; a link whose node or
+slot is gone is dropped and reported). Nodes added to the module appear
+everywhere, removed ones disappear, and the frame grows to fit. The dropdown
+lists group modules with a "(group)" suffix.
+
 ## 2026.9.3
 
 **Module: Publish knows which subgraph you mean.** Pressing a button on the
