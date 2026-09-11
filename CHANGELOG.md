@@ -6,6 +6,14 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.19
+
+**Control Image node.** `Control Image` (Symbiotica/Images) is Load Image
+scoped to the shared library `input/controlnet/`: the dropdown lists every
+image there, subfolders included, by relative path, and outputs IMAGE and
+MASK. A recipe slot on it stores `bakery/counter.png`, and the same file
+loads on any editor or render sandbox that mounts the inputs.
+
 ## 2026.9.18
 
 **Recipes: the recipe name is a slug.** Whatever reaches the `recipe` input
