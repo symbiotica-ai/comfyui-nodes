@@ -48,15 +48,15 @@ const activeWorkflowPath = () => app.extensionManager?.workflow?.activeWorkflow?
 // The category Capture writes into: typed on the node, or read off the text
 // node wired into the `category` input. A computed string (an LLM output, a
 // concat) has no value on the canvas, so only a typed one can be read.
-function categoryValue(node) {
-    const index = node.inputs?.findIndex((i) => i.name === "category") ?? -1;
+function textValue(node, name) {
+    const index = node.inputs?.findIndex((i) => i.name === name) ?? -1;
     const input = index >= 0 ? node.inputs[index] : null;
     if (input?.link != null) {
         const origin = node.getInputNode?.(index);
         const widget = origin?.widgets?.find((w) => typeof w.value === "string");
         return widget ? String(widget.value).trim() : null;
     }
-    return String(node.widgets?.find((w) => w.name === "category")?.value ?? "").trim();
+    return String(node.widgets?.find((w) => w.name === name)?.value ?? "").trim();
 }
 
 // ----------------------------------------------------------------- cells --
@@ -453,18 +453,9 @@ function recipePanel(node) {
 
     function render() {
         body.replaceChildren();
-        const top = el("div", "display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:2px 0 6px;");
-        const newName = stopCanvas(el("input", inputCss + "flex:1 1 140px;"));
-        newName.placeholder = "recipe name";
-        const newButton = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "New");
-        stopCanvas(newButton).addEventListener("click", (e) => { e.stopPropagation(); startNew(newName.value.trim()); });
-        newName.addEventListener("keydown", (e) => { if (e.key === "Enter") newButton.click(); });
-        top.append(newName, newButton);
-        body.appendChild(top);
-
         if (!state.table) {
             body.appendChild(el("div", `padding:6px 3px;color:${HUB.inkSubtle};`,
-                "Pick a recipe above, or open the template workflow and start a new one."));
+                "Pick a recipe, or open the template workflow, type a name and press New."));
             body.appendChild(statusLine);
             refit();
             return;
@@ -611,39 +602,13 @@ function recipePanel(node) {
             body.appendChild(box);
         });
 
-        const addRow = el("div", "display:flex;align-items:center;gap:6px;padding:2px 0 4px;");
-        const addName = stopCanvas(el("input", inputCss + "flex:1 1 140px;"));
-        addName.placeholder = "category";
-        const add = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "Add");
-        add.title = "A new category with no values of its own yet. Set the canvas and press its capture.";
-        stopCanvas(add).addEventListener("click", (e) => {
-            e.stopPropagation();
-            const column = addName.value.trim();
-            if (!column) { toast("warn", "Name it first", "The category name is the suffix of the generated workflow."); return; }
-            if (columns.includes(column)) { toast("warn", "Name taken", `There is already a "${column}" category.`); return; }
-            columns.push(column);
-            for (const row of rows) row.cells[column] = "";
-            expanded.add(column);
-            state.dirty = true;
-            render();
-        });
-        addName.addEventListener("keydown", (e) => { if (e.key === "Enter") add.click(); });
-        addRow.append(addName, add);
-        body.appendChild(addRow);
-
-        const actions = el("div", "display:flex;align-items:center;gap:6px;padding:8px 0 2px;");
-        const saveButton = el("button", ghostButtonCss + "padding:3px 10px;", "Save");
-        stopCanvas(saveButton).addEventListener("click", (e) => { e.stopPropagation(); save(); });
-        const generateButton = el("button", ghostButtonCss + "padding:3px 10px;", "Generate");
-        stopCanvas(generateButton).addEventListener("click", (e) => { e.stopPropagation(); generate(); });
-        actions.append(saveButton, generateButton, statusLine);
-        body.appendChild(actions);
+        body.appendChild(statusLine);
         status(state.dirty ? "Unsaved edits." : `${state.name}: ${columns.length - 1} categories, ${rows.length} slots.`);
-        if (!state.dirty && columns.length === 1) status("No categories yet. Add one, set the canvas, press its capture.");
+        if (!state.dirty && columns.length === 1) status("No categories yet. Set the canvas, name a category, press Capture.");
         refit();
     }
 
-    node._symRecipeLoad = load;
+    node._symRecipe = { load, save, generate, startNew };
     render();
 }
 
@@ -655,16 +620,26 @@ function setupRecipeNode(node) {
     picker.value = PICK;
     picker.callback = (value) => {
         if (!value || value === PICK) return;
-        node._symRecipeLoad?.(String(value));
+        node._symRecipe?.load(String(value));
     };
-    const capture = node.addWidget("button", "Capture", null, () => {
-        const column = categoryValue(node);
+    const button = (label, action) => {
+        const widget = node.addWidget("button", label, null, action, { serialize: false });
+        widget.serializeValue = () => undefined;
+    };
+    button("New", () => {
+        const name = textValue(node, "name");
+        if (name === null) { toast("warn", "name is wired to a node with no typed text", "Type it, or connect a text node."); return; }
+        node._symRecipe?.startNew(name);
+    });
+    button("Capture", () => {
+        const column = textValue(node, "category");
         if (column === null) { toast("warn", "category is wired to a node with no typed text", "Type it, or connect a text node."); return; }
         if (!column) { toast("warn", "Name the category first", "Type it in category, or connect a text node."); return; }
         if (!node._symCapture) { toast("warn", "Pick a recipe first", "Capture needs an open recipe to write into."); return; }
         node._symCapture(column);
-    }, { serialize: false });
-    capture.serializeValue = () => undefined;
+    });
+    button("Save", () => node._symRecipe?.save());
+    button("Generate", () => node._symRecipe?.generate());
     recipePanel(node);
     if (node.size[1] < 320) node.setSize?.([Math.max(node.size[0], 560), 320]);
     const onRemoved = node.onRemoved;

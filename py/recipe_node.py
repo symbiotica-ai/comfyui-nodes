@@ -29,6 +29,10 @@ class SymbioticaRecipe:
                     "tooltip": "A recipe from user/default/recipes: one template "
                                "workflow plus a table of per-category values.",
                 }),
+                "name": ("STRING", {
+                    "default": "",
+                    "tooltip": "Name for the recipe New creates from the open workflow.",
+                }),
                 "category": ("STRING", {
                     "default": "",
                     "tooltip": "The category Capture writes into (created if new). "
@@ -43,7 +47,7 @@ class SymbioticaRecipe:
     DESCRIPTION = ("Workflow recipes: one template workflow, a table of values per "
                    "category, one generated workflow per category.")
 
-    def execute(self, recipe=PICK, category=""):
+    def execute(self, recipe=PICK, name="", category=""):
         return ()
 
 

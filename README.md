@@ -212,10 +212,10 @@ Wrappers around Wavespeed's hosted endpoints.
   one generated workflow per category. Pick a recipe in the **recipe**
   dropdown and it opens on the node as collapsible sections: **game** (what
   every category shares) and one per category, each listing the template's
-  slots. Rename a category in its header, remove it with ×, add one with
-  **Add**, then **Save**, or **Generate**, which
+  slots. Rename a category in its header, remove it with ×, then **Save**,
+  or **Generate**, which
   writes prefix + category `.json` files into the output folder (default:
-  the template's folder), overwriting the last run. **New** starts a recipe with the open, saved workflow as its template.
+  the template's folder), overwriting the last run. **New** starts a recipe named by the **name** input with the open, saved workflow as its template.
   To fill a category without typing, set the values on the template's own
   nodes and press the section's **capture**, or put the name in the node's
   **category** input (typed, or a wired text node) and press **Capture**, which creates the category if it is new. A
