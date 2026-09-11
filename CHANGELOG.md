@@ -6,6 +6,11 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.21
+
+**Control Image shows its image.** The node previews the picked file like
+Load Image does.
+
 ## 2026.9.20
 
 **Recipes: sections sorted by name.**
