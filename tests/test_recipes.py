@@ -1,5 +1,5 @@
 # ABOUTME: Tests workflow recipes — nodes titled `recipe:<key>` take their values
-# ABOUTME: from a recipe file, and one template writes one workflow per category.
+# ABOUTME: from a project file, and one template writes one workflow per recipe.
 import copy
 import json
 import os
@@ -60,11 +60,11 @@ def template():
     }
 
 
-def recipe():
+def project():
     return {
         "workflow_prefix": "dev-imperia-bakery-",
-        "game": {"render": {"lora_name": "bakery.safetensors"}},
-        "categories": {
+        "shared": {"render": {"lora_name": "bakery.safetensors"}},
+        "recipes": {
             "appliance1x1": {"control_image": "controlnet/bakery/appliance1x1.png",
                              "render_aspect": "1:1 (Square)", "grid": [2, 1], "pre_flip": False},
             "appliance1x2": {"control_image": "controlnet/bakery/appliance1x2.png",
@@ -149,8 +149,8 @@ class TestApplyRecipe:
 
 
 class TestGenerate:
-    def test_category_values_layer_over_game_values(self):
-        wf, _ = generate(template(), recipe(), "appliance1x2")
+    def test_recipe_values_layer_over_shared_values(self):
+        wf, _ = generate(template(), project(), "appliance1x2")
         assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x2.png"
         assert by_id(wf, 14)["widgets_values"][1] == "bakery.safetensors"
         assert by_id(wf, 13)["mode"] == 0
@@ -158,30 +158,30 @@ class TestGenerate:
     def test_the_template_is_not_modified(self):
         tpl = template()
         before = copy.deepcopy(tpl)
-        generate(tpl, recipe(), "appliance1x1")
+        generate(tpl, project(), "appliance1x1")
         assert tpl == before
 
-    def test_a_category_value_overrides_a_game_value_for_the_same_key(self):
-        r = recipe()
-        r["game"]["control_image"] = "game.png"
+    def test_a_recipe_value_overrides_a_shared_value_for_the_same_key(self):
+        r = project()
+        r["shared"]["control_image"] = "shared.png"
         wf, _ = generate(template(), r, "appliance1x1")
         assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x1.png"
 
-    def test_an_unknown_category_is_refused(self):
+    def test_an_unknown_recipe_is_refused(self):
         with pytest.raises(RecipeError, match="chair"):
-            generate(template(), recipe(), "chair")
+            generate(template(), project(), "chair")
 
     def test_each_generated_workflow_gets_its_own_stable_id_and_a_fresh_revision(self):
-        a, _ = generate(template(), recipe(), "appliance1x1")
-        b, _ = generate(template(), recipe(), "appliance1x2")
-        again, _ = generate(template(), recipe(), "appliance1x1")
+        a, _ = generate(template(), project(), "appliance1x1")
+        b, _ = generate(template(), project(), "appliance1x2")
+        again, _ = generate(template(), project(), "appliance1x1")
         assert a["id"] != template()["id"]
         assert a["id"] != b["id"]
         assert a["id"] == again["id"]
         assert a["revision"] == 0
 
-    def test_the_workflow_name_is_the_prefix_plus_the_category(self):
-        assert workflow_name(recipe(), "appliance1x2") == "dev-imperia-bakery-appliance1x2"
+    def test_the_workflow_name_is_the_prefix_plus_the_recipe(self):
+        assert workflow_name(project(), "appliance1x2") == "dev-imperia-bakery-appliance1x2"
 
 
 def subgraph_with_inner_string():
@@ -271,7 +271,7 @@ class TestPromoteStringInput:
             promote_string_input(workflow_with_instance(), "render", 2, "p", "recipe:p", pos=[0, 0])
 
 
-from _recipes import generate_all, list_recipes, read_recipe
+from _recipes import generate_all, list_projects, read_project
 
 
 def write_json(path, data):
@@ -283,84 +283,84 @@ def write_json(path, data):
 @pytest.fixture
 def library(tmp_path):
     """A workflows dir holding the template in a folder, and a recipes dir
-    holding one recipe that names it."""
+    holding one project that names it."""
     workflows = str(tmp_path / "workflows")
     recipes = str(tmp_path / "recipes")
     write_json(os.path.join(workflows, "recipe-test", "bakery-template.json"), template())
     write_json(os.path.join(recipes, "imperia-bakery.json"),
-               {**recipe(), "template": "recipe-test/bakery-template.json"})
+               {**project(), "template": "recipe-test/bakery-template.json"})
     return {"workflows": workflows, "recipes": recipes}
 
 
 class TestRecipeLibrary:
     def test_lists_every_recipe_with_its_template_and_categories(self, library):
-        assert list_recipes(library["recipes"]) == [
+        assert list_projects(library["recipes"]) == [
             {"name": "imperia-bakery", "template": "recipe-test/bakery-template.json",
-             "categories": ["appliance1x1", "appliance1x2"]}]
+             "recipes": ["appliance1x1", "appliance1x2"]}]
 
     def test_a_missing_dir_lists_nothing(self, tmp_path):
-        assert list_recipes(str(tmp_path / "nope")) == []
+        assert list_projects(str(tmp_path / "nope")) == []
 
     def test_reads_one_by_name_and_none_when_absent(self, library):
-        assert read_recipe(library["recipes"], "imperia-bakery")["workflow_prefix"] == "dev-imperia-bakery-"
-        assert read_recipe(library["recipes"], "other") is None
+        assert read_project(library["recipes"], "imperia-bakery")["workflow_prefix"] == "dev-imperia-bakery-"
+        assert read_project(library["recipes"], "other") is None
 
     def test_a_name_cannot_walk_out_of_the_dir(self, library):
         with pytest.raises(RecipeError):
-            read_recipe(library["recipes"], "../secrets")
+            read_project(library["recipes"], "../secrets")
 
 
 class TestGenerateAll:
-    def test_writes_one_workflow_per_category_next_to_the_template(self, library):
-        r = read_recipe(library["recipes"], "imperia-bakery")
+    def test_writes_one_workflow_per_recipe_next_to_the_template(self, library):
+        r = read_project(library["recipes"], "imperia-bakery")
         report = generate_all(library["workflows"], r)
         paths = [w["path"] for w in report["written"]]
         assert paths == ["recipe-test/dev-imperia-bakery-appliance1x1.json",
                          "recipe-test/dev-imperia-bakery-appliance1x2.json"]
         wf = json.load(open(os.path.join(library["workflows"], paths[1])))
         assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x2.png"
-        assert report["written"][1]["category"] == "appliance1x2"
+        assert report["written"][1]["recipe"] == "appliance1x2"
         assert report["written"][1]["applied"] == ["control_image", "grid", "pre_flip", "render", "render_aspect"]
 
     def test_an_output_folder_in_the_recipe_wins_over_the_template_folder(self, library):
-        r = {**read_recipe(library["recipes"], "imperia-bakery"), "output": "bakery/generated"}
+        r = {**read_project(library["recipes"], "imperia-bakery"), "output": "bakery/generated"}
         report = generate_all(library["workflows"], r)
         assert report["written"][0]["path"] == "bakery/generated/dev-imperia-bakery-appliance1x1.json"
         assert os.path.isfile(os.path.join(library["workflows"], report["written"][0]["path"]))
 
     def test_regenerating_overwrites_the_previous_file(self, library):
-        r = read_recipe(library["recipes"], "imperia-bakery")
+        r = read_project(library["recipes"], "imperia-bakery")
         generate_all(library["workflows"], r)
-        r["categories"]["appliance1x1"]["control_image"] = "changed.png"
+        r["recipes"]["appliance1x1"]["control_image"] = "changed.png"
         generate_all(library["workflows"], r)
         wf = json.load(open(os.path.join(library["workflows"], "recipe-test/dev-imperia-bakery-appliance1x1.json")))
         assert by_id(wf, 10)["widgets_values"][0] == "changed.png"
 
-    def test_a_recipe_without_a_template_is_refused(self, library):
+    def test_a_project_without_a_template_is_refused(self, library):
         with pytest.raises(RecipeError, match="template"):
-            generate_all(library["workflows"], recipe())
+            generate_all(library["workflows"], project())
 
     def test_a_template_that_is_not_there_is_refused(self, library):
-        r = {**recipe(), "template": "recipe-test/missing.json"}
+        r = {**project(), "template": "recipe-test/missing.json"}
         with pytest.raises(RecipeError, match="missing.json"):
             generate_all(library["workflows"], r)
 
     def test_a_template_or_output_path_cannot_walk_out_of_the_workflows_dir(self, library):
         with pytest.raises(RecipeError):
-            generate_all(library["workflows"], {**recipe(), "template": "../recipes/imperia-bakery.json"})
-        r = {**read_recipe(library["recipes"], "imperia-bakery"), "output": "../elsewhere"}
+            generate_all(library["workflows"], {**project(), "template": "../recipes/imperia-bakery.json"})
+        r = {**read_project(library["recipes"], "imperia-bakery"), "output": "../elsewhere"}
         with pytest.raises(RecipeError):
             generate_all(library["workflows"], r)
 
-    def test_a_bad_category_value_fails_before_any_file_is_written(self, library):
-        r = read_recipe(library["recipes"], "imperia-bakery")
-        r["categories"]["appliance1x2"]["typo"] = 1
+    def test_a_bad_recipe_value_fails_before_any_file_is_written(self, library):
+        r = read_project(library["recipes"], "imperia-bakery")
+        r["recipes"]["appliance1x2"]["typo"] = 1
         with pytest.raises(RecipeError, match="typo"):
             generate_all(library["workflows"], r)
         assert not os.path.exists(os.path.join(library["workflows"], "recipe-test/dev-imperia-bakery-appliance1x1.json"))
 
 
-from _recipes import new_recipe, read_template, template_slots, write_recipe
+from _recipes import new_project, project_name, read_template, template_slots, write_project
 
 
 class TestTemplateSlots:
@@ -403,38 +403,45 @@ class TestReadTemplate:
             read_template(library["workflows"], "recipe-test/nope.json")
 
 
-class TestWriteRecipe:
+class TestWriteProject:
     def test_writes_the_file_the_name_reads_back(self, library):
-        r = {**recipe(), "template": "recipe-test/bakery-template.json"}
-        r["categories"]["chair"] = {"control_image": "chair.png"}
-        write_recipe(library["recipes"], "imperia-bakery", r)
-        assert read_recipe(library["recipes"], "imperia-bakery")["categories"]["chair"] == {"control_image": "chair.png"}
+        r = {**project(), "template": "recipe-test/bakery-template.json"}
+        r["recipes"]["chair"] = {"control_image": "chair.png"}
+        write_project(library["recipes"], "imperia-bakery", r)
+        assert read_project(library["recipes"], "imperia-bakery")["recipes"]["chair"] == {"control_image": "chair.png"}
 
     def test_creates_the_dir_and_keeps_unicode_readable(self, tmp_path):
         d = str(tmp_path / "recipes")
-        write_recipe(d, "x", {"template": "t.json", "categories": {"a": {"preamble": "QE 2 — Coven"}}})
+        write_project(d, "x", {"template": "t.json", "recipes": {"a": {"preamble": "QE 2 — Coven"}}})
         assert "Coven" in open(os.path.join(d, "x.json"), encoding="utf-8").read()
         assert "\\u2014" not in open(os.path.join(d, "x.json"), encoding="utf-8").read()
 
-    def test_refuses_a_recipe_that_is_not_a_table(self, tmp_path):
-        with pytest.raises(RecipeError, match="categories"):
-            write_recipe(str(tmp_path), "x", {"template": "t.json"})
+    def test_refuses_a_project_that_is_not_a_table(self, tmp_path):
+        with pytest.raises(RecipeError, match="recipes"):
+            write_project(str(tmp_path), "x", {"template": "t.json"})
         with pytest.raises(RecipeError, match="template"):
-            write_recipe(str(tmp_path), "x", {"categories": {}})
+            write_project(str(tmp_path), "x", {"recipes": {}})
 
 
-class TestNewRecipe:
-    def test_a_fresh_recipe_names_the_template_and_starts_the_game_column_from_its_values(self, library):
-        r = new_recipe(library["workflows"], "workflows/recipe-test/bakery-template.json")
-        assert r == {"template": "recipe-test/bakery-template.json", "output": "recipe-test",
+class TestNewProject:
+    def test_a_fresh_project_names_the_template_and_starts_shared_from_its_values(self, library):
+        name, p = new_project(library["workflows"], "workflows/recipe-test/bakery-template.json")
+        assert name == "bakery-template"
+        assert p == {"template": "recipe-test/bakery-template.json", "output": "recipe-test",
                      "workflow_prefix": "",
-                     "game": {"control_image": "old.png", "grid": 2, "pre_flip": False,
-                              "render": {"seed": 7, "lora_name": "old.safetensors", "strength_model": 0.5},
-                              "render_aspect": "1:1 (Square)"},
-                     "categories": {}}
+                     "shared": {"control_image": "old.png", "grid": 2, "pre_flip": False,
+                                "render": {"seed": 7, "lora_name": "old.safetensors", "strength_model": 0.5},
+                                "render_aspect": "1:1 (Square)"},
+                     "recipes": {}}
 
     def test_a_template_at_the_workflows_root_has_no_output_folder(self, library):
         write_json(os.path.join(library["workflows"], "root-template.json"), template())
-        r = new_recipe(library["workflows"], "root-template.json")
-        assert r["template"] == "root-template.json"
-        assert "output" not in r
+        _, p = new_project(library["workflows"], "root-template.json")
+        assert p["template"] == "root-template.json"
+        assert "output" not in p
+
+    def test_the_name_comes_from_the_library_slot_when_the_template_has_one(self):
+        slots = [{"key": "library", "kind": "scalar", "default": "studios/imperia/bakery", "widgets": 2}]
+        assert project_name("recipe-test/bakery-template.json", slots) == "imperia-bakery"
+        assert project_name("x.json", [{"key": "library", "kind": "scalar", "default": "", "widgets": 2}]) == "x"
+        assert project_name("x.json", [{"key": "library", "kind": "scalar", "default": "studios/", "widgets": 2}]) == "x"

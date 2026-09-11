@@ -207,30 +207,30 @@ Wrappers around Wavespeed's hosted endpoints.
   node or the text in a prompt node changes everywhere when you change it in
   the module.
 
-### Recipes (one template, one workflow per category)
-- `Recipe` (Symbiotica/Recipes) — one template workflow, a table of values,
-  one generated workflow per category. Pick a recipe in the **recipe**
-  dropdown and it opens on the node as collapsible sections: **game** (what
-  every category shares) and one per category, each listing the template's
-  slots. Rename a category in its header, remove it with ×, then **Save**,
-  or **Generate**, which
-  writes prefix + category `.json` files into the output folder (default:
-  the template's folder), overwriting the last run. **New** starts a recipe named by the **name** input with the open, saved workflow as its template.
-  To fill a category without typing, set the values on the template's own
-  nodes and press the section's **capture**, or put the name in the node's
-  **category** input (typed, or a wired text node) and press **Capture**, which creates the category if it is new. A
-  category keeps what differs from game, `game` keeps everything. **load** does the reverse: it puts
-  that section's values onto the canvas, to adjust and capture again.
+### Recipes (one template, one workflow per recipe)
+- `Recipes` (Symbiotica/Recipes) — a **project** is one template workflow,
+  a block of **shared** values and one **recipe** per asset type; Generate
+  writes one workflow per recipe. Pick a project in the dropdown and it
+  opens on the node as collapsible sections: shared, then one per recipe,
+  each listing the template's slots with **load** (put its values onto the
+  canvas), **capture** (read the canvas into it) and ×. To add or refill a
+  recipe, set the values on the template's own nodes, put its name in the
+  **recipe** input (typed, or a wired text node) and press **Capture**; a
+  recipe keeps what differs from shared, shared keeps everything. **Save**
+  writes the project; **Generate** saves and writes prefix + recipe `.json`
+  files into the output folder (default: the template's folder), overwriting
+  the last run. **New** starts a project from the open, saved workflow, named
+  from its `recipe:library` slot (`studios/imperia/bakery` gives
+  `imperia-bakery`).
 - A node in the template titled `recipe:<key>` is a slot for `<key>`. A cell
-  sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; on a
-  subgraph instance the cell is a JSON object of promoted widgets
-  (`{"lora_name": "…"}`); a title ending in `?` (`recipe:pre_flip?`) is a
-  toggle that takes `true` (active) or `false` (bypassed). An empty cell is an
-  absent key: the category takes the game value, else the template's own. A
-  key no slot carries refuses the run. Recipes are files in
-  `user/default/recipes/<name>.json`.
+  sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; a
+  subgraph instance shows one field per promoted widget; a title ending in
+  `?` (`recipe:pre_flip?`) is a toggle that takes `true` (active) or `false`
+  (bypassed). An empty cell is an absent key: the recipe takes the shared
+  value, else the template's own. A key no slot carries refuses the run.
+  Projects are files in `user/default/recipes/<name>.json`.
 - The generated files are output: edits belong in the template (the
-  pipeline, for every category) or in the recipe (one category's values).
+  pipeline, for every recipe) or in the project (one recipe's values).
 
 ### Canvas
 - **Find node by ID** — press `Ctrl+Shift+0`, or pick **Find node by ID** at the

@@ -1,11 +1,12 @@
-// ABOUTME: Workflow recipes — the Recipe node: pick or start a recipe, edit it as
-// ABOUTME: a table (a row per template slot, a column per category), save, generate.
+// ABOUTME: Workflow recipes — the Recipes node: pick or start a project, edit its
+// ABOUTME: shared values and one recipe per asset type, save, generate.
 
-// A recipe is one template workflow plus a table of values. The rows come from
-// the template itself (every node titled `recipe:<key>`), so a new slot on the
-// canvas is a new row here the next time the recipe is opened. The columns are
-// `game` (what every category shares) and one per category. An empty cell is
-// an absent key: the category then takes the game value, or the template's own.
+// A project is one template workflow plus a table of values. The rows come
+// from the template itself (every node titled `recipe:<key>`), so a new slot
+// on the canvas is a new row here the next time the project is opened. The
+// columns are `shared` (what every recipe takes) and one per recipe. An empty
+// cell is an absent key: the recipe then takes the shared value, or the
+// template's own.
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
@@ -13,8 +14,8 @@ import { HUB, ghostButtonCss, injectHubStyles } from "./hub_theme.js";
 import { el, pinPanelWidth } from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaRecipe";
-const PICK = "— pick a recipe —";
-const GAME = "game";
+const PICK = "— pick a project —";
+const SHARED = "shared";
 
 // ---------------------------------------------------------------- server --
 
@@ -36,8 +37,8 @@ async function postJson(path, payload) {
     return body;
 }
 
-const listRecipes = () => getJson("/symbiotica/recipes").then((b) => b.recipes ?? []);
-const readRecipe = (name) => getJson(`/symbiotica/recipes/${encodeURIComponent(name)}`);
+const listProjects = () => getJson("/symbiotica/recipes").then((b) => b.projects ?? []);
+const readProject = (name) => getJson(`/symbiotica/recipes/${encodeURIComponent(name)}`);
 
 function toast(severity, summary, detail, life = 5000) {
     app.extensionManager?.toast?.add({ severity, summary, detail, life });
@@ -45,8 +46,8 @@ function toast(severity, summary, detail, life = 5000) {
 
 const activeWorkflowPath = () => app.extensionManager?.workflow?.activeWorkflow?.path ?? null;
 
-// The category Capture writes into: typed on the node, or read off the text
-// node wired into the `category` input. A computed string (an LLM output, a
+// The recipe Capture writes into: typed on the node, or read off the text
+// node wired into the `recipe` input. A computed string (an LLM output, a
 // concat) has no value on the canvas, so only a typed one can be read.
 function textValue(node, name) {
     const index = node.inputs?.findIndex((i) => i.name === name) ?? -1;
@@ -128,10 +129,10 @@ export function dictCellUpdate(cell, name, text) {
 
 // ----------------------------------------------------------------- table --
 
-export function recipeToTable(recipe, slots) {
-    const categories = recipe?.categories ?? {};
-    const columns = [GAME, ...Object.keys(categories)];
-    const valuesOf = (column) => (column === GAME ? recipe?.game ?? {} : categories[column] ?? {});
+export function projectToTable(project, slots) {
+    const recipes = project?.recipes ?? {};
+    const columns = [SHARED, ...Object.keys(recipes)];
+    const valuesOf = (column) => (column === SHARED ? project?.shared ?? {} : recipes[column] ?? {});
     const keys = slots.map((s) => s.key);
     const orphans = [];
     for (const column of columns) {
@@ -146,16 +147,16 @@ export function recipeToTable(recipe, slots) {
     }
     return {
         header: {
-            template: recipe?.template ?? "",
-            output: recipe?.output ?? "",
-            workflow_prefix: recipe?.workflow_prefix ?? "",
+            template: project?.template ?? "",
+            output: project?.output ?? "",
+            workflow_prefix: project?.workflow_prefix ?? "",
         },
         columns,
         rows,
     };
 }
 
-export function tableToRecipe(base, table, slots) {
+export function tableToProject(base, table, slots) {
     const byKey = Object.fromEntries(slots.map((s) => [s.key, s]));
     const out = { ...base, template: table.header.template, workflow_prefix: table.header.workflow_prefix };
     if (table.header.output) out.output = table.header.output;
@@ -175,9 +176,9 @@ export function tableToRecipe(base, table, slots) {
         }
         columnValues[column] = values;
     }
-    out.game = columnValues[GAME] ?? {};
-    out.categories = {};
-    for (const column of table.columns) if (column !== GAME) out.categories[column] = columnValues[column];
+    out.shared = columnValues[SHARED] ?? {};
+    out.recipes = {};
+    for (const column of table.columns) if (column !== SHARED) out.recipes[column] = columnValues[column];
     return out;
 }
 
@@ -210,9 +211,9 @@ function liveSlotValues(graph) {
     return values;
 }
 
-// Write captured values into one column. A category column takes only what
-// differs from the game column, so a later game edit still reaches it; the
-// game column takes everything.
+// Write captured values into one column. A recipe takes only what differs
+// from shared, so a later shared edit still reaches it; shared takes
+// everything.
 export function captureColumn(table, slots, column, values) {
     if (!table.columns.includes(column)) {
         table.columns.push(column);
@@ -221,17 +222,17 @@ export function captureColumn(table, slots, column, values) {
     for (const row of table.rows) {
         if (!(row.key in values)) continue;
         const text = cellText(values[row.key]);
-        row.cells[column] = column !== GAME && text === (row.cells[GAME] ?? "") ? "" : text;
+        row.cells[column] = column !== SHARED && text === (row.cells[SHARED] ?? "") ? "" : text;
     }
     return table;
 }
 
-// One column as the generator would see it: the game column with the
-// column's own cells on top, each parsed by its slot.
+// One column as the generator would see it: shared with the column's own
+// cells on top, each parsed by its slot.
 export function columnValues(table, slots, column) {
     const byKey = Object.fromEntries(slots.map((s) => [s.key, s]));
     const values = {};
-    for (const source of column === GAME ? [GAME] : [GAME, column]) {
+    for (const source of column === SHARED ? [SHARED] : [SHARED, column]) {
         for (const row of table.rows) {
             const slot = byKey[row.key] ?? { key: row.key, kind: "scalar", default: "" };
             const value = cellValue(slot, row.cells[source]);
@@ -242,7 +243,7 @@ export function columnValues(table, slots, column) {
 }
 
 // The reverse of capture: put a value set onto the canvas's slot nodes, so
-// the category can be adjusted with the nodes' own widgets and captured again.
+// the recipe can be adjusted with the nodes' own widgets and captured again.
 export function applyValuesToNodes(nodes, values) {
     const applied = [];
     const seen = new Set();
@@ -277,7 +278,7 @@ export function generateSummary(report) {
     const detail = written.length
         ? `${written.map((w) => w.path).join(", ")}. Open them from the workflows sidebar; `
           + "reopen any that is open now. Edits belong in the template or the recipe, not in these files."
-        : "The recipe has no categories.";
+        : "The project has no recipes.";
     return { summary, detail };
 }
 
@@ -288,7 +289,7 @@ const pickers = new Set();
 async function refreshPickers() {
     let names;
     try {
-        names = (await listRecipes()).map((r) => r.name);
+        names = (await listProjects()).map((p) => p.name);
     } catch {
         return;
     }
@@ -328,10 +329,10 @@ function recipePanel(node) {
         node.setDirtyCanvas?.(true, true);
     });
 
-    // What is on screen: the recipe as loaded, the template's slots, and the
+    // What is on screen: the project as loaded, the template's slots, and the
     // table the person is editing. `dirty` is unsaved edits.
-    const state = { name: null, recipe: null, slots: [], table: null, dirty: false };
-    // Which sections are open. A freshly opened recipe shows its headers only.
+    const state = { name: null, project: null, slots: [], table: null, dirty: false };
+    // Which sections are open. A freshly opened project shows its headers only.
     const expanded = new Set();
     let busy = false;
 
@@ -343,16 +344,16 @@ function recipePanel(node) {
     const statusLine = el("div", `padding:4px 3px;color:${HUB.inkSubtle};`);
 
     function collect() {
-        return tableToRecipe(state.recipe, state.table, state.slots);
+        return tableToProject(state.project, state.table, state.slots);
     }
 
     async function load(name) {
         try {
-            const { recipe, slots } = await readRecipe(name);
+            const { project, slots } = await readProject(name);
             state.name = name;
-            state.recipe = recipe;
+            state.project = project;
             state.slots = slots;
-            state.table = recipeToTable(recipe, slots);
+            state.table = projectToTable(project, slots);
             state.dirty = false;
             expanded.clear();
             render();
@@ -362,17 +363,17 @@ function recipePanel(node) {
     }
 
     async function save() {
-        if (!state.name) { toast("warn", "Nothing to save", "Pick a recipe or start one first."); return false; }
-        let recipe;
+        if (!state.name) { toast("warn", "Nothing to save", "Pick a project or start one first."); return false; }
+        let project;
         try {
-            recipe = collect();
+            project = collect();
         } catch (err) {
             toast("error", "Fix the cell first", String(err?.message ?? err), 8000);
             return false;
         }
         try {
-            await postJson("/symbiotica/recipes/save", { name: state.name, recipe });
-            state.recipe = recipe;
+            await postJson("/symbiotica/recipes/save", { name: state.name, project });
+            state.project = project;
             state.dirty = false;
             status(`Saved ${state.name}.`);
             return true;
@@ -398,26 +399,25 @@ function recipePanel(node) {
         }
     }
 
-    async function startNew(name) {
+    async function startNew() {
         const template = activeWorkflowPath();
-        if (!template) { toast("warn", "Save the workflow first", "A new recipe takes the open, saved workflow as its template."); return; }
-        if (!name) { toast("warn", "Name it first", "Type a name for the new recipe."); return; }
+        if (!template) { toast("warn", "Save the workflow first", "A new project takes the open, saved workflow as its template."); return; }
         try {
-            const { recipe, slots } = await postJson("/symbiotica/recipes/new", { name, template });
+            const { name, project, slots } = await postJson("/symbiotica/recipes/new", { template });
             state.name = name;
-            state.recipe = recipe;
+            state.project = project;
             state.slots = slots;
-            state.table = recipeToTable(recipe, slots);
+            state.table = projectToTable(project, slots);
             state.dirty = false;
             expanded.clear();
-            expanded.add(GAME);
+            expanded.add(SHARED);
             await refreshPickers();
-            const picker = node.widgets?.find((w) => w.name === "recipe");
+            const picker = node.widgets?.find((w) => w.name === "project");
             if (picker) picker.value = name;
             render();
-            toast("success", `Started "${name}"`, `Template: ${recipe.template}. Add a category column, fill the cells, Save.`);
+            toast("success", `Started project "${name}"`, `Template: ${project.template}. Set the canvas, name a recipe, press Capture.`);
         } catch (err) {
-            toast("error", "Could not start the recipe", String(err?.message ?? err));
+            toast("error", "Could not start the project", String(err?.message ?? err));
         }
     }
 
@@ -455,7 +455,7 @@ function recipePanel(node) {
         body.replaceChildren();
         if (!state.table) {
             body.appendChild(el("div", `padding:6px 3px;color:${HUB.inkSubtle};`,
-                "Pick a recipe, or open the template workflow, type a name and press New."));
+                "Pick a project, or open the template workflow and press New."));
             body.appendChild(statusLine);
             refit();
             return;
@@ -480,10 +480,10 @@ function recipePanel(node) {
 
         // One slot inside a section: a label and the value field. A subgraph
         // slot gets one field per widget; the rest a single field. The
-        // placeholder is what the category inherits (game, else template).
+        // placeholder is what the recipe inherits (shared, else template).
         function slotRows(section, column, row) {
             const slot = byKey[row.key];
-            const inherited = column === GAME ? "" : (row.cells[GAME] ?? "");
+            const inherited = column === SHARED ? "" : (row.cells[SHARED] ?? "");
             const label = el("div", "padding:4px 3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
                 + (row.orphan ? `color:${HUB.inkSubtle};text-decoration:line-through;` : ""), row.key);
             label.title = row.orphan
@@ -535,7 +535,7 @@ function recipePanel(node) {
         }
 
         columns.forEach((column, index) => {
-            const isGame = column === GAME;
+            const isShared = column === SHARED;
             const open = expanded.has(column);
             const box = el("div", `border:1px solid ${HUB.hairline};border-radius:${HUB.radius.md};margin:0 0 6px;`);
             const head = el("div", "display:flex;align-items:center;gap:6px;padding:4px 6px;min-width:0;");
@@ -547,18 +547,18 @@ function recipePanel(node) {
                 render();
             });
             head.appendChild(toggle);
-            if (isGame) {
-                const title = el("div", "flex:1 1 auto;min-width:0;", "game");
-                title.title = "What every category shares. A category takes these unless it sets its own.";
+            if (isShared) {
+                const title = el("div", "flex:1 1 auto;min-width:0;", "shared");
+                title.title = "What every recipe takes unless it sets its own.";
                 head.appendChild(title);
             } else {
                 const name = stopCanvas(el("input", inputCss + "flex:1 1 120px;"));
                 name.value = column;
-                name.title = "Category: also the suffix of the generated workflow's name.";
+                name.title = "Recipe: also the suffix of the generated workflow's name.";
                 name.addEventListener("change", () => {
                     const next = name.value.trim();
                     if (!next || next === column) { name.value = column; return; }
-                    if (columns.includes(next)) { toast("warn", "Name taken", `There is already a "${next}" category.`); name.value = column; return; }
+                    if (columns.includes(next)) { toast("warn", "Name taken", `There is already a "${next}" recipe.`); name.value = column; return; }
                     columns[index] = next;
                     for (const row of rows) { row.cells[next] = row.cells[column]; delete row.cells[column]; }
                     if (expanded.delete(column)) expanded.add(next);
@@ -569,17 +569,17 @@ function recipePanel(node) {
             }
             const count = setCount(column);
             head.appendChild(el("div", `flex:0 0 auto;color:${HUB.inkSubtle};font:11px ${HUB.mono};`,
-                isGame ? `${count} values` : `${count} own`));
+                isShared ? `${count} values` : `${count} own`));
             const load = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "load");
-            load.title = isGame ? "Put the game values onto this canvas."
-                : `Put ${column} onto this canvas (its own values over game), to adjust with the nodes' widgets and capture again.`;
+            load.title = isShared ? "Put the shared values onto this canvas."
+                : `Put ${column} onto this canvas (its own values over shared), to adjust with the nodes' widgets and capture again.`;
             stopCanvas(load).addEventListener("click", (e) => { e.stopPropagation(); loadColumn(column); });
             const capture = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "capture");
-            capture.title = isGame ? "Read every slot off this canvas into game."
-                : `Read the slots off this canvas into ${column}: only what differs from game is kept.`;
+            capture.title = isShared ? "Read every slot off this canvas into shared."
+                : `Read the slots off this canvas into ${column}: only what differs from shared is kept.`;
             stopCanvas(capture).addEventListener("click", (e) => { e.stopPropagation(); captureInto(column); });
             head.append(load, capture);
-            if (!isGame) {
+            if (!isShared) {
                 const remove = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "×");
                 remove.title = `Remove ${column}`;
                 stopCanvas(remove).addEventListener("click", (e) => {
@@ -603,8 +603,8 @@ function recipePanel(node) {
         });
 
         body.appendChild(statusLine);
-        status(state.dirty ? "Unsaved edits." : `${state.name}: ${columns.length - 1} categories, ${rows.length} slots.`);
-        if (!state.dirty && columns.length === 1) status("No categories yet. Set the canvas, name a category, press Capture.");
+        status(state.dirty ? "Unsaved edits." : `${state.name}: ${columns.length - 1} recipes, ${rows.length} slots.`);
+        if (!state.dirty && columns.length === 1) status("No recipes yet. Set the canvas, name a recipe, press Capture.");
         refit();
     }
 
@@ -614,7 +614,7 @@ function recipePanel(node) {
 
 function setupRecipeNode(node) {
     node.isVirtualNode = true;
-    const picker = node.widgets?.find((w) => w.name === "recipe");
+    const picker = node.widgets?.find((w) => w.name === "project");
     if (!picker) return;
     pickers.add(picker);
     picker.value = PICK;
@@ -626,16 +626,12 @@ function setupRecipeNode(node) {
         const widget = node.addWidget("button", label, null, action, { serialize: false });
         widget.serializeValue = () => undefined;
     };
-    button("New", () => {
-        const name = textValue(node, "name");
-        if (name === null) { toast("warn", "name is wired to a node with no typed text", "Type it, or connect a text node."); return; }
-        node._symRecipe?.startNew(name);
-    });
+    button("New", () => node._symRecipe?.startNew());
     button("Capture", () => {
-        const column = textValue(node, "category");
-        if (column === null) { toast("warn", "category is wired to a node with no typed text", "Type it, or connect a text node."); return; }
-        if (!column) { toast("warn", "Name the category first", "Type it in category, or connect a text node."); return; }
-        if (!node._symCapture) { toast("warn", "Pick a recipe first", "Capture needs an open recipe to write into."); return; }
+        const column = textValue(node, "recipe");
+        if (column === null) { toast("warn", "recipe is wired to a node with no typed text", "Type it, or connect a text node."); return; }
+        if (!column) { toast("warn", "Name the recipe first", "Type it in recipe, or connect a text node."); return; }
+        if (!node._symCapture) { toast("warn", "Pick a project first", "Capture writes into the project picked above."); return; }
         node._symCapture(column);
     });
     button("Save", () => node._symRecipe?.save());

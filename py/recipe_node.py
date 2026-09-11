@@ -2,22 +2,22 @@
 # ABOUTME: behind it: list, read (with the template's slots), new, save, generate.
 import os
 
-from ._recipes import (RECIPES_DIRNAME, RecipeError, generate_all, list_recipes,
-                       new_recipe, read_recipe, read_template, recipes_dir,
-                       template_slots, write_recipe)
+from ._recipes import (RECIPES_DIRNAME, RecipeError, generate_all, list_projects,
+                       new_project, projects_dir, read_project, read_template,
+                       template_slots, write_project)
 
-PICK = "— pick a recipe —"
+PICK = "— pick a project —"
 
 
-def _recipe_names():
+def _project_names():
     try:
-        return [r["name"] for r in list_recipes(recipes_dir())]
+        return [p["name"] for p in list_projects(projects_dir())]
     except Exception:
         return []
 
 
 class SymbioticaRecipe:
-    """Frontend-only control: pick a recipe to edit it as a table on the node,
+    """Frontend-only control: pick a project to edit its recipes on the node,
     start one from the open workflow, save it, or generate its workflows.
     Never executes — web/js/recipes.js marks it virtual."""
 
@@ -25,18 +25,15 @@ class SymbioticaRecipe:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "recipe": ([PICK] + _recipe_names(), {
-                    "tooltip": "A recipe from user/default/recipes: one template "
-                               "workflow plus a table of per-category values.",
+                "project": ([PICK] + _project_names(), {
+                    "tooltip": "A project from user/default/recipes: one template "
+                               "workflow, shared values, one recipe per asset type.",
                 }),
-                "name": ("STRING", {
+                "recipe": ("STRING", {
                     "default": "",
-                    "tooltip": "Name for the recipe New creates from the open workflow.",
-                }),
-                "category": ("STRING", {
-                    "default": "",
-                    "tooltip": "The category Capture writes into (created if new). "
-                               "Type it or connect a text node.",
+                    "tooltip": "The recipe Capture writes into (created if new); "
+                               "also the suffix of its workflow's name. Type it or "
+                               "connect a text node.",
                 }),
             },
         }
@@ -44,15 +41,16 @@ class SymbioticaRecipe:
     RETURN_TYPES = ()
     FUNCTION = "execute"
     CATEGORY = "Symbiotica/Recipes"
-    DESCRIPTION = ("Workflow recipes: one template workflow, a table of values per "
-                   "category, one generated workflow per category.")
+    DESCRIPTION = ("Workflow recipes: a project holds one template workflow, shared "
+                   "values and one recipe per asset type; Generate writes one "
+                   "workflow per recipe.")
 
-    def execute(self, recipe=PICK, name="", category=""):
+    def execute(self, project=PICK, recipe=""):
         return ()
 
 
 NODE_CLASS_MAPPINGS = {"SymbioticaRecipe": SymbioticaRecipe}
-NODE_DISPLAY_NAME_MAPPINGS = {"SymbioticaRecipe": "Recipe"}
+NODE_DISPLAY_NAME_MAPPINGS = {"SymbioticaRecipe": "Recipes"}
 
 
 try:
@@ -69,49 +67,51 @@ if PromptServer is not None:
         return os.path.join(folder_paths.get_user_directory(), "default", "workflows")
 
     @routes.get("/symbiotica/recipes")
-    async def recipes_list(request):
-        return web.json_response({"recipes": list_recipes(recipes_dir()),
+    async def projects_list(request):
+        return web.json_response({"projects": list_projects(projects_dir()),
                                   "library": RECIPES_DIRNAME})
 
     @routes.get("/symbiotica/recipes/{name:.+}")
-    async def recipes_read(request):
+    async def projects_read(request):
         try:
-            recipe = read_recipe(recipes_dir(), request.match_info["name"])
-            if recipe is None:
-                return web.json_response({"error": "no such recipe"}, status=404)
-            slots = template_slots(read_template(_workflows_dir(), recipe.get("template")))
+            project = read_project(projects_dir(), request.match_info["name"])
+            if project is None:
+                return web.json_response({"error": "no such project"}, status=404)
+            slots = template_slots(read_template(_workflows_dir(), project.get("template")))
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
-        return web.json_response({"recipe": recipe, "slots": slots})
+        return web.json_response({"project": project, "slots": slots})
 
     @routes.post("/symbiotica/recipes/new")
-    async def recipes_new(request):
+    async def projects_new(request):
         body = await request.json()
         try:
-            recipe = new_recipe(_workflows_dir(), body.get("template"))
-            write_recipe(recipes_dir(), body.get("name") or "", recipe)
-            slots = template_slots(read_template(_workflows_dir(), recipe["template"]))
+            name, project = new_project(_workflows_dir(), body.get("template"))
+            if read_project(projects_dir(), name) is not None:
+                return web.json_response({"error": f"project {name!r} exists — pick it instead"}, status=409)
+            write_project(projects_dir(), name, project)
+            slots = template_slots(read_template(_workflows_dir(), project["template"]))
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
-        return web.json_response({"recipe": recipe, "slots": slots})
+        return web.json_response({"name": name, "project": project, "slots": slots})
 
     @routes.post("/symbiotica/recipes/save")
-    async def recipes_save(request):
+    async def projects_save(request):
         body = await request.json()
         try:
-            write_recipe(recipes_dir(), body.get("name") or "", body.get("recipe"))
+            write_project(projects_dir(), body.get("name") or "", body.get("project"))
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response({"saved": body.get("name")})
 
     @routes.post("/symbiotica/recipes/generate")
-    async def recipes_generate(request):
+    async def projects_generate(request):
         body = await request.json()
         try:
-            recipe = read_recipe(recipes_dir(), body.get("name") or "")
-            if recipe is None:
-                return web.json_response({"error": "no such recipe"}, status=404)
-            report = generate_all(_workflows_dir(), recipe)
+            project = read_project(projects_dir(), body.get("name") or "")
+            if project is None:
+                return web.json_response({"error": "no such project"}, status=404)
+            report = generate_all(_workflows_dir(), project)
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(report)

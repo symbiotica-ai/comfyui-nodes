@@ -1,10 +1,10 @@
-// ABOUTME: The Recipe node's table — cells are text, the recipe is JSON, and the
-// ABOUTME: two must round-trip without a category losing or gaining a key.
+// ABOUTME: The Recipes node's table — cells are text, the project is JSON, and
+// ABOUTME: the two must round-trip without a recipe losing or gaining a key.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import "./comfy_stub.mjs";
-import { cellText, cellValue, generateSummary, recipeToTable, tableToRecipe } from "../../web/js/recipes.js";
+import { cellText, cellValue, generateSummary, projectToTable, tableToProject } from "../../web/js/recipes.js";
 
 const slots = [
     { key: "control_image", kind: "scalar", default: "old.png", widgets: 2 },
@@ -14,10 +14,10 @@ const slots = [
     { key: "render", kind: "dict", default: { lora_name: "old.safetensors", strength_model: 0.5 }, widgets: 2 },
 ];
 
-const recipe = () => ({
+const project = () => ({
     template: "recipe-test/bakery-template.json", output: "recipe-test", workflow_prefix: "dev-imperia-bakery-",
-    game: { render: { lora_name: "bakery.safetensors" } },
-    categories: {
+    shared: { render: { lora_name: "bakery.safetensors" } },
+    recipes: {
         appliance1x1: { control_image: "a.png", grid: [2, 1], pre_flip: false },
         appliance1x2: { control_image: "b.png", pre_flip: true, strength: 0.7 },
     },
@@ -58,53 +58,53 @@ test("a dict cell is a JSON object", () => {
 });
 
 test("the table has a game column, one column per category, and a row per slot", () => {
-    const table = recipeToTable(recipe(), slots);
-    assert.deepEqual(table.columns, ["game", "appliance1x1", "appliance1x2"]);
+    const table = projectToTable(project(), slots);
+    assert.deepEqual(table.columns, ["shared", "appliance1x1", "appliance1x2"]);
     assert.deepEqual(table.rows.map((r) => r.key), slots.map((s) => s.key));
     const grid = table.rows.find((r) => r.key === "grid");
-    assert.deepEqual(grid.cells, { game: "", appliance1x1: "[2, 1]", appliance1x2: "" });
+    assert.deepEqual(grid.cells, { shared: "", appliance1x1: "[2, 1]", appliance1x2: "" });
     const render = table.rows.find((r) => r.key === "render");
-    assert.equal(render.cells.game, '{"lora_name": "bakery.safetensors"}');
+    assert.equal(render.cells.shared, '{"lora_name": "bakery.safetensors"}');
 });
 
 test("a key a category carries that the template no longer has still gets a row, marked", () => {
-    const r = recipe();
-    r.categories.appliance1x1.gone = "x";
-    const table = recipeToTable(r, slots);
+    const r = project();
+    r.recipes.appliance1x1.gone = "x";
+    const table = projectToTable(r, slots);
     const row = table.rows.find((r) => r.key === "gone");
     assert.equal(row.orphan, true);
     assert.equal(row.cells.appliance1x1, "x");
 });
 
 test("the table writes back the recipe it was read from", () => {
-    const r = recipe();
-    const table = recipeToTable(r, slots);
-    assert.deepEqual(tableToRecipe(r, table, slots), r);
+    const r = project();
+    const table = projectToTable(r, slots);
+    assert.deepEqual(tableToProject(r, table, slots), r);
 });
 
 test("edits land in the right column, empty cells drop the key, and a new column is a new category", () => {
-    const r = recipe();
-    const table = recipeToTable(r, slots);
+    const r = project();
+    const table = projectToTable(r, slots);
     table.rows.find((x) => x.key === "control_image").cells.appliance1x2 = "c.png";
     table.rows.find((x) => x.key === "pre_flip").cells.appliance1x1 = "";
     table.columns.push("chair");
     table.rows.find((x) => x.key === "control_image").cells.chair = "chair.png";
     table.header = { template: "t.json", output: "out", workflow_prefix: "p-" };
-    const out = tableToRecipe(r, table, slots);
-    assert.equal(out.categories.appliance1x2.control_image, "c.png");
-    assert.equal("pre_flip" in out.categories.appliance1x1, false);
-    assert.deepEqual(out.categories.chair, { control_image: "chair.png" });
+    const out = tableToProject(r, table, slots);
+    assert.equal(out.recipes.appliance1x2.control_image, "c.png");
+    assert.equal("pre_flip" in out.recipes.appliance1x1, false);
+    assert.deepEqual(out.recipes.chair, { control_image: "chair.png" });
     assert.equal(out.template, "t.json");
     assert.equal(out.output, "out");
     assert.equal(out.workflow_prefix, "p-");
-    assert.deepEqual(Object.keys(out.categories), ["appliance1x1", "appliance1x2", "chair"]);
+    assert.deepEqual(Object.keys(out.recipes), ["appliance1x1", "appliance1x2", "chair"]);
 });
 
 test("a bad cell names its row and column", () => {
-    const r = recipe();
-    const table = recipeToTable(r, slots);
+    const r = project();
+    const table = projectToTable(r, slots);
     table.rows.find((x) => x.key === "pre_flip").cells.appliance1x2 = "maybe";
-    assert.throws(() => tableToRecipe(r, table, slots), /pre_flip.*appliance1x2/);
+    assert.throws(() => tableToProject(r, table, slots), /pre_flip.*appliance1x2/);
 });
 
 test("the generate toast names every file written and where edits belong", () => {
@@ -116,14 +116,14 @@ test("the generate toast names every file written and where edits belong", () =>
     assert.equal(summary, "Wrote 2 workflows from recipe-test/bakery-template.json");
     assert.match(detail, /appliance1x1\.json, recipe-test\/dev-imperia-bakery-appliance1x2\.json\./);
     assert.match(detail, /Edits belong in the template or the recipe/);
-    assert.equal(generateSummary({ template: "t.json", written: [] }).detail, "The recipe has no categories.");
+    assert.equal(generateSummary({ template: "t.json", written: [] }).detail, "The project has no recipes.");
 });
 
 import { captureColumn } from "../../web/js/recipes.js";
 
 test("capturing the canvas into a category writes only what differs from the game column", () => {
-    const r = recipe();
-    const table = recipeToTable(r, slots);
+    const r = project();
+    const table = projectToTable(r, slots);
     const live = { control_image: "b.png", grid: [2, 1], strength: 0.5, pre_flip: true,
                    render: { lora_name: "bakery.safetensors" } };
     // game has render = bakery.safetensors already; strength and grid have no game value
@@ -137,19 +137,19 @@ test("capturing the canvas into a category writes only what differs from the gam
 });
 
 test("capturing into a column that does not exist adds it, and into game writes everything", () => {
-    const r = recipe();
-    const table = recipeToTable(r, slots);
+    const r = project();
+    const table = projectToTable(r, slots);
     captureColumn(table, slots, "chair", { control_image: "chair.png" });
-    assert.deepEqual(table.columns, ["game", "appliance1x1", "appliance1x2", "chair"]);
+    assert.deepEqual(table.columns, ["shared", "appliance1x1", "appliance1x2", "chair"]);
     assert.equal(table.rows.find((x) => x.key === "control_image").cells.chair, "chair.png");
-    captureColumn(table, slots, "game", { control_image: "g.png", render: { lora_name: "bakery.safetensors" } });
-    assert.equal(table.rows.find((x) => x.key === "control_image").cells.game, "g.png");
-    assert.equal(table.rows.find((x) => x.key === "render").cells.game, '{"lora_name": "bakery.safetensors"}');
+    captureColumn(table, slots, "shared", { control_image: "g.png", render: { lora_name: "bakery.safetensors" } });
+    assert.equal(table.rows.find((x) => x.key === "control_image").cells.shared, "g.png");
+    assert.equal(table.rows.find((x) => x.key === "render").cells.shared, '{"lora_name": "bakery.safetensors"}');
 });
 
 test("a slot the canvas did not report keeps its cell", () => {
-    const r = recipe();
-    const table = recipeToTable(r, slots);
+    const r = project();
+    const table = projectToTable(r, slots);
     captureColumn(table, slots, "appliance1x1", { pre_flip: true });
     assert.equal(table.rows.find((x) => x.key === "control_image").cells.appliance1x1, "a.png");
     assert.equal(table.rows.find((x) => x.key === "pre_flip").cells.appliance1x1, "true");
@@ -158,11 +158,11 @@ test("a slot the canvas did not report keeps its cell", () => {
 import { applyValuesToNodes, columnValues } from "../../web/js/recipes.js";
 
 test("a column's values are its own cells over the game column, parsed", () => {
-    const r = recipe();
-    const table = recipeToTable(r, slots);
+    const r = project();
+    const table = projectToTable(r, slots);
     assert.deepEqual(columnValues(table, slots, "appliance1x2"),
         { render: { lora_name: "bakery.safetensors" }, control_image: "b.png", pre_flip: true, strength: 0.7 });
-    assert.deepEqual(columnValues(table, slots, "game"), { render: { lora_name: "bakery.safetensors" } });
+    assert.deepEqual(columnValues(table, slots, "shared"), { render: { lora_name: "bakery.safetensors" } });
 });
 
 function liveNode(title, widgets, extra = {}) {

@@ -1,13 +1,14 @@
-# ABOUTME: Workflow recipes — one template graph plus a table of per-game and
-# ABOUTME: per-category values, written out as one workflow file per category.
+# ABOUTME: Workflow recipes — a project file holds shared values and one recipe
+# ABOUTME: per asset type; each recipe is written out as one workflow from a template.
 
 # A template is an ordinary workflow whose variable nodes carry a title of the
-# form `recipe:<key>`. A recipe file holds a `game` block (values every
-# category shares: library path, project name, LoRAs) and a `categories` table
-# (the control image, aspect, preamble and so on that make appliance1x2 differ
-# from appliance1x1). `generate` layers a category over the game block and
-# writes those values into the slots, so the workflow files stop being hand
-# edited copies and become build output.
+# form `recipe:<key>`. A project file (`imperia-bakery`) holds a `shared` block
+# (values every recipe shares: library path, project name, LoRAs) and a
+# `recipes` table, one recipe per asset type (the control image, aspect,
+# preamble and so on that make appliance1x2 differ from appliance1x1).
+# `generate` layers a recipe over the shared block and writes those values
+# into the slots, so the workflow files stop being hand edited copies and
+# become build output.
 #
 # How a value lands depends on its shape: a scalar sets the node's first
 # widget, a list replaces every widget, a dict sets promoted widgets by name
@@ -18,6 +19,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import uuid
 
 try:
@@ -115,21 +117,21 @@ def apply_recipe(workflow: dict, values: dict) -> dict:
 
 # --------------------------------------------------------------- generate --
 
-def workflow_name(recipe: dict, category: str) -> str:
-    return f"{recipe.get('workflow_prefix', '')}{category}"
+def workflow_name(project: dict, recipe: str) -> str:
+    return f"{project.get('workflow_prefix', '')}{recipe}"
 
 
-def generate(template: dict, recipe: dict, category: str) -> tuple[dict, dict]:
-    """One workflow for one category: the game block with the category's
-    values layered on top. The id is stable per (recipe, category) so a
-    regenerated file is the same workflow to the editor, not a new one."""
-    categories = recipe.get("categories") or {}
-    if category not in categories:
-        raise RecipeError(f"recipe has no category {category!r}")
-    values = {**(recipe.get("game") or {}), **(categories[category] or {})}
+def generate(template: dict, project: dict, recipe: str) -> tuple[dict, dict]:
+    """One workflow for one recipe: the project's shared block with the
+    recipe's values layered on top. The id is stable per (project, recipe)
+    so a regenerated file is the same workflow to the editor, not a new one."""
+    recipes = project.get("recipes") or {}
+    if recipe not in recipes:
+        raise RecipeError(f"project has no recipe {recipe!r}")
+    values = {**(project.get("shared") or {}), **(recipes[recipe] or {})}
     workflow = copy.deepcopy(template)
     report = apply_recipe(workflow, values)
-    workflow["id"] = str(uuid.uuid5(NAMESPACE, workflow_name(recipe, category)))
+    workflow["id"] = str(uuid.uuid5(NAMESPACE, workflow_name(project, recipe)))
     workflow["revision"] = 0
     return workflow, report
 
@@ -237,6 +239,7 @@ def template_slots(workflow: dict) -> list[dict]:
 
 RECIPES_DIRNAME = "recipes"
 WORKFLOWS_PREFIX = "workflows/"
+LIBRARY_ROOT = "studios/"
 
 
 def _template_rel(rel) -> str:
@@ -257,36 +260,57 @@ def read_template(workflows_dir: str, rel) -> dict:
         return json.load(f)
 
 
-def write_recipe(dir_: str, name: str, recipe: dict) -> str:
-    """Save a recipe as the file its name reads back. Refuses a shape the
+def write_project(dir_: str, name: str, project: dict) -> str:
+    """Save a project as the file its name reads back. Refuses a shape the
     generator could not run, so a broken save cannot hide until Generate."""
-    if not isinstance(recipe, dict) or not isinstance(recipe.get("categories"), dict):
-        raise RecipeError("a recipe needs a categories table")
-    if not str(recipe.get("template") or "").strip():
-        raise RecipeError("a recipe needs a template")
-    path = _under(dir_, f"{name}.json", "recipe name")
+    if not isinstance(project, dict) or not isinstance(project.get("recipes"), dict):
+        raise RecipeError("a project needs a recipes table")
+    if not str(project.get("template") or "").strip():
+        raise RecipeError("a project needs a template")
+    path = _under(dir_, f"{name}.json", "project name")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(recipe, f, indent=2, ensure_ascii=False)
+        json.dump(project, f, indent=2, ensure_ascii=False)
     return path
 
 
-def new_recipe(workflows_dir: str, template_rel) -> dict:
-    """A recipe for one template with the game column started from the
-    template's own values, no categories yet, output beside the template."""
+def project_name(template_rel, slots: list[dict]) -> str:
+    """What a new project is called: the template's `library` slot with the
+    studios root dropped and slashes to dashes (`studios/imperia/bakery` is
+    `imperia-bakery`), else the template's own file name."""
+    library = next((s["default"] for s in slots if s["key"] == "library"), None)
+    if isinstance(library, str) and library.strip():
+        rel = library.strip().lstrip("/")
+        if rel.startswith(LIBRARY_ROOT):
+            rel = rel[len(LIBRARY_ROOT):]
+        name = safe_project_name(rel.strip("/").replace("/", "-"))
+        if name:
+            return name
+    stem = os.path.splitext(os.path.basename(_template_rel(template_rel)))[0]
+    return safe_project_name(stem) or "project"
+
+
+def safe_project_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(name or "")).strip("-.")
+
+
+def new_project(workflows_dir: str, template_rel) -> tuple[str, dict]:
+    """A project for one template, named from it, with the shared block
+    started from the template's own values, no recipes yet, output beside
+    the template."""
     rel = _template_rel(template_rel)
     slots = template_slots(read_template(workflows_dir, rel))
-    recipe = {"template": rel}
+    project = {"template": rel}
     folder = os.path.dirname(rel)
     if folder:
-        recipe["output"] = folder
-    recipe.update({"workflow_prefix": "",
-                   "game": {s["key"]: copy.deepcopy(s["default"]) for s in slots if s["default"] is not None},
-                   "categories": {}})
-    return recipe
+        project["output"] = folder
+    project.update({"workflow_prefix": "",
+                    "shared": {s["key"]: copy.deepcopy(s["default"]) for s in slots if s["default"] is not None},
+                    "recipes": {}})
+    return project_name(rel, slots), project
 
 
-def recipes_dir() -> str:
+def projects_dir() -> str:
     import folder_paths
     return os.path.join(folder_paths.get_user_directory(), "default", RECIPES_DIRNAME)
 
@@ -303,17 +327,27 @@ def _under(root: str, rel: str, what: str) -> str:
     return path
 
 
-def read_recipe(dir_: str, name: str) -> dict | None:
-    path = _under(dir_, f"{name}.json", "recipe name")
+def _current_keys(project: dict) -> dict:
+    """Files written before the rename said `game` and `categories`."""
+    if isinstance(project, dict):
+        if "shared" not in project and "game" in project:
+            project["shared"] = project.pop("game")
+        if "recipes" not in project and "categories" in project:
+            project["recipes"] = project.pop("categories")
+    return project
+
+
+def read_project(dir_: str, name: str) -> dict | None:
+    path = _under(dir_, f"{name}.json", "project name")
     if not os.path.isfile(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return _current_keys(json.load(f))
 
 
-def list_recipes(dir_: str) -> list[dict]:
-    """Every recipe file, by name, with the template it builds from and the
-    categories it would write. Unreadable files are skipped."""
+def list_projects(dir_: str) -> list[dict]:
+    """Every project file, by name, with the template it builds from and the
+    recipes it would write. Unreadable files are skipped."""
     if not os.path.isdir(dir_):
         return []
     out = []
@@ -322,31 +356,31 @@ def list_recipes(dir_: str) -> list[dict]:
             continue
         try:
             with open(os.path.join(dir_, filename), "r", encoding="utf-8") as f:
-                recipe = json.load(f)
+                project = _current_keys(json.load(f))
         except (OSError, json.JSONDecodeError):
             continue
-        if not isinstance(recipe, dict) or not isinstance(recipe.get("categories"), dict):
+        if not isinstance(project, dict) or not isinstance(project.get("recipes"), dict):
             continue
-        out.append({"name": filename[:-len(".json")], "template": recipe.get("template"),
-                    "categories": list(recipe["categories"])})
+        out.append({"name": filename[:-len(".json")], "template": project.get("template"),
+                    "recipes": list(project["recipes"])})
     return out
 
 
-def generate_all(workflows_dir: str, recipe: dict) -> dict:
-    """Every category of one recipe, written beside its template (or into the
-    recipe's `output` folder). Every workflow is generated before any is
+def generate_all(workflows_dir: str, project: dict) -> dict:
+    """Every recipe of one project, written beside its template (or into the
+    project's `output` folder). Every workflow is generated before any is
     written, so a bad row leaves the folder as it was."""
-    template = read_template(workflows_dir, recipe.get("template"))
-    output_rel = recipe.get("output") or os.path.dirname(_template_rel(recipe.get("template")))
+    template = read_template(workflows_dir, project.get("template"))
+    output_rel = project.get("output") or os.path.dirname(_template_rel(project.get("template")))
     output_dir = _under(workflows_dir, output_rel, "output folder") if output_rel else workflows_dir
     written = []
-    for category in recipe.get("categories") or {}:
-        workflow, report = generate(template, recipe, category)
-        filename = f"{workflow_name(recipe, category)}.json"
+    for recipe in project.get("recipes") or {}:
+        workflow, report = generate(template, project, recipe)
+        filename = f"{workflow_name(project, recipe)}.json"
         rel = f"{output_rel}/{filename}" if output_rel else filename
-        written.append({"path": rel, "category": category, "workflow": workflow, **report})
+        written.append({"path": rel, "recipe": recipe, "workflow": workflow, **report})
     os.makedirs(output_dir, exist_ok=True)
     for item in written:
         with open(os.path.join(output_dir, os.path.basename(item["path"])), "w", encoding="utf-8") as f:
             json.dump(item.pop("workflow"), f, indent=2)
-    return {"template": recipe.get("template"), "written": written}
+    return {"template": project.get("template"), "written": written}
