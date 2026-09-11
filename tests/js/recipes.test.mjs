@@ -210,3 +210,12 @@ test("a recipe name is a lowercase file-name suffix: apostrophes dropped, the re
     assert.equal(recipeSlug("appliance1x2"), "appliance1x2");
     assert.equal(recipeSlug("''"), "");
 });
+
+test("recipe sections come sorted by name after shared, however they were captured", () => {
+    const p = project();
+    p.recipes = { zebra: {}, appliance1x1: {}, "cashier-desk1x1": {} };
+    assert.deepEqual(projectToTable(p, slots).columns, ["shared", "appliance1x1", "cashier-desk1x1", "zebra"]);
+    const table = projectToTable(project(), slots);
+    captureColumn(table, slots, "aaa", { control_image: "a.png" });
+    assert.deepEqual(table.columns, ["shared", "aaa", "appliance1x1", "appliance1x2"]);
+});

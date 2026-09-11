@@ -144,9 +144,11 @@ export function dictCellUpdate(cell, name, text) {
 
 // ----------------------------------------------------------------- table --
 
+const sortedRecipes = (names) => [...names].sort((a, b) => a.localeCompare(b));
+
 export function projectToTable(project, slots) {
     const recipes = project?.recipes ?? {};
-    const columns = [SHARED, ...Object.keys(recipes)];
+    const columns = [SHARED, ...sortedRecipes(Object.keys(recipes))];
     const valuesOf = (column) => (column === SHARED ? project?.shared ?? {} : recipes[column] ?? {});
     const keys = slots.map((s) => s.key);
     const orphans = [];
@@ -231,7 +233,8 @@ function liveSlotValues(graph) {
 // everything.
 export function captureColumn(table, slots, column, values) {
     if (!table.columns.includes(column)) {
-        table.columns.push(column);
+        table.columns.splice(0, table.columns.length,
+            SHARED, ...sortedRecipes([...table.columns.filter((c) => c !== SHARED), column]));
         for (const row of table.rows) row.cells[column] = "";
     }
     for (const row of table.rows) {
@@ -603,6 +606,7 @@ function recipePanel(node) {
                     if (!next || next === column) { name.value = column; return; }
                     if (columns.includes(next)) { toast("warn", "Name taken", `There is already a "${next}" recipe.`); name.value = column; return; }
                     columns[index] = next;
+                    columns.splice(0, columns.length, SHARED, ...sortedRecipes(columns.filter((c) => c !== SHARED)));
                     for (const row of rows) { row.cells[next] = row.cells[column]; delete row.cells[column]; }
                     if (expanded.delete(column)) expanded.add(next);
                     state.dirty = true;
