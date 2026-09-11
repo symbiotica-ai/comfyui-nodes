@@ -37,6 +37,13 @@ async function postJson(path, payload) {
     return body;
 }
 
+async function deleteJson(path) {
+    const res = await api.fetchApi(path, { method: "DELETE" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+    return body;
+}
+
 const listProjects = () => getJson("/symbiotica/recipes").then((b) => b.projects ?? []);
 const readProject = (name) => getJson(`/symbiotica/recipes/${encodeURIComponent(name)}`);
 
@@ -399,6 +406,34 @@ function recipePanel(node) {
         }
     }
 
+    // Two presses within a few seconds, so a stray click cannot remove a
+    // project; the generated workflows are left where they are.
+    let armed = null;
+    async function remove() {
+        if (!state.name) { toast("warn", "Nothing to delete", "Pick a project first."); return; }
+        if (armed !== state.name) {
+            armed = state.name;
+            status(`Press Delete again to remove the project "${state.name}". Its generated workflows stay.`, false);
+            setTimeout(() => { if (armed === state.name) { armed = null; status(""); } }, 6000);
+            return;
+        }
+        armed = null;
+        const name = state.name;
+        try {
+            await deleteJson(`/symbiotica/recipes/${encodeURIComponent(name)}`);
+            state.name = null;
+            state.project = null;
+            state.slots = [];
+            state.table = null;
+            state.dirty = false;
+            await refreshPickers();
+            render();
+            toast("info", `Deleted project "${name}"`, "Its generated workflows are still in the workflows folder.");
+        } catch (err) {
+            toast("error", "Delete failed", String(err?.message ?? err));
+        }
+    }
+
     async function startNew() {
         const template = activeWorkflowPath();
         if (!template) { toast("warn", "Save the workflow first", "A new project takes the open, saved workflow as its template."); return; }
@@ -608,7 +643,7 @@ function recipePanel(node) {
         refit();
     }
 
-    node._symRecipe = { load, save, generate, startNew };
+    node._symRecipe = { load, save, generate, startNew, remove };
     render();
 }
 
@@ -636,6 +671,7 @@ function setupRecipeNode(node) {
     });
     button("Save", () => node._symRecipe?.save());
     button("Generate", () => node._symRecipe?.generate());
+    button("Delete", () => node._symRecipe?.remove());
     recipePanel(node);
     if (node.size[1] < 320) node.setSize?.([Math.max(node.size[0], 560), 320]);
     const onRemoved = node.onRemoved;

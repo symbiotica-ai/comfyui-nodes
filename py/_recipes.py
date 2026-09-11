@@ -274,6 +274,16 @@ def write_project(dir_: str, name: str, project: dict) -> str:
     return path
 
 
+def delete_project(dir_: str, name: str) -> bool:
+    """Remove a project file. The generated workflows stay: they are files
+    in the workflows folder like any other."""
+    path = _under(dir_, f"{name}.json", "project name")
+    if not os.path.isfile(path):
+        return False
+    os.remove(path)
+    return True
+
+
 def project_name(template_rel, slots: list[dict]) -> str:
     """What a new project is called: the template's `library` slot with the
     studios root dropped and slashes to dashes (`studios/imperia/bakery` is

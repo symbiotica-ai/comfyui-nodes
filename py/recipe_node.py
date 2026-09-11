@@ -2,9 +2,9 @@
 # ABOUTME: behind it: list, read (with the template's slots), new, save, generate.
 import os
 
-from ._recipes import (RECIPES_DIRNAME, RecipeError, generate_all, list_projects,
-                       new_project, projects_dir, read_project, read_template,
-                       template_slots, write_project)
+from ._recipes import (RECIPES_DIRNAME, RecipeError, delete_project, generate_all,
+                       list_projects, new_project, projects_dir, read_project,
+                       read_template, template_slots, write_project)
 
 PICK = "— pick a project —"
 
@@ -94,6 +94,16 @@ if PromptServer is not None:
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response({"name": name, "project": project, "slots": slots})
+
+    @routes.delete("/symbiotica/recipes/{name:.+}")
+    async def projects_delete(request):
+        try:
+            removed = delete_project(projects_dir(), request.match_info["name"])
+        except RecipeError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        if not removed:
+            return web.json_response({"error": "no such project"}, status=404)
+        return web.json_response({"deleted": request.match_info["name"]})
 
     @routes.post("/symbiotica/recipes/save")
     async def projects_save(request):

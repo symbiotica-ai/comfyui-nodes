@@ -445,3 +445,19 @@ class TestNewProject:
         assert project_name("recipe-test/bakery-template.json", slots) == "imperia-bakery"
         assert project_name("x.json", [{"key": "library", "kind": "scalar", "default": "", "widgets": 2}]) == "x"
         assert project_name("x.json", [{"key": "library", "kind": "scalar", "default": "studios/", "widgets": 2}]) == "x"
+
+
+from _recipes import delete_project
+
+
+class TestDeleteProject:
+    def test_removes_the_file_and_says_so(self, library):
+        assert delete_project(library["recipes"], "imperia-bakery") is True
+        assert read_project(library["recipes"], "imperia-bakery") is None
+
+    def test_a_project_that_is_not_there_is_false_not_an_error(self, library):
+        assert delete_project(library["recipes"], "nope") is False
+
+    def test_a_name_cannot_walk_out_of_the_dir(self, library):
+        with pytest.raises(RecipeError):
+            delete_project(library["recipes"], "../secrets")

@@ -221,7 +221,8 @@ Wrappers around Wavespeed's hosted endpoints.
   files into the output folder (default: the template's folder), overwriting
   the last run. **New** starts a project from the open, saved workflow, named
   from its `recipe:library` slot (`studios/imperia/bakery` gives
-  `imperia-bakery`).
+  `imperia-bakery`). **Delete**, pressed twice, removes the picked project;
+  its generated workflows stay.
 - A node in the template titled `recipe:<key>` is a slot for `<key>`. A cell
   sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; a
   subgraph instance shows one field per promoted widget; a title ending in
