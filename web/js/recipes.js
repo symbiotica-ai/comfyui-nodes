@@ -413,7 +413,7 @@ function recipePanel(node) {
         if (!state.name) { toast("warn", "Nothing to delete", "Pick a project first."); return; }
         if (armed !== state.name) {
             armed = state.name;
-            status(`Press Delete again to remove the project "${state.name}". Its generated workflows stay.`, false);
+            status(`Press delete project again to remove "${state.name}". Its generated workflows stay.`, false);
             setTimeout(() => { if (armed === state.name) { armed = null; status(""); } }, 6000);
             return;
         }
@@ -661,17 +661,17 @@ function setupRecipeNode(node) {
         const widget = node.addWidget("button", label, null, action, { serialize: false });
         widget.serializeValue = () => undefined;
     };
-    button("New", () => node._symRecipe?.startNew());
-    button("Capture", () => {
+    button("new project", () => node._symRecipe?.startNew());
+    button("capture recipe", () => {
         const column = textValue(node, "recipe");
         if (column === null) { toast("warn", "recipe is wired to a node with no typed text", "Type it, or connect a text node."); return; }
         if (!column) { toast("warn", "Name the recipe first", "Type it in recipe, or connect a text node."); return; }
         if (!node._symCapture) { toast("warn", "Pick a project first", "Capture writes into the project picked above."); return; }
         node._symCapture(column);
     });
-    button("Save", () => node._symRecipe?.save());
-    button("Generate", () => node._symRecipe?.generate());
-    button("Delete", () => node._symRecipe?.remove());
+    button("save project", () => node._symRecipe?.save());
+    button("generate workflows", () => node._symRecipe?.generate());
+    button("delete project", () => node._symRecipe?.remove());
     recipePanel(node);
     if (node.size[1] < 320) node.setSize?.([Math.max(node.size[0], 560), 320]);
     const onRemoved = node.onRemoved;
