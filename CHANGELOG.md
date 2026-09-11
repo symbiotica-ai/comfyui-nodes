@@ -6,6 +6,12 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.18
+
+**Recipes: the recipe name is a slug.** Whatever reaches the `recipe` input
+or a section's name field is lowercased, loses apostrophes and gets dashes
+for the rest: `Cashier's Desk 1x1` is `cashiers-desk-1x1`.
+
 ## 2026.9.17
 
 **Recipes: button names.** new project, capture recipe, save project,
