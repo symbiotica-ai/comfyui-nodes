@@ -4,6 +4,7 @@ import os
 import random
 
 from .compose import IMG_EXTS
+from .order_sheet import category_recipe
 
 
 def assets_by_category(order, category="All"):
@@ -31,7 +32,9 @@ def assets_by_category(order, category="All"):
         if not name:
             continue
         cat = str(a.get("category", "") or "").strip()
-        if want != "All" and cat != want:
+        # A recipe label (`Appliance 1x2`) narrows to one canvas of the
+        # category; the plain name keeps every canvas.
+        if want != "All" and cat != want and category_recipe(a) != want:
             continue
         groups.setdefault(cat, []).append(a)
     out = []

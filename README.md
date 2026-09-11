@@ -207,6 +207,16 @@ Wrappers around Wavespeed's hosted endpoints.
   node or the text in a prompt node changes everywhere when you change it in
   the module.
 
+### Asset Focus, by canvas
+- The `category` dropdown splits a category by its canvas in tiles:
+  `Appliance 1x1` (128x128) and `Appliance 1x2` (128x256) are two entries,
+  since they are two drawings and two recipes. Picking one narrows to that
+  canvas; a plain name on the wire still keeps every canvas. Three outputs
+  after `ref_name`: `category_recipe` (the label, `Appliance 1x2`; a canvas
+  with no whole-tile grid carries its pixels, `Crate Icon 200x200`) and
+  `width` / `height` in pixels for saving at the game's size. `category`
+  stays the plain sheet name.
+
 ### Control images
 - `Control Image` (Symbiotica/Images) — Load Image scoped to the shared
   library `input/controlnet/`. The dropdown lists every image under it,

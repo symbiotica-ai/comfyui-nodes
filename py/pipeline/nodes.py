@@ -32,7 +32,7 @@ from .regional_prompt import (
 )
 from .skeleton import build_client_prompts, build_skeleton
 from .order_loader import event_spec, load_order, order_overview, spec_wire_json
-from .order_sheet import bucket_for, slugify
+from .order_sheet import bucket_for, canvas_size, category_recipe, slugify
 from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import (assets_by_category, dataset_dir,
                            pick_reference_per_category, save_paths)
@@ -1366,7 +1366,22 @@ class SymbioticaAssetFocus(io.ComfyNode):
                                          "records as the reference drawn. "
                                          "Empty when the asset has no "
                                          "references at all."),
-            ],
+                            # APPENDED: the category as a workflow is named — its canvas in
+                # tiles beside it, since a 128x128 and a 128x256 Appliance are
+                # two recipes — and the canvas in pixels, for saving at the
+                # game's own size. `category` stays the plain sheet name, so
+                # paths and datasets keep the one name the sheet gives them.
+                io.String.Output(display_name="category_recipe", is_output_list=True,
+                                 tooltip="The category plus its canvas in tiles: "
+                                         "`Appliance 1x2`. What a recipe is "
+                                         "named after."),
+                io.Int.Output(display_name="width", is_output_list=True,
+                              tooltip="The asset's canvas width in pixels, 0 "
+                                      "when the sheet names none."),
+                io.Int.Output(display_name="height", is_output_list=True,
+                              tooltip="The asset's canvas height in pixels, 0 "
+                                      "when the sheet names none."),
+],
             hidden=[io.Hidden.unique_id],
             # An output node so it can be queued on its own. Without that there
             # is no way to run it before anything is wired downstream, and its
@@ -1481,7 +1496,10 @@ class SymbioticaAssetFocus(io.ComfyNode):
                              [bucket_for(i) for i in picked],
                              [r[0] for r in chosen_refs],
                              [r[1] for r in chosen_refs],
-                             [r[2] for r in chosen_refs])
+                             [r[2] for r in chosen_refs],
+                             [category_recipe(raw.get(i["assetName"], i)) for i in picked],
+                             [canvas_size(raw.get(i["assetName"], i))[0] for i in picked],
+                             [canvas_size(raw.get(i["assetName"], i))[1] for i in picked])
 
 
 class SymbioticaSaveRender(io.ComfyNode):

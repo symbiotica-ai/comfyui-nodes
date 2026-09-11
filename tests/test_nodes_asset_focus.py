@@ -150,7 +150,8 @@ class TestSchema:
         schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
         assert [o.display_name for o in schema.outputs] == [
             "asset_name", "category", "client_prompt", "save_path", "order",
-            "event_order", "bucket", "ref_image", "ref_mask", "ref_name"]
+            "event_order", "bucket", "ref_image", "ref_mask", "ref_name",
+            "category_recipe", "width", "height"]
 
     def test_ref_is_the_last_input(self, nodes_mod):
         """Widget values restore BY POSITION, so the clicked reference goes on
@@ -401,3 +402,37 @@ class TestWhenItReReads:
         second = nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(
             order=ORDER, category="Decoration")
         assert first != second
+
+
+class TestCategoryByTiles:
+    """One category, two canvases, two workflows: `Appliance 1x1` is the
+    128x128 one and `Appliance 1x2` the 128x256 one. The recipe label is the
+    category plus its canvas in tiles, and it narrows like a category."""
+
+    ORDER = {**ORDER, "assets": [
+        {"assetName": "Short Oven", "category": "Appliance", "canvas": "128x128", "prompt": "a"},
+        {"assetName": "Tall Oven", "category": "Appliance", "canvas": "128x256", "prompt": "b"},
+        {"assetName": "Bunting", "category": "Decoration", "prompt": "c"},
+    ]}
+
+    def test_the_recipe_label_and_the_resolution_come_out_on_their_own_wires(self, nodes_mod):
+        out = run(nodes_mod, order=self.ORDER, asset="Tall Oven")
+        schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
+        names = [o.display_name for o in schema.outputs]
+        assert names[-3:] == ["category_recipe", "width", "height"]
+        assert out.args[1] == ["Appliance"]
+        assert out.args[-3:] == (["Appliance 1x2"], [128], [256])
+
+    def test_no_canvas_means_the_plain_category_and_no_size(self, nodes_mod):
+        out = run(nodes_mod, order=self.ORDER, asset="Bunting")
+        assert out.args[-3:] == (["Decoration"], [0], [0])
+
+    def test_a_canvas_with_no_whole_tile_grid_carries_its_pixels(self, nodes_mod):
+        order = {**ORDER, "assets": [
+            {"assetName": "Chest", "category": "Crate Icon", "canvas": "200x200", "prompt": "a"}]}
+        out = run(nodes_mod, order=order)
+        assert out.args[-3:] == (["Crate Icon 200x200"], [200], [200])
+
+    def test_the_recipe_label_narrows_to_one_canvas_and_the_plain_name_keeps_both(self, nodes_mod):
+        assert run(nodes_mod, order=self.ORDER, category="Appliance 1x2").args[0] == ["Tall Oven"]
+        assert run(nodes_mod, order=self.ORDER, category="Appliance").args[0] == ["Short Oven", "Tall Oven"]

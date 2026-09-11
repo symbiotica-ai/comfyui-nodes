@@ -758,3 +758,38 @@ test("the category dropdown is sorted A-Z under All", async () => {
     assert.deepEqual(values, ["All", "Appliance", "Cashier's Desk",
                               "Food - 3 stages", "Wallpaper"]);
 });
+
+test("the category dropdown splits a category by its canvas in tiles", async () => {
+    reset();
+    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs._symEvents = [{ feature: "Mini 3", assets: [
+        { assetName: "Short Oven", category: "Appliance", canvas: "128x128" },
+        { assetName: "Tall Oven", category: "Appliance", canvas: "128x256" },
+        { assetName: "Chest", category: "Crate Icon", canvas: "200x200" },
+        { assetName: "Bunting", category: "Decoration" },
+    ] }];
+    const node = await create("SymbioticaAssetFocus", { order: null, category: "", asset: "" });
+    await node.onNodeCreated?.call(node);
+    link(specs, node, "order");
+    node._symRenderFocus();
+    for (let i = 0; i < 5; i++) await tick();
+    const w = node.widgets.find((x) => x.name === "category");
+    assert.deepEqual(w.options.values(),
+                     ["All", "Appliance 1x1", "Appliance 1x2", "Crate Icon 200x200", "Decoration"]);
+});
+
+test("choosing a tiles label narrows to that canvas, and All groups by it", async () => {
+    const assets = [
+        { name: "Short Oven", category: "Appliance", canvas: "128x128" },
+        { name: "Tall Oven", category: "Appliance", canvas: "128x256" },
+        { name: "Bunting", category: "Decoration" },
+    ];
+    const node = await focusNode({ category: "All" }, assets);
+    assert.deepEqual(headers(node), ["Appliance 1x1 · 1", "Appliance 1x2 · 1", "Decoration · 1"]);
+    const w = node.widgets.find((x) => x.name === "category");
+    w.value = "Appliance 1x2";
+    w.callback("Appliance 1x2");
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(names(node), ["Tall Oven · 128x256"]);
+});

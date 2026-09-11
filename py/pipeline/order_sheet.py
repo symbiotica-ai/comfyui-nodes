@@ -234,6 +234,24 @@ def canvas_tiles(canvas: str) -> str:
     return f"{spec['w'] // TILE_PX}x{spec['h'] // TILE_PX}"
 
 
+def category_recipe(asset: dict) -> str:
+    """The category as a workflow is named: the category plus its canvas in
+    tiles (`Appliance 1x2`), since a 128x128 and a 128x256 Appliance are two
+    drawings and two recipes. A canvas with no whole-tile grid carries its
+    pixels instead (`Crate Icon 200x200`); no canvas at all is the plain
+    category."""
+    category = str(asset.get("category", "") or "").strip()
+    canvas = re.sub(r"\s+", "", str(asset.get("canvas", "") or ""))
+    size = canvas_tiles(canvas) or canvas
+    return f"{category} {size}".strip() if size else category
+
+
+def canvas_size(asset: dict) -> tuple[int, int]:
+    """The asset's canvas in pixels, (0, 0) when the row names none."""
+    spec = canvas_spec_of(str(asset.get("canvas", "") or ""))
+    return (spec["w"], spec["h"]) if spec else (0, 0)
+
+
 def bucket_for(asset: dict) -> str:
     """The bucket of one asset ROW — how this row is drawn within its category.
 

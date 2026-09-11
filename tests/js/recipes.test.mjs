@@ -282,3 +282,15 @@ test("the project is the one whose template is the open workflow", () => {
     assert.equal(projectForWorkflow(projects, "workflows/recipe-test/dev-imperia-counter1x1.json"), null);
     assert.equal(projectForWorkflow(projects, null), null);
 });
+
+test("asset focus's category_recipe output is the picked label, and category the plain name", () => {
+    const focus = { id: 1, type: "SymbioticaAssetFocus", inputs: [], widgets: [{ name: "category", value: "Appliance 1x2" }],
+        outputs: [{ name: "asset_name" }, { name: "category" }, { name: "client_prompt" }, { name: "category_recipe" }] };
+    const target = (slot) => ({ id: 2, type: "SymbioticaRecipe", inputs: [{ name: "recipe", link: 10, widget: { name: "recipe" } }], widgets: [{ name: "recipe", value: "" }],
+        _slot: slot });
+    const graphFor = (slot) => graphOf([focus, target(slot)], { 10: { origin_id: 1, origin_slot: slot } });
+    assert.equal(resolveText(graphFor(3), target(3), "recipe"), "Appliance 1x2");
+    assert.equal(resolveText(graphFor(1), target(1), "recipe"), "Appliance");
+    focus.widgets[0].value = "All";
+    assert.equal(resolveText(graphFor(3), target(3), "recipe"), null);
+});

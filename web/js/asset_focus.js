@@ -137,15 +137,45 @@ function comboify(node, widgetName, valuesFn) {
     return w;
 }
 
-// The categories the wired order actually holds, A-Z under "All". A dropdown
-// is read by hunting for a name, and seventeen of them in the order the
-// spreadsheet happens to list them is a list you have to scan every time.
-// Compared with `localeCompare` so "Cashier's Desk" files where a person looks
-// for it rather than where its apostrophe's code point puts it.
+// A canvas in floor tiles — `128x256` is `1x2` — or "" when it is not a whole
+// number of tiles. Mirrors order_sheet.canvas_tiles.
+const TILE_PX = 128;
+export function tilesOf(canvas) {
+    const m = /^(\d+)x(\d+)$/.exec(String(canvas ?? "").toLowerCase().replace(/\s+/g, ""));
+    if (!m) return "";
+    const w = Number(m[1]), h = Number(m[2]);
+    if (!w || !h || w % TILE_PX || h % TILE_PX) return "";
+    return `${w / TILE_PX}x${h / TILE_PX}`;
+}
+
+// The category as a workflow is named: the category plus its canvas in tiles
+// (`Appliance 1x2`), the raw pixels when there is no whole-tile grid, the
+// plain category when the row names no canvas. Mirrors order_sheet.category_recipe.
+export function categoryRecipeOf(asset) {
+    const category = String(asset?.category ?? "").trim();
+    const canvas = String(asset?.canvas ?? "").replace(/\s+/g, "");
+    const size = tilesOf(canvas) || canvas;
+    return size ? `${category} ${size}`.trim() : category;
+}
+
+// Does an asset fall under a dropdown pick? The pick is a recipe label
+// (`Appliance 1x2`, one canvas) or a plain category (every canvas).
+function inCategory(asset, pick) {
+    const want = String(pick ?? "").trim().toLowerCase();
+    if (!want) return true;
+    return String(asset?.category ?? "").trim().toLowerCase() === want
+        || categoryRecipeOf(asset).toLowerCase() === want;
+}
+
+// The categories the wired order actually holds, split by canvas, A-Z under
+// "All". A dropdown is read by hunting for a name, and seventeen of them in
+// the order the spreadsheet happens to list them is a list you have to scan
+// every time. Compared with `localeCompare` so "Cashier's Desk" files where a
+// person looks for it rather than where its apostrophe's code point puts it.
 function categoriesOf(node) {
     const found = [];
     for (const asset of publishedAssets(node)?.assets ?? []) {
-        const category = String(asset.category ?? "").trim();
+        const category = categoryRecipeOf(asset);
         if (category && !found.includes(category)) found.push(category);
     }
     return [ALL_CATEGORIES,
@@ -417,14 +447,13 @@ function focusPanel(node) {
         // narrowed by the same widget, but between runs the widget can move
         // and the panel must not keep showing what it would no longer choose.
         const assets = (fromRun ?? published?.assets ?? [])
-            .filter((a) => !narrow
-                || String(a.category ?? "").toLowerCase() === narrow)
             .map((a) => ({
                 ...a,
                 canvas: a.canvas || known.get(a.name)?.canvas || "",
                 refs: known.get(a.name)?.refs?.length
                     ? known.get(a.name).refs : (a.refs ?? []),
-            }));
+            }))
+            .filter((a) => inCategory(a, narrow));
         // A saved workflow restores the widget AFTER onNodeCreated ran, so the
         // normalising done there is overwritten by the empty value on disk.
         const categoryW = widgetOf(node, "category");
@@ -501,7 +530,7 @@ function focusPanel(node) {
             // is the order it shows.
             const groups = new Map();
             for (const asset of assets) {
-                const key = String(asset.category ?? "").trim();
+                const key = categoryRecipeOf(asset);
                 if (!groups.has(key)) groups.set(key, []);
                 groups.get(key).push(asset);
             }
@@ -526,8 +555,7 @@ function focusPanel(node) {
             const pool = node._symFocusAssets?.length
                 ? node._symFocusAssets : (publishedAssets(node)?.assets ?? []);
             const keep = pool.some(
-                (a) => a.name === chosen()
-                    && (!narrowed() || a.category === narrowed()));
+                (a) => a.name === chosen() && inCategory(a, narrowed()));
             if (!keep) {
                 const w = widgetOf(node, "asset");
                 if (w) w.value = "";
@@ -546,7 +574,7 @@ function focusPanel(node) {
         ALL_ASSETS,
         ...(node._symFocusAssets?.length
             ? node._symFocusAssets : (publishedAssets(node)?.assets ?? []))
-            .filter((a) => !narrowed() || a.category === narrowed())
+            .filter((a) => inCategory(a, narrowed()))
             .map((a) => a.name),
     ]);
     if (assetWidget) {

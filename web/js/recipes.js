@@ -92,6 +92,13 @@ function nodeText(graph, node, slot, depth) {
     }
     if (type === "SymbioticaAssetFocus") {
         const output = node.outputs?.[slot]?.name;
+        // The dropdown holds the recipe label (`Appliance 1x2`); the plain
+        // `category` output is that without its size, and "All" names nothing.
+        if (output === "category" || output === "category_recipe") {
+            const picked = String(widgetValue(node, "category") ?? "").trim();
+            if (!picked || picked === "All") return null;
+            return output === "category" ? picked.replace(/\s+\d+x\d+$/i, "") : picked;
+        }
         const value = output ? widgetValue(node, output) : undefined;
         return typeof value === "string" ? value : null;
     }
