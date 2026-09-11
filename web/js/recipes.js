@@ -53,18 +53,90 @@ function toast(severity, summary, detail, life = 5000) {
 
 const activeWorkflowPath = () => app.extensionManager?.workflow?.activeWorkflow?.path ?? null;
 
-// The recipe Capture writes into: typed on the node, or read off the text
-// node wired into the `recipe` input. A computed string (an LLM output, a
-// concat) has no value on the canvas, so only a typed one can be read.
-function textValue(node, name) {
-    const index = node.inputs?.findIndex((i) => i.name === name) ?? -1;
+// ------------------------------------------------------------- resolver --
+
+// The recipe name is usually wired: Asset Focus's category joined with a plot
+// string. None of that has a value on the canvas until a run, so the name
+// is read live by walking the wires back through the nodes whose output is
+// a plain function of their widgets. Anything else (an LLM, a file) is null:
+// a guess would save a recipe under the wrong name.
+const STRING_NODES = new Set(["String", "PrimitiveString", "PrimitiveStringMultiline", "StringConstant",
+    "StringConstantMultiline", "easy string", "Text", "CR Text", "Simple String"]);
+const PASS_THROUGH = new Set(["Reroute", "PreviewAny", "ShowText|pysssss", "PreviewAsText"]);
+
+function widgetValue(node, name) {
+    const widget = node.widgets?.find((w) => w.name === name);
+    return widget ? widget.value : undefined;
+}
+
+function inputText(graph, node, inputName, depth) {
+    const index = node.inputs?.findIndex((i) => i.name === inputName) ?? -1;
     const input = index >= 0 ? node.inputs[index] : null;
-    if (input?.link != null) {
-        const origin = node.getInputNode?.(index);
-        const widget = origin?.widgets?.find((w) => typeof w.value === "string");
-        return widget ? String(widget.value).trim() : null;
+    if (!input) return undefined;
+    if (input.link != null) {
+        const link = graph.links?.[input.link];
+        const origin = link ? graph.getNodeById?.(link.origin_id) : null;
+        if (!origin) return null;
+        return nodeText(graph, origin, link.origin_slot ?? 0, depth + 1);
     }
-    return String(node.widgets?.find((w) => w.name === name)?.value ?? "").trim();
+    const value = widgetValue(node, input.widget?.name ?? inputName);
+    return value === undefined ? undefined : String(value);
+}
+
+function nodeText(graph, node, slot, depth) {
+    if (depth > 12) return null;
+    const type = String(node.type ?? "");
+    if (STRING_NODES.has(type)) {
+        const widget = node.widgets?.find((w) => typeof w.value === "string");
+        return widget ? String(widget.value) : null;
+    }
+    if (type === "SymbioticaAssetFocus") {
+        const output = node.outputs?.[slot]?.name;
+        const value = output ? widgetValue(node, output) : undefined;
+        return typeof value === "string" ? value : null;
+    }
+    if (type === "JoinStrings") {
+        const a = inputText(graph, node, "string1", depth);
+        const b = inputText(graph, node, "string2", depth);
+        if (a == null || b == null) return null;
+        return `${a}${inputText(graph, node, "delimiter", depth) ?? ""}${b}`;
+    }
+    if (type === "JoinStringMulti") {
+        const count = Number(widgetValue(node, "inputcount") ?? 2);
+        const delimiter = String(widgetValue(node, "delimiter") ?? "");
+        const parts = [];
+        for (let i = 1; i <= count; i += 1) {
+            const part = inputText(graph, node, `string_${i}`, depth);
+            if (part == null) return null;
+            parts.push(part);
+        }
+        return parts.join(delimiter);
+    }
+    if (PASS_THROUGH.has(type)) {
+        const first = node.inputs?.[0]?.name;
+        return first ? inputText(graph, node, first, depth) ?? null : null;
+    }
+    return null;
+}
+
+// The text arriving on one of this node's inputs: typed, or resolved live
+// through the wire. null when wired to something the resolver cannot read.
+export function resolveText(graph, node, inputName) {
+    const value = inputText(graph, node, inputName, 0);
+    return value == null ? null : String(value).trim();
+}
+
+const liveGraph = () => app.canvas?.graph ?? app.graph;
+const textValue = (node, name) => resolveText(liveGraph(), node, name);
+
+// What auto does when the name on the wire is `next` and the canvas was on
+// `prev` (changed = slot values moved since that recipe was last written):
+// save what you leave, then load the recipe you arrive at, or create it.
+export function autoDecision(prev, next, columns) {
+    const actions = [];
+    if (prev.name && prev.changed) actions.push(`save:${prev.name}`);
+    if (next && next !== prev.name) actions.push(columns.includes(next) ? `load:${next}` : `create:${next}`);
+    return actions;
 }
 
 // A recipe name is the suffix of a workflow file name, so whatever arrives
@@ -486,6 +558,67 @@ function recipePanel(node) {
         status(`Loaded ${column} onto the canvas (${report.applied.length} slots).${missing}`, false);
     }
 
+    // ------------------------------------------------------------ auto --
+    // Watched on every repaint, like the Module node's rows. `last` is the
+    // recipe the canvas is on and the slot signature it was last written with.
+    const auto = { last: { name: null, sig: null }, timer: null, busy: false, on: false };
+    const slotSignature = (values) => JSON.stringify(values);
+
+    async function autoTick() {
+        if (!auto.on || auto.busy || !state.table) return;
+        const graph = liveGraph();
+        const values = liveSlotValues(graph);
+        if (!Object.keys(values).length) return;
+        const sig = slotSignature(values);
+        const raw = textValue(node, "recipe");
+        const next = raw ? recipeSlug(raw) : "";
+        const prev = { name: auto.last.name, changed: auto.last.sig !== null && auto.last.sig !== sig };
+        const actions = autoDecision(prev, next, state.table.columns);
+        if (!actions.length) return;
+        // A value edit settles for a second before it is written; a name
+        // change acts at once, so the recipe you leave is saved as it was.
+        const onlySave = actions.length === 1 && actions[0] === `save:${prev.name}` && next === prev.name;
+        if (onlySave) {
+            if (auto.timer) return;
+            auto.timer = setTimeout(() => { auto.timer = null; autoRun(actions, values, sig); }, 1000);
+            return;
+        }
+        if (auto.timer) { clearTimeout(auto.timer); auto.timer = null; }
+        await autoRun(actions, values, sig);
+    }
+
+    async function autoRun(actions, values, sig) {
+        auto.busy = true;
+        try {
+            for (const action of actions) {
+                const [verb, name] = action.split(/:(.*)/s);
+                if (verb === "save" || verb === "create") {
+                    captureColumn(state.table, state.slots, name, values);
+                    state.dirty = true;
+                    // On a failed save the signature is still recorded, so the
+                    // same values do not retry on every repaint; the toast said why.
+                    auto.last = { name, sig };
+                    if (!(await save())) return;
+                    render();
+                    status(`auto: ${verb === "save" ? "saved" : "created"} ${name}`, false);
+                } else if (verb === "load") {
+                    loadColumn(name);
+                    auto.last = { name, sig: slotSignature(liveSlotValues(liveGraph())) };
+                    status(`auto: loaded ${name} onto the canvas`, false);
+                }
+            }
+        } finally {
+            auto.busy = false;
+        }
+    }
+
+    node._symAuto = auto;
+    const onDrawForeground = node.onDrawForeground;
+    node.onDrawForeground = function () {
+        autoTick();
+        return onDrawForeground?.apply(this, arguments);
+    };
+
     function headerField(label, key, placeholder) {
         const wrap = el("label", "display:flex;align-items:center;gap:6px;min-width:0;flex:1 1 30%;");
         wrap.append(el("span", `flex:0 0 auto;color:${HUB.inkSubtle};`, label));
@@ -669,6 +802,13 @@ function setupRecipeNode(node) {
         if (!value || value === PICK) return;
         node._symRecipe?.load(String(value));
     };
+    const autoToggle = node.addWidget("toggle", "auto", false, (value) => {
+        const auto = node._symAuto;
+        if (!auto) return;
+        auto.on = !!value;
+        auto.last = { name: null, sig: null };
+        if (auto.timer) { clearTimeout(auto.timer); auto.timer = null; }
+    });
     const button = (label, action) => {
         const widget = node.addWidget("button", label, null, action, { serialize: false });
         widget.serializeValue = () => undefined;
@@ -686,6 +826,13 @@ function setupRecipeNode(node) {
     button("generate workflows", () => node._symRecipe?.generate());
     button("delete project", () => node._symRecipe?.remove());
     recipePanel(node);
+    const applyToggle = () => { if (node._symAuto) node._symAuto.on = !!autoToggle.value; };
+    applyToggle();
+    const onConfigure = node.onConfigure;
+    node.onConfigure = function () {
+        onConfigure?.apply(this, arguments);
+        applyToggle();
+    };
     if (node.size[1] < 320) node.setSize?.([Math.max(node.size[0], 560), 320]);
     const onRemoved = node.onRemoved;
     node.onRemoved = function () {

@@ -219,3 +219,55 @@ test("recipe sections come sorted by name after shared, however they were captur
     captureColumn(table, slots, "aaa", { control_image: "a.png" });
     assert.deepEqual(table.columns, ["shared", "aaa", "appliance1x1", "appliance1x2"]);
 });
+
+import { autoDecision, resolveText } from "../../web/js/recipes.js";
+
+// A live-graph stand-in: nodes by id, links by id as {origin_id, origin_slot}.
+function graphOf(nodes, links) {
+    return { links, getNodeById: (id) => nodes.find((n) => n.id === id) ?? null };
+}
+const strNode = (id, value, type = "String") => ({ id, type, inputs: [{ name: "String", widget: { name: "String" } }],
+    widgets: [{ name: "String", value }], outputs: [{ name: "STRING" }] });
+
+test("a wired recipe name is read live through string, join and asset-focus nodes", () => {
+    const focus = { id: 1, type: "SymbioticaAssetFocus", inputs: [], widgets: [{ name: "category", value: "Counter" }, { name: "asset", value: "X" }],
+        outputs: [{ name: "asset_name" }, { name: "category" }] };
+    const plot = strNode(2, "1x1");
+    const join = { id: 3, type: "JoinStringMulti", widgets: [{ name: "inputcount", value: 2 }, { name: "delimiter", value: "" }],
+        inputs: [{ name: "string_1", link: 10 }, { name: "string_2", link: 11 }, { name: "inputcount", widget: { name: "inputcount" } }],
+        outputs: [{ name: "string" }] };
+    const recipes = { id: 4, type: "SymbioticaRecipe", inputs: [{ name: "project", widget: { name: "project" } }, { name: "recipe", link: 12, widget: { name: "recipe" } }],
+        widgets: [{ name: "project", value: "p" }, { name: "recipe", value: "" }] };
+    const graph = graphOf([focus, plot, join, recipes], {
+        10: { origin_id: 1, origin_slot: 1 }, 11: { origin_id: 2, origin_slot: 0 }, 12: { origin_id: 3, origin_slot: 0 },
+    });
+    assert.equal(resolveText(graph, recipes, "recipe"), "Counter1x1");
+});
+
+test("join strings uses its delimiter and a typed value is read as is", () => {
+    const a = strNode(1, "a"), b = strNode(2, "b");
+    const join = { id: 3, type: "JoinStrings", widgets: [{ name: "delimiter", value: "-" }],
+        inputs: [{ name: "string1", link: 10 }, { name: "string2", link: 11 }, { name: "delimiter", widget: { name: "delimiter" } }], outputs: [{ name: "STRING" }] };
+    const target = { id: 4, type: "SymbioticaRecipe", inputs: [{ name: "recipe", link: 12, widget: { name: "recipe" } }], widgets: [{ name: "recipe", value: "typed" }] };
+    const graph = graphOf([a, b, join, target], { 10: { origin_id: 1, origin_slot: 0 }, 11: { origin_id: 2, origin_slot: 0 }, 12: { origin_id: 3, origin_slot: 0 } });
+    assert.equal(resolveText(graph, target, "recipe"), "a-b");
+    const typed = { id: 5, type: "SymbioticaRecipe", inputs: [{ name: "recipe", link: null, widget: { name: "recipe" } }], widgets: [{ name: "recipe", value: "typed" }] };
+    assert.equal(resolveText(graph, typed, "recipe"), "typed");
+});
+
+test("a node the resolver does not understand yields null, never a guess", () => {
+    const llm = { id: 1, type: "SymbioticaClaude", inputs: [{ name: "prompt", link: null, widget: { name: "prompt" } }], widgets: [{ name: "prompt", value: "hi" }], outputs: [{ name: "text" }] };
+    const target = { id: 2, type: "SymbioticaRecipe", inputs: [{ name: "recipe", link: 10, widget: { name: "recipe" } }], widgets: [{ name: "recipe", value: "" }] };
+    const graph = graphOf([llm, target], { 10: { origin_id: 1, origin_slot: 0 } });
+    assert.equal(resolveText(graph, target, "recipe"), null);
+});
+
+test("auto decides: save the recipe you leave, then load an existing one or create a new one", () => {
+    const columns = ["shared", "counter1x1"];
+    assert.deepEqual(autoDecision({ name: "counter1x1", changed: true }, "chair1x1", columns), ["save:counter1x1", "create:chair1x1"]);
+    assert.deepEqual(autoDecision({ name: "chair1x1", changed: false }, "counter1x1", columns), ["load:counter1x1"]);
+    assert.deepEqual(autoDecision({ name: "counter1x1", changed: true }, "counter1x1", columns), ["save:counter1x1"]);
+    assert.deepEqual(autoDecision({ name: "counter1x1", changed: false }, "counter1x1", columns), []);
+    assert.deepEqual(autoDecision({ name: null, changed: false }, "counter1x1", columns), ["load:counter1x1"]);
+    assert.deepEqual(autoDecision({ name: "counter1x1", changed: true }, "", columns), ["save:counter1x1"]);
+});

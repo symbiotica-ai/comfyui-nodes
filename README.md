@@ -232,6 +232,13 @@ Wrappers around Wavespeed's hosted endpoints.
   from its `recipe:library` slot (`studios/imperia/bakery` gives
   `imperia-bakery`). **Delete**, pressed twice, removes the picked project;
   its generated workflows stay.
+- The **recipe** input reads a wired name live: through String, Join
+  Strings, Join String Multi and Asset Focus's `category` output, so a name
+  built from the picked category changes as you pick. With the **auto**
+  toggle on, the node watches the canvas: a value edit is captured and
+  saved a second later, and a name change saves the recipe you leave, then
+  loads the one you arrive at onto the canvas, or creates it from the canvas
+  if it is new.
 - A node in the template titled `recipe:<key>` is a slot for `<key>`. A cell
   sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; a
   subgraph instance shows one field per promoted widget; a title ending in
