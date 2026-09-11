@@ -6,6 +6,17 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.7
+
+**Recipe node.** Recipes move off the Module node onto their own `Recipe`
+node (Symbiotica/Recipes), and become editable: pick a recipe and it opens
+as a table, a row per template slot, a **game** column and a column per
+category. Rename, add or remove categories in the header, edit cells,
+**Save**, or **Save and generate workflows**. **New from this workflow**
+starts a recipe with the open workflow as its template. The Module node's
+`recipe` input and Generate button from 2026.9.6 are gone (its inputs are
+back to `module` and `folder`).
+
 ## 2026.9.6
 
 **Module: recipes.** A recipe in `user/default/recipes/` names a template
