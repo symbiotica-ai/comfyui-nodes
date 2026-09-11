@@ -6,6 +6,14 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.11
+
+**Recipe: sections, not columns.** The recipe is a list of collapsible
+sections, game first, then one per category, each with its own count,
+**load**, **capture** and remove. A subgraph slot (render, flip) shows one
+field per widget instead of a JSON object. The capture row and the column
+headers are gone; **Add category** sits under the list.
+
 ## 2026.9.10
 
 **Recipe: load a column onto the canvas.** Every column header has a **load**
