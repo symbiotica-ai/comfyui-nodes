@@ -200,3 +200,13 @@ test("a subgraph row edits one widget at a time inside its JSON cell", () => {
     assert.equal(dictCellUpdate('{"lora_name": "a"}', "lora_name", ""), "");
     assert.equal(dictCellUpdate("not json", "x", "1"), '{"x": 1}');
 });
+
+import { recipeSlug } from "../../web/js/recipes.js";
+
+test("a recipe name is a lowercase file-name suffix: apostrophes dropped, the rest dashed", () => {
+    assert.equal(recipeSlug("Cashier's Desk 1x1"), "cashiers-desk-1x1");
+    assert.equal(recipeSlug("  Appliance 1×2 "), "appliance-1-2");
+    assert.equal(recipeSlug("bakery-Cashier's Desk-1x2"), "bakery-cashiers-desk-1x2");
+    assert.equal(recipeSlug("appliance1x2"), "appliance1x2");
+    assert.equal(recipeSlug("''"), "");
+});

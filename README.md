@@ -215,7 +215,8 @@ Wrappers around Wavespeed's hosted endpoints.
   each listing the template's slots with **load** (put its values onto the
   canvas), **capture** (read the canvas into it) and ×. To add or refill a
   recipe, set the values on the template's own nodes, put its name in the
-  **recipe** input (typed, or a wired text node) and press **Capture**; a
+  **recipe** input (typed, or a wired text node; `Cashier's Desk 1x1`
+  becomes `cashiers-desk-1x1`) and press **capture recipe**; a
   recipe keeps what differs from shared, shared keeps everything. **Save**
   writes the project; **Generate** saves and writes prefix + recipe `.json`
   files into the output folder (default: the template's folder), overwriting

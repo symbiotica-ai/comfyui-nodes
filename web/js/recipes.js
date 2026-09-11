@@ -67,6 +67,14 @@ function textValue(node, name) {
     return String(node.widgets?.find((w) => w.name === name)?.value ?? "").trim();
 }
 
+// A recipe name is the suffix of a workflow file name, so whatever arrives
+// on the input is lowercased, loses its apostrophes and gets one dash where
+// anything else non-alphanumeric was.
+export function recipeSlug(text) {
+    return String(text ?? "").toLowerCase().replace(/['’]/g, "")
+        .replace(/[^a-z0-9._]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
 // ----------------------------------------------------------------- cells --
 
 export function cellText(value) {
@@ -591,7 +599,7 @@ function recipePanel(node) {
                 name.value = column;
                 name.title = "Recipe: also the suffix of the generated workflow's name.";
                 name.addEventListener("change", () => {
-                    const next = name.value.trim();
+                    const next = recipeSlug(name.value);
                     if (!next || next === column) { name.value = column; return; }
                     if (columns.includes(next)) { toast("warn", "Name taken", `There is already a "${next}" recipe.`); name.value = column; return; }
                     columns[index] = next;
@@ -663,8 +671,9 @@ function setupRecipeNode(node) {
     };
     button("new project", () => node._symRecipe?.startNew());
     button("capture recipe", () => {
-        const column = textValue(node, "recipe");
-        if (column === null) { toast("warn", "recipe is wired to a node with no typed text", "Type it, or connect a text node."); return; }
+        const raw = textValue(node, "recipe");
+        if (raw === null) { toast("warn", "recipe is wired to a node with no typed text", "Type it, or connect a text node."); return; }
+        const column = recipeSlug(raw);
         if (!column) { toast("warn", "Name the recipe first", "Type it in recipe, or connect a text node."); return; }
         if (!node._symCapture) { toast("warn", "Pick a project first", "Capture writes into the project picked above."); return; }
         node._symCapture(column);
