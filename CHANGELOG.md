@@ -6,6 +6,15 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.9
+
+**Recipe: capture a column from the canvas.** Set the values on the template
+workflow's nodes with their own widgets (the image picker, the aspect
+dropdown, the LoRA list), type a column name on the Recipe node and press
+**Capture into column**: every slot on the canvas lands in that column, a new
+column if the name is new. A category takes only what differs from the game
+column; capturing into `game` takes everything.
+
 ## 2026.9.8
 
 **Recipe: a new recipe starts filled in.** New from this workflow now copies
