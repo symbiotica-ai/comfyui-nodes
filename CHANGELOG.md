@@ -6,6 +6,18 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.15
+
+**Recipes: project and recipe.** Inputs changed and renamed to what they
+are: the node is **Recipes**; the dropdown is **project** (one file per
+game, e.g. `imperia-bakery`) and the text input is **recipe** (one asset
+type inside it, e.g. `appliance1x2`; typed or wired). The `name` input is
+gone: **New** names the project from the workflow's `recipe:library` slot
+(`studios/imperia/bakery` becomes `imperia-bakery`), else from the template
+file name, and refuses to overwrite an existing one. The panel's first
+section is **shared**, then one section per recipe. Project files now say
+`shared` and `recipes`; files saying `game` and `categories` still read.
+
 ## 2026.9.14
 
 **Recipe: one kind of control.** Inputs changed: the node gains a `name`
