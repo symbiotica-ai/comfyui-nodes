@@ -218,8 +218,9 @@ Wrappers around Wavespeed's hosted endpoints.
 ### Recipes (one template, one workflow per recipe)
 - `Recipes` (Symbiotica/Recipes) — a **project** is one template workflow,
   a block of **shared** values and one **recipe** per asset type; Generate
-  writes one workflow per recipe. Pick a project in the dropdown and it
-  opens on the node as collapsible sections: shared, then one per recipe,
+  writes one workflow per recipe. The project is the one whose template is
+  the open workflow, so on a base workflow the node opens its project by
+  itself, as collapsible sections: shared, then one per recipe,
   each listing the template's slots with **load** (put its values onto the
   canvas), **capture** (read the canvas into it) and ×. To add or refill a
   recipe, set the values on the template's own nodes, put its name in the
