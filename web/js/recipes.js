@@ -45,6 +45,20 @@ function toast(severity, summary, detail, life = 5000) {
 
 const activeWorkflowPath = () => app.extensionManager?.workflow?.activeWorkflow?.path ?? null;
 
+// The category Capture writes into: typed on the node, or read off the text
+// node wired into the `category` input. A computed string (an LLM output, a
+// concat) has no value on the canvas, so only a typed one can be read.
+function categoryValue(node) {
+    const index = node.inputs?.findIndex((i) => i.name === "category") ?? -1;
+    const input = index >= 0 ? node.inputs[index] : null;
+    if (input?.link != null) {
+        const origin = node.getInputNode?.(index);
+        const widget = origin?.widgets?.find((w) => typeof w.value === "string");
+        return widget ? String(widget.value).trim() : null;
+    }
+    return String(node.widgets?.find((w) => w.name === "category")?.value ?? "").trim();
+}
+
 // ----------------------------------------------------------------- cells --
 
 export function cellText(value) {
@@ -516,6 +530,8 @@ function recipePanel(node) {
             section.appendChild(cell);
         }
 
+        node._symCapture = (column) => captureInto(column);
+
         function captureInto(column) {
             const values = liveSlotValues(app.canvas?.graph ?? app.graph);
             const found = Object.keys(values).length;
@@ -641,6 +657,14 @@ function setupRecipeNode(node) {
         if (!value || value === PICK) return;
         node._symRecipeLoad?.(String(value));
     };
+    const capture = node.addWidget("button", "Capture canvas into category", null, () => {
+        const column = categoryValue(node);
+        if (column === null) { toast("warn", "category is wired to a node with no typed text", "Type it, or connect a text node."); return; }
+        if (!column) { toast("warn", "Name the category first", "Type it in category, or connect a text node."); return; }
+        if (!node._symCapture) { toast("warn", "Pick a recipe first", "Capture needs an open recipe to write into."); return; }
+        node._symCapture(column);
+    }, { serialize: false });
+    capture.serializeValue = () => undefined;
     recipePanel(node);
     if (node.size[1] < 320) node.setSize?.([Math.max(node.size[0], 560), 320]);
     const onRemoved = node.onRemoved;

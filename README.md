@@ -218,8 +218,10 @@ Wrappers around Wavespeed's hosted endpoints.
   the template's folder), overwriting the last run. **New from this
   workflow** starts a recipe with the open, saved workflow as its template.
   To fill a category without typing, set the values on the template's own
-  nodes and press the section's **capture**: a category keeps what differs
-  from game, `game` keeps everything. **load** does the reverse: it puts
+  nodes and press the section's **capture**, or put the name in the node's
+  **category** input (typed, or a wired text node) and press **Capture
+  canvas into category**, which creates the category if it is new. A
+  category keeps what differs from game, `game` keeps everything. **load** does the reverse: it puts
   that section's values onto the canvas, to adjust and capture again.
 - A node in the template titled `recipe:<key>` is a slot for `<key>`. A cell
   sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; on a
