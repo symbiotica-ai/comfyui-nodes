@@ -455,8 +455,8 @@ function recipePanel(node) {
         body.replaceChildren();
         const top = el("div", "display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:2px 0 6px;");
         const newName = stopCanvas(el("input", inputCss + "flex:1 1 140px;"));
-        newName.placeholder = "new recipe name, e.g. imperia-restaurant";
-        const newButton = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "New from this workflow");
+        newName.placeholder = "recipe name";
+        const newButton = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "New");
         stopCanvas(newButton).addEventListener("click", (e) => { e.stopPropagation(); startNew(newName.value.trim()); });
         newName.addEventListener("keydown", (e) => { if (e.key === "Enter") newButton.click(); });
         top.append(newName, newButton);
@@ -613,8 +613,8 @@ function recipePanel(node) {
 
         const addRow = el("div", "display:flex;align-items:center;gap:6px;padding:2px 0 4px;");
         const addName = stopCanvas(el("input", inputCss + "flex:1 1 140px;"));
-        addName.placeholder = "new category, e.g. appliance1x2";
-        const add = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "Add category");
+        addName.placeholder = "category";
+        const add = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "Add");
         add.title = "A new category with no values of its own yet. Set the canvas and press its capture.";
         stopCanvas(add).addEventListener("click", (e) => {
             e.stopPropagation();
@@ -634,7 +634,7 @@ function recipePanel(node) {
         const actions = el("div", "display:flex;align-items:center;gap:6px;padding:8px 0 2px;");
         const saveButton = el("button", ghostButtonCss + "padding:3px 10px;", "Save");
         stopCanvas(saveButton).addEventListener("click", (e) => { e.stopPropagation(); save(); });
-        const generateButton = el("button", ghostButtonCss + "padding:3px 10px;", "Save and generate workflows");
+        const generateButton = el("button", ghostButtonCss + "padding:3px 10px;", "Generate");
         stopCanvas(generateButton).addEventListener("click", (e) => { e.stopPropagation(); generate(); });
         actions.append(saveButton, generateButton, statusLine);
         body.appendChild(actions);
@@ -657,7 +657,7 @@ function setupRecipeNode(node) {
         if (!value || value === PICK) return;
         node._symRecipeLoad?.(String(value));
     };
-    const capture = node.addWidget("button", "Capture canvas into category", null, () => {
+    const capture = node.addWidget("button", "Capture", null, () => {
         const column = categoryValue(node);
         if (column === null) { toast("warn", "category is wired to a node with no typed text", "Type it, or connect a text node."); return; }
         if (!column) { toast("warn", "Name the category first", "Type it in category, or connect a text node."); return; }
