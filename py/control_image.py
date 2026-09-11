@@ -18,7 +18,6 @@ class SymbioticaControlImage:
         return {
             "required": {
                 "image": (files or [f"[no images under input/{CONTROL_DIR}]"], {
-                    "image_upload": False,
                     "tooltip": f"An image under input/{CONTROL_DIR}/, subfolders "
                                "included. Upload there from the hub's storage "
                                "browser; new files appear after a browser reload.",
