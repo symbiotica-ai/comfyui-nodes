@@ -6,6 +6,11 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.16
+
+**Recipes: Delete.** A Delete button removes the picked project file after a
+second press; its generated workflows stay in the workflows folder.
+
 ## 2026.9.15
 
 **Recipes: project and recipe.** Inputs changed and renamed to what they
