@@ -171,6 +171,21 @@ class TestGenerate:
         with pytest.raises(RecipeError, match="chair"):
             generate(template(), project(), "chair")
 
+    def test_a_key_the_template_no_longer_carries_is_left_out_and_reported(self):
+        # The panel strikes such a row through and says the value is ignored;
+        # the generator has to keep that promise instead of refusing the project.
+        r = project()
+        r["shared"]["old_slot"] = "x.png"
+        r["recipes"]["appliance1x1"]["gone"] = True
+        wf, report = generate(template(), r, "appliance1x1")
+        assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x1.png"
+        assert report["ignored"] == ["gone", "old_slot"]
+        assert "old_slot" not in report["applied"]
+
+    def test_the_report_has_no_ignored_keys_when_every_value_has_a_slot(self):
+        _, report = generate(template(), project(), "appliance1x1")
+        assert report["ignored"] == []
+
     def test_each_generated_workflow_gets_its_own_stable_id_and_a_fresh_revision(self):
         a, _ = generate(template(), project(), "appliance1x1")
         b, _ = generate(template(), project(), "appliance1x2")
@@ -354,7 +369,7 @@ class TestGenerateAll:
 
     def test_a_bad_recipe_value_fails_before_any_file_is_written(self, library):
         r = read_project(library["recipes"], "imperia-bakery")
-        r["recipes"]["appliance1x2"]["typo"] = 1
+        r["recipes"]["appliance1x2"]["pre_flip"] = "typo"
         with pytest.raises(RecipeError, match="typo"):
             generate_all(library["workflows"], r)
         assert not os.path.exists(os.path.join(library["workflows"], "recipe-test/dev-imperia-bakery-appliance1x1.json"))

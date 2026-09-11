@@ -387,7 +387,14 @@ export function generateSummary(report) {
         ? `${written.map((w) => w.path).join(", ")}. Open them from the workflows sidebar; `
           + "reopen any that is open now. Edits belong in the template or the recipe, not in these files."
         : "The project has no recipes.";
-    return { summary, detail };
+    // Values the template had no slot for, each with the recipes that carry it.
+    const ignored = {};
+    for (const w of written) for (const key of w.ignored ?? []) (ignored[key] ??= []).push(w.recipe);
+    const keys = Object.keys(ignored).sort();
+    const note = keys.length
+        ? ` Ignored, no slot in the template: ${keys.map((k) => `${k} (${ignored[k].join(", ")})`).join(", ")}.`
+        : "";
+    return { summary, detail: detail + note };
 }
 
 // ----------------------------------------------------------------- panel --

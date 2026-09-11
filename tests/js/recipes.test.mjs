@@ -119,6 +119,18 @@ test("the generate toast names every file written and where edits belong", () =>
     assert.equal(generateSummary({ template: "t.json", written: [] }).detail, "The project has no recipes.");
 });
 
+test("the summary names the values the template had no slot for", () => {
+    const { summary, detail } = generateSummary({
+        template: "t.json",
+        written: [{ path: "a.json", recipe: "appliance1x1", ignored: ["control_image"] },
+                  { path: "b.json", recipe: "table", ignored: [] },
+                  { path: "c.json", recipe: "cashier-desk1x1", ignored: ["control_image", "format"] }],
+    });
+    assert.equal(summary, "Wrote 3 workflows from t.json");
+    assert.match(detail, /Ignored, no slot in the template: control_image \(appliance1x1, cashier-desk1x1\), format \(cashier-desk1x1\)\./);
+    assert.doesNotMatch(generateSummary({ template: "t.json", written: [{ path: "b.json", recipe: "table", ignored: [] }] }).detail, /Ignored/);
+});
+
 import { captureColumn } from "../../web/js/recipes.js";
 
 test("capturing the canvas into a category writes only what differs from the game column", () => {

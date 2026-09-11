@@ -130,7 +130,13 @@ def generate(template: dict, project: dict, recipe: str) -> tuple[dict, dict]:
         raise RecipeError(f"project has no recipe {recipe!r}")
     values = {**(project.get("shared") or {}), **(recipes[recipe] or {})}
     workflow = copy.deepcopy(template)
-    report = apply_recipe(workflow, values)
+    # A key the template has no slot for is a value the panel already shows
+    # struck through as ignored (a slot renamed since the capture), so it is
+    # reported, not refused: one stale key must not block every workflow.
+    slots = recipe_slots(workflow)
+    ignored = sorted(k for k in values if k not in slots)
+    report = apply_recipe(workflow, {k: v for k, v in values.items() if k in slots})
+    report["ignored"] = ignored
     workflow["id"] = str(uuid.uuid5(NAMESPACE, workflow_name(project, recipe)))
     workflow["revision"] = 0
     return workflow, report
