@@ -271,3 +271,14 @@ test("auto decides: save the recipe you leave, then load an existing one or crea
     assert.deepEqual(autoDecision({ name: null, changed: false }, "counter1x1", columns), ["load:counter1x1"]);
     assert.deepEqual(autoDecision({ name: "counter1x1", changed: true }, "", columns), ["save:counter1x1"]);
 });
+
+import { projectForWorkflow } from "../../web/js/recipes.js";
+
+test("the project is the one whose template is the open workflow", () => {
+    const projects = [{ name: "imperia-bakery", template: "recipe-test/bakery-template-test.json" },
+                      { name: "imperia-restaurant", template: "restaurant/base.json" }];
+    assert.equal(projectForWorkflow(projects, "workflows/recipe-test/bakery-template-test.json"), "imperia-bakery");
+    assert.equal(projectForWorkflow(projects, "recipe-test/bakery-template-test.json"), "imperia-bakery");
+    assert.equal(projectForWorkflow(projects, "workflows/recipe-test/dev-imperia-counter1x1.json"), null);
+    assert.equal(projectForWorkflow(projects, null), null);
+});

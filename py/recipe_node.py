@@ -6,29 +6,17 @@ from ._recipes import (RECIPES_DIRNAME, RecipeError, delete_project, generate_al
                        list_projects, new_project, projects_dir, read_project,
                        read_template, template_slots, write_project)
 
-PICK = "— pick a project —"
-
-
-def _project_names():
-    try:
-        return [p["name"] for p in list_projects(projects_dir())]
-    except Exception:
-        return []
-
 
 class SymbioticaRecipe:
-    """Frontend-only control: pick a project to edit its recipes on the node,
-    start one from the open workflow, save it, or generate its workflows.
-    Never executes — web/js/recipes.js marks it virtual."""
+    """Frontend-only control: the project is the one whose template is the
+    open workflow; edit its recipes on the node, start it from the open
+    workflow, save it, or generate its workflows. Never executes —
+    web/js/recipes.js marks it virtual."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "project": ([PICK] + _project_names(), {
-                    "tooltip": "A project from user/default/recipes: one template "
-                               "workflow, shared values, one recipe per asset type.",
-                }),
                 "recipe": ("STRING", {
                     "default": "",
                     "tooltip": "The recipe Capture writes into (created if new); "
@@ -45,7 +33,7 @@ class SymbioticaRecipe:
                    "values and one recipe per asset type; Generate writes one "
                    "workflow per recipe.")
 
-    def execute(self, project=PICK, recipe=""):
+    def execute(self, recipe=""):
         return ()
 
 

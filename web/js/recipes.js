@@ -14,8 +14,8 @@ import { HUB, ghostButtonCss, injectHubStyles } from "./hub_theme.js";
 import { el, pinPanelWidth } from "./browser_chrome.js";
 
 const NODE_CLASS = "SymbioticaRecipe";
-const PICK = "— pick a project —";
 const SHARED = "shared";
+const WORKFLOWS_PREFIX = "workflows/";
 
 // ---------------------------------------------------------------- server --
 
@@ -362,6 +362,17 @@ export function applyValuesToNodes(nodes, values) {
     return { applied, missing: Object.keys(values).filter((k) => !seen.has(k)) };
 }
 
+// The project this canvas belongs to: the one whose template is the open
+// workflow. A project is a file per game and the template is that game's base
+// workflow, so being on the base workflow says which project it is.
+export function projectForWorkflow(projects, workflowPath) {
+    if (!workflowPath) return null;
+    let rel = String(workflowPath).replace(/\\/g, "/").replace(/^\/+/, "");
+    if (rel.startsWith(WORKFLOWS_PREFIX)) rel = rel.slice(WORKFLOWS_PREFIX.length);
+    const hit = (projects ?? []).find((p) => String(p.template ?? "").replace(/^\/+/, "") === rel);
+    return hit ? hit.name : null;
+}
+
 export function generateSummary(report) {
     const written = report?.written ?? [];
     const summary = `Wrote ${written.length} workflow${written.length === 1 ? "" : "s"} from ${report?.template ?? "the template"}`;
@@ -374,21 +385,6 @@ export function generateSummary(report) {
 
 // ----------------------------------------------------------------- panel --
 
-const pickers = new Set();
-
-async function refreshPickers() {
-    let names;
-    try {
-        names = (await listProjects()).map((p) => p.name);
-    } catch {
-        return;
-    }
-    for (const widget of pickers) {
-        widget.options.values = [PICK, ...names];
-        if (!widget.options.values.includes(widget.value)) widget.value = PICK;
-    }
-    app.graph?.setDirtyCanvas(true, false);
-}
 
 const inputCss = "box-sizing:border-box;min-width:0;padding:3px 5px;"
     + `font:11px ${HUB.mono};background:var(--comfy-input-bg, transparent);`
@@ -437,6 +433,29 @@ function recipePanel(node) {
         return tableToProject(state.project, state.table, state.slots);
     }
 
+    // Which project this canvas is: looked up by the open workflow's path,
+    // again whenever that path changes (a Save As, another tab).
+    let resolvedFor = undefined;
+    async function resolveProject() {
+        const path = activeWorkflowPath();
+        if (path === resolvedFor) return;
+        resolvedFor = path;
+        let name = null;
+        try {
+            name = projectForWorkflow(await listProjects(), path);
+        } catch (err) {
+            status(`Could not list projects: ${String(err?.message ?? err)}`, false);
+            return;
+        }
+        if (!name) {
+            state.name = null; state.project = null; state.slots = []; state.table = null; state.dirty = false;
+            render();
+            status(path ? "No project has this workflow as its template. Press new project." : "Save the workflow first.", false);
+            return;
+        }
+        if (name !== state.name) await load(name);
+    }
+
     async function load(name) {
         try {
             const { project, slots } = await readProject(name);
@@ -453,7 +472,7 @@ function recipePanel(node) {
     }
 
     async function save() {
-        if (!state.name) { toast("warn", "Nothing to save", "Pick a project or start one first."); return false; }
+        if (!state.name) { toast("warn", "Nothing to save", "No project for this workflow; press new project."); return false; }
         let project;
         try {
             project = collect();
@@ -493,7 +512,7 @@ function recipePanel(node) {
     // project; the generated workflows are left where they are.
     let armed = null;
     async function remove() {
-        if (!state.name) { toast("warn", "Nothing to delete", "Pick a project first."); return; }
+        if (!state.name) { toast("warn", "Nothing to delete", "No project for this workflow."); return; }
         if (armed !== state.name) {
             armed = state.name;
             status(`Press delete project again to remove "${state.name}". Its generated workflows stay.`, false);
@@ -509,7 +528,7 @@ function recipePanel(node) {
             state.slots = [];
             state.table = null;
             state.dirty = false;
-            await refreshPickers();
+            resolvedFor = undefined;
             render();
             toast("info", `Deleted project "${name}"`, "Its generated workflows are still in the workflows folder.");
         } catch (err) {
@@ -529,9 +548,7 @@ function recipePanel(node) {
             state.dirty = false;
             expanded.clear();
             expanded.add(SHARED);
-            await refreshPickers();
-            const picker = node.widgets?.find((w) => w.name === "project");
-            if (picker) picker.value = name;
+            resolvedFor = template;
             render();
             toast("success", `Started project "${name}"`, `Template: ${project.template}. Set the canvas, name a recipe, press Capture.`);
         } catch (err) {
@@ -615,6 +632,7 @@ function recipePanel(node) {
     node._symAuto = auto;
     const onDrawForeground = node.onDrawForeground;
     node.onDrawForeground = function () {
+        resolveProject();
         autoTick();
         return onDrawForeground?.apply(this, arguments);
     };
@@ -634,7 +652,7 @@ function recipePanel(node) {
         body.replaceChildren();
         if (!state.table) {
             body.appendChild(el("div", `padding:6px 3px;color:${HUB.inkSubtle};`,
-                "Pick a project, or open the template workflow and press New."));
+                "No project for this workflow yet. Open the base workflow and press new project."));
             body.appendChild(statusLine);
             refit();
             return;
@@ -788,20 +806,13 @@ function recipePanel(node) {
         refit();
     }
 
-    node._symRecipe = { load, save, generate, startNew, remove };
+    node._symRecipe = { load, save, generate, startNew, remove, resolveProject };
     render();
+    resolveProject();
 }
 
 function setupRecipeNode(node) {
     node.isVirtualNode = true;
-    const picker = node.widgets?.find((w) => w.name === "project");
-    if (!picker) return;
-    pickers.add(picker);
-    picker.value = PICK;
-    picker.callback = (value) => {
-        if (!value || value === PICK) return;
-        node._symRecipe?.load(String(value));
-    };
     const autoToggle = node.addWidget("toggle", "auto", false, (value) => {
         const auto = node._symAuto;
         if (!auto) return;
@@ -819,7 +830,7 @@ function setupRecipeNode(node) {
         if (raw === null) { toast("warn", "recipe is wired to a node with no typed text", "Type it, or connect a text node."); return; }
         const column = recipeSlug(raw);
         if (!column) { toast("warn", "Name the recipe first", "Type it in recipe, or connect a text node."); return; }
-        if (!node._symCapture) { toast("warn", "Pick a project first", "Capture writes into the project picked above."); return; }
+        if (!node._symCapture) { toast("warn", "No project for this workflow", "Press new project first."); return; }
         node._symCapture(column);
     });
     button("save project", () => node._symRecipe?.save());
@@ -834,17 +845,6 @@ function setupRecipeNode(node) {
         applyToggle();
     };
     if (node.size[1] < 320) node.setSize?.([Math.max(node.size[0], 560), 320]);
-    const onRemoved = node.onRemoved;
-    node.onRemoved = function () {
-        pickers.delete(picker);
-        onRemoved?.apply(this, arguments);
-    };
-    const onSelected = node.onSelected;
-    node.onSelected = function () {
-        onSelected?.apply(this, arguments);
-        refreshPickers();
-    };
-    refreshPickers();
 }
 
 registerSymbioticaExtension(app, {
