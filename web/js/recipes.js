@@ -92,6 +92,26 @@ export function cellValue(slot, text) {
     return raw;
 }
 
+// One widget of a subgraph row, edited on its own: the cell stays a JSON
+// object, this rewrites one key. Numbers and true/false are typed as such,
+// an empty field drops the key, and no keys left is an empty cell.
+export function dictCellUpdate(cell, name, text) {
+    const parsed = parseJson(String(cell ?? "").trim() || "{}");
+    const obj = parsed.ok && parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
+        ? parsed.value : {};
+    const raw = String(text ?? "");
+    if (!raw.trim()) {
+        delete obj[name];
+    } else if (raw.trim() === "true" || raw.trim() === "false") {
+        obj[name] = raw.trim() === "true";
+    } else if (raw.trim() !== "" && Number.isFinite(Number(raw.trim()))) {
+        obj[name] = Number(raw.trim());
+    } else {
+        obj[name] = raw;
+    }
+    return Object.keys(obj).length ? cellText(obj) : "";
+}
+
 // ----------------------------------------------------------------- table --
 
 export function recipeToTable(recipe, slots) {
@@ -297,6 +317,8 @@ function recipePanel(node) {
     // What is on screen: the recipe as loaded, the template's slots, and the
     // table the person is editing. `dirty` is unsaved edits.
     const state = { name: null, recipe: null, slots: [], table: null, dirty: false };
+    // Which sections are open. A freshly opened recipe shows its headers only.
+    const expanded = new Set();
     let busy = false;
 
     function status(text, subtle = true) {
@@ -318,6 +340,7 @@ function recipePanel(node) {
             state.slots = slots;
             state.table = recipeToTable(recipe, slots);
             state.dirty = false;
+            expanded.clear();
             render();
         } catch (err) {
             toast("error", `Could not open "${name}"`, String(err?.message ?? err));
@@ -372,6 +395,8 @@ function recipePanel(node) {
             state.slots = slots;
             state.table = recipeToTable(recipe, slots);
             state.dirty = false;
+            expanded.clear();
+            expanded.add(GAME);
             await refreshPickers();
             const picker = node.widgets?.find((w) => w.name === "recipe");
             if (picker) picker.value = name;
@@ -438,108 +463,157 @@ function recipePanel(node) {
             headerField("prefix", "workflow_prefix", "dev-imperia-bakery-"));
         body.appendChild(header);
 
-        const capture = el("div", "display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:2px 0 8px;");
-        capture.append(el("span", `flex:0 0 auto;color:${HUB.inkSubtle};`, "Set the values on this workflow's nodes, then"));
-        const captureName = stopCanvas(el("input", inputCss + "flex:1 1 120px;"));
-        captureName.placeholder = "column, e.g. appliance1x2";
-        const captureButton = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "Capture into column");
-        stopCanvas(captureButton).addEventListener("click", (e) => {
-            e.stopPropagation();
-            const column = captureName.value.trim();
-            if (!column) { toast("warn", "Name the column", "A category name, or game."); return; }
+        const { columns, rows } = state.table;
+        const byKey = Object.fromEntries(state.slots.map((s) => [s.key, s]));
+        const setCount = (column) => rows.filter((row) => (row.cells[column] ?? "").trim()).length;
+
+        const parsedDict = (text) => {
+            const parsed = parseJson(String(text ?? "").trim() || "{}");
+            return parsed.ok && parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
+                ? parsed.value : {};
+        };
+
+        // One slot inside a section: a label and the value field. A subgraph
+        // slot gets one field per widget; the rest a single field. The
+        // placeholder is what the category inherits (game, else template).
+        function slotRows(section, column, row) {
+            const slot = byKey[row.key];
+            const inherited = column === GAME ? "" : (row.cells[GAME] ?? "");
+            const label = el("div", "padding:4px 3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                + (row.orphan ? `color:${HUB.inkSubtle};text-decoration:line-through;` : ""), row.key);
+            label.title = row.orphan
+                ? "The template has no slot with this name any more; the value is ignored."
+                : slot?.kind === "toggle" ? "true or false"
+                : `Template: ${cellText(slot?.default)}${slot?.widgets > 1 && slot?.kind !== "dict" ? ` (a JSON list sets all ${slot.widgets} widgets)` : ""}`;
+            section.appendChild(label);
+            if (slot?.kind === "dict") {
+                const own = parsedDict(row.cells[column]);
+                const base = parsedDict(inherited);
+                const names = Object.keys(slot.default ?? {});
+                for (const name of Object.keys({ ...own, ...base })) if (!names.includes(name)) names.push(name);
+                const sub = el("div", "display:grid;grid-template-columns:minmax(90px, 0.5fr) 1fr;gap:3px;align-items:center;");
+                for (const name of names) {
+                    sub.appendChild(el("div", `padding:2px 3px;color:${HUB.inkSubtle};font:11px ${HUB.mono};`, name));
+                    const field = stopCanvas(el("input", inputCss + "width:100%;"));
+                    field.value = name in own ? cellText(own[name]) : "";
+                    field.placeholder = name in base ? cellText(base[name]) : cellText(slot.default?.[name]);
+                    field.addEventListener("input", () => {
+                        row.cells[column] = dictCellUpdate(row.cells[column], name, field.value);
+                        state.dirty = true;
+                    });
+                    sub.appendChild(field);
+                }
+                section.appendChild(sub);
+                return;
+            }
+            const cell = stopCanvas(el("textarea", cellCss));
+            cell.rows = 1;
+            cell.value = row.cells[column] ?? "";
+            cell.placeholder = inherited || cellText(slot?.default) || "";
+            cell.addEventListener("input", () => { row.cells[column] = cell.value; state.dirty = true; });
+            cell.addEventListener("focus", () => { if (cell.value.length > 60 || cell.placeholder.length > 60) cell.rows = 4; });
+            cell.addEventListener("blur", () => { cell.rows = 1; });
+            section.appendChild(cell);
+        }
+
+        function captureInto(column) {
             const values = liveSlotValues(app.canvas?.graph ?? app.graph);
             const found = Object.keys(values).length;
             if (!found) { toast("warn", "No recipe slots on this canvas", "Open the template workflow, the one with recipe: nodes."); return; }
             captureColumn(state.table, state.slots, column, values);
             state.dirty = true;
+            expanded.add(column);
             render();
-            status(`Captured ${found} slots into ${column}. Save when it looks right.`, false);
-        });
-        captureName.addEventListener("keydown", (e) => { if (e.key === "Enter") captureButton.click(); });
-        capture.append(captureName, captureButton);
-        body.appendChild(capture);
+            status(`Captured ${found} slots from the canvas into ${column}.`, false);
+        }
 
-        const { columns, rows } = state.table;
-        const grid = el("div", `display:grid;gap:3px;align-items:start;`
-            + `grid-template-columns:minmax(90px, 0.6fr) repeat(${columns.length}, minmax(140px, 1fr)) 28px;`);
-        grid.appendChild(el("div", `padding:3px;color:${HUB.inkSubtle};`, "slot"));
         columns.forEach((column, index) => {
-            if (column === GAME) {
-                const head = el("div", `display:flex;align-items:center;gap:4px;padding:3px;color:${HUB.inkSubtle};`);
-                const load = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "load");
-                load.title = "Put the game values onto this canvas.";
-                stopCanvas(load).addEventListener("click", (e) => { e.stopPropagation(); loadColumn(GAME); });
-                head.append(load, el("span", "", "game (every category)"));
-                head.title = "A value here applies to every category that leaves the cell empty.";
-                grid.appendChild(head);
-                return;
-            }
-            const head = el("div", "display:flex;align-items:center;gap:4px;min-width:0;");
-            const load = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "load");
-            load.title = `Put ${column}'s values onto this canvas, to adjust with the nodes' widgets and capture again.`;
-            stopCanvas(load).addEventListener("click", (e) => { e.stopPropagation(); loadColumn(column); });
-            const name = stopCanvas(el("input", inputCss + "flex:1 1 auto;width:100%;"));
-            name.value = column;
-            name.title = "Category: also the suffix of the generated workflow's name.";
-            name.addEventListener("change", () => {
-                const next = name.value.trim();
-                if (!next || next === column) { name.value = column; return; }
-                if (columns.includes(next)) { toast("warn", "Name taken", `There is already a "${next}" column.`); name.value = column; return; }
-                columns[index] = next;
-                for (const row of rows) { row.cells[next] = row.cells[column]; delete row.cells[column]; }
-                state.dirty = true;
-                render();
-            });
-            const remove = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "×");
-            remove.title = `Remove the ${column} column`;
-            stopCanvas(remove).addEventListener("click", (e) => {
+            const isGame = column === GAME;
+            const open = expanded.has(column);
+            const box = el("div", `border:1px solid ${HUB.hairline};border-radius:${HUB.radius.md};margin:0 0 6px;`);
+            const head = el("div", "display:flex;align-items:center;gap:6px;padding:4px 6px;min-width:0;");
+            const toggle = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;border:none;", open ? "▾" : "▸");
+            toggle.title = open ? "Collapse" : "Expand";
+            stopCanvas(toggle).addEventListener("click", (e) => {
                 e.stopPropagation();
-                columns.splice(index, 1);
-                for (const row of rows) delete row.cells[column];
-                state.dirty = true;
+                if (open) expanded.delete(column); else expanded.add(column);
                 render();
             });
-            head.append(load, name, remove);
-            grid.appendChild(head);
+            head.appendChild(toggle);
+            if (isGame) {
+                const title = el("div", "flex:1 1 auto;min-width:0;", "game");
+                title.title = "What every category shares. A category takes these unless it sets its own.";
+                head.appendChild(title);
+            } else {
+                const name = stopCanvas(el("input", inputCss + "flex:1 1 120px;"));
+                name.value = column;
+                name.title = "Category: also the suffix of the generated workflow's name.";
+                name.addEventListener("change", () => {
+                    const next = name.value.trim();
+                    if (!next || next === column) { name.value = column; return; }
+                    if (columns.includes(next)) { toast("warn", "Name taken", `There is already a "${next}" category.`); name.value = column; return; }
+                    columns[index] = next;
+                    for (const row of rows) { row.cells[next] = row.cells[column]; delete row.cells[column]; }
+                    if (expanded.delete(column)) expanded.add(next);
+                    state.dirty = true;
+                    render();
+                });
+                head.appendChild(name);
+            }
+            const count = setCount(column);
+            head.appendChild(el("div", `flex:0 0 auto;color:${HUB.inkSubtle};font:11px ${HUB.mono};`,
+                isGame ? `${count} values` : `${count} own`));
+            const load = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "load");
+            load.title = isGame ? "Put the game values onto this canvas."
+                : `Put ${column} onto this canvas (its own values over game), to adjust with the nodes' widgets and capture again.`;
+            stopCanvas(load).addEventListener("click", (e) => { e.stopPropagation(); loadColumn(column); });
+            const capture = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "capture");
+            capture.title = isGame ? "Read every slot off this canvas into game."
+                : `Read the slots off this canvas into ${column}: only what differs from game is kept.`;
+            stopCanvas(capture).addEventListener("click", (e) => { e.stopPropagation(); captureInto(column); });
+            head.append(load, capture);
+            if (!isGame) {
+                const remove = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "×");
+                remove.title = `Remove ${column}`;
+                stopCanvas(remove).addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    columns.splice(index, 1);
+                    for (const row of rows) delete row.cells[column];
+                    expanded.delete(column);
+                    state.dirty = true;
+                    render();
+                });
+                head.appendChild(remove);
+            }
+            box.appendChild(head);
+            if (open) {
+                const section = el("div", "display:grid;grid-template-columns:minmax(110px, 0.35fr) 1fr;gap:3px;"
+                    + `align-items:start;padding:2px 6px 6px;border-top:1px solid ${HUB.hairline};`);
+                for (const row of rows) slotRows(section, column, row);
+                box.appendChild(section);
+            }
+            body.appendChild(box);
         });
-        const add = el("button", ghostButtonCss + "padding:1px 6px;", "+");
-        add.title = "Add a category column";
+
+        const addRow = el("div", "display:flex;align-items:center;gap:6px;padding:2px 0 4px;");
+        const addName = stopCanvas(el("input", inputCss + "flex:1 1 140px;"));
+        addName.placeholder = "new category, e.g. appliance1x2";
+        const add = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "Add category");
+        add.title = "A new category with no values of its own yet. Set the canvas and press its capture.";
         stopCanvas(add).addEventListener("click", (e) => {
             e.stopPropagation();
-            let n = 1;
-            while (columns.includes(`category${n}`)) n += 1;
-            const column = `category${n}`;
+            const column = addName.value.trim();
+            if (!column) { toast("warn", "Name it first", "The category name is the suffix of the generated workflow."); return; }
+            if (columns.includes(column)) { toast("warn", "Name taken", `There is already a "${column}" category.`); return; }
             columns.push(column);
             for (const row of rows) row.cells[column] = "";
+            expanded.add(column);
             state.dirty = true;
             render();
         });
-        grid.appendChild(add);
-
-        const byKey = Object.fromEntries(state.slots.map((s) => [s.key, s]));
-        for (const row of rows) {
-            const slot = byKey[row.key];
-            const label = el("div", `padding:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`
-                + (row.orphan ? `color:${HUB.inkSubtle};text-decoration:line-through;` : ""), row.key);
-            label.title = row.orphan
-                ? "The template has no slot with this name any more; the value is ignored."
-                : slot?.kind === "toggle" ? "true or false"
-                : slot?.kind === "dict" ? `JSON object of widget values. Template: ${cellText(slot.default)}`
-                : `Template: ${cellText(slot?.default)}${slot?.widgets > 1 ? ` (a JSON list sets all ${slot.widgets} widgets)` : ""}`;
-            grid.appendChild(label);
-            for (const column of columns) {
-                const cell = stopCanvas(el("textarea", cellCss));
-                cell.rows = 1;
-                cell.value = row.cells[column] ?? "";
-                cell.placeholder = column === GAME ? cellText(slot?.default) : (row.cells[GAME] || cellText(slot?.default) || "");
-                cell.addEventListener("input", () => { row.cells[column] = cell.value; state.dirty = true; });
-                cell.addEventListener("focus", () => { if (cell.value.length > 60) cell.rows = 4; });
-                cell.addEventListener("blur", () => { cell.rows = 1; });
-                grid.appendChild(cell);
-            }
-            grid.appendChild(el("div"));
-        }
-        body.appendChild(grid);
+        addName.addEventListener("keydown", (e) => { if (e.key === "Enter") add.click(); });
+        addRow.append(addName, add);
+        body.appendChild(addRow);
 
         const actions = el("div", "display:flex;align-items:center;gap:6px;padding:8px 0 2px;");
         const saveButton = el("button", ghostButtonCss + "padding:3px 10px;", "Save");
@@ -549,6 +623,7 @@ function recipePanel(node) {
         actions.append(saveButton, generateButton, statusLine);
         body.appendChild(actions);
         status(state.dirty ? "Unsaved edits." : `${state.name}: ${columns.length - 1} categories, ${rows.length} slots.`);
+        if (!state.dirty && columns.length === 1) status("No categories yet. Add one, set the canvas, press its capture.");
         refit();
     }
 

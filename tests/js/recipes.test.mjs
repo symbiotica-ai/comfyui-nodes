@@ -189,3 +189,14 @@ test("loading values onto the canvas sets widgets, modes and promoted widgets by
     assert.equal(other.widgets[0].value, "leave me");
     assert.deepEqual(report, { applied: ["control_image", "grid", "pre_flip", "render"], missing: ["missing"] });
 });
+
+import { dictCellUpdate } from "../../web/js/recipes.js";
+
+test("a subgraph row edits one widget at a time inside its JSON cell", () => {
+    assert.equal(dictCellUpdate("", "lora_name", "a.safetensors"), '{"lora_name": "a.safetensors"}');
+    assert.equal(dictCellUpdate('{"lora_name": "a"}', "strength_model", "0.9"), '{"lora_name": "a", "strength_model": 0.9}');
+    assert.equal(dictCellUpdate('{"lora_name": "a"}', "value", "true"), '{"lora_name": "a", "value": true}');
+    assert.equal(dictCellUpdate('{"lora_name": "a", "strength_model": 0.9}', "strength_model", ""), '{"lora_name": "a"}');
+    assert.equal(dictCellUpdate('{"lora_name": "a"}', "lora_name", ""), "");
+    assert.equal(dictCellUpdate("not json", "x", "1"), '{"x": 1}');
+});

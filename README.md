@@ -210,18 +210,17 @@ Wrappers around Wavespeed's hosted endpoints.
 ### Recipes (one template, one workflow per category)
 - `Recipe` (Symbiotica/Recipes) — one template workflow, a table of values,
   one generated workflow per category. Pick a recipe in the **recipe**
-  dropdown and it opens as a table on the node: a row per slot in the
-  template, a **game** column for what every category shares, and a column
-  per category. Edit cells, rename or remove a column in its header, add one
-  with **+**, then **Save**, or **Save and generate workflows**, which writes
-  prefix + category `.json` files into the output folder (default: the
-  template's folder), overwriting the last run. **New from this workflow**
-  starts a recipe with the open, saved workflow as its template. To fill a
-  column without typing, set the values on the template's own nodes, type the
-  column name and press **Capture into column**: a category takes what differs
-  from the game column, `game` takes everything. **load** in a column header
-  does the reverse: it puts that column's values onto the canvas, to adjust
-  and capture again.
+  dropdown and it opens on the node as collapsible sections: **game** (what
+  every category shares) and one per category, each listing the template's
+  slots. Rename a category in its header, remove it with ×, add one with
+  **Add category**, then **Save**, or **Save and generate workflows**, which
+  writes prefix + category `.json` files into the output folder (default:
+  the template's folder), overwriting the last run. **New from this
+  workflow** starts a recipe with the open, saved workflow as its template.
+  To fill a category without typing, set the values on the template's own
+  nodes and press the section's **capture**: a category keeps what differs
+  from game, `game` keeps everything. **load** does the reverse: it puts
+  that section's values onto the canvas, to adjust and capture again.
 - A node in the template titled `recipe:<key>` is a slot for `<key>`. A cell
   sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; on a
   subgraph instance the cell is a JSON object of promoted widgets
