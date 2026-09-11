@@ -207,6 +207,14 @@ Wrappers around Wavespeed's hosted endpoints.
   node or the text in a prompt node changes everywhere when you change it in
   the module.
 
+### Control images
+- `Control Image` (Symbiotica/Images) — Load Image scoped to the shared
+  library `input/controlnet/`. The dropdown lists every image under it,
+  subfolders included, as `folder/name.png`; outputs IMAGE and MASK. Upload
+  there from the hub's storage browser (volume `user-inputs`); new files
+  show after a browser reload. Title it `recipe:control_image` and a recipe
+  stores the relative path.
+
 ### Recipes (one template, one workflow per recipe)
 - `Recipes` (Symbiotica/Recipes) — a **project** is one template workflow,
   a block of **shared** values and one **recipe** per asset type; Generate
