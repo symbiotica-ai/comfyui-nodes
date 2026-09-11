@@ -147,6 +147,51 @@ export function tableToRecipe(base, table, slots) {
     return out;
 }
 
+// The values the open canvas holds for every slot, in the shape a recipe
+// stores them: a toggle's on/off, a subgraph instance's promoted widgets (the
+// wired ones left out), else the node's first widget.
+function liveSlotValues(graph) {
+    const values = {};
+    for (const node of graph?.nodes ?? []) {
+        const title = String(node.title ?? "");
+        if (!title.startsWith("recipe:")) continue;
+        const key = title.slice("recipe:".length).replace(/\?\s*$/, "").trim();
+        if (!key || key in values) continue;
+        if (title.trimEnd().endsWith("?")) {
+            values[key] = node.mode === 0;
+        } else if (node.isSubgraphNode?.()) {
+            const promoted = {};
+            for (const inp of node.inputs ?? []) {
+                if (!inp.widget || inp.link != null) continue;
+                const name = inp.widget.name ?? inp.name;
+                const widget = node.widgets?.find((w) => w.name === name);
+                if (widget) promoted[name] = widget.value;
+            }
+            values[key] = promoted;
+        } else {
+            const widget = (node.widgets ?? []).find((w) => w.type !== "button");
+            if (widget) values[key] = widget.value;
+        }
+    }
+    return values;
+}
+
+// Write captured values into one column. A category column takes only what
+// differs from the game column, so a later game edit still reaches it; the
+// game column takes everything.
+export function captureColumn(table, slots, column, values) {
+    if (!table.columns.includes(column)) {
+        table.columns.push(column);
+        for (const row of table.rows) row.cells[column] = "";
+    }
+    for (const row of table.rows) {
+        if (!(row.key in values)) continue;
+        const text = cellText(values[row.key]);
+        row.cells[column] = column !== GAME && text === (row.cells[GAME] ?? "") ? "" : text;
+    }
+    return table;
+}
+
 export function generateSummary(report) {
     const written = report?.written ?? [];
     const summary = `Wrote ${written.length} workflow${written.length === 1 ? "" : "s"} from ${report?.template ?? "the template"}`;
@@ -328,6 +373,27 @@ function recipePanel(node) {
             headerField("output", "output", "folder (default: the template's)"),
             headerField("prefix", "workflow_prefix", "dev-imperia-bakery-"));
         body.appendChild(header);
+
+        const capture = el("div", "display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:2px 0 8px;");
+        capture.append(el("span", `flex:0 0 auto;color:${HUB.inkSubtle};`, "Set the values on this workflow's nodes, then"));
+        const captureName = stopCanvas(el("input", inputCss + "flex:1 1 120px;"));
+        captureName.placeholder = "column, e.g. appliance1x2";
+        const captureButton = el("button", ghostButtonCss + "padding:2px 8px;flex:0 0 auto;", "Capture into column");
+        stopCanvas(captureButton).addEventListener("click", (e) => {
+            e.stopPropagation();
+            const column = captureName.value.trim();
+            if (!column) { toast("warn", "Name the column", "A category name, or game."); return; }
+            const values = liveSlotValues(app.canvas?.graph ?? app.graph);
+            const found = Object.keys(values).length;
+            if (!found) { toast("warn", "No recipe slots on this canvas", "Open the template workflow, the one with recipe: nodes."); return; }
+            captureColumn(state.table, state.slots, column, values);
+            state.dirty = true;
+            render();
+            status(`Captured ${found} slots into ${column}. Save when it looks right.`, false);
+        });
+        captureName.addEventListener("keydown", (e) => { if (e.key === "Enter") captureButton.click(); });
+        capture.append(captureName, captureButton);
+        body.appendChild(capture);
 
         const { columns, rows } = state.table;
         const grid = el("div", `display:grid;gap:3px;align-items:start;`

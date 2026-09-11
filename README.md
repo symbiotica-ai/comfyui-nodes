@@ -216,7 +216,10 @@ Wrappers around Wavespeed's hosted endpoints.
   with **+**, then **Save**, or **Save and generate workflows**, which writes
   prefix + category `.json` files into the output folder (default: the
   template's folder), overwriting the last run. **New from this workflow**
-  starts a recipe with the open, saved workflow as its template.
+  starts a recipe with the open, saved workflow as its template. To fill a
+  column without typing, set the values on the template's own nodes, type the
+  column name and press **Capture into column**: a category takes what differs
+  from the game column, `game` takes everything.
 - A node in the template titled `recipe:<key>` is a slot for `<key>`. A cell
   sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; on a
   subgraph instance the cell is a JSON object of promoted widgets

@@ -118,3 +118,39 @@ test("the generate toast names every file written and where edits belong", () =>
     assert.match(detail, /Edits belong in the template or the recipe/);
     assert.equal(generateSummary({ template: "t.json", written: [] }).detail, "The recipe has no categories.");
 });
+
+import { captureColumn } from "../../web/js/recipes.js";
+
+test("capturing the canvas into a category writes only what differs from the game column", () => {
+    const r = recipe();
+    const table = recipeToTable(r, slots);
+    const live = { control_image: "b.png", grid: [2, 1], strength: 0.5, pre_flip: true,
+                   render: { lora_name: "bakery.safetensors" } };
+    // game has render = bakery.safetensors already; strength and grid have no game value
+    captureColumn(table, slots, "appliance1x2", live);
+    const cells = Object.fromEntries(table.rows.map((row) => [row.key, row.cells.appliance1x2]));
+    assert.equal(cells.control_image, "b.png");
+    assert.equal(cells.render, "");            // same as game
+    assert.equal(cells.pre_flip, "true");
+    assert.equal(cells.grid, "[2, 1]");
+    assert.equal(cells.strength, "0.5");
+});
+
+test("capturing into a column that does not exist adds it, and into game writes everything", () => {
+    const r = recipe();
+    const table = recipeToTable(r, slots);
+    captureColumn(table, slots, "chair", { control_image: "chair.png" });
+    assert.deepEqual(table.columns, ["game", "appliance1x1", "appliance1x2", "chair"]);
+    assert.equal(table.rows.find((x) => x.key === "control_image").cells.chair, "chair.png");
+    captureColumn(table, slots, "game", { control_image: "g.png", render: { lora_name: "bakery.safetensors" } });
+    assert.equal(table.rows.find((x) => x.key === "control_image").cells.game, "g.png");
+    assert.equal(table.rows.find((x) => x.key === "render").cells.game, '{"lora_name": "bakery.safetensors"}');
+});
+
+test("a slot the canvas did not report keeps its cell", () => {
+    const r = recipe();
+    const table = recipeToTable(r, slots);
+    captureColumn(table, slots, "appliance1x1", { pre_flip: true });
+    assert.equal(table.rows.find((x) => x.key === "control_image").cells.appliance1x1, "a.png");
+    assert.equal(table.rows.find((x) => x.key === "pre_flip").cells.appliance1x1, "true");
+});
