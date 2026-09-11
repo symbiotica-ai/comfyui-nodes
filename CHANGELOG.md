@@ -6,6 +6,13 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.12
+
+**Recipe: a `category` input.** Inputs changed: the Recipe node gains a
+`category` text input (type it or connect a text node) and a **Capture
+canvas into category** button that reads the slots off the canvas into that
+category, creating it if new.
+
 ## 2026.9.11
 
 **Recipe: sections, not columns.** The recipe is a list of collapsible
