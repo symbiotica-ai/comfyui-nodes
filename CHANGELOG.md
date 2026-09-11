@@ -6,6 +6,14 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.6
+
+**Module: recipes.** A recipe in `user/default/recipes/` names a template
+workflow, a `game` block of shared values and a `categories` table; nodes
+titled `recipe:<key>` in the template are the slots. Pick it in the new
+**recipe** dropdown and press **Generate workflows** to write one workflow
+per category beside the template. A key no slot carries refuses the run.
+
 ## 2026.9.5
 
 **Module: one row per group and subgraph, and folders.** The Module node now
