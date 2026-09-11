@@ -154,3 +154,38 @@ test("a slot the canvas did not report keeps its cell", () => {
     assert.equal(table.rows.find((x) => x.key === "control_image").cells.appliance1x1, "a.png");
     assert.equal(table.rows.find((x) => x.key === "pre_flip").cells.appliance1x1, "true");
 });
+
+import { applyValuesToNodes, columnValues } from "../../web/js/recipes.js";
+
+test("a column's values are its own cells over the game column, parsed", () => {
+    const r = recipe();
+    const table = recipeToTable(r, slots);
+    assert.deepEqual(columnValues(table, slots, "appliance1x2"),
+        { render: { lora_name: "bakery.safetensors" }, control_image: "b.png", pre_flip: true, strength: 0.7 });
+    assert.deepEqual(columnValues(table, slots, "game"), { render: { lora_name: "bakery.safetensors" } });
+});
+
+function liveNode(title, widgets, extra = {}) {
+    return { title, mode: 0, widgets: widgets.map(([name, value]) => ({ name, value })), inputs: [], ...extra };
+}
+
+test("loading values onto the canvas sets widgets, modes and promoted widgets by name", () => {
+    const image = liveNode("recipe:control_image", [["image", "old.png"], ["upload", "image"]]);
+    const grid = liveNode("recipe:grid", [["columns", 2], ["rows", 3]]);
+    const flip = liveNode("recipe:pre_flip?", [["flip_method", "y-axis: horizontally"]], { mode: 4 });
+    const render = liveNode("recipe:render", [["seed", 7], ["lora_name", "old.safetensors"], ["strength_model", 0.5]],
+        { isSubgraphNode: () => true });
+    const other = liveNode("User Custom Request", [["String", "leave me"]]);
+    const report = applyValuesToNodes([image, grid, flip, render, other], {
+        control_image: "b.png", grid: [2, 1], pre_flip: true,
+        render: { lora_name: "bakery.safetensors" }, missing: "x",
+    });
+    assert.equal(image.widgets[0].value, "b.png");
+    assert.equal(image.widgets[1].value, "image");
+    assert.deepEqual(grid.widgets.map((w) => w.value), [2, 1]);
+    assert.equal(flip.mode, 0);
+    assert.equal(render.widgets[1].value, "bakery.safetensors");
+    assert.equal(render.widgets[0].value, 7);
+    assert.equal(other.widgets[0].value, "leave me");
+    assert.deepEqual(report, { applied: ["control_image", "grid", "pre_flip", "render"], missing: ["missing"] });
+});

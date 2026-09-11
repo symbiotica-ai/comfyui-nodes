@@ -192,6 +192,51 @@ export function captureColumn(table, slots, column, values) {
     return table;
 }
 
+// One column as the generator would see it: the game column with the
+// column's own cells on top, each parsed by its slot.
+export function columnValues(table, slots, column) {
+    const byKey = Object.fromEntries(slots.map((s) => [s.key, s]));
+    const values = {};
+    for (const source of column === GAME ? [GAME] : [GAME, column]) {
+        for (const row of table.rows) {
+            const slot = byKey[row.key] ?? { key: row.key, kind: "scalar", default: "" };
+            const value = cellValue(slot, row.cells[source]);
+            if (value !== undefined) values[row.key] = value;
+        }
+    }
+    return values;
+}
+
+// The reverse of capture: put a value set onto the canvas's slot nodes, so
+// the category can be adjusted with the nodes' own widgets and captured again.
+export function applyValuesToNodes(nodes, values) {
+    const applied = [];
+    const seen = new Set();
+    for (const node of nodes ?? []) {
+        const title = String(node.title ?? "");
+        if (!title.startsWith("recipe:")) continue;
+        const key = title.slice("recipe:".length).replace(/\?\s*$/, "").trim();
+        if (!key || !(key in values)) continue;
+        const value = values[key];
+        const widgets = (node.widgets ?? []).filter((w) => w.type !== "button");
+        if (title.trimEnd().endsWith("?")) {
+            node.mode = value ? 0 : 4;
+        } else if (value && typeof value === "object" && !Array.isArray(value)) {
+            for (const [name, item] of Object.entries(value)) {
+                const widget = widgets.find((w) => w.name === name);
+                if (widget) widget.value = item;
+            }
+        } else if (Array.isArray(value)) {
+            value.forEach((item, index) => { if (widgets[index]) widgets[index].value = item; });
+        } else if (widgets[0]) {
+            widgets[0].value = value;
+        }
+        seen.add(key);
+        if (!applied.includes(key)) applied.push(key);
+    }
+    return { applied, missing: Object.keys(values).filter((k) => !seen.has(k)) };
+}
+
 export function generateSummary(report) {
     const written = report?.written ?? [];
     const summary = `Wrote ${written.length} workflow${written.length === 1 ? "" : "s"} from ${report?.template ?? "the template"}`;
@@ -337,6 +382,25 @@ function recipePanel(node) {
         }
     }
 
+    function loadColumn(column) {
+        let values;
+        try {
+            values = columnValues(state.table, state.slots, column);
+        } catch (err) {
+            toast("error", "Fix the cell first", String(err?.message ?? err), 8000);
+            return;
+        }
+        const graph = app.canvas?.graph ?? app.graph;
+        const report = applyValuesToNodes(graph?.nodes ?? [], values);
+        if (!report.applied.length) {
+            toast("warn", "No recipe slots on this canvas", "Open the template workflow, the one with recipe: nodes.");
+            return;
+        }
+        app.graph?.setDirtyCanvas(true, true);
+        const missing = report.missing.length ? ` Not on this canvas: ${report.missing.join(", ")}.` : "";
+        status(`Loaded ${column} onto the canvas (${report.applied.length} slots).${missing}`, false);
+    }
+
     function headerField(label, key, placeholder) {
         const wrap = el("label", "display:flex;align-items:center;gap:6px;min-width:0;flex:1 1 30%;");
         wrap.append(el("span", `flex:0 0 auto;color:${HUB.inkSubtle};`, label));
@@ -401,12 +465,19 @@ function recipePanel(node) {
         grid.appendChild(el("div", `padding:3px;color:${HUB.inkSubtle};`, "slot"));
         columns.forEach((column, index) => {
             if (column === GAME) {
-                const head = el("div", `padding:3px;color:${HUB.inkSubtle};`, "game (every category)");
+                const head = el("div", `display:flex;align-items:center;gap:4px;padding:3px;color:${HUB.inkSubtle};`);
+                const load = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "load");
+                load.title = "Put the game values onto this canvas.";
+                stopCanvas(load).addEventListener("click", (e) => { e.stopPropagation(); loadColumn(GAME); });
+                head.append(load, el("span", "", "game (every category)"));
                 head.title = "A value here applies to every category that leaves the cell empty.";
                 grid.appendChild(head);
                 return;
             }
             const head = el("div", "display:flex;align-items:center;gap:4px;min-width:0;");
+            const load = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "load");
+            load.title = `Put ${column}'s values onto this canvas, to adjust with the nodes' widgets and capture again.`;
+            stopCanvas(load).addEventListener("click", (e) => { e.stopPropagation(); loadColumn(column); });
             const name = stopCanvas(el("input", inputCss + "flex:1 1 auto;width:100%;"));
             name.value = column;
             name.title = "Category: also the suffix of the generated workflow's name.";
@@ -428,7 +499,7 @@ function recipePanel(node) {
                 state.dirty = true;
                 render();
             });
-            head.append(name, remove);
+            head.append(load, name, remove);
             grid.appendChild(head);
         });
         const add = el("button", ghostButtonCss + "padding:1px 6px;", "+");

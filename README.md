@@ -219,7 +219,9 @@ Wrappers around Wavespeed's hosted endpoints.
   starts a recipe with the open, saved workflow as its template. To fill a
   column without typing, set the values on the template's own nodes, type the
   column name and press **Capture into column**: a category takes what differs
-  from the game column, `game` takes everything.
+  from the game column, `game` takes everything. **load** in a column header
+  does the reverse: it puts that column's values onto the canvas, to adjust
+  and capture again.
 - A node in the template titled `recipe:<key>` is a slot for `<key>`. A cell
   sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; on a
   subgraph instance the cell is a JSON object of promoted widgets
