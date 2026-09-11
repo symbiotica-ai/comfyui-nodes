@@ -1,5 +1,5 @@
-// ABOUTME: Linked subgraph modules — the Module node (pick / publish / sync all /
-// ABOUTME: generate from recipe) and the swap that updates a stale module copy on open.
+// ABOUTME: Linked subgraph modules — the Module node (pick / publish / sync all)
+// ABOUTME: and the swap that brings a workflow's stale module copy up to date on open.
 
 // A subgraph published as a module is tagged with a name and a revision in
 // its `extra`. On every workflow open, tagged subgraphs older than the library
@@ -19,7 +19,6 @@ const TAG = "symbiotica_module";
 // frame is only the rectangle that says which tagged nodes belong together.
 const GTAG = "symbiotica_group";
 const PICK = "— pick a module —";
-const PICK_RECIPE = "— pick a recipe —";
 const GROUP_SUFFIX = " (group)";
 
 // ---------------------------------------------------------------- server --
@@ -43,7 +42,6 @@ async function postJson(path, payload) {
 }
 
 const listModules = () => getJson("/symbiotica/modules").then((b) => b.modules ?? []);
-const listRecipes = () => getJson("/symbiotica/recipes").then((b) => b.recipes ?? []);
 const readModule = (name) => getJson(`/symbiotica/modules/${encodeURIComponent(name)}`);
 
 function toast(severity, summary, detail, life = 5000) {
@@ -628,42 +626,9 @@ async function syncAll() {
     }
 }
 
-// ---------------------------------------------------------------- recipes --
-
-// A recipe is one template workflow plus a table of per-category values, and
-// generating it writes one workflow file per category beside the template.
-// The files are the recipe's output: an edit made in one of them by hand is
-// gone on the next Generate, so the toast says where to make edits instead.
-export function generateSummary(report) {
-    const written = report?.written ?? [];
-    const summary = `Wrote ${written.length} workflow${written.length === 1 ? "" : "s"} from ${report?.template ?? "the template"}`;
-    const detail = written.length
-        ? `${written.map((w) => w.path).join(", ")}. Open them from the workflows sidebar; `
-          + "reopen any that is open now. Edits belong in the template or the recipe, not in these files."
-        : "The recipe has no categories.";
-    return { summary, detail };
-}
-
-async function generateFromRecipe(node) {
-    const picker = node.widgets?.find((w) => w.name === "recipe");
-    const name = String(picker?.value ?? "");
-    if (!name || name === PICK_RECIPE) {
-        toast("warn", "Pick a recipe first", "The recipe dropdown lists user/default/recipes.");
-        return;
-    }
-    try {
-        const report = await postJson("/symbiotica/recipes/generate", { name });
-        const { summary, detail } = generateSummary(report);
-        toast("success", summary, detail, 10000);
-    } catch (err) {
-        toast("error", "Generate failed", String(err?.message ?? err));
-    }
-}
-
 // ----------------------------------------------------------- Module node --
 
 const pickers = new Set();
-const recipePickers = new Set();
 
 const pickerLabel = (m) => (m.kind === "group" ? `${m.name}${GROUP_SUFFIX}` : m.name);
 const pickerName = (label) => (label.endsWith(GROUP_SUFFIX) ? label.slice(0, -GROUP_SUFFIX.length) : label);
@@ -678,18 +643,6 @@ async function refreshPickers() {
     for (const widget of pickers) {
         widget.options.values = [PICK, ...names];
         if (!widget.options.values.includes(widget.value)) widget.value = PICK;
-    }
-    let recipes = [];
-    try {
-        recipes = (await listRecipes()).map((r) => r.name);
-    } catch {
-        recipes = null;
-    }
-    if (recipes) {
-        for (const widget of recipePickers) {
-            widget.options.values = [PICK_RECIPE, ...recipes];
-            if (!widget.options.values.includes(widget.value)) widget.value = PICK_RECIPE;
-        }
     }
     app.graph?.setDirtyCanvas(true, false);
 }
@@ -855,20 +808,11 @@ function setupModuleNode(node) {
     const sync = node.addWidget("button", "Sync all workflows", null,
         () => syncAll(), { serialize: false });
     sync.serializeValue = () => undefined;
-    const recipePicker = node.widgets?.find((w) => w.name === "recipe");
-    if (recipePicker) {
-        recipePickers.add(recipePicker);
-        recipePicker.value = PICK_RECIPE;
-        const generate = node.addWidget("button", "Generate workflows", null,
-            () => generateFromRecipe(node), { serialize: false });
-        generate.serializeValue = () => undefined;
-    }
     modulePanel(node);
     if (node.size[1] < 220) node.setSize?.([Math.max(node.size[0], 360), 220]);
     const onRemoved = node.onRemoved;
     node.onRemoved = function () {
         pickers.delete(picker);
-        if (recipePicker) recipePickers.delete(recipePicker);
         onRemoved?.apply(this, arguments);
     };
     const onSelected = node.onSelected;

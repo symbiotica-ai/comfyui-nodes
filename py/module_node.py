@@ -1,14 +1,10 @@
-# ABOUTME: Module node — the canvas control for linked subgraph modules and
-# ABOUTME: workflow recipes — and the routes behind it: list, publish, sync, generate.
+# ABOUTME: Module node — the canvas control for linked subgraph modules — and
+# ABOUTME: the routes behind it: list, read, publish and sync-all-workflows.
 import os
 
 from ._modules import (LIBRARY_DIRNAME, ModuleError, library_dir, list_modules,
                        load_library, read_module, sync_workflows, write_module)
-from ._recipes import (RECIPES_DIRNAME, RecipeError, generate_all, list_recipes,
-                       read_recipe, recipes_dir)
-
 PICK = "— pick a module —"
-PICK_RECIPE = "— pick a recipe —"
 
 
 def _module_names():
@@ -18,18 +14,10 @@ def _module_names():
         return []
 
 
-def _recipe_names():
-    try:
-        return [r["name"] for r in list_recipes(recipes_dir())]
-    except Exception:
-        return []
-
-
 class SymbioticaModule:
     """Frontend-only control: pick a published module to drop it on the canvas,
-    publish the selected subgraph as a module, sync every workflow file, or
-    generate a recipe's workflows. Never executes — web/js/modules.js marks it
-    virtual."""
+    publish the selected subgraph as a module, or sync every workflow file.
+    Never executes — web/js/modules.js marks it virtual."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -43,11 +31,6 @@ class SymbioticaModule:
                     "tooltip": "Project folder for new modules, e.g. bakery. "
                                "Type it or connect a text node.",
                 }),
-                "recipe": ([PICK_RECIPE] + _recipe_names(), {
-                    "tooltip": "A recipe from user/default/recipes: one template "
-                               "workflow plus per-category values. Generate "
-                               "writes one workflow per category.",
-                }),
             },
         }
 
@@ -55,10 +38,9 @@ class SymbioticaModule:
     FUNCTION = "execute"
     CATEGORY = "Symbiotica/Modules"
     DESCRIPTION = ("Linked subgraph modules: publish a subgraph once, and every "
-                   "workflow that uses it picks up the change. Recipes: one "
-                   "template workflow, one generated workflow per category.")
+                   "workflow that uses it picks up the change.")
 
-    def execute(self, module=PICK, folder="", recipe=PICK_RECIPE):
+    def execute(self, module=PICK, folder=""):
         return ()
 
 
@@ -111,23 +93,6 @@ if PromptServer is not None:
         except ModuleError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(result)
-
-    @routes.get("/symbiotica/recipes")
-    async def recipes_list(request):
-        return web.json_response({"recipes": list_recipes(recipes_dir()),
-                                  "library": RECIPES_DIRNAME})
-
-    @routes.post("/symbiotica/recipes/generate")
-    async def recipes_generate(request):
-        body = await request.json()
-        try:
-            recipe = read_recipe(recipes_dir(), body.get("name") or "")
-            if recipe is None:
-                return web.json_response({"error": "no such recipe"}, status=404)
-            report = generate_all(_workflows_dir(), recipe)
-        except RecipeError as e:
-            return web.json_response({"error": str(e)}, status=400)
-        return web.json_response(report)
 
     @routes.post("/symbiotica/modules/sync")
     async def modules_sync(request):

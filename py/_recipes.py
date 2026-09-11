@@ -202,9 +202,81 @@ def promote_string_input(workflow: dict, subgraph_name: str, inner_id: int,
     return root
 
 
+# ------------------------------------------------------------------ slots --
+
+def template_slots(workflow: dict) -> list[dict]:
+    """What a recipe can set in this template, one entry per key, in canvas
+    order: the kind a value takes (toggle, dict for a subgraph instance,
+    scalar otherwise), the template's own value, and how many widgets the
+    node has (a scalar cell may still hold a list to set them all)."""
+    subgraph_ids = {s.get("id") for s in
+                    ((workflow.get("definitions") or {}).get("subgraphs") or [])}
+    out = []
+    for key, nodes in recipe_slots(workflow).items():
+        node = nodes[0]
+        widgets = node.get("widgets_values") or []
+        if is_toggle(node):
+            out.append({"key": key, "kind": "toggle",
+                        "default": node.get("mode", MODE_ACTIVE) == MODE_ACTIVE, "widgets": len(widgets)})
+        elif node.get("type") in subgraph_ids:
+            names = promoted_names(node)
+            default = dict(zip(names, widgets)) if len(names) == len(widgets) else {}
+            out.append({"key": key, "kind": "dict", "default": default, "widgets": len(widgets)})
+        else:
+            out.append({"key": key, "kind": "scalar",
+                        "default": widgets[0] if widgets else None, "widgets": len(widgets)})
+    return out
+
+
 # ---------------------------------------------------------------- library --
 
 RECIPES_DIRNAME = "recipes"
+WORKFLOWS_PREFIX = "workflows/"
+
+
+def _template_rel(rel) -> str:
+    """A template path as the recipe stores it: relative to the workflows
+    folder. The editor names the open workflow with a `workflows/` prefix."""
+    rel = str(rel or "").replace("\\", "/").strip("/")
+    if rel.startswith(WORKFLOWS_PREFIX):
+        rel = rel[len(WORKFLOWS_PREFIX):]
+    return rel
+
+
+def read_template(workflows_dir: str, rel) -> dict:
+    rel = _template_rel(rel)
+    path = _under(workflows_dir, rel, "template")
+    if not os.path.isfile(path):
+        raise RecipeError(f"template {rel!r} is not in the workflows directory")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_recipe(dir_: str, name: str, recipe: dict) -> str:
+    """Save a recipe as the file its name reads back. Refuses a shape the
+    generator could not run, so a broken save cannot hide until Generate."""
+    if not isinstance(recipe, dict) or not isinstance(recipe.get("categories"), dict):
+        raise RecipeError("a recipe needs a categories table")
+    if not str(recipe.get("template") or "").strip():
+        raise RecipeError("a recipe needs a template")
+    path = _under(dir_, f"{name}.json", "recipe name")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(recipe, f, indent=2, ensure_ascii=False)
+    return path
+
+
+def new_recipe(workflows_dir: str, template_rel) -> dict:
+    """An empty recipe for one template: no game values, no categories,
+    output beside the template."""
+    rel = _template_rel(template_rel)
+    read_template(workflows_dir, rel)
+    recipe = {"template": rel}
+    folder = os.path.dirname(rel)
+    if folder:
+        recipe["output"] = folder
+    recipe.update({"workflow_prefix": "", "game": {}, "categories": {}})
+    return recipe
 
 
 def recipes_dir() -> str:
@@ -257,13 +329,8 @@ def generate_all(workflows_dir: str, recipe: dict) -> dict:
     """Every category of one recipe, written beside its template (or into the
     recipe's `output` folder). Every workflow is generated before any is
     written, so a bad row leaves the folder as it was."""
-    template_path = _under(workflows_dir, recipe.get("template"), "template")
-    if not os.path.isfile(template_path):
-        raise RecipeError(f"template {recipe.get('template')!r} is not in the workflows directory")
-    with open(template_path, "r", encoding="utf-8") as f:
-        template = json.load(f)
-    output_rel = recipe.get("output") or os.path.dirname(
-        str(recipe.get("template")).replace("\\", "/").strip("/"))
+    template = read_template(workflows_dir, recipe.get("template"))
+    output_rel = recipe.get("output") or os.path.dirname(_template_rel(recipe.get("template")))
     output_dir = _under(workflows_dir, output_rel, "output folder") if output_rel else workflows_dir
     written = []
     for category in recipe.get("categories") or {}:

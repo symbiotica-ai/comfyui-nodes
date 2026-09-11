@@ -358,3 +358,68 @@ class TestGenerateAll:
         with pytest.raises(RecipeError, match="typo"):
             generate_all(library["workflows"], r)
         assert not os.path.exists(os.path.join(library["workflows"], "recipe-test/dev-imperia-bakery-appliance1x1.json"))
+
+
+from _recipes import new_recipe, read_template, template_slots, write_recipe
+
+
+class TestTemplateSlots:
+    def test_describes_every_slot_with_its_kind_and_template_value(self):
+        slots = template_slots(template())
+        by_key = {s["key"]: s for s in slots}
+        assert [s["key"] for s in slots] == ["control_image", "render_aspect", "grid", "pre_flip", "render"]
+        assert by_key["control_image"] == {"key": "control_image", "kind": "scalar", "default": "old.png", "widgets": 2}
+        assert by_key["grid"] == {"key": "grid", "kind": "scalar", "default": 2, "widgets": 2}
+        assert by_key["pre_flip"] == {"key": "pre_flip", "kind": "toggle", "default": False, "widgets": 1}
+        assert by_key["render"] == {"key": "render", "kind": "dict",
+                                    "default": {"seed": 7, "lora_name": "old.safetensors", "strength_model": 0.5},
+                                    "widgets": 3}
+
+    def test_a_key_shared_by_two_nodes_is_one_slot(self):
+        wf = template()
+        wf["nodes"].append({**copy.deepcopy(by_id(wf, 11)), "id": 16})
+        assert [s["key"] for s in template_slots(wf)].count("render_aspect") == 1
+
+
+class TestReadTemplate:
+    def test_reads_by_path_relative_to_the_workflows_dir_with_or_without_the_workflows_prefix(self, library):
+        a = read_template(library["workflows"], "recipe-test/bakery-template.json")
+        b = read_template(library["workflows"], "workflows/recipe-test/bakery-template.json")
+        assert a == b == template()
+
+    def test_a_missing_template_is_refused_by_name(self, library):
+        with pytest.raises(RecipeError, match="nope.json"):
+            read_template(library["workflows"], "recipe-test/nope.json")
+
+
+class TestWriteRecipe:
+    def test_writes_the_file_the_name_reads_back(self, library):
+        r = {**recipe(), "template": "recipe-test/bakery-template.json"}
+        r["categories"]["chair"] = {"control_image": "chair.png"}
+        write_recipe(library["recipes"], "imperia-bakery", r)
+        assert read_recipe(library["recipes"], "imperia-bakery")["categories"]["chair"] == {"control_image": "chair.png"}
+
+    def test_creates_the_dir_and_keeps_unicode_readable(self, tmp_path):
+        d = str(tmp_path / "recipes")
+        write_recipe(d, "x", {"template": "t.json", "categories": {"a": {"preamble": "QE 2 — Coven"}}})
+        assert "Coven" in open(os.path.join(d, "x.json"), encoding="utf-8").read()
+        assert "\\u2014" not in open(os.path.join(d, "x.json"), encoding="utf-8").read()
+
+    def test_refuses_a_recipe_that_is_not_a_table(self, tmp_path):
+        with pytest.raises(RecipeError, match="categories"):
+            write_recipe(str(tmp_path), "x", {"template": "t.json"})
+        with pytest.raises(RecipeError, match="template"):
+            write_recipe(str(tmp_path), "x", {"categories": {}})
+
+
+class TestNewRecipe:
+    def test_a_fresh_recipe_names_the_template_and_its_folder_and_has_no_rows_yet(self, library):
+        r = new_recipe(library["workflows"], "workflows/recipe-test/bakery-template.json")
+        assert r == {"template": "recipe-test/bakery-template.json", "output": "recipe-test",
+                     "workflow_prefix": "", "game": {}, "categories": {}}
+
+    def test_a_template_at_the_workflows_root_has_no_output_folder(self, library):
+        write_json(os.path.join(library["workflows"], "root-template.json"), template())
+        r = new_recipe(library["workflows"], "root-template.json")
+        assert r["template"] == "root-template.json"
+        assert "output" not in r

@@ -208,20 +208,23 @@ Wrappers around Wavespeed's hosted endpoints.
   the module.
 
 ### Recipes (one template, one workflow per category)
-- A **recipe** is a JSON file in `user/default/recipes/` naming a template
-  workflow (`template`, relative to the workflows folder), an optional `output`
-  folder (default: the template's folder), a `workflow_prefix`, a `game` block
-  of values every category shares, and a `categories` table of the values that
-  differ per category. Pick it in the Module node's **recipe** dropdown and
-  press **Generate workflows**: one file per category lands in the output
-  folder, named prefix + category, overwriting the last run.
-- A node in the template titled `recipe:<key>` is a slot for `<key>`. A scalar
-  sets the node's first widget, a list sets every widget, a dict sets a
-  subgraph instance's promoted widgets by name (`{"lora_name": …}`), and a
-  title ending in `?` (`recipe:pre_flip?`) is a toggle that takes `true`
-  (active) or `false` (bypassed). A key no slot carries refuses the whole
-  run, so a typo cannot render the template's own value. Category values win
-  over game values for the same key.
+- `Recipe` (Symbiotica/Recipes) — one template workflow, a table of values,
+  one generated workflow per category. Pick a recipe in the **recipe**
+  dropdown and it opens as a table on the node: a row per slot in the
+  template, a **game** column for what every category shares, and a column
+  per category. Edit cells, rename or remove a column in its header, add one
+  with **+**, then **Save**, or **Save and generate workflows**, which writes
+  prefix + category `.json` files into the output folder (default: the
+  template's folder), overwriting the last run. **New from this workflow**
+  starts a recipe with the open, saved workflow as its template.
+- A node in the template titled `recipe:<key>` is a slot for `<key>`. A cell
+  sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; on a
+  subgraph instance the cell is a JSON object of promoted widgets
+  (`{"lora_name": "…"}`); a title ending in `?` (`recipe:pre_flip?`) is a
+  toggle that takes `true` (active) or `false` (bypassed). An empty cell is an
+  absent key: the category takes the game value, else the template's own. A
+  key no slot carries refuses the run. Recipes are files in
+  `user/default/recipes/<name>.json`.
 - The generated files are output: edits belong in the template (the
   pipeline, for every category) or in the recipe (one category's values).
 
