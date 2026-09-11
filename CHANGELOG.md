@@ -6,6 +6,13 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.10
+
+**Recipe: load a column onto the canvas.** Every column header has a **load**
+button: it puts that column's values (its own cells over the game column)
+onto the template's nodes, so a category saved earlier can be adjusted with
+the nodes' own widgets and captured again.
+
 ## 2026.9.9
 
 **Recipe: capture a column from the canvas.** Set the values on the template
