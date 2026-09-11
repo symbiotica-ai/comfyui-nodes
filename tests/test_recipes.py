@@ -1,0 +1,271 @@
+# ABOUTME: Tests workflow recipes — nodes titled `recipe:<key>` take their values
+# ABOUTME: from a recipe file, and one template writes one workflow per category.
+import copy
+import json
+import os
+import uuid
+
+import pytest
+
+from _recipes import (RecipeError, apply_recipe, generate, promote_string_input,
+                      recipe_slots, workflow_name)
+
+SG_ID = "4ea6e827-ec92-4fdc-8d87-a021f5d6fb0a"
+
+
+def string_node(node_id, title, text, link_out=None):
+    return {
+        "id": node_id, "type": "String", "pos": [0, 0], "size": [400, 100],
+        "flags": {}, "order": 0, "mode": 0, "title": title,
+        "inputs": [{"name": "String", "type": "STRING", "widget": {"name": "String"}, "link": None}],
+        "outputs": [{"name": "STRING", "type": "STRING", "links": [link_out] if link_out else []}],
+        "properties": {"Node name for S&R": "String"},
+        "widgets_values": [text],
+    }
+
+
+def template():
+    """A root graph with one slot of each kind, plus a subgraph instance."""
+    return {
+        "id": "79ab9a5b-f4bc-44e0-91eb-f83753cc7e99", "revision": 3,
+        "last_node_id": 60, "last_link_id": 900,
+        "nodes": [
+            {"id": 10, "type": "LoadImage", "title": "recipe:control_image", "mode": 0,
+             "inputs": [{"name": "image", "type": "COMBO", "widget": {"name": "image"}, "link": None}],
+             "outputs": [], "widgets_values": ["old.png", "image"]},
+            {"id": 11, "type": "NSQwenResolution", "title": "recipe:render_aspect", "mode": 0,
+             "inputs": [{"name": "aspect", "type": "COMBO", "widget": {"name": "aspect"}, "link": None}],
+             "outputs": [], "widgets_values": ["1:1 (Square)"]},
+            {"id": 12, "type": "SplitTiles", "title": "recipe:grid", "mode": 0,
+             "inputs": [{"name": "columns", "type": "INT", "widget": {"name": "columns"}, "link": None},
+                        {"name": "rows", "type": "INT", "widget": {"name": "rows"}, "link": None}],
+             "outputs": [], "widgets_values": [2, 3]},
+            {"id": 13, "type": "ImageFlip", "title": "recipe:pre_flip?", "mode": 4,
+             "inputs": [{"name": "flip_method", "type": "COMBO", "widget": {"name": "flip_method"}, "link": None}],
+             "outputs": [], "widgets_values": ["y-axis: horizontally"]},
+            {"id": 14, "type": SG_ID, "title": "recipe:render", "mode": 0,
+             "inputs": [{"name": "text", "type": "STRING", "link": None},
+                        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": None},
+                        {"name": "lora_name", "type": "COMBO", "widget": {"name": "lora_name"}, "link": None},
+                        {"name": "strength_model", "type": "FLOAT", "widget": {"name": "strength_model"}, "link": None}],
+             "outputs": [], "widgets_values": [7, "old.safetensors", 0.5]},
+            {"id": 15, "type": "String", "title": "User Custom Request", "mode": 0,
+             "inputs": [{"name": "String", "type": "STRING", "widget": {"name": "String"}, "link": None}],
+             "outputs": [], "widgets_values": ["leave me"]},
+        ],
+        "links": [], "groups": [],
+        "definitions": {"subgraphs": [{"id": SG_ID, "name": "render", "inputs": [], "outputs": [],
+                                       "nodes": [], "links": [], "state": {"lastLinkId": 5}}]},
+        "extra": {}, "version": 0.4,
+    }
+
+
+def recipe():
+    return {
+        "workflow_prefix": "dev-imperia-bakery-",
+        "game": {"render": {"lora_name": "bakery.safetensors"}},
+        "categories": {
+            "appliance1x1": {"control_image": "controlnet/bakery/appliance1x1.png",
+                             "render_aspect": "1:1 (Square)", "grid": [2, 1], "pre_flip": False},
+            "appliance1x2": {"control_image": "controlnet/bakery/appliance1x2.png",
+                             "render_aspect": "9:16 (Widescreen Portrait)", "grid": [2, 1], "pre_flip": True},
+        },
+    }
+
+
+def by_id(workflow, node_id):
+    return next(n for n in workflow["nodes"] if n["id"] == node_id)
+
+
+class TestRecipeSlots:
+    def test_every_recipe_titled_root_node_is_a_slot_keyed_without_the_prefix(self):
+        slots = recipe_slots(template())
+        assert set(slots) == {"control_image", "render_aspect", "grid", "pre_flip", "render"}
+
+    def test_a_toggle_slot_drops_its_question_mark_from_the_key(self):
+        slots = recipe_slots(template())
+        assert [n["id"] for n in slots["pre_flip"]] == [13]
+
+    def test_two_nodes_may_share_a_key(self):
+        wf = template()
+        wf["nodes"].append({**copy.deepcopy(by_id(wf, 11)), "id": 16})
+        assert [n["id"] for n in recipe_slots(wf)["render_aspect"]] == [11, 16]
+
+    def test_nodes_inside_subgraph_definitions_are_not_slots(self):
+        wf = template()
+        wf["definitions"]["subgraphs"][0]["nodes"].append(
+            {"id": 1, "type": "String", "title": "recipe:hidden", "widgets_values": ["x"]})
+        assert "hidden" not in recipe_slots(wf)
+
+
+class TestApplyRecipe:
+    def test_a_scalar_sets_the_first_widget_and_leaves_the_rest(self):
+        wf = template()
+        apply_recipe(wf, {"control_image": "new.png"})
+        assert by_id(wf, 10)["widgets_values"] == ["new.png", "image"]
+
+    def test_a_list_replaces_every_widget(self):
+        wf = template()
+        apply_recipe(wf, {"grid": [2, 1]})
+        assert by_id(wf, 12)["widgets_values"] == [2, 1]
+
+    def test_a_list_of_the_wrong_length_is_refused(self):
+        with pytest.raises(RecipeError, match="grid"):
+            apply_recipe(template(), {"grid": [2]})
+
+    def test_a_dict_sets_promoted_widgets_by_name(self):
+        wf = template()
+        apply_recipe(wf, {"render": {"lora_name": "bakery.safetensors", "strength_model": 0.9}})
+        assert by_id(wf, 14)["widgets_values"] == [7, "bakery.safetensors", 0.9]
+
+    def test_a_dict_naming_a_widget_the_node_lacks_is_refused(self):
+        with pytest.raises(RecipeError, match="steps"):
+            apply_recipe(template(), {"render": {"steps": 8}})
+
+    def test_a_toggle_sets_the_mode_true_on_false_bypassed(self):
+        wf = template()
+        apply_recipe(wf, {"pre_flip": True})
+        assert by_id(wf, 13)["mode"] == 0
+        apply_recipe(wf, {"pre_flip": False})
+        assert by_id(wf, 13)["mode"] == 4
+
+    def test_a_toggle_given_a_non_boolean_is_refused(self):
+        with pytest.raises(RecipeError, match="pre_flip"):
+            apply_recipe(template(), {"pre_flip": "yes"})
+
+    def test_a_key_no_node_carries_is_refused_so_a_typo_cannot_render_the_template_value(self):
+        with pytest.raises(RecipeError, match="controll_image"):
+            apply_recipe(template(), {"controll_image": "x.png"})
+
+    def test_nodes_without_a_recipe_title_are_untouched(self):
+        wf = template()
+        apply_recipe(wf, {"control_image": "new.png"})
+        assert by_id(wf, 15)["widgets_values"] == ["leave me"]
+
+    def test_reports_the_slots_the_values_left_at_their_template_value(self):
+        report = apply_recipe(template(), {"control_image": "new.png"})
+        assert report["applied"] == ["control_image"]
+        assert report["template"] == ["grid", "pre_flip", "render", "render_aspect"]
+
+
+class TestGenerate:
+    def test_category_values_layer_over_game_values(self):
+        wf, _ = generate(template(), recipe(), "appliance1x2")
+        assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x2.png"
+        assert by_id(wf, 14)["widgets_values"][1] == "bakery.safetensors"
+        assert by_id(wf, 13)["mode"] == 0
+
+    def test_the_template_is_not_modified(self):
+        tpl = template()
+        before = copy.deepcopy(tpl)
+        generate(tpl, recipe(), "appliance1x1")
+        assert tpl == before
+
+    def test_a_category_value_overrides_a_game_value_for_the_same_key(self):
+        r = recipe()
+        r["game"]["control_image"] = "game.png"
+        wf, _ = generate(template(), r, "appliance1x1")
+        assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x1.png"
+
+    def test_an_unknown_category_is_refused(self):
+        with pytest.raises(RecipeError, match="chair"):
+            generate(template(), recipe(), "chair")
+
+    def test_each_generated_workflow_gets_its_own_stable_id_and_a_fresh_revision(self):
+        a, _ = generate(template(), recipe(), "appliance1x1")
+        b, _ = generate(template(), recipe(), "appliance1x2")
+        again, _ = generate(template(), recipe(), "appliance1x1")
+        assert a["id"] != template()["id"]
+        assert a["id"] != b["id"]
+        assert a["id"] == again["id"]
+        assert a["revision"] == 0
+
+    def test_the_workflow_name_is_the_prefix_plus_the_category(self):
+        assert workflow_name(recipe(), "appliance1x2") == "dev-imperia-bakery-appliance1x2"
+
+
+def subgraph_with_inner_string():
+    """A subgraph whose inner String feeds a JoinStrings, the way the bakery
+    preamble does; promoting it turns that link into a subgraph input."""
+    return {
+        "id": SG_ID, "name": "render", "version": 1,
+        "state": {"lastNodeId": 3, "lastLinkId": 5},
+        "inputNode": {"id": -10, "bounding": [-100, 0, 100, 100]},
+        "outputNode": {"id": -20, "bounding": [500, 0, 100, 100]},
+        "inputs": [{"id": "aaa", "name": "text", "type": "STRING", "linkIds": [4], "pos": [0, 0]}],
+        "outputs": [],
+        "nodes": [
+            {"id": 1, "type": "String", "title": "Image Model Preamble", "mode": 0, "pos": [0, 0],
+             "inputs": [{"name": "String", "type": "STRING", "widget": {"name": "String"}, "link": None}],
+             "outputs": [{"name": "STRING", "type": "STRING", "links": [5]}],
+             "widgets_values": ["A single isometric sprite"]},
+            {"id": 2, "type": "JoinStrings", "mode": 0, "pos": [200, 0],
+             "inputs": [{"name": "string1", "type": "STRING", "link": 5},
+                        {"name": "string2", "type": "STRING", "link": 4},
+                        {"name": "delimiter", "type": "STRING", "widget": {"name": "delimiter"}, "link": None}],
+             "outputs": [{"name": "STRING", "type": "STRING", "links": []}],
+             "widgets_values": [" "]},
+        ],
+        "links": [
+            {"id": 4, "origin_id": -10, "origin_slot": 0, "target_id": 2, "target_slot": 1, "type": "STRING"},
+            {"id": 5, "origin_id": 1, "origin_slot": 0, "target_id": 2, "target_slot": 0, "type": "STRING"},
+        ],
+        "extra": {},
+    }
+
+
+def workflow_with_instance():
+    return {
+        "last_node_id": 30, "last_link_id": 100,
+        "nodes": [
+            {"id": 20, "type": "PreviewAny", "mode": 0, "pos": [0, 0], "inputs": [],
+             "outputs": [{"name": "STRING", "type": "STRING", "links": [100]}], "widgets_values": []},
+            {"id": 30, "type": SG_ID, "mode": 0, "pos": [300, 0],
+             "inputs": [{"name": "text", "type": "STRING", "link": 100}],
+             "outputs": [], "widgets_values": []},
+        ],
+        "links": [[100, 20, 0, 30, 0, "STRING"]],
+        "groups": [],
+        "definitions": {"subgraphs": [subgraph_with_inner_string()]},
+    }
+
+
+class TestPromoteStringInput:
+    def test_the_inner_string_becomes_a_subgraph_input_fed_from_a_root_recipe_node(self):
+        wf = workflow_with_instance()
+        promote_string_input(wf, "render", 1, "preamble", "recipe:preamble", pos=[-500, 0])
+        sg = wf["definitions"]["subgraphs"][0]
+        # inner: the String node is gone, its link now originates at the input node
+        assert [n["id"] for n in sg["nodes"]] == [2]
+        assert [i["name"] for i in sg["inputs"]] == ["text", "preamble"]
+        moved = next(l for l in sg["links"] if l["id"] == 5)
+        assert (moved["origin_id"], moved["origin_slot"], moved["target_id"], moved["target_slot"]) == (-10, 1, 2, 0)
+        assert sg["inputs"][1]["linkIds"] == [5]
+        assert sg["inputs"][1]["type"] == "STRING"
+        # root: a String node titled for the recipe, wired into the new instance slot
+        root = next(n for n in wf["nodes"] if n.get("title") == "recipe:preamble")
+        assert root["type"] == "String"
+        assert root["widgets_values"] == ["A single isometric sprite"]
+        assert root["pos"] == [-500, 0]
+        instance = next(n for n in wf["nodes"] if n["id"] == 30)
+        assert [i["name"] for i in instance["inputs"]] == ["text", "preamble"]
+        link_id = instance["inputs"][1]["link"]
+        assert [link_id, root["id"], 0, 30, 1, "STRING"] in wf["links"]
+        assert root["outputs"][0]["links"] == [link_id]
+        assert wf["last_node_id"] == root["id"] > 30
+        assert wf["last_link_id"] == link_id > 100
+
+    def test_the_new_slot_is_a_recipe_slot(self):
+        wf = workflow_with_instance()
+        promote_string_input(wf, "render", 1, "preamble", "recipe:preamble", pos=[0, 0])
+        assert "preamble" in recipe_slots(wf)
+
+    def test_refuses_a_subgraph_or_node_that_is_not_there(self):
+        with pytest.raises(RecipeError, match="nope"):
+            promote_string_input(workflow_with_instance(), "nope", 1, "p", "recipe:p", pos=[0, 0])
+        with pytest.raises(RecipeError, match="99"):
+            promote_string_input(workflow_with_instance(), "render", 99, "p", "recipe:p", pos=[0, 0])
+
+    def test_refuses_an_inner_node_that_is_not_a_single_output_string_source(self):
+        with pytest.raises(RecipeError, match="JoinStrings"):
+            promote_string_input(workflow_with_instance(), "render", 2, "p", "recipe:p", pos=[0, 0])
