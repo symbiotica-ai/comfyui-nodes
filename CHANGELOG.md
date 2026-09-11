@@ -6,6 +6,13 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.8
+
+**Recipe: a new recipe starts filled in.** New from this workflow now copies
+the template's own values into the game column (a wired promoted input, like
+a seed fed by a Seed node, is left out), the game column's empty cells show
+the template value as a placeholder, and rows come in name order.
+
 ## 2026.9.7
 
 **Recipe node.** Recipes move off the Module node onto their own `Recipe`
