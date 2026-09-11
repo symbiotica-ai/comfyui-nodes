@@ -6,6 +6,14 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.14
+
+**Recipe: one kind of control.** Inputs changed: the node gains a `name`
+text input beside `category` (both typed or wired), and New, Capture, Save
+and Generate are node buttons. The panel holds only the recipe: template,
+output, prefix and the sections. The duplicate category field and the Add
+button are gone; Capture creates a category that does not exist yet.
+
 ## 2026.9.13
 
 **Recipe: short buttons.** New, Capture, Add, Save, Generate.
