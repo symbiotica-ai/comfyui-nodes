@@ -123,3 +123,18 @@ test("a title becomes a path segment and joins the project folder", () => {
     assert.equal(joinPath("", "flip"), "flip");
     assert.equal(joinPath("fashion-story", ""), "fashion-story");
 });
+
+import { generateSummary } from "../../web/js/modules.js";
+
+test("the generate toast names every file written and where edits belong", () => {
+    const { summary, detail } = generateSummary({
+        template: "recipe-test/bakery-template.json",
+        written: [{ path: "recipe-test/dev-imperia-bakery-appliance1x1.json" },
+                  { path: "recipe-test/dev-imperia-bakery-appliance1x2.json" }],
+    });
+    assert.equal(summary, "Wrote 2 workflows from recipe-test/bakery-template.json");
+    assert.match(detail, /appliance1x1\.json, recipe-test\/dev-imperia-bakery-appliance1x2\.json\./);
+    assert.match(detail, /Edits belong in the template or the recipe/);
+    assert.equal(generateSummary({ template: "t.json", written: [] }).detail, "The recipe has no categories.");
+    assert.equal(generateSummary({ written: [{ path: "a.json" }] }).summary, "Wrote 1 workflow from the template");
+});

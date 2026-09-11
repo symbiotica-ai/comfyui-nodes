@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
 import uuid
 
 try:
@@ -198,3 +200,79 @@ def promote_string_input(workflow: dict, subgraph_name: str, inner_id: int,
         root_links.append([new_link, node_id, 0, instance["id"], len(instance["inputs"]) - 1, "STRING"])
         root["outputs"][0]["links"].append(new_link)
     return root
+
+
+# ---------------------------------------------------------------- library --
+
+RECIPES_DIRNAME = "recipes"
+
+
+def recipes_dir() -> str:
+    import folder_paths
+    return os.path.join(folder_paths.get_user_directory(), "default", RECIPES_DIRNAME)
+
+
+def _under(root: str, rel: str, what: str) -> str:
+    """An absolute path inside root, or a refusal: a recipe names files
+    relative to the workflows dir and must not reach past it."""
+    rel = str(rel or "").replace("\\", "/").strip("/")
+    if not rel:
+        raise RecipeError(f"recipe has no {what}")
+    path = os.path.normpath(os.path.join(root, rel))
+    if os.path.commonpath([os.path.abspath(root), os.path.abspath(path)]) != os.path.abspath(root):
+        raise RecipeError(f"{what} {rel!r} is outside the workflows directory")
+    return path
+
+
+def read_recipe(dir_: str, name: str) -> dict | None:
+    path = _under(dir_, f"{name}.json", "recipe name")
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def list_recipes(dir_: str) -> list[dict]:
+    """Every recipe file, by name, with the template it builds from and the
+    categories it would write. Unreadable files are skipped."""
+    if not os.path.isdir(dir_):
+        return []
+    out = []
+    for filename in sorted(os.listdir(dir_)):
+        if not filename.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(dir_, filename), "r", encoding="utf-8") as f:
+                recipe = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(recipe, dict) or not isinstance(recipe.get("categories"), dict):
+            continue
+        out.append({"name": filename[:-len(".json")], "template": recipe.get("template"),
+                    "categories": list(recipe["categories"])})
+    return out
+
+
+def generate_all(workflows_dir: str, recipe: dict) -> dict:
+    """Every category of one recipe, written beside its template (or into the
+    recipe's `output` folder). Every workflow is generated before any is
+    written, so a bad row leaves the folder as it was."""
+    template_path = _under(workflows_dir, recipe.get("template"), "template")
+    if not os.path.isfile(template_path):
+        raise RecipeError(f"template {recipe.get('template')!r} is not in the workflows directory")
+    with open(template_path, "r", encoding="utf-8") as f:
+        template = json.load(f)
+    output_rel = recipe.get("output") or os.path.dirname(
+        str(recipe.get("template")).replace("\\", "/").strip("/"))
+    output_dir = _under(workflows_dir, output_rel, "output folder") if output_rel else workflows_dir
+    written = []
+    for category in recipe.get("categories") or {}:
+        workflow, report = generate(template, recipe, category)
+        filename = f"{workflow_name(recipe, category)}.json"
+        rel = f"{output_rel}/{filename}" if output_rel else filename
+        written.append({"path": rel, "category": category, "workflow": workflow, **report})
+    os.makedirs(output_dir, exist_ok=True)
+    for item in written:
+        with open(os.path.join(output_dir, os.path.basename(item["path"])), "w", encoding="utf-8") as f:
+            json.dump(item.pop("workflow"), f, indent=2)
+    return {"template": recipe.get("template"), "written": written}

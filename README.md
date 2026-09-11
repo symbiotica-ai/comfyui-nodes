@@ -207,6 +207,24 @@ Wrappers around Wavespeed's hosted endpoints.
   node or the text in a prompt node changes everywhere when you change it in
   the module.
 
+### Recipes (one template, one workflow per category)
+- A **recipe** is a JSON file in `user/default/recipes/` naming a template
+  workflow (`template`, relative to the workflows folder), an optional `output`
+  folder (default: the template's folder), a `workflow_prefix`, a `game` block
+  of values every category shares, and a `categories` table of the values that
+  differ per category. Pick it in the Module node's **recipe** dropdown and
+  press **Generate workflows**: one file per category lands in the output
+  folder, named prefix + category, overwriting the last run.
+- A node in the template titled `recipe:<key>` is a slot for `<key>`. A scalar
+  sets the node's first widget, a list sets every widget, a dict sets a
+  subgraph instance's promoted widgets by name (`{"lora_name": …}`), and a
+  title ending in `?` (`recipe:pre_flip?`) is a toggle that takes `true`
+  (active) or `false` (bypassed). A key no slot carries refuses the whole
+  run, so a typo cannot render the template's own value. Category values win
+  over game values for the same key.
+- The generated files are output: edits belong in the template (the
+  pipeline, for every category) or in the recipe (one category's values).
+
 ### Canvas
 - **Find node by ID** — press `Ctrl+Shift+0`, or pick **Find node by ID** at the
   top of the canvas right-click menu. Type the number on the node's ID badge,

@@ -269,3 +269,92 @@ class TestPromoteStringInput:
     def test_refuses_an_inner_node_that_is_not_a_single_output_string_source(self):
         with pytest.raises(RecipeError, match="JoinStrings"):
             promote_string_input(workflow_with_instance(), "render", 2, "p", "recipe:p", pos=[0, 0])
+
+
+from _recipes import generate_all, list_recipes, read_recipe
+
+
+def write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+@pytest.fixture
+def library(tmp_path):
+    """A workflows dir holding the template in a folder, and a recipes dir
+    holding one recipe that names it."""
+    workflows = str(tmp_path / "workflows")
+    recipes = str(tmp_path / "recipes")
+    write_json(os.path.join(workflows, "recipe-test", "bakery-template.json"), template())
+    write_json(os.path.join(recipes, "imperia-bakery.json"),
+               {**recipe(), "template": "recipe-test/bakery-template.json"})
+    return {"workflows": workflows, "recipes": recipes}
+
+
+class TestRecipeLibrary:
+    def test_lists_every_recipe_with_its_template_and_categories(self, library):
+        assert list_recipes(library["recipes"]) == [
+            {"name": "imperia-bakery", "template": "recipe-test/bakery-template.json",
+             "categories": ["appliance1x1", "appliance1x2"]}]
+
+    def test_a_missing_dir_lists_nothing(self, tmp_path):
+        assert list_recipes(str(tmp_path / "nope")) == []
+
+    def test_reads_one_by_name_and_none_when_absent(self, library):
+        assert read_recipe(library["recipes"], "imperia-bakery")["workflow_prefix"] == "dev-imperia-bakery-"
+        assert read_recipe(library["recipes"], "other") is None
+
+    def test_a_name_cannot_walk_out_of_the_dir(self, library):
+        with pytest.raises(RecipeError):
+            read_recipe(library["recipes"], "../secrets")
+
+
+class TestGenerateAll:
+    def test_writes_one_workflow_per_category_next_to_the_template(self, library):
+        r = read_recipe(library["recipes"], "imperia-bakery")
+        report = generate_all(library["workflows"], r)
+        paths = [w["path"] for w in report["written"]]
+        assert paths == ["recipe-test/dev-imperia-bakery-appliance1x1.json",
+                         "recipe-test/dev-imperia-bakery-appliance1x2.json"]
+        wf = json.load(open(os.path.join(library["workflows"], paths[1])))
+        assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x2.png"
+        assert report["written"][1]["category"] == "appliance1x2"
+        assert report["written"][1]["applied"] == ["control_image", "grid", "pre_flip", "render", "render_aspect"]
+
+    def test_an_output_folder_in_the_recipe_wins_over_the_template_folder(self, library):
+        r = {**read_recipe(library["recipes"], "imperia-bakery"), "output": "bakery/generated"}
+        report = generate_all(library["workflows"], r)
+        assert report["written"][0]["path"] == "bakery/generated/dev-imperia-bakery-appliance1x1.json"
+        assert os.path.isfile(os.path.join(library["workflows"], report["written"][0]["path"]))
+
+    def test_regenerating_overwrites_the_previous_file(self, library):
+        r = read_recipe(library["recipes"], "imperia-bakery")
+        generate_all(library["workflows"], r)
+        r["categories"]["appliance1x1"]["control_image"] = "changed.png"
+        generate_all(library["workflows"], r)
+        wf = json.load(open(os.path.join(library["workflows"], "recipe-test/dev-imperia-bakery-appliance1x1.json")))
+        assert by_id(wf, 10)["widgets_values"][0] == "changed.png"
+
+    def test_a_recipe_without_a_template_is_refused(self, library):
+        with pytest.raises(RecipeError, match="template"):
+            generate_all(library["workflows"], recipe())
+
+    def test_a_template_that_is_not_there_is_refused(self, library):
+        r = {**recipe(), "template": "recipe-test/missing.json"}
+        with pytest.raises(RecipeError, match="missing.json"):
+            generate_all(library["workflows"], r)
+
+    def test_a_template_or_output_path_cannot_walk_out_of_the_workflows_dir(self, library):
+        with pytest.raises(RecipeError):
+            generate_all(library["workflows"], {**recipe(), "template": "../recipes/imperia-bakery.json"})
+        r = {**read_recipe(library["recipes"], "imperia-bakery"), "output": "../elsewhere"}
+        with pytest.raises(RecipeError):
+            generate_all(library["workflows"], r)
+
+    def test_a_bad_category_value_fails_before_any_file_is_written(self, library):
+        r = read_recipe(library["recipes"], "imperia-bakery")
+        r["categories"]["appliance1x2"]["typo"] = 1
+        with pytest.raises(RecipeError, match="typo"):
+            generate_all(library["workflows"], r)
+        assert not os.path.exists(os.path.join(library["workflows"], "recipe-test/dev-imperia-bakery-appliance1x1.json"))
