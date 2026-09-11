@@ -394,7 +394,7 @@ function recipePanel(node) {
                 const cell = stopCanvas(el("textarea", cellCss));
                 cell.rows = 1;
                 cell.value = row.cells[column] ?? "";
-                cell.placeholder = column === GAME ? "" : (row.cells[GAME] || cellText(slot?.default) || "");
+                cell.placeholder = column === GAME ? cellText(slot?.default) : (row.cells[GAME] || cellText(slot?.default) || "");
                 cell.addEventListener("input", () => { row.cells[column] = cell.value; state.dirty = true; });
                 cell.addEventListener("focus", () => { if (cell.value.length > 60) cell.rows = 4; });
                 cell.addEventListener("blur", () => { cell.rows = 1; });

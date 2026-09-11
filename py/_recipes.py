@@ -212,7 +212,7 @@ def template_slots(workflow: dict) -> list[dict]:
     subgraph_ids = {s.get("id") for s in
                     ((workflow.get("definitions") or {}).get("subgraphs") or [])}
     out = []
-    for key, nodes in recipe_slots(workflow).items():
+    for key, nodes in sorted(recipe_slots(workflow).items()):
         node = nodes[0]
         widgets = node.get("widgets_values") or []
         if is_toggle(node):
@@ -220,7 +220,12 @@ def template_slots(workflow: dict) -> list[dict]:
                         "default": node.get("mode", MODE_ACTIVE) == MODE_ACTIVE, "widgets": len(widgets)})
         elif node.get("type") in subgraph_ids:
             names = promoted_names(node)
-            default = dict(zip(names, widgets)) if len(names) == len(widgets) else {}
+            # A promoted input fed by a link (a seed node, a resolution node)
+            # renders from the link, so its widget value is not a setting.
+            wired = {(i.get("widget") or {}).get("name") or i.get("name")
+                     for i in node.get("inputs") or [] if i.get("widget") and i.get("link") is not None}
+            default = ({n: v for n, v in zip(names, widgets) if n not in wired}
+                       if len(names) == len(widgets) else {})
             out.append({"key": key, "kind": "dict", "default": default, "widgets": len(widgets)})
         else:
             out.append({"key": key, "kind": "scalar",
@@ -267,15 +272,17 @@ def write_recipe(dir_: str, name: str, recipe: dict) -> str:
 
 
 def new_recipe(workflows_dir: str, template_rel) -> dict:
-    """An empty recipe for one template: no game values, no categories,
-    output beside the template."""
+    """A recipe for one template with the game column started from the
+    template's own values, no categories yet, output beside the template."""
     rel = _template_rel(template_rel)
-    read_template(workflows_dir, rel)
+    slots = template_slots(read_template(workflows_dir, rel))
     recipe = {"template": rel}
     folder = os.path.dirname(rel)
     if folder:
         recipe["output"] = folder
-    recipe.update({"workflow_prefix": "", "game": {}, "categories": {}})
+    recipe.update({"workflow_prefix": "",
+                   "game": {s["key"]: copy.deepcopy(s["default"]) for s in slots if s["default"] is not None},
+                   "categories": {}})
     return recipe
 
 

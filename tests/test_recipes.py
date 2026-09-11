@@ -367,13 +367,24 @@ class TestTemplateSlots:
     def test_describes_every_slot_with_its_kind_and_template_value(self):
         slots = template_slots(template())
         by_key = {s["key"]: s for s in slots}
-        assert [s["key"] for s in slots] == ["control_image", "render_aspect", "grid", "pre_flip", "render"]
+        assert [s["key"] for s in slots] == ["control_image", "grid", "pre_flip", "render", "render_aspect"]
         assert by_key["control_image"] == {"key": "control_image", "kind": "scalar", "default": "old.png", "widgets": 2}
         assert by_key["grid"] == {"key": "grid", "kind": "scalar", "default": 2, "widgets": 2}
         assert by_key["pre_flip"] == {"key": "pre_flip", "kind": "toggle", "default": False, "widgets": 1}
         assert by_key["render"] == {"key": "render", "kind": "dict",
                                     "default": {"seed": 7, "lora_name": "old.safetensors", "strength_model": 0.5},
                                     "widgets": 3}
+
+    def test_rows_come_in_key_order_so_the_table_does_not_shuffle_between_opens(self):
+        wf = template()
+        wf["nodes"].reverse()
+        assert [s["key"] for s in template_slots(wf)] == ["control_image", "grid", "pre_flip", "render", "render_aspect"]
+
+    def test_a_wired_promoted_input_is_not_offered_as_a_dict_default(self):
+        wf = template()
+        by_id(wf, 14)["inputs"][1]["link"] = 4400   # seed comes from a Seed node
+        render = next(s for s in template_slots(wf) if s["key"] == "render")
+        assert render["default"] == {"lora_name": "old.safetensors", "strength_model": 0.5}
 
     def test_a_key_shared_by_two_nodes_is_one_slot(self):
         wf = template()
@@ -413,10 +424,14 @@ class TestWriteRecipe:
 
 
 class TestNewRecipe:
-    def test_a_fresh_recipe_names_the_template_and_its_folder_and_has_no_rows_yet(self, library):
+    def test_a_fresh_recipe_names_the_template_and_starts_the_game_column_from_its_values(self, library):
         r = new_recipe(library["workflows"], "workflows/recipe-test/bakery-template.json")
         assert r == {"template": "recipe-test/bakery-template.json", "output": "recipe-test",
-                     "workflow_prefix": "", "game": {}, "categories": {}}
+                     "workflow_prefix": "",
+                     "game": {"control_image": "old.png", "grid": 2, "pre_flip": False,
+                              "render": {"seed": 7, "lora_name": "old.safetensors", "strength_model": 0.5},
+                              "render_aspect": "1:1 (Square)"},
+                     "categories": {}}
 
     def test_a_template_at_the_workflows_root_has_no_output_folder(self, library):
         write_json(os.path.join(library["workflows"], "root-template.json"), template())
