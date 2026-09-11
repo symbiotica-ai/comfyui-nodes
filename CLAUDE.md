@@ -6,10 +6,15 @@
 the canvas waiting to see the change, and digging for "do I reload or restart?"
 is the whole cost of a long answer. One of:
 
-- **Hard-reload the Comfy tab.** — `web/js` only
-- **Restart ComfyUI.** — anything under `py/`, and a new node needs it to
+- **Hard-reload.** — `web/js` only
+- **Restart Comfy.** — anything under `py/`, and a new node needs it to
   register at all
 - **Nothing to do.** — tests, docs, a commit, a release he has not pulled yet
+
+Two words. Not "open Manager once, then Manager's Restart": he called that
+token-wasting, and he was right. Before either line, run `./push.sh` — it puts
+the working tree on the Modal Volume his editor mounts (see Repo ground
+rules); the registry release is for when he asks for one.
 
 **The action line is usually the WHOLE message.** Default to one line. Add a
 second only when it carries information he cannot get from the canvas — a new
@@ -51,10 +56,10 @@ Browser pane on purpose, and going around it with a node script is not a
 loophole. Verify in the pane: `preview_start {url: "http://127.0.0.1:8000"}`,
 then `javascript_tool` against `window.app` and `computer` for screenshots.
 
-His ComfyUI is **Comfy Desktop**, an Electron app, even though it serves the
-same `127.0.0.1:8000` the pane reaches. Verifying in the pane does not prove
-what his window shows — its renderer caches the frontend across in-app reloads.
-Say which one you checked.
+He works on the **Modal editor** (the Symbiotica platform's ComfyUI sandbox),
+not a local install — "there is no local comfy, we work on modal". Nothing
+here can be verified against his canvas from this machine; say what was
+tested (unit tests) and what was not.
 
 ## MANDATORY: load the ComfyUI skill for your task before writing code
 
@@ -109,5 +114,17 @@ and keeping the node RESIZABLE".
 - Versioning is calendar-based (`2026.M.N` in `pyproject.toml`); bump happens
   at release time, not per PR.
 - Deploys: the pack is registry-managed on desktop installs and volume-mounted
-  on Modal. Never leave versioned or backup `.js`/`.py` copies in the tree —
-  ComfyUI loads every file under `web/`, and orphans register extensions twice.
+  on Modal at `symbiotica-comfy-custom-nodes:symbiotica/`. `./push.sh` uploads
+  `py/` and `web/` there and removes remote files the tree no longer has; the
+  editor syncs that Volume after any ComfyUI Manager request, so a push lands
+  in a running editor once Manager is opened. Cut a registry release
+  (version bump + CHANGELOG + `gh release create`, which triggers
+  `publish_action.yml`) only when asked or for a non-Modal install. Never
+  leave versioned or backup `.js`/`.py` copies in the tree — ComfyUI loads
+  every file under `web/`, and orphans register extensions twice.
+- Vocabulary he insists on for the Recipes node: a **project** is the file
+  (one per game, `imperia-bakery`, resolved from the open workflow), a
+  **recipe** is one asset type in it (`appliance-1x2`), **shared** is what
+  every recipe takes. Buttons are two words naming what they act on
+  (`new project`, `capture recipe`). Node inputs are Comfy widgets, wirable,
+  never DOM fields, and never the same thing twice.
