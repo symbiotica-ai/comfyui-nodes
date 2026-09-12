@@ -306,3 +306,39 @@ test("asset focus's category_recipe output is the picked label, and category the
     focus.widgets[0].value = "All";
     assert.equal(resolveText(graphFor(3), target(3), "recipe"), null);
 });
+
+import { liveSlots, retable } from "../../web/js/recipes.js";
+
+const canvas = () => ({ nodes: [
+    { title: "recipe:render", isSubgraphNode: () => true,
+      inputs: [{ name: "lora_name", widget: { name: "lora_name" }, link: null },
+               { name: "seed", widget: { name: "seed" }, link: 3 }],
+      widgets: [{ name: "lora_name", value: "x.safetensors" }, { name: "seed", value: 1 }] },
+    { title: "recipe:pre_flip?", mode: 4, widgets: [] },
+    { title: "recipe:control_image", widgets: [{ name: "image", value: "a.png" }, { name: "upload", type: "button" }] },
+    { title: "recipe:grid", widgets: [{ name: "columns", value: 2 }, { name: "rows", value: 1 }] },
+    { title: "Load Image", widgets: [{ name: "image", value: "b.png" }] },
+] });
+
+test("the canvas describes its own slots the way the saved template does, in key order", () => {
+    assert.deepEqual(liveSlots(canvas()), [
+        { key: "control_image", kind: "scalar", default: "a.png", widgets: 1 },
+        { key: "grid", kind: "scalar", default: 2, widgets: 2 },
+        { key: "pre_flip", kind: "toggle", default: false, widgets: 0 },
+        { key: "render", kind: "dict", default: { lora_name: "x.safetensors" }, widgets: 2 },
+    ]);
+    assert.deepEqual(liveSlots({ nodes: [] }), []);
+});
+
+test("re-tabling on a slot change keeps unsaved cells, adds the new slot and strikes the gone one", () => {
+    const r = project();
+    const table = projectToTable(r, slots);
+    table.rows.find((row) => row.key === "strength").cells.appliance1x1 = "0.9";
+    const renamed = slots.filter((s) => s.key !== "control_image")
+        .concat([{ key: "controlnet", kind: "scalar", default: "floor.png", widgets: 1 }]);
+    const next = retable(r, table, slots, renamed);
+    const keys = next.rows.map((row) => `${row.key}${row.orphan ? "!" : ""}`);
+    assert.deepEqual(keys, ["grid", "strength", "pre_flip", "render", "controlnet", "control_image!"]);
+    assert.equal(next.rows.find((row) => row.key === "strength").cells.appliance1x1, "0.9");
+    assert.equal(next.rows.find((row) => row.key === "control_image").cells.appliance1x1, "a.png");
+});

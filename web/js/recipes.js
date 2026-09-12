@@ -307,6 +307,40 @@ function liveSlotValues(graph) {
     return values;
 }
 
+// The slots the open canvas carries, in the shape the server describes a
+// saved template's: a rename, an added or a deleted recipe: node shows at
+// once instead of after the workflow is saved and the project reopened.
+export function liveSlots(graph) {
+    const out = {};
+    for (const node of graph?.nodes ?? []) {
+        const title = String(node.title ?? "");
+        if (!title.startsWith("recipe:")) continue;
+        const key = title.slice("recipe:".length).replace(/\?\s*$/, "").trim();
+        if (!key || key in out) continue;
+        const widgets = (node.widgets ?? []).filter((w) => w.type !== "button");
+        if (title.trimEnd().endsWith("?")) {
+            out[key] = { key, kind: "toggle", default: node.mode === 0, widgets: widgets.length };
+        } else if (node.isSubgraphNode?.()) {
+            const promoted = {};
+            for (const inp of node.inputs ?? []) {
+                if (!inp.widget || inp.link != null) continue;
+                const name = inp.widget.name ?? inp.name;
+                const widget = widgets.find((w) => w.name === name);
+                if (widget) promoted[name] = widget.value;
+            }
+            out[key] = { key, kind: "dict", default: promoted, widgets: widgets.length };
+        } else {
+            out[key] = { key, kind: "scalar", default: widgets[0]?.value ?? null, widgets: widgets.length };
+        }
+    }
+    return Object.keys(out).sort().map((key) => out[key]);
+}
+
+// The table again under a changed slot list, the edits in progress kept.
+export function retable(project, table, slots, nextSlots) {
+    return projectToTable(tableToProject(project, table, slots), nextSlots);
+}
+
 // Write captured values into one column. A recipe takes only what differs
 // from shared, so a later shared edit still reaches it; shared takes
 // everything.
@@ -478,6 +512,7 @@ function recipePanel(node) {
             state.slots = slots;
             state.table = projectToTable(project, slots);
             state.dirty = false;
+            slotSig = null;
             expanded.clear();
             render();
         } catch (err) {
@@ -560,6 +595,7 @@ function recipePanel(node) {
             state.slots = slots;
             state.table = projectToTable(project, slots);
             state.dirty = false;
+            slotSig = null;
             expanded.clear();
             expanded.add(SHARED);
             resolvedFor = template;
@@ -643,10 +679,31 @@ function recipePanel(node) {
         }
     }
 
+    // The slot list follows the canvas; the saved template's stands in only
+    // while the canvas has no recipe: nodes (or a cell cannot be parsed).
+    let slotSig = null;
+    function syncSlots() {
+        if (!state.table) return;
+        const live = liveSlots(liveGraph());
+        if (!live.length) return;
+        const sig = JSON.stringify(live);
+        if (sig === slotSig) return;
+        slotSig = sig;
+        if (sig === JSON.stringify(state.slots)) return;
+        try {
+            state.table = retable(state.project, state.table, state.slots, live);
+        } catch {
+            return;
+        }
+        state.slots = live;
+        render();
+    }
+
     node._symAuto = auto;
     const onDrawForeground = node.onDrawForeground;
     node.onDrawForeground = function () {
         resolveProject();
+        syncSlots();
         autoTick();
         return onDrawForeground?.apply(this, arguments);
     };
