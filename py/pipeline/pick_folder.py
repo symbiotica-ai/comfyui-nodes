@@ -1,4 +1,4 @@
-# ABOUTME: The Pick node's folder listing — the images already on disk for one
+# ABOUTME: A folder's listing — the images already on disk for one
 # ABOUTME: asset, numbered so they can be ticked, and the ticked ones copied out.
 from __future__ import annotations
 

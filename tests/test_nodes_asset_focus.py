@@ -129,7 +129,7 @@ class TestRefusals:
             run(nodes_mod, order=ORDER, category="Wallpaper")
 
     def test_no_order_says_what_to_wire(self, nodes_mod):
-        with pytest.raises(ValueError, match="wire an Order Specs"):
+        with pytest.raises(ValueError, match="wire an(other)? Asset Focus"):
             run(nodes_mod, order=None)
 
 
@@ -369,12 +369,12 @@ class TestItMakesItsOwnOrder:
 
 class TestWhenItReReads:
     def test_its_own_order_follows_the_order_file(self, nodes_mod, monkeypatch):
-        """Reading the folder itself means inheriting Order Specs' change
-        check — the .xlsx moves without the graph moving."""
+        """Reading the folder itself means caching on the ORDER FILE — the
+        .xlsx moves without the graph moving."""
         monkeypatch.setattr(
-            nodes_mod.SymbioticaOrderSpecs, "fingerprint_inputs",
-            classmethod(lambda cls, project_path="", month="", feature="":
-                        f"specs:{project_path}:{month}:{feature}"))
+            nodes_mod, "_order_fingerprint",
+            lambda project_path="", month="", feature="":
+                f"specs:{project_path}:{month}:{feature}")
         assert nodes_mod.SymbioticaAssetFocus.fingerprint_inputs(
             project_path="/p", month="October", feature="Mini 3") \
             == "specs:/p:October:Mini 3"

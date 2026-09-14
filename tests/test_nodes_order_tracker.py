@@ -130,7 +130,7 @@ class TestTheBoard:
     def test_no_order_says_what_to_wire(self, nodes_mod):
         nodes_mod.SymbioticaOrderTracker.hidden = types.SimpleNamespace(
             unique_id="7")
-        with pytest.raises(ValueError, match="wire an Order Specs"):
+        with pytest.raises(ValueError, match="wire an(other)? Asset Focus"):
             nodes_mod.SymbioticaOrderTracker.execute(order=None)
 
 

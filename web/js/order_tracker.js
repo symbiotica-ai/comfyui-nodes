@@ -157,7 +157,7 @@ function trackerPanel(node) {
             list.appendChild(emptyState(
                 node.inputs?.find((i) => i.name === "order")?.link != null
                     ? "queue this node once to read the board"
-                    : "wire an Order Specs (or an Asset Focus) into order"));
+                    : "wire an Asset Focus's event_order into order"));
             refit();
             return;
         }

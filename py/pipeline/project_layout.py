@@ -37,7 +37,7 @@ def _find_subdir(project_path: str, names: tuple[str, ...]) -> str | None:
 def project_root_of(path: str, max_up: int = 6) -> str:
     """The client project folder a library path sits under, or "".
 
-    The Reference Browser is handed a folder somewhere inside
+    A reference browse is handed a folder somewhere inside
     `<project>/reference-assets/…` (often several levels down — Minis/Mini 01/
     Food). Walking up to the folder that HAS an orders/ or reference-assets/
     child puts its saved templates in the same `<project>/templates/` the order

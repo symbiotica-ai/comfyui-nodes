@@ -101,8 +101,8 @@ test("the assets appear from the wired source, with no run at all", async () => 
     // Nothing downstream is wired when the node is first dropped, so waiting
     // for a run means waiting forever.
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3 — Franken-Feast" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3 — Franken-Feast" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Frankencrisps", category: "Food - 3 stages" },
         { assetName: "Bunting", category: "Decoration" },
@@ -125,8 +125,8 @@ test("changing the feature upstream re-lists without touching this node", async 
     // categories". LiteGraph has no event for "a widget upstream changed", so
     // the source announces it and every order reader decides if it cares.
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 1" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 1" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [
         { feature: "Mini 1", assets: [
             { assetName: "Skull Rose Cupcake", category: "Food - 3 stages" }] },
@@ -153,8 +153,8 @@ test("a run's list does not survive the feature changing under it", async () => 
     // What a run reported wins over what the source published, so leaving it
     // in place shows the PREVIOUS event's assets and emits them too.
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Bunting", category: "Decoration" }] }];
     const node = await create("SymbioticaAssetFocus",
@@ -177,8 +177,8 @@ test("a category the new feature does not have falls back to All", async () => {
     // Narrowing to nothing reads as "this node is broken" rather than as
     // "Decoration is not in this feature".
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 1" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 1" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [
         { feature: "Mini 1", assets: [
             { assetName: "Bunting", category: "Decoration" }] },
@@ -204,12 +204,12 @@ test("an order change from somewhere else is ignored", async () => {
     // Two orders on one canvas is ordinary; a picker must not re-list because
     // the OTHER one moved.
     reset();
-    const mine = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    mine.comfyClass = "SymbioticaOrderSpecs";
+    const mine = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    mine.comfyClass = "SymbioticaAssetFocus";
     mine._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Bunting", category: "Decoration" }] }];
-    const other = await create("SymbioticaOrderSpecs", { feature: "Mini 9" });
-    other.comfyClass = "SymbioticaOrderSpecs";
+    const other = await create("SymbioticaAssetFocus", { feature: "Mini 9" });
+    other.comfyClass = "SymbioticaAssetFocus";
     const node = await create("SymbioticaAssetFocus",
                               { order: null, category: "", asset: "" });
     await node.onNodeCreated?.call(node);
@@ -227,8 +227,8 @@ test("an order change from somewhere else is ignored", async () => {
 
 test("the category widget narrows the published list too", async () => {
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Frankencrisps", category: "Food - 3 stages" },
         { assetName: "Bunting", category: "Decoration" },
@@ -251,8 +251,8 @@ test("with nothing wired it says what to wire", async () => {
 test("what a run reported wins over what was published", async () => {
     // The run's list is what the node actually chose from, already narrowed.
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Stale", category: "Food" }] }];
     const node = await create("SymbioticaAssetFocus",
@@ -270,8 +270,8 @@ test("the order is followed through a reroute", async () => {
     // The wire commonly passes through one; a node in between that forwards
     // the order is not a reason to stop looking for who produced it.
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Frankencrisps", category: "Food - 3 stages" }] }];
     const hop = await create("Reroute", {});
@@ -289,8 +289,8 @@ test("the order is followed through a reroute", async () => {
 
 test("an ambiguous hop is not guessed at", async () => {
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Frankencrisps", category: "Food" }] }];
     const other = await create("SomethingElse", {});
@@ -309,12 +309,12 @@ test("an ambiguous hop is not guessed at", async () => {
 });
 
 test("a source holding no events yet is asked to parse, once", async () => {
-    // A saved workflow restores Order Specs' month and feature without parsing
+    // A saved workflow restores the month and feature widgets without parsing
     // anything, so the node looks configured while holding no events at all.
     reset();
     let asked = 0;
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [];
     specs._symRefreshOrder = async () => {
         asked += 1;
@@ -339,8 +339,8 @@ test("a source holding no events yet is asked to parse, once", async () => {
 
 test("re-wiring the order lets it ask the new source", async () => {
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [];
     let asked = 0;
     specs._symRefreshOrder = async () => { asked += 1; };
@@ -358,8 +358,8 @@ test("re-wiring the order lets it ask the new source", async () => {
 test("category is a dropdown of what the order actually holds", async () => {
     // A text box you cannot be told what to type is not an input.
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Frankenstein Date", category: "Decoration" },
         { assetName: "Frankencrisps", category: "Food - 3 stages" },
@@ -488,8 +488,8 @@ test("an asset with no category still gets a group", async () => {
 test("each asset shows its reference art", async () => {
     // The names alone do not say which of two similar assets this is.
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symRefsRoot = "/refs/bakery";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Bunting", category: "Decoration",
@@ -521,8 +521,8 @@ test("a run's list gets its thumbnails from the wired source", async () => {
     // The run reports the names it chose from; the source holds the reference
     // files. Whichever list is in use, the fuller record wins.
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symRefsRoot = "/refs/bakery";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Bunting", category: "Decoration",
@@ -572,8 +572,8 @@ test("an asset with no canvas is just its name", async () => {
 
 test("the canvas survives a run reporting only names", async () => {
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Bunting", category: "Decoration", canvas: "128×256" }] }];
     const node = await create("SymbioticaAssetFocus",
@@ -689,9 +689,9 @@ async function reopened(saved) {
     // A saved graph, reopened: onNodeCreated first, then onConfigure applies
     // widgets_values, and only later does the order arrive with the choices.
     reset();
-    const specs = await create("SymbioticaOrderSpecs",
+    const specs = await create("SymbioticaAssetFocus",
                                { feature: "Mini 3 — Franken-Feast" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Frankencrisps", category: "Food - 3 stages" },
         { assetName: "Bunting", category: "Decoration" },
@@ -740,8 +740,8 @@ test("the category dropdown is sorted A-Z under All", async () => {
     // Seventeen categories in the order the spreadsheet lists them is a list
     // you have to scan every time.
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Bunting", category: "Wallpaper" },
         { assetName: "Oven", category: "Appliance" },
@@ -761,8 +761,8 @@ test("the category dropdown is sorted A-Z under All", async () => {
 
 test("the category dropdown splits a category by its canvas in tiles", async () => {
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     specs._symEvents = [{ feature: "Mini 3", assets: [
         { assetName: "Short Oven", category: "Appliance", canvas: "128x128" },
         { assetName: "Tall Oven", category: "Appliance", canvas: "128x256" },

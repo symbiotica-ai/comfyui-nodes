@@ -15,28 +15,6 @@ pip install -r symbiotica/requirements.txt
 
 ## What's in the pack
 
-### Agents (LLM)
-Stateless agents you wire into workflows. Personality (SOUL), instructions (CLAUDE), skills, and a router across providers.
-
-- `Symbiotica Agent Settings` — load agent definition from disk
-- `Symbiotica Agent` — run the agent against a prompt or image
-- `Symbiotica Skills` — toggle which skills the agent has access to
-- `NS LLM Chat` — single-shot chat completion
-- `NS LLM Model Selector` — central model picker for routing
-- `NS Prompt Tuner Load` / `NS Prompt Tuner Save` — self-improving system-prompt loop; each queue run refines the prompt against a design reference (see `docs/prompt-tuner.md`)
-
-Supports Claude, Gemini, GPT, Grok.
-
-### Image generation (Wavespeed)
-Wrappers around Wavespeed's hosted endpoints.
-
-- **Flux** — Kontext (Dev/Pro/Max), ControlNet Union Pro 2, Image Upscaler
-- **Nano Banana** — text-to-image, edit, fast variants, Pro (text-to-image / edit / multi / ultra), Nano Banana 2 (text-to-image, edit, fast)
-- **Qwen** — text-to-image (+ LoRA), edit (+ LoRA), edit-plus (+ LoRA)
-- **SeedDream V4** — text-to-image, edit, sequential variants
-- **Wan 2.5** — text-to-image, image edit
-- **Runway** — upscale
-
 ### Text (Anthropic Claude)
 - **Claude (Symbiotica)** — a prompt and up to 20 reference images become an
   answer. Claude draws nothing; this belongs in a graph as a prompt author, a
@@ -81,67 +59,6 @@ Wrappers around Wavespeed's hosted endpoints.
   wins, and a gateway URL missing either its token or its studio is an error
   rather than a quiet fall back to a personal or shared key.
 
-### Video generation (ByteDance Seedance)
-- **Seedance Reference to Video (Symbiotica)** — reference images, clips and
-  audio become a video on Seedance 2.5, 2.0, 2.0 Fast or 2.0 Mini, billed
-  through Cloudflare AI Gateway rather than to a ComfyUI account.
-
-  Each model offers only the slots it can carry, because the four differ and a
-  shared input list could only offer the union: 2.5 takes thirty reference
-  images, ten clips and ten audio tracks and runs to 30s; the 2.0 family takes
-  nine images, three clips and three audio tracks and stops at 15s; 2.0 reaches
-  4k and 2.5 reaches 1080p where Fast and Mini stop at 720p. Enabling
-  `video_editing` on 2.5 hands the length and shape back to the source clip.
-
-  **Two routes, and the node prefers the better one.** Where the studio gateway
-  is configured the call goes through AI Gateway's **fal** passthrough, which is
-  the same arm the Gemini and Claude nodes take — the studio's own stored key
-  pays, selected by alias, and the spend stays inside the BYOK boundary. This is
-  the route the node is built for and the one that carries the counts above.
-
-  Where only the Cloudflare **model catalog** is configured the node falls back
-  to it, and it is a poorer route: a shared key pays, reference clips cannot
-  ride at all, and the 2.0 family is cut to four images with no audio. The
-  sockets do not change — a graph is shared between boxes — so what the fall
-  back cannot carry is refused by name at render time rather than hidden.
-
-  `watermark` is offered because ComfyUI's node offers it, and the fal route has
-  no such parameter — asked for there it is refused rather than dropped, so the
-  same graph never renders watermarked on one box and clean on another.
-
-  `auto_downscale` and `auto_upscale` do what they do on ComfyUI's node. A
-  reference clip has a pixel budget set by the model and the chosen resolution,
-  and an ordinary 1920x1080 clip is over it on every 2.0 model — 2,073,600
-  pixels against a ceiling of 927,408. With downscaling on such a clip is
-  re-encoded to fit, keeping its aspect ratio; with it off the clip goes as it
-  is and the provider refuses it. A clip already inside its budget is not
-  re-encoded at all. Upscaling is off, because enlarging a small clip adds no
-  detail it did not have.
-
-  Two things ComfyUI's node has that this one does not: `output_format`, because
-  fal writes mp4 and offers no such field; and `asset_1..30`, because the
-  digital-character library is reachable only through ByteDance's own API.
-  Reference images are resampled to 2048px JPEG before sending, where ComfyUI
-  sends up to 6000px — the difference is invisible at 720p and shows on 2.0 at
-  4k.
-
-  References ride inside the request as base64, which fal accepts on every
-  reference field. The set is refused above 8 MB, because Cloudflare stores no
-  gateway log above 10 MB and a call with no log is spend that reaches no
-  cockpit row. A few seconds of 720p footage is most of that budget, so the clip
-  slots are more than this ceiling will let you fill.
-
-  Renders take minutes — four seconds of 480p on 2.5 measured at 221s
-  synchronously — so the fal route submits to fal's queue and polls, which is
-  what fal's own clients do for these models. Cancel stops the wait. The
-  Cloudflare catalog route has no queue and holds the connection open instead.
-
-### Video generation (Wavespeed)
-- **Sora 2** — text-to-video, image-to-video, Pro variants
-- **Veo 3.1** — text-to-video, image-to-video, reference-to-video, fast variants
-- **Wan 2.2 / 2.5** — i2v 720p, animate, image-to-video (+ fast), text-to-video (+ fast)
-- **InfiniteTalk** — single and multi-character
-
 ### Audio & transcription
 - `NS Whisper Transcribe` — local faster-whisper transcription with optional initial-prompt biasing
 - `NS Google Transcribe` — Google Speech-to-Text API
@@ -171,13 +88,11 @@ Wrappers around Wavespeed's hosted endpoints.
 - `Product Image Sort` — orders a gallery batch by category
 
 ### Workflow utilities
-- `NS Workflow Model Downloader` — pulls models referenced in a workflow JSON
-- `NS Prompt List` — multi-prompt iteration
 - `NS Qwen Resolution` — common Qwen-friendly resolutions
-- `Symbiotica Seed` — reproducible seeds with optional auto-increment
 - `Load Text File` — one text file as a STRING
 - `Load Text List` — one text file's blank-line-separated blocks as a list,
-  emitting the same `(prompts, names, count)` contract as `NS Prompt List`
+  emitting `(prompts, names, count)`
+- `Split Prompts` — one text block split into separate prompt strings
 
 ### Modules (linked subgraphs and groups)
 - `Module` (Symbiotica/Modules) — a subgraph or a group, edited once, updated
@@ -281,42 +196,38 @@ Wrappers around Wavespeed's hosted endpoints.
 
 ## Order pipeline (Symbiotica Hub port)
 
-Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
+What is left of the hub's order flow, once the reading, packing and template
+nodes came out: one node reads the order and picks the asset, and the rest
+watch or edit what that asset needs.
 
-- **Symbiotica Order Read** — parses a monthly order `.xlsx` (Feature / Asset
-  Name / Canvas / Prompt columns) plus a folder of reference images
-  (`AssetName.png`, `AssetName_2.png`, ...) into events. A blank `month` means
-  "whichever this project has" and reads the first one; a NAMED month the
-  project holds no order for raises, rather than reading the first one under
-  the name that was asked for. The same split applies to `feature` on Order
-  Specs and the Template Editor — over the API a substituted answer renders,
-  bills, and reports success indistinguishably from the one requested.
-- **Symbiotica Event Specs** — picks one event (feature) and emits its spec:
-  template groups by category + canvas with per-asset prompts and refs.
-- **Symbiotica Template Builder** — composes a template sheet: either
-  `prefill_from_specs` (reference strips packed onto the sheet — single-ref
-  assets get a flipped pair, multi-ref assets one cell per stage) or
-  `catalog_grid` (existing game art matched by category). Sheets save to
-  `output/templates/<name>.png` with a JSON region sidecar, and the bundle
-  output feeds the Template Prompt node.
-- **Symbiotica Template Prompt** — turns the bundle's regions into an edit
-  prompt for the Nano Banana edit nodes.
-- **Symbiotica Regional Prompt** — turns the template bundle into a
-  layout-aware edit prompt (ERPK Regional Prompt Builder format): numbered
-  `box_2d` placements per region, base sheet as image 1, per-region reference
-  images (task-sheet crops by default) numbered from 2. Outputs
-  `ERPK_IMAGE_REFS` for the ERPK Gemini edit nodes plus a plain IMAGE refs
-  batch, pixel bboxes, and per-region masks.
-- **Symbiotica Template Editor** — the full template editor / texture packer
-  as an in-Comfy app: "Open template editor" launches a full-screen editor
-  (hub layout) with a zoom/pan canvas, draggable/resizable numbered regions,
-  prefill-from-specs, a project-assets tree with per-region base assignment,
-  per-region task references, kind/description editing, full pack settings
-  (model presets, MaxRects/Shelf/Grid, distribute-by-folder, snap, smart
-  guides, background), scene prompt, and save/load of named templates
-  (stored under `output/templates/`). The node executes from the saved
-  template: base sheet + task-reference sheet sharing one region layout —
-  wire both into an img2img edit node.
+- **Symbiotica Asset Focus** — the whole selection in one node. Project folder,
+  month, event, category and asset are picked here — **📁 Read folder** fills
+  the month and event dropdowns without a queue — and the asset's record comes
+  out on separate outputs: name, category, client prompt, save path, the
+  category plus its canvas in tiles, that canvas in pixels, and the client
+  reference you clicked (image, mask, filename). `order` is the incoming order
+  narrowed to the focused asset; `event_order` is the whole event, unnarrowed,
+  for the Order Tracker. Pick nothing and it emits every asset in the event, so
+  the same node covers the one-asset loop and a run over everything.
+- **Symbiotica Order Tracker** — the order as a board: one slot per asset it
+  asks for, filled with the approved render or left empty, with a count and a
+  percent for the event. It is a picker pointed at every asset at once — the
+  same folders, the same `names` tag, the same thumbnails — so nothing is
+  tracked that is not already on disk and there is no bookkeeping to drift.
+  Wire an Asset Focus's `event_order` into `order`; `names` defaults to
+  `_final`, and any other save prefix asks the board a different question
+  ("which assets have a `_base` at all") without a code change. Queue it on its
+  own to re-read the folders.
+- **Symbiotica Prompt Block** — one block of the prompt book, edited on the
+  canvas: a shared rule (`_rules/02-inputs.md`), an image-model block
+  (`_image/01-image-model.md`) or an asset type (`Chair.md`). Several side by
+  side ARE the book, and a save lands in `<project>/<subfolder>/` where every
+  queue reads it. Chain block to block through `project_path` so one wire feeds
+  the row; wire Asset Focus's `category` in and the node becomes a window onto
+  whatever `_recipes/<category>.json` names in `slot` — switch asset type and
+  the block on screen follows, with nothing to pick. A block file may hold up
+  to three versions, split by `<!-- version: name -->` markers; the top of the
+  file stays the default.
 - **Symbiotica Studio Library** — pick a file or folder from the active
   studio's asset library; outputs its absolute sandbox path and whether it is
   a folder. The browser refreshes the studio volume when it opens and whenever
@@ -328,128 +239,12 @@ Recreates the hub's Order Read → Specs → Template flow as ComfyUI nodes:
   `embeddings`, `diffusion_models`, `text_encoders`) because models are picked
   in the model loader node, not by path; it says how many it left out and
   `show` lists them anyway.
-- **Symbiotica Refs Folder** — load every image in one folder, in filename
-  order, from an absolute path and nothing else. No browsing and no picking, so
-  a dispatcher can bind the path and run the graph headless over the API.
-  Outputs the images, their filenames index-aligned, and a count; `max_count`
-  caps how many come back. A file that will not decode is skipped, but a
-  missing folder — or one where nothing decodes — raises rather than handing
-  the graph zero references in silence.
-- **Symbiotica Order Assets** — emits one item per asset in a feature, with
-  names, categories and save paths index-aligned, so ComfyUI's own list
-  fan-out runs a single render lane once per asset instead of eight duplicated
-  groups.
-- **Symbiotica Save Render** — files each result under
-  month/feature/category/asset, and declares what it wrote as the run's output
-  images. An API caller reads a run's renders from `/history`, and only what a
-  node declares gets there — a save that declares nothing finishes green with
-  nothing to show for it.
-- **Symbiotica Dataset Reference** — picks a reference per category, seeded per
-  `(seed, category)` so adding a type does not reshuffle a pick already
-  approved. Also reports `cell_boxes`: where each asset sits inside its type's
-  packed sheet, so a render of that sheet can be cut back up on the grid it was
-  packed to — and `save_path`, the type folder the reference was drawn from.
-  Wire that into a Pick node's `save_path` to see every reference of that type
-  in a grid and choose by eye instead of by seed. Wire Asset Focus's `order`
-  output in and the `categories` wire is unneeded.
-- **Symbiotica Slice Cells** — cuts a generated sheet into one image per asset
-  on those boxes, each named by its role, so an edit addresses "serving" rather
-  than "the third one" and a run that switches asset type re-cuts itself with
-  no rewiring.
-- **Symbiotica Asset Focus** — one asset out of the order, chosen on the
-  node, with its whole record on separate outputs: name, category, client
-  prompt, save path — and `order`, the incoming order narrowed to each focused
-  asset. That one wire feeds Dataset Reference, Asset Refs and Prompt Recipe
-  everything the string outputs carry, so the strings are left for core nodes
-  (a save's filename_prefix, string joins). Order Assets is
-  still the node for rendering a whole event in one press; this is the one for
-  iterating on one asset.
-- **Symbiotica Pick** — the triage step between two stages: every image wired
-  into it is filed in that node's own buffer and drawn as a thumbnail on the
-  node body, so three separate runs of the same generator stack up as three
-  candidates instead of overwriting each other. Tick the ones worth keeping and
-  only those leave the node. `images` is optional on purpose — once the picks
-  are made the generator branch can be muted and the node still serves them
-  from disk, so queueing the edit stage does not re-fire a paid render. Wire
-  the asset and category being worked on and candidates are tagged with it; the
-  node then opens on that asset rather than on everything ever generated. Drop
-  one after each stage — generate → pick → edit → pick → background removal.
-  `names` narrows the listing to exactly those filenames — wire Asset Refs'
-  `ref_names` to tick only the references the client sent for this asset — and
-  resting on a thumbnail floats it big beside the grid, so a render can be
-  judged without opening it in a tab.
-  To review the EDITS of one approval rather than the approval itself, wire this
-  node's `edit_save_path` into the Save Image that writes them and set the next
-  picker's `show` to `edits`. `edit_save_path` is `save_path` marked with
-  the render that was picked, so each edit records what it came from in its own
-  name — which is the only place that link can live, since an edit is named by
-  the save node long after the tick was made and can never appear in a set of
-  ticks. A file written without the mark simply has no parent, so nothing
-  already on disk needs renaming. The edits land wherever `save_path` points, so
-  give the picker a `stage` to keep them in their own step folder rather than
-  beside the renders they came from.
-  Approving a tile also writes it: `_final_from.<render>_00001_.png` lands beside
-  the render, and un-approving deletes it. A tick lives on the `selection`
-  widget — workflow JSON, which nothing else on the canvas can read — so an
-  approval that another node has to see has to be a file. `_final` is a stage
-  like `_base`, so `names="_final"` lists exactly the approved renders through
-  the machinery that was already here, and the render itself is copied rather
-  than renamed: a rename would break the tick pointing at it and orphan any edit
-  whose name carries `_from.<it>`.
-- **Symbiotica Order Tracker** — the order as a board: one slot per asset it
-  asks for, filled with the approved render or left empty, with a count and a
-  percent for the event. It is a Pick node pointed at every asset at once —
-  the same folders, the same `names` tag, the same thumbnails — so nothing is
-  tracked that is not already on disk and there is no bookkeeping to drift.
-  Wire an Order Specs or an Asset Focus into `order`; `names` defaults to
-  `_final`, and any other save prefix asks the board a different question
-  ("which assets have a `_base` at all") without a code change. Queue it on its
-  own to re-read the folders.
-- **Symbiotica Asset Refs** — the client's own reference art for one asset, in
-  the order the order sheet pairs it, so the index that picks a cell picks the
-  reference belonging to it. References with transparency are composited onto a
-  chosen background rather than flattened, and their alpha comes out as `masks`.
-  It also emits `folder`, the references root they were read from, which a Pick
-  node takes as its `save_path` to tick the client's references by eye.
-- **Symbiotica Client Examples** — every client brief of one type in a feature,
-  numbered, as ONE string, so an LLM downstream runs once and sees the whole
-  set rather than a brief at a time. `limit` truncates and the header says so,
-  because a text showing three of eight examples that does not admit it reads
-  as the whole population.
-- **Symbiotica Reconstruct Cells** — the inverse of Slice Cells: edited cells go
-  back onto the grid they were cut from, on the same `cell_boxes`, so a sheet
-  survives a per-asset edit intact. The canvas is measured from the boxes, which
-  record the grid rather than the sheet, so the outer margin is recovered from
-  the centring rather than lost.
-- **Symbiotica Compare Sheet** — a row of references over a row of results in one
-  image, so an asset and the art it was drawn from can be read in a glance
-  instead of flipped between. Cell size, spacing and background are settable, and
-  a reference can be drawn smaller than its cell.
-- **Symbiotica Category Prompts** — composes a category's architect prompt from
-  the project's shared `prompts/_rules/*.md` (filename order) followed by
-  `prompts/<Category>.md`, which stays last because the tail of a prompt
-  carries the most weight.
-- **Symbiotica Prompt Book** — reads and writes those prompt blocks from the
-  canvas; every render records which blocks composed its prompt, per block
-  rather than one hash of the whole, so a lighting change is distinguishable
-  from a negatives change. A block file may hold up to three versions, split by
-  `<!-- version: name -->` markers; the top of the file stays the default.
-- **Symbiotica Prompt Recipe** — composes the architect (`system_prompt`) and
-  image (`image_prompt`) prompts in one node, with a version slot (1–3) per
-  rules / image / type block, so two phrasings of the same block can be
-  compared without editing the file between runs. A slot with no such version
-  falls back to the top of its file.
-
-The web extension adds an events browser on Order Read and populates the
-feature/group dropdowns after the first queue. On a fully cached run the
-browser panel is not re-pushed — change any input (or re-parse) to
-repopulate it after a page reload.
 
 ## Hypereel (streamer-reel pipeline)
 
 The Hypereel product ported node for node from the Symbiotica platform: find viral
-moments in gameplay, cut them, animate a consistent streamer facecam (Seedance 2.0
-partner node), and stack facecam over real gameplay into a vertical reel.
+moments in gameplay, cut them, animate a consistent streamer facecam, and stack
+facecam over real gameplay into a vertical reel.
 
 - `Hypereel Product Scrape (URL to references)` — scrapes a product, app, or
   app-store page into a logo + screenshots (IMAGE outputs) and a product summary for
@@ -506,20 +301,17 @@ Two ways, checked in this order (after any per-node `api_key` widget):
 | Variable | Provider |
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude, including the Claude node's direct arm |
-| `OPENAI_API_KEY` | GPT |
 | `GEMINI_API_KEY` | Gemini |
 | `XAI_API_KEY` | Grok |
-| `WAVESPEED_API_KEY` | Wavespeed (image + video) |
 | `ELEVENLABS_API_KEY` | ElevenLabs (sound effects) |
 | `SUBMAGIC_API_KEY` | Submagic (captions) |
-| `FAL_KEY` | fal.ai, for the Seedance node's direct arm (`FAL_API_KEY` also accepted) |
 | `GOOGLE_API_KEY` | Google Speech-to-Text, and the Gemini image node's second choice after `GEMINI_API_KEY` |
 
 Per-node `api_key` widget overrides the env var.
 
-**The Claude, Gemini and Seedance nodes are the exception.** On a box that
-carries these, every one of their calls goes through the gateway and no
-personal key is consulted:
+**The Claude and Gemini nodes are the exception.** On a box that carries
+these, every one of their calls goes through the gateway and no personal key
+is consulted:
 
 | Variable | Content |
 |---|---|
@@ -552,41 +344,8 @@ the gateway at all:
 
 Runs from here are tagged `surface: canvas` rather than `order`, so canvas
 spend does not join the order totals under a label that reads correctly. The
-per-provider keys in **Settings → Symbiotica → API Keys** — `FAL_KEY` among
-them — are ignored wherever a gateway route is configured.
-
-The Seedance node prefers fal, which is a passthrough provider like the two
-above and needs nothing beyond `SYMBIOTICA_AIG_BASE`, `SYMBIOTICA_AIG_TOKEN` and
-`ORDER_STUDIO` — the studio's fal key is stored in the gateway as BYOK and
-injected there. Its direct arm takes `FAL_KEY` or `FAL_API_KEY`.
-
-Its fall back is Cloudflare's own model catalog, reached at the account's
-`/ai/run` rather than through a provider path, because ByteDance has no
-passthrough slug of its own:
-
-| Variable | Content |
-|---|---|
-| `SYMBIOTICA_CF_ACCOUNT_ID` | The Cloudflare account tag whose `/ai/run` is called. |
-| `SYMBIOTICA_CF_API_TOKEN` | A Cloudflare API token, sent as `Authorization: Bearer`. **This is not the AI Gateway token and is a much broader credential** — it authenticates to the Cloudflare account rather than to one model vendor. Scope it to the minimum the catalog needs. |
-| `SYMBIOTICA_AIG_GATEWAY_ID` | Which gateway to route through, sent as `cf-aig-gateway-id`. Without it the call takes the account's default gateway, where its log lands somewhere nobody reads and the studio tag with it. |
-
-`ORDER_STUDIO` and `SYMBIOTICA_AIG_SURFACE` mean the same thing on this path and
-are equally required. All three of the variables above are required together;
-there is no personal-key fall back, because a catalog model has no provider
-endpoint of its own to call.
-
-**Spend on this path is not separable by studio.** Cloudflare consults only the
-`default` BYOK alias on its own AI endpoints, so whichever single ByteDance key
-is stored there pays for every studio. The `cf-aig-metadata` tag still rides on
-every call, so spend remains *attributable* in analytics — it is the paying key
-that is shared, not the accounting. That is a narrower gap than it sounds, but
-it is a real one, and it does not apply to the Gemini or Claude nodes.
-
-Every reply names the key that paid, and until a ByteDance key is stored under
-the gateway's `default` alias the answer is `keySource: Unified` — Cloudflare's
-own balance, outside the BYOK boundary entirely. The node logs a warning saying
-so on any render billed that way, because nothing else in the system would
-mention it and the render itself looks perfect.
+per-provider keys in **Settings → Symbiotica → API Keys** are ignored wherever
+a gateway route is configured.
 
 Setting the base without the token is an error, not a fall back: a call that
 succeeds on somebody's personal key while its spend leaves the gateway is a
@@ -631,23 +390,6 @@ Absolute paths, separated by commas, semicolons or newlines. Without this a
 project outside those folders browses empty: a request cannot make a folder
 readable by naming it, or asking to browse a folder would be what grants access
 to it.
-
-### Agent and skill directories
-
-The Agent nodes scan disk for agent and skill definitions.
-
-```ini
-# config.ini in the package root
-[agents]
-agents_dir = /path/to/agents
-
-[skills]
-skills_dir = /path/to/skills
-```
-
-Or environment variables `SYMBIOTICA_AGENTS_DIR` and `SYMBIOTICA_SKILLS_DIR`. The `agents_path` / `skills_path` widgets on the nodes also override at the node level.
-
-Agents repo: [symbiotica-ai/agents](https://github.com/symbiotica-ai/agents). Skills repo: [symbiotica-ai/skills](https://github.com/symbiotica-ai/skills).
 
 ## Heads up
 

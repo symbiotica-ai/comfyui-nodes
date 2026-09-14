@@ -39,28 +39,6 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-class TestListAssets:
-    def test_a_directory_outside_every_root_is_refused(self, tmp_path, monkeypatch):
-        routes = _load_routes(monkeypatch)
-        monkeypatch.setattr(routes, "declared_roots", lambda: [])
-        stray = tmp_path / "somebody-elses-tree"
-        stray.mkdir()
-        (stray / "a.png").write_bytes(b"x")
-
-        res = _run(routes.list_assets(_Req(dir=str(stray))))
-        assert res["status"] == 403, "scanned a directory outside every declared root"
-
-    def test_a_directory_inside_a_root_is_scanned(self, tmp_path, monkeypatch):
-        routes = _load_routes(monkeypatch)
-        trusted = tmp_path / "trusted"
-        (trusted / "refs").mkdir(parents=True)
-        (trusted / "refs" / "a.png").write_bytes(b"x")
-        monkeypatch.setattr(routes, "declared_roots", lambda: [str(trusted)])
-
-        res = _run(routes.list_assets(_Req(dir=str(trusted / "refs"))))
-        assert res["status"] == 200
-
-
 class TestParseOrder:
     def test_an_order_file_outside_every_root_is_refused(self, tmp_path, monkeypatch):
         # The handler read any absolute path and, for any zip container, parsed

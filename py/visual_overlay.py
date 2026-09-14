@@ -14,9 +14,16 @@ import io
 import requests
 import folder_paths
 
-from .llm_chat import claude_models
-
 from ._bins import FFMPEG, FFPROBE, NODE_BIN, NPX_BIN, NPM_BIN
+
+# The model list, inlined: NS LLM Chat owned it and is gone, and this node is
+# the only thing left that offers a choice of Claude models.
+claude_models = [
+    "claude-fable-5",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-haiku-4-5",
+]
 
 REMOTION_DIR = os.path.join(os.path.dirname(__file__), "..", "remotion")
 REMOTION_BUNDLE = os.path.join(REMOTION_DIR, "bundle")

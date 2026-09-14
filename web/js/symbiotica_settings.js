@@ -5,13 +5,10 @@ import { registerSymbioticaExtension } from "./register.js";
 
 const KEYS = [
     ["ANTHROPIC_API_KEY", "Anthropic (Claude) API key"],
-    ["OPENAI_API_KEY", "OpenAI API key"],
     ["GEMINI_API_KEY", "Google Gemini API key"],
     ["XAI_API_KEY", "xAI (Grok) API key"],
-    ["WAVESPEED_API_KEY", "Wavespeed API key"],
     ["ELEVENLABS_API_KEY", "ElevenLabs API key"],
     ["SUBMAGIC_API_KEY", "Submagic API key"],
-    ["FAL_KEY", "fal.ai API key"],
 ];
 
 // Cloudflare AI Gateway, for a box that has no environment to put it in —

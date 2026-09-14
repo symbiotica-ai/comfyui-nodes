@@ -1,10 +1,9 @@
-# ABOUTME: Tests for a single asset's client references — lookup, order, and
-# ABOUTME: saying plainly whether they line up with the packed sheet's cells.
+# ABOUTME: Tests for a single asset's client references — finding the asset,
+# ABOUTME: the order its files come back in, and compositing them for a render.
 import pytest
 
-from pipeline.asset_refs import (asset_names, find_asset, pairing_note,
+from pipeline.asset_refs import (asset_names, find_asset,
                                  reference_files)
-from pipeline.sheet_cells import cell_boxes
 
 
 def order(tmp_path, assets, refs_root=None, project_path=""):
@@ -64,35 +63,13 @@ def test_a_missing_file_is_named_not_silently_dropped(tmp_path):
 
 
 def test_an_order_with_no_refs_folder_names_the_node_to_re_run(tmp_path):
-    with pytest.raises(ValueError, match="Order Specs"):
+    with pytest.raises(ValueError, match="Asset Focus"):
         reference_files(order(tmp_path, [SPOOKIES], refs_root=""), "Spookies")
 
 
 def test_asset_names_lists_only_named_assets():
     o = {"assets": [SPOOKIES, {"assetName": "  "}, {"assetName": "Chair"}]}
     assert asset_names(o) == ["Spookies", "Chair"]
-
-
-def test_note_confirms_the_pairing_when_counts_match():
-    cells = cell_boxes("food2row", 1024, 1024, 20)
-    note = pairing_note({"assets": [SPOOKIES]}, "Spookies",
-                        SPOOKIES["refFiles"], cells)
-    assert "reference i is role i" in note
-    assert "prep, ready, serving" in note
-
-
-def test_note_warns_loudly_when_counts_disagree():
-    cells = cell_boxes("pair", 1024, 1024, 20)
-    note = pairing_note({"assets": [SPOOKIES]}, "Spookies",
-                        SPOOKIES["refFiles"], cells)
-    assert "do NOT line up" in note
-    assert "3 references but 2 cells" in note
-
-
-def test_note_says_when_the_type_has_no_rule_recorded():
-    note = pairing_note({"assets": [SPOOKIES]}, "Spookies",
-                        SPOOKIES["refFiles"], [])
-    assert "no packing rule recorded" in note
 
 
 # --- transparency -----------------------------------------------------------

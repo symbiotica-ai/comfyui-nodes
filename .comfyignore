@@ -12,7 +12,6 @@ docs/
 .github/
 
 CHANGELOG.md
-config.ini.example
 
 # Preset templates are not distributed.
 py/_hypereel_preset_data.py

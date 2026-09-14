@@ -1,6 +1,7 @@
 # ABOUTME: Tests that only a declared root becomes servable — a request cannot put
 # ABOUTME: its own folder on the allowlist, and an operator can declare extra roots.
 import importlib
+import os
 import sys
 import types
 
@@ -109,3 +110,22 @@ class TestGraphExecutionStillRegisters:
         img = _image(d)
         routes.register_root(str(d))
         assert routes.is_allowed(str(img)) == str(img.resolve())
+
+
+class TestServableIsNotWatched:
+    def test_a_served_root_is_not_a_reference_root(self, monkeypatch, tmp_path):
+        """The two registries answer different questions: what may be served,
+        and what a node's output depends on. A save destination is the first
+        without being the second."""
+        routes = _load_routes(monkeypatch)
+        refs = tmp_path / "refs"
+        saves = tmp_path / "output" / "templates"
+        refs.mkdir()
+        saves.mkdir(parents=True)
+        routes.register_refs_root(str(refs))
+        routes.register_root(str(saves))
+        assert os.path.realpath(str(refs)) in routes.reference_roots()
+        assert os.path.realpath(str(saves)) not in routes.reference_roots()
+        # Both remain servable — narrowing the watch list must not narrow access.
+        assert os.path.realpath(str(refs)) in routes.executed_roots()
+        assert os.path.realpath(str(saves)) in routes.executed_roots()

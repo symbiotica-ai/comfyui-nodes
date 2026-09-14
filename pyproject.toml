@@ -1,7 +1,7 @@
 [project]
 name = "symbiotica"
-description = "All-in-one creative pack for ComfyUI: agent-based LLMs (Claude, Gemini, GPT, Grok), Wavespeed image and video generation (Flux, Nano Banana, Qwen, Sora 2, Veo 3, Wan 2.5, SeedDream, InfiniteTalk), audio and transcription (Whisper, ElevenLabs, Submagic), Remotion-rendered overlays and captions, and video composition utilities."
-version = "2026.9.21"
+description = "Creative pack for ComfyUI: Claude and Gemini image/text nodes routed through Cloudflare AI Gateway, the order pipeline (Asset Focus, Prompt Block, Order Tracker, Studio Library, Recipes), audio and transcription (Whisper, ElevenLabs, Submagic), Remotion-rendered overlays and captions, and video composition utilities."
+version = "2026.9.22"
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
@@ -11,21 +11,10 @@ authors = [
 keywords = [
     "comfyui",
     "comfyui-nodes",
-    "agents",
     "llm",
     "claude",
     "gemini",
-    "gpt",
     "grok",
-    "wavespeed",
-    "flux",
-    "nano-banana",
-    "qwen",
-    "sora",
-    "veo",
-    "wan",
-    "seedream",
-    "infinitetalk",
     "whisper",
     "elevenlabs",
     "remotion",

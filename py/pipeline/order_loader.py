@@ -1,4 +1,4 @@
-# ABOUTME: Runner side of the Order Read node — loads a client order (local xlsx +
+# ABOUTME: Runner side of the order read — loads a client order (local xlsx +
 # ABOUTME: reference-image folder) and emits per-event specs for downstream nodes.
 # Port of symbiotica-hub apps/web/src/lib/flows/order-read.ts.
 from __future__ import annotations

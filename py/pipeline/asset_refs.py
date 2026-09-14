@@ -63,7 +63,7 @@ def find_asset(order, asset_name):
 
     Matched on the name exactly as the order sheet writes it, which is the same
     string every other node in the lane carries, so a name that came out of
-    Order Assets always finds its asset here.
+    Asset Focus always finds its asset here.
     """
     want = str(asset_name or "").strip()
     if not want:
@@ -110,35 +110,10 @@ def reference_files(order, asset_name):
     root = str((order or {}).get("refsRoot", "") or "").strip()
     if not root:
         raise ValueError("this order names no references folder — re-run the "
-                         "Order Specs node that produced it")
+                         "Asset Focus node that produced it")
     paths = [os.path.join(root, n) for n in names]
     missing = [n for n, p in zip(names, paths) if not os.path.isfile(p)]
     if missing:
         raise ValueError(f"reference files missing from {root!r}: "
                          f"{', '.join(missing)}")
     return paths, names
-
-
-def pairing_note(order, asset_name, names, cells):
-    """A one-line account of whether these references line up with the sheet's
-    cells, for the node to show on the canvas.
-
-    Worth saying out loud because the useful case and the broken one look
-    identical downstream: three references against three cells means reference i
-    IS role i and one index drives both, while two against three means the pair
-    an index makes is arbitrary. Nothing here changes the data — a caller that
-    silently paired them would be guessing on the user's behalf.
-    """
-    asset = find_asset(order, asset_name) or {}
-    category = str(asset.get("category", "") or "").strip() or "?"
-    roles = [str(c.get("role", "")) for c in (cells or [])]
-    if roles and len(roles) == len(names):
-        return (f"{asset_name}: {len(names)} references ↔ {len(roles)} cells "
-                f"({category}) — reference i is role i: {', '.join(roles)}")
-    if not roles:
-        return (f"{asset_name}: {len(names)} references ({category}) — no "
-                f"packing rule recorded for this type, so the references do "
-                f"not map to cells")
-    return (f"{asset_name}: {len(names)} references but {len(roles)} cells "
-            f"({category}) — they do NOT line up, so an index picks a "
-            f"different thing in each: {', '.join(roles)}")

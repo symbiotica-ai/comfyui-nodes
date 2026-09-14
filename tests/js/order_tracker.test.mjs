@@ -152,13 +152,13 @@ test("a finished order reads 100%", async () => {
 test("with nothing wired it says what to wire", async () => {
     const node = await trackerNode(null);
     const text = walk(listOf(node)).map((e) => e.textContent).join(" ");
-    assert.match(text, /wire an Order Specs/);
+    assert.match(text, /wire an Asset Focus/);
 });
 
 test("wired but never queued says so", async () => {
     reset();
-    const specs = await create("SymbioticaOrderSpecs", { feature: "Mini 3" });
-    specs.comfyClass = "SymbioticaOrderSpecs";
+    const specs = await create("SymbioticaAssetFocus", { feature: "Mini 3" });
+    specs.comfyClass = "SymbioticaAssetFocus";
     const node = await create("SymbioticaOrderTracker",
                               { order: null, category: "", names: "_final" });
     await node.onNodeCreated?.call(node);

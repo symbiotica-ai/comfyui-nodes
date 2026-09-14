@@ -6,6 +6,45 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.22
+
+**BREAKING — 100 nodes removed.** A workflow holding one of them opens with a
+red missing-node box. The old pack stays on the registry, so pin `2026.9.21`
+to keep a graph that still needs them.
+
+Gone: the whole Wavespeed family (45 nodes, image and video), the agent nodes
+(`Symbiotica Agent`, `Agent Settings`, `Skills`), `NS LLM Chat` and
+`NS LLM Model Selector`, `NS Prompt Tuner Load`/`Save`, `NS Prompt List`,
+`NS Structured Prompt List`, `NS Workflow Model Downloader`, `Symbiotica Seed`,
+`Trellis 2 Image to 3D (fal)`, `Seedance Reference to Video`, and 31 of the 35
+order-pipeline nodes — Order Read, Order Specs, Event Specs, Auto Packer (+
+Settings), Model Preset, Order Assets, Client Examples, Dataset Reference,
+Asset Refs, Compare Sheet, Slice Cells, Reconstruct Cells, Grid Layout,
+Save Render, Refs Folder, Refs Split, Prompts Split, Category Prompts,
+Prompt Book, Prompt Compose, Prompt Recipe, Prompt Enhancer, Regional Prompt,
+Regional Edit, Reference Browser, Template Library, Template Builder,
+Template Editor and Template Prompt.
+
+**What stays, and what changed under it.** `Asset Focus`, `Order Tracker`,
+`Prompt Block`, `Studio Library` and `Recipes` keep their ids, inputs and
+outputs — a workflow built on those five still loads.
+
+- **Asset Focus** now hosts the whole selection on its own. It already carried
+  `project_path`, `month`, `feature` and **📁 Read folder**; with Order Specs
+  gone that is the only way to read an order. Wiring an order in still works —
+  the node it looks for upstream is another Asset Focus's `event_order`.
+- **Order Tracker** takes that same `event_order`. Its "wire an Order Specs"
+  message now names Asset Focus.
+- **Prompt Block**'s `slot` is a visible widget again. The Prompt Recipe's
+  `text_N` output used to set it from the wire; nothing else on the canvas
+  says which slot a block edits.
+- **Settings → Symbiotica → API Keys** drops `WAVESPEED_API_KEY`, `FAL_KEY`
+  and `OPENAI_API_KEY` — nothing in the pack reads them now. The Cloudflare
+  model-catalog route (`SYMBIOTICA_CF_ACCOUNT_ID`, `SYMBIOTICA_CF_API_TOKEN`,
+  `SYMBIOTICA_AIG_GATEWAY_ID`) went with the Seedance node; Claude and Gemini
+  route through provider passthrough and are untouched.
+- `config.ini` (agent and skill directories) is no longer read.
+
 ## 2026.9.21
 
 **Control Image shows its image.** The node previews the picked file like

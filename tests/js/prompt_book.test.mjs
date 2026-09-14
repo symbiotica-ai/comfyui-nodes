@@ -1,5 +1,5 @@
-// ABOUTME: The Prompt Book panel — that it lists rules before types, loads the
-// ABOUTME: picked block, and saves what the user typed to the right file.
+// ABOUTME: The Prompt Block panel — that it loads the picked block, saves what
+// ABOUTME: the user typed to the right file, and finds the project on the wire.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -32,277 +32,16 @@ function router(seen) {
     };
 }
 
-async function panelNode(seen, project = "/p/bakery") {
+
+async function blockNode(seen, { subfolder = "prompts" } = {}) {
     reset();
     app.graph._nodes = [];
     setResponder(router(seen));
-    const node = await create("SymbioticaPromptBook", { project_path: project });
-    node.inputs = [{ name: "order", link: null }];
-    app.graph._nodes = [node];
-    await node.onNodeCreated?.call(node);
-    for (let i = 0; i < 20; i++) await tick();
-    return node;
-}
-
-const panelOf = (node) =>
-    node.widgets.find((w) => w.name === "prompt_book").element;
-const parts = (node) => {
-    // container.append(bar, blocksBar, status, editor) — destructured rather
-    // than indexed one by one, so a row added to the panel shifts the names
-    // together instead of silently handing back the element next door.
-    const [bar, blocks, status, editor] = panelOf(node).children;
-    return { picker: bar.children[0], save: bar.children[1], blocks, status,
-             editor };
-};
-
-test("the picker lists shared rules before the type blocks", async () => {
-    const node = await panelNode([]);
-    const { picker } = parts(node);
-    assert.deepEqual(picker.children.map((g) => g.label),
-                     ["Game rules — apply to every type",
-                      "Image model — style, light, camera",
-                      "Asset type",
-                      "Composed — what the LLM receives"]);
-    const group = (label) =>
-        picker.children.find((g) => g.label.startsWith(label));
-    assert.deepEqual(group("Game rules").children.map((o) => o.value),
-                     ["_rules/01-refs.md", "_rules/03-light.md"]);
-    assert.deepEqual(group("Asset type").children.map((o) => o.value),
-                     ["Chair.md", "Decoration.md"]);
-});
-
-test("opening the panel loads the first block's text", async () => {
-    const node = await panelNode([]);
-    assert.equal(parts(node).editor.value, "TEXT OF _rules/01-refs.md");
-});
-
-test("save posts the edited text for the picked block", async () => {
-    const seen = [];
-    const node = await panelNode(seen);
-    const { editor, save } = parts(node);
-    editor.value = "TIGHTER LIGHTING RULE";
-    fire(save, "click", {});
-    for (let i = 0; i < 20; i++) await tick();
-    const write = seen.find((c) => c.route === "/symbiotica/prompt-write");
-    assert.ok(write, "no save request was made");
-    const sent = JSON.parse(write.init.body);
-    assert.equal(sent.name, "_rules/01-refs.md");
-    assert.equal(sent.text, "TIGHTER LIGHTING RULE");
-    assert.equal(sent.project, "/p/bakery");
-});
-
-test("no project asks for one instead of requesting a book", async () => {
-    // Without the guard the panel asks with project="" and shows the server's
-    // 400 as if the user had done something wrong.
-    const seen = [];
-    const node = await panelNode(seen, "");
-    assert.equal(seen.filter((c) => c.route.includes("prompt-book")).length, 0,
-                 "asked the server for a book with no project");
-    assert.match(parts(node).status.textContent, /wire an order|project_path/);
-});
-
-test("finds the project through an Order Specs whose path is itself wired", async () => {
-    // His real graph: Prompt Book <- Order Specs <- Path Local. Reading the
-    // Order Specs' own widget finds "" and the panel reports no project while
-    // an order is plainly connected — so the walk has to continue upstream.
-    const seen = [];
-    reset();
-    app.graph._nodes = [];
-    setResponder(router(seen));
-    const pathNode = await create("String", { value: "/p/bakery" });
-    pathNode.outputs = [{ name: "STRING", links: [] }];
-    const specs = await create("SymbioticaOrderSpecs", { project_path: "" });
-    specs.outputs = [{ name: "order", links: [] }];
-    link(pathNode, specs, "project_path");
-    const book = await create("SymbioticaPromptBook", { project_path: "" });
-    link(specs, book, "order");
-    app.graph._nodes = [pathNode, specs, book];
-    await book.onNodeCreated?.call(book);
-    for (let i = 0; i < 20; i++) await tick();
-
-    const asked = seen.find((c) => c.route.includes("prompt-book"));
-    assert.ok(asked, "never asked for the book — the project did not resolve");
-    assert.match(asked.route, /project=%2Fp%2Fbakery/);
-});
-
-// --- the Prompt Recipe panel: a saved SET of blocks, one picker to swap -----
-
-function recipeRouter(seen, recipes) {
-    return (route, _n, init) => {
-        seen.push({ route, init });
-        if (route.startsWith("/symbiotica/prompt-versions")) {
-            return { ok: true, status: 200, body: { ok: true, blocks: [
-                { name: "_rules/01-llm-prompt.md", versions: ["", "punchy"] },
-                { name: "_image/01-image-model.md", versions: [""] },
-                { name: "_flip/01-flip.md", versions: [""] },
-                { name: "Chair.md", versions: [""] },
-            ] } };
-        }
-        if (route.startsWith("/symbiotica/recipe-list")) {
-            return { ok: true, status: 200,
-                     body: { ok: true, recipes: recipes ?? [] } };
-        }
-        if (route.startsWith("/symbiotica/recipe-write")) {
-            return { ok: true, status: 200,
-                     body: { ok: true, name: "Decoration",
-                             slots: JSON.parse(init.body).slots } };
-        }
-        return { ok: false, status: 404, body: { error: "no route" } };
-    };
-}
-
-const DECO = [{ name: "Decoration", slots: [
-    { block: "_rules/01-llm-prompt.md", version: "" },
-    { block: "_image/01-image-model.md", version: "" },
-    { block: "_flip/01-flip.md", version: "" },
-] }];
-
-async function recipeNode(seen, recipes = DECO) {
-    reset();
-    app.graph._nodes = [];
-    setResponder(recipeRouter(seen, recipes));
-    const node = await create("SymbioticaPromptRecipe",
-                              { project_path: "/p/bakery", recipe: "", slots: 3 });
-    node.inputs = [{ name: "order", link: null }];
-    app.graph._nodes = [node];
-    await node.onNodeCreated?.call(node);
-    for (let i = 0; i < 20; i++) await tick();
-    return node;
-}
-
-const recipePanelOf = (node) =>
-    node.widgets.find((w) => w.name === "prompt_recipe").element;
-const recipeParts = (node) => {
-    const [bar, blocks, status, rows] = recipePanelOf(node).children;
-    return { picker: bar.children[0], save: bar.children[1],
-             del: bar.children[2], blocks, status, rows };
-};
-
-test("the panel opens on a saved recipe and shows one row per slot", async () => {
-    const node = await recipeNode([]);
-    const { picker, rows } = recipeParts(node);
-    assert.equal(picker.value, "Decoration");
-    assert.equal(rows.children.length, 3);
-    const first = rows.children[0].children[1];
-    assert.equal(first.value, "_rules/01-llm-prompt.md");
-    // Every folder of the book is offered, `_flip` included.
-    const labels = first.children.filter((c) => c.label).map((g) => g.label);
-    assert.ok(labels.includes("Mirror / standalone"), `groups: ${labels}`);
-});
-
-test("picking a recipe writes the node's own widget — that is what the queue "
-     + "serves", async () => {
-    const node = await recipeNode([], [...DECO, { name: "Chair", slots: [
-        { block: "Chair.md", version: "" }] }]);
-    const { picker } = recipeParts(node);
-    picker.value = "Chair";
-    fire(picker, "change");
-    for (let i = 0; i < 10; i++) await tick();
-    assert.equal(node.widgets.find((w) => w.name === "recipe").value, "Chair");
-    assert.equal(recipeParts(node).rows.children[0].children[1].value,
-                 "Chair.md");
-});
-
-test("Save posts the rows as the recipe's slots", async () => {
-    const seen = [];
-    const node = await recipeNode(seen);
-    const { rows, save } = recipeParts(node);
-    rows.children[2].children[1].value = "Chair.md";
-    seen.length = 0;
-    fire(save, "click");
-    for (let i = 0; i < 10; i++) await tick();
-    const call = seen.find((s) => s.route.startsWith("/symbiotica/recipe-write"));
-    assert.ok(call, "no save request went out");
-    const body = JSON.parse(call.init.body);
-    assert.equal(body.name, "Decoration");
-    assert.deepEqual(body.slots.map((s) => s.block),
-                     ["_rules/01-llm-prompt.md", "_image/01-image-model.md",
-                      "Chair.md"]);
-});
-
-test("the slot-count widget adds and removes rows", async () => {
-    const node = await recipeNode([]);
-    const w = node.widgets.find((x) => x.name === "slots");
-    w.value = 5;
-    w.callback?.call(node, 5);
-    for (let i = 0; i < 10; i++) await tick();
-    assert.equal(recipeParts(node).rows.children.length, 5);
-});
-
-test("a version can be pinned per slot", async () => {
-    const node = await recipeNode([]);
-    const version = recipeParts(node).rows.children[0].children[2];
-    const names = version.children.map((o) => o.value);
-    assert.deepEqual(names, ["", "punchy"]);
-});
-
-test("a plain String node wired into project_path names the book", async () => {
-    // The obvious way to point the book at a local folder: a literal holding
-    // the path. It resolved to nothing, and the panel showed an empty book.
-    const seen = [];
-    reset();
-    app.graph._nodes = [];
-    setResponder(router(seen));
-    const literal = await create("String", { value: "/p/bakery" });
-    const book = await create("SymbioticaPromptBook", { project_path: "" });
-    book.inputs = [];
-    app.graph._nodes = [literal, book];
-    link(literal, book, "project_path");
-    await book.onNodeCreated?.call(book);
-    for (let i = 0; i < 20; i++) await tick();
-    const asked = seen.find((c) => c.route.includes("prompt-book"));
-    assert.ok(asked, "never asked for the book — the literal did not resolve");
-    assert.match(asked.route, /project=%2Fp%2Fbakery/);
-});
-
-test("switching to a shorter recipe drops the longer one's leftover rows",
-     async () => {
-    // A 2-block recipe was showing the 3-block recipe's third block — an
-    // appliance flip sitting in the food recipe.
-    const node = await recipeNode([], [...DECO, { name: "Food", slots: [
-        { block: "_rules/01-llm-prompt.md", version: "" },
-        { block: "_image/01-image-model.md", version: "" }] }]);
-    const { picker } = recipeParts(node);
-    picker.value = "Food";
-    fire(picker, "change");
-    for (let i = 0; i < 10; i++) await tick();
-    const rows = recipeParts(node).rows.children;
-    assert.equal(rows.length, 2, "slot count did not follow the recipe");
-    // `slots` is a dropdown, and a combo's value is its option — a string.
-    assert.equal(node.widgets.find((w) => w.name === "slots").value, "2");
-    assert.deepEqual(rows.map((r) => r.children[1].value),
-                     ["_rules/01-llm-prompt.md", "_image/01-image-model.md"]);
-});
-
-test("changing a row writes the recipe — the node serves the file, not the DOM",
-     async () => {
-    const seen = [];
-    const node = await recipeNode(seen);
-    const { rows } = recipeParts(node);
-    seen.length = 0;
-    rows.children[2].children[1].value = "Chair.md";
-    fire(rows.children[2].children[1], "change");
-    for (let i = 0; i < 10; i++) await tick();
-    const call = seen.find((s) => s.route.startsWith("/symbiotica/recipe-write"));
-    assert.ok(call, "a row change did not write the recipe");
-    assert.equal(JSON.parse(call.init.body).slots[2].block, "Chair.md");
-});
-
-// --- a Prompt Block fed by the Recipe ---------------------------------------
-
-async function blockNode(seen, { originSlot = 0, wire = true,
-                                subfolder = "prompts" } = {}) {
-    reset();
-    app.graph._nodes = [];
-    setResponder(router(seen));
-    const recipe = await create("SymbioticaPromptRecipe", { recipe: "Appliance" });
-    recipe.outputs = [];
     const block = await create("SymbioticaPromptBlock",
                                { project_path: "/p/bakery", block: "Chair.md",
                                  slot: "1", subfolder });
     block.inputs = [];
-    if (wire) link(recipe, block, "text_in", originSlot);
-    app.graph._nodes = [recipe, block];
+    app.graph._nodes = [block];
     await block.onNodeCreated?.call(block);
     for (let i = 0; i < 20; i++) await tick();
     return block;
@@ -319,25 +58,15 @@ const blockParts = (node) => {
              editor };
 };
 
-test("the recipe output it is wired to names the slot it edits", async () => {
-    // Wiring `text_3` in IS the statement "this node edits slot 3" — nothing
-    // else on the canvas says it, and a typed second control could disagree.
-    const node = await blockNode([], { originSlot: 2 });
-    assert.equal(slotOf(node), "3");
-});
-
-test("wired to text_1, the block edits slot 1", async () => {
-    const node = await blockNode([], { originSlot: 0 });
-    assert.equal(slotOf(node), "1");
-});
-
-test("an unwired block keeps its slot", async () => {
-    const node = await blockNode([], { wire: false });
+test("the block keeps the slot its widget names", async () => {
+    // Wiring used to set this — the Prompt Recipe's `text_3` output SAID "this
+    // edits slot 3". With that node gone the widget is the only statement.
+    const node = await blockNode([]);
     assert.equal(slotOf(node), "1");
 });
 
 test("the block panel follows the block the run served", async () => {
-    // With a category wired the RECIPE names the block, in Python, at run
+    // With a category wired the recipe names the block, in Python, at run
     // time: without the push the panel sits on the pick made by hand.
     const seen = [];
     const node = await blockNode(seen);
@@ -423,3 +152,67 @@ test("retyping the subfolder re-lists the book", async () => {
     assert.ok(after.length > before, "the panel re-listed");
     assert.ok(after[after.length - 1].route.includes("subfolder=briefs"));
 });
+
+// --- which project the panel reads --------------------------------------------
+// `projectOf` walks the graph rather than reading one widget: the path commonly
+// arrives on a wire, through a switch or a literal, and a panel that gave up at
+// the first empty widget reported "no project" on a plainly wired graph.
+
+async function wiredBlock(seen, build) {
+    reset();
+    app.graph._nodes = [];
+    setResponder(router(seen));
+    const block = await create("SymbioticaPromptBlock",
+                               { project_path: "", block: "Chair.md",
+                                 slot: "1", subfolder: "prompts" });
+    block.inputs = [];
+    app.graph._nodes = await build(block);
+    await block.onNodeCreated?.call(block);
+    for (let i = 0; i < 20; i++) await tick();
+    return block;
+}
+
+test("a plain String node wired into project_path names the book", async () => {
+    // The obvious way to point the book at a local folder: a literal holding
+    // the path. It resolved to nothing, and the panel showed an empty book.
+    const seen = [];
+    await wiredBlock(seen, async (block) => {
+        const literal = await create("String", { value: "/p/bakery" });
+        literal.outputs = [{ name: "STRING", links: [] }];
+        link(literal, block, "project_path");
+        return [literal, block];
+    });
+    const asked = seen.find((c) => c.route.includes("prompt-book"));
+    assert.ok(asked, "never asked for the book — the literal did not resolve");
+    assert.match(asked.route, /project=%2Fp%2Fbakery/);
+});
+
+test("a project arriving through a passthrough still names the book", async () => {
+    // His real graph puts a reroute (or a Local/Modal switch) between the path
+    // and the panel. Reading the neighbour's own widget finds "" and the panel
+    // reports no project while a path is plainly connected — so the walk has to
+    // continue upstream through the node that only forwards it.
+    const seen = [];
+    await wiredBlock(seen, async (block) => {
+        const literal = await create("String", { value: "/p/bakery" });
+        literal.outputs = [{ name: "STRING", links: [] }];
+        const hop = await create("Reroute", {});
+        hop.inputs = [];
+        hop.outputs = [{ name: "", links: [] }];
+        link(literal, hop, "value");
+        link(hop, block, "project_path");
+        return [literal, hop, block];
+    });
+    const asked = seen.find((c) => c.route.includes("prompt-book"));
+    assert.ok(asked, "never asked for the book — the walk stopped at the hop");
+    assert.match(asked.route, /project=%2Fp%2Fbakery/);
+});
+
+test("no project asks for one instead of requesting a book", async () => {
+    const seen = [];
+    const node = await wiredBlock(seen, async (block) => [block]);
+    assert.ok(!seen.some((c) => c.route.includes("prompt-book")),
+              "asked the server for a book with no project");
+    assert.match(blockParts(node).status.textContent, /project_path/);
+});
+

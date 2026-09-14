@@ -7,16 +7,16 @@ import { registerSymbioticaExtension } from "./register.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
 import { attachHoverZoom, el, emptyState, hideHoverZoom, imageFullUrl,
          imageThumbUrl, pinPanelWidth } from "./browser_chrome.js";
-// The Order Specs front end — project, month, feature, "Read folder" — hosted
-// here rather than reimplemented: "order specs and asset focus are 2 nodes
+// The order picker — project, month, feature, "Read folder". This node hosts
+// the whole selection: "order specs and asset focus are 2 nodes
 // that are doing one thing… i select month and feature in specs and asset in
 // asset focus. this doesn't make any sense".
-import { wireOrderSpecs } from "./order_pipeline.js";
+import { wireOrderSpecs } from "./order_source.js";
 
 const NODE_CLASS = "SymbioticaAssetFocus";
 const MIN_NODE_W = 300;
-// The client's own reference art for an asset, at the size the Auto Packer's
-// cell strip uses — the two panels list the same assets and must read alike.
+// The client's own reference art for an asset, at the size the cell strips
+// use, so every panel that lists these assets reads alike.
 const THUMB_PX = 30;
 
 const widgetOf = (node, name) => node.widgets?.find((w) => w.name === name);
@@ -29,23 +29,19 @@ function upstreamNode(node, inputName) {
 }
 
 // The feature combo reads "Mini 3 — Franken-Feast" while the event is keyed on
-// "Mini 3"; order_pipeline.js splits the same way.
+// "Mini 3"; order_source.js splits the same way.
 const featureKey = (value) => String(value ?? "").split(" — ")[0].trim();
 
 // The assets the wired source has ALREADY published to the canvas, so the list
-// exists before anything is queued. Order Specs keeps its parsed events on the
-// node and a Reference Browser publishes its picks in the same shape, which is
-// how the Auto Packer's panel fills without a run either.
+// exists before anything is queued: a node that read the folder keeps its
+// parsed events on itself, which is how the panel fills without a run.
 // Walk up the order wire. More than one hop because the wire commonly passes
 // through a reroute, and a node in between that simply forwards the order is
 // not a reason to stop looking for who produced it.
 function orderSource(node) {
     let cur = upstreamNode(node, "order");
     for (let hop = 0; hop < 6 && cur; hop++) {
-        if (cur.comfyClass === "SymbioticaOrderSpecs"
-            || cur.comfyClass === "SymbioticaReferenceBrowser") {
-            return cur;
-        }
+        if (cur.comfyClass === NODE_CLASS) return cur;
         const next = upstreamNode(cur, "order");
         if (next) { cur = next; continue; }
         // A reroute names its input whatever it likes; one wired input is
@@ -58,13 +54,13 @@ function orderSource(node) {
 }
 
 // Asking the source to parse, once, when it has nothing yet. A saved workflow
-// restores Order Specs' month and feature widgets without parsing anything, so
-// the node looks configured while holding no events at all — which is exactly
-// the state a freshly reopened graph is in.
+// restores the month and feature widgets without parsing anything, so the node
+// looks configured while holding no events at all — which is exactly the state
+// a freshly reopened graph is in.
 function askSource(node, source) {
     // Remembered PER SOURCE, not per node: this node asks ITSELF while nothing
     // is wired, and a plain "already asked" flag then swallowed the first ask
-    // of the Order Specs that arrived afterwards.
+    // of the source that arrived afterwards.
     if (node._symAskedFor === source || !source?._symRefreshOrder) return;
     node._symAskedFor = source;
     Promise.resolve(source._symRefreshOrder())
@@ -73,22 +69,20 @@ function askSource(node, source) {
 }
 
 // `{ assets, refsRoot }` — the reference files ride along with the names, and
-// the root they are relative to comes off the same source node the Auto Packer
-// reads (`_symRefsRoot`, set by the order parse that also registers the folder
-// with the server, which is what makes the thumbnails loadable at all).
+// the root they are relative to comes off the source node (`_symRefsRoot`, set
+// by the order parse that also registers the folder with the server, which is
+// what makes the thumbnails loadable at all).
 function publishedAssets(node) {
     // Nothing wired in means this node is its own source: it hosts the same
     // project/month/feature front end, so it holds `_symEvents` and knows how
     // to refresh them. Returning null here instead is what left the panel
-    // saying "wire an Order Specs" on a node that reads the folder itself.
+    // saying "wire an order in" on a node that reads the folder itself.
     const source = orderSource(node) ?? node;
     let event = null;
     if (Array.isArray(source._symEvents)) {
         const events = source._symEvents;
         const want = featureKey(widgetOf(source, "feature")?.value);
         event = events.find((e) => featureKey(e.feature) === want) || events[0] || null;
-    } else if (source.comfyClass === "SymbioticaReferenceBrowser") {
-        event = source._symPickedEvent ?? null;
     }
     const assets = event?.assets ?? null;
     if (!Array.isArray(assets) || !assets.length) {
@@ -107,8 +101,8 @@ function publishedAssets(node) {
 // A text box you cannot be told what to type is not an input. The classic node
 // UI will not turn a text widget into a dropdown by mutating `.type`, so the
 // widget is recreated as a real combo in the same slot — same approach as
-// order_pipeline.js's `comboify`, kept here because that module exports
-// nothing. Value and serialisation are preserved, so the string still reaches
+// order_source.js's `comboify`, kept here because that module does not export
+// it. Value and serialisation are preserved, so the string still reaches
 // the Python node and a saved workflow still restores it.
 const ALL_CATEGORIES = "All";
 // The `asset` combo cannot offer an empty label, so "no narrowing" is
@@ -656,7 +650,7 @@ registerSymbioticaExtension(app, {
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             onNodeCreated?.apply(this, arguments);
-            // The same project/month/feature front end Order Specs has, so the
+            // The same project/month/feature front end the order read has, so the
             // whole selection is made here. It only acts when `project_path`
             // has something in it, so a node fed by a wire is unaffected.
             wireOrderSpecs(this);

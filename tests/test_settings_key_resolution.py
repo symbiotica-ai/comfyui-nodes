@@ -23,8 +23,8 @@ def nodes(monkeypatch):
             os.path.abspath(__file__))), "py")]
         sys.modules["symbiotica_py"] = pkg
     return {name: importlib.import_module(f"symbiotica_py.{name}")
-            for name in ("submagic_captions", "wavespeed_client",
-                         "grok_client", "visual_overlay")}
+            for name in ("submagic_captions", "grok_client",
+                         "visual_overlay")}
 
 
 @pytest.fixture
@@ -51,8 +51,6 @@ CASES = [
      lambda n, k: n._resolve_api_key(k), "ANTHROPIC_API_KEY"),
     ("grok_client", "NSGrokClient",
      lambda n, k: n.create_client(k)[0]["api_key"], "XAI_API_KEY"),
-    ("wavespeed_client", "NSWaveSpeedClient",
-     lambda n, k: n.create_client(k)[0]["api_key"], "WAVESPEED_API_KEY"),
 ]
 
 

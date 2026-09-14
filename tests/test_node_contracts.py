@@ -90,10 +90,10 @@ def test_every_declared_input_is_one_the_node_can_accept(pack):
     # Most of the pack is V1; the pipeline nodes are the V3 ones. The floor
     # is here so an import failure that empties the mapping cannot read as a
     # clean run.
-    assert checked >= 30, f"only {checked} V3 nodes reached the check"
+    assert checked >= 6, f"only {checked} V3 nodes reached the check"
 
 
 def test_the_whole_pack_registers(pack):
     """A module that raises on import drops its nodes with only a console
     traceback, so a release can lose nodes without failing a single test."""
-    assert len(pack.NODE_CLASS_MAPPINGS) >= 128
+    assert len(pack.NODE_CLASS_MAPPINGS) >= 45

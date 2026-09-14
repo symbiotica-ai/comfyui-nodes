@@ -3,14 +3,11 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
-import { nodeOutputString, resolveProjectPath } from "./order_pipeline.js";
+import { nodeOutputString, resolveProjectPath } from "./order_source.js";
 import { pinPanelWidth } from "./browser_chrome.js";
 import { HUB, injectHubStyles } from "./hub_theme.js";
 
-const BOOK = "SymbioticaPromptBook";
 const BLOCK = "SymbioticaPromptBlock";
-const COMPOSE = "SymbioticaPromptCompose";
-const RECIPE = "SymbioticaPromptRecipe";
 
 // Picker entries that are a composed VIEW of an asset type rather than a file.
 // A prefix, not a separate control, so switching between "the block I edit" and
@@ -61,7 +58,7 @@ function projectOf(node, seen = new Set()) {
     seen.add(node.id);
     const typed = valueText(widgetOf(node, "project_path"));
     if (typed) return typed;
-    const OURS = new Set([BOOK, BLOCK, COMPOSE, RECIPE]);
+    const OURS = new Set([BLOCK]);
     for (const name of ["project_path", "order"]) {
         const link = node.inputs?.find((i) => i.name === name)?.link;
         if (link == null) continue;
@@ -78,7 +75,7 @@ function projectOf(node, seen = new Set()) {
             : (resolveProjectPath(origin)
                || nodeOutputString(origin, new Set()));
         // An order-passing node with no project of its own (Asset Focus) is a
-        // hop, not a dead end — climb through it to the Order Specs behind.
+        // hop, not a dead end — climb through it to the node behind.
         if (!found && origin.inputs?.some((i) => i.name === "order")) {
             found = projectOf(origin, seen);
         }
@@ -290,155 +287,13 @@ function toastSaved(detail) {
     });
 }
 
-// --- the Prompt Book node: the whole book in one panel -----------------------
-function bookPanel(node) {
-    const ui = panelChrome(node, "prompt_book");
-    const { picker, saveBtn, blocksBar, editor, setStatus, setEditable } = ui;
-
-    let loaded = { name: "", text: "" };
-    // The blocks that exist on disk, as of the last refresh. A picked name that
-    // is not among them is a block being created, not a read that failed.
-    let existing = new Set();
-
-    const dirty = () => editor.value !== loaded.text;
-
-    async function loadComposed(project, category) {
-        const { text, blocks } = await getJson(
-            `/symbiotica/prompt-compose?project=${encodeURIComponent(project)}`
-            + `&category=${encodeURIComponent(category)}` + bookQuery(node));
-        loaded = { name: COMPOSED + category, text };
-        editor.value = text;
-        setEditable(false);
-        blocksBar.textContent = blocks
-            .map((b) => `${b.name} (${b.chars})`).join("  +  ");
-        setStatus(`${blocks.length} blocks · ${text.length} chars — read-only,`
-                  + " this is what the LLM receives");
-    }
-
-    async function load(name) {
-        const project = projectOf(node);
-        if (!project || !name) return;
-        try {
-            if (name.startsWith(COMPOSED)) {
-                await loadComposed(project, name.slice(COMPOSED.length));
-                return;
-            }
-            if (!existing.has(name)) {
-                loaded = { name, text: "" };
-                editor.value = "";
-                setEditable(true);
-                setStatus(`${name} — new block, Save creates it`);
-                return;
-            }
-            const { text } = await getJson(
-                `/symbiotica/prompt-read?project=${encodeURIComponent(project)}`
-                + `&name=${encodeURIComponent(name)}` + bookQuery(node));
-            loaded = { name, text };
-            editor.value = text;
-            setEditable(true);
-            setStatus(`${text.length} chars`);
-        } catch (err) {
-            // Leave the editor holding whatever failed to load rather than
-            // blanking it — a composed view that errors on one missing type
-            // must not look like an empty prompt book.
-            setStatus(String(err.message || err), true);
-        }
-    }
-
-    async function refresh() {
-        const project = projectOf(node);
-        if (!project) {
-            picker.replaceChildren();
-            editor.value = "";
-            setStatus("wire an order, or set project_path", true);
-            return;
-        }
-        try {
-            const book = await getJson(
-                `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`
-                + bookQuery(node));
-            const keep = picker.value;
-            picker.replaceChildren();
-            // Rules first, in composition order — the same order they appear in
-            // the prompt the model receives, so the list reads as the prompt does.
-            groupInto(picker, "Game rules — apply to every type", book.rules);
-            const image = book.image ?? [];
-            groupInto(picker, "Image model — style, light, camera",
-                      image.length ? image
-                                   : [{ name: NEW_IMAGE, title: "01-image-model",
-                                        chars: "new" }]);
-            groupInto(picker, "Asset type", book.types);
-            // Composed last, because it is where you go after an edit rather
-            // than before one: same types again, this time assembled.
-            groupInto(picker, "Composed — what the LLM receives",
-                      (book.types ?? []).map(
-                (row) => ({ name: COMPOSED + row.title, title: row.title,
-                            chars: "rules + type" })));
-            const names = [...book.rules, ...image, ...book.types]
-                .map((r) => r.name);
-            existing = new Set(names);
-            if (!image.length) names.push(NEW_IMAGE);   // pickable, not on disk
-            // Keep a composed selection across a reload too — it is not in
-            // `names` (it is a view, not a file), and dropping back to the
-            // first rule every time the panel refreshes loses your place.
-            const selectable = [...names, ...(book.types ?? []).map(
-                (r) => COMPOSED + r.title)];
-            const pick = selectable.includes(keep) ? keep : names[0];
-            if (!pick) { setStatus("no prompts in this project's book", true); return; }
-            picker.value = pick;
-            // A refresh fired by ANOTHER panel's save must not clobber an edit
-            // in progress here — reload the list, keep the text being typed.
-            if (!(dirty() && loaded.name === pick)) await load(pick);
-        } catch (err) {
-            setStatus(String(err.message || err), true);
-        }
-    }
-
-    picker.addEventListener("change", async () => {
-        // An unsaved edit is a tuned rule the user would have to retype; ask
-        // rather than silently discard it on a stray click.
-        if (dirty() && !(await askConfirm(
-            `Discard your unsaved changes to ${loaded.name}?`))) {
-            picker.value = loaded.name;
-            return;
-        }
-        load(picker.value);
-    });
-
-    saveBtn.addEventListener("click", async () => {
-        const project = projectOf(node);
-        if (!project || !picker.value) return;
-        if (picker.value.startsWith(COMPOSED)) return;   // a view, not a file
-        saveBtn.disabled = true;
-        try {
-            const res = await postJson("/symbiotica/prompt-write", {
-                project, name: picker.value, text: editor.value,
-                subfolder: bookOf(node),
-            });
-            loaded = { name: picker.value, text: editor.value };
-            setStatus(`saved — ${res.chars} chars (.bak kept)`);
-            toastSaved(`${picker.value} — ${res.chars} chars`);
-            announceSaved(project);
-            await refresh();
-        } catch (err) {
-            setStatus(String(err.message || err), true);
-        } finally {
-            saveBtn.disabled = false;
-        }
-    });
-
-    node._symRefreshBook = refresh;
-    onBookSaved(node, refresh);
-    queueMicrotask(refresh);
-}
 
 // --- the Prompt Block node: one block, big on the canvas ---------------------
 function blockPanel(node) {
     const blockW = hideBackingWidget(node, "block");
-    // Which slot of the recipe this node edits. Derived from the wire, never
-    // typed: wiring `text_3` in IS the statement "this edits slot 3", and a
-    // second control saying the same thing could disagree with it.
-    const slotW = hideBackingWidget(node, "slot");
+    // `slot` stays a visible widget. It used to be derived from the wire — the
+    // Prompt Recipe's `text_3` output SAID "this edits slot 3" — and with that
+    // node gone the only thing that can name the slot is the picker itself.
     const ui = panelChrome(node, "prompt_block");
     const { picker, saveBtn, editor, setStatus, setEditable } = ui;
     setEditable(true);
@@ -447,18 +302,6 @@ function blockPanel(node) {
     let existing = new Set();
     const dirty = () => editor.value !== loaded.text;
 
-    // `text_in` from a Prompt Recipe means this node is a window onto that
-    // recipe's slot — the output index it is wired to names the slot.
-    function followRecipeWire() {
-        if (!slotW) return;
-        const link = node.inputs?.find((i) => i.name === "text_in")?.link;
-        if (link == null) return;
-        const wire = app.graph.links[link];
-        const origin = app.graph.getNodeById(wire?.origin_id);
-        if (origin?.comfyClass !== RECIPE) return;
-        slotW.value = String((wire.origin_slot ?? 0) + 1);
-    }
-
     async function load(name) {
         const project = projectOf(node);
         if (!project || !name) return;
@@ -481,13 +324,12 @@ function blockPanel(node) {
     }
 
     async function refresh() {
-        followRecipeWire();
         const project = projectOf(node);
         if (!project) {
             picker.replaceChildren();
             editor.value = "";
-            setStatus("wire the Prompt Book's project output, or set "
-                      + "project_path", true);
+            setStatus("set project_path, or wire a neighbouring block's "
+                      + "passthrough", true);
             return;
         }
         try {
@@ -584,7 +426,7 @@ function blockPanel(node) {
 
     node._symRefreshBook = refresh;
     // Which block the last run actually edited. With a category wired the
-    // RECIPE names it, and that name is only known in Python at run time — so
+    // recipe names it, and that name is only known in Python at run time — so
     // the panel is told rather than guessing, and stops showing the block that
     // was last picked by hand while serving a different one.
     node._symShowServed = async (name) => {
@@ -613,416 +455,9 @@ function blockPanel(node) {
     queueMicrotask(refresh);
 }
 
-// --- the Prompt Compose node: what the LLM receives, live --------------------
-function composePanel(node) {
-    const catW = hideBackingWidget(node, "category");
-    const ui = panelChrome(node, "prompt_compose", { save: false });
-    const { picker, blocksBar, editor, setStatus, setEditable } = ui;
-    setEditable(false);
-
-    async function load(category) {
-        const project = projectOf(node);
-        if (!project || !category) return;
-        try {
-            const { text, blocks } = await getJson(
-                `/symbiotica/prompt-compose?project=`
-                + `${encodeURIComponent(project)}`
-                + `&category=${encodeURIComponent(category)}` + bookQuery(node));
-            editor.value = text;
-            blocksBar.textContent = blocks
-                .map((b) => `${b.name} (${b.chars})`).join("  +  ");
-            setStatus(`${blocks.length} blocks · ${text.length} chars — `
-                      + "read-only, this is what the LLM receives");
-        } catch (err) {
-            setStatus(String(err.message || err), true);
-        }
-    }
-
-    async function refresh() {
-        const project = projectOf(node);
-        if (!project) {
-            picker.replaceChildren();
-            editor.value = "";
-            setStatus("wire the Prompt Book's project output, or set "
-                      + "project_path", true);
-            return;
-        }
-        try {
-            const book = await getJson(
-                `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`
-                + bookQuery(node));
-            const keep = valueText(catW) || picker.value;
-            picker.replaceChildren();
-            groupInto(picker, "Asset type", (book.types ?? []).map(
-                (row) => ({ name: row.title, title: row.title,
-                            chars: "rules + type" })));
-            const names = (book.types ?? []).map((r) => r.title);
-            const pick = names.includes(keep) ? keep : names[0];
-            if (!pick) { setStatus("no type blocks in this project's book", true); return; }
-            picker.value = pick;
-            if (catW) catW.value = pick;
-            await load(pick);
-        } catch (err) {
-            setStatus(String(err.message || err), true);
-        }
-    }
-
-    picker.addEventListener("change", () => {
-        if (catW) catW.value = picker.value;
-        node.title = `Compose — ${picker.value}`;
-        node.setDirtyCanvas?.(true, true);
-        load(picker.value);
-    });
-
-    node._symRefreshBook = refresh;
-    onBookSaved(node, refresh);
-    queueMicrotask(refresh);
-}
-
-// --- the Prompt Recipe node: a saved SET of blocks. A category needs several
-// --- prompts at once, so a recipe names them together and one picker swaps
-// --- all of them. Editing a block itself stays the Block node's job.
-const NEW_RECIPE = "__new-recipe__";
-
-// Serve the recipe named after the asset's own category instead of a fixed
-// one: picking a Food asset upstream then serves the Food recipe, which is
-// the whole reason the node exists — changing category should be one move,
-// not two. The string is the contract with nodes.py's FOLLOW.
-const FOLLOW_CATEGORY = "(follow category)";
-
-// Which group a block name belongs to, and what that group is called. Derived
-// from the folder, so a book that grows a folder groups itself.
-const GROUP_TITLES = {
-    "_rules/": "Game rules",
-    "_image/": "Image model",
-    "_flip/": "Mirror / standalone",
-    "": "Asset type",
-};
-
-function groupKeyOf(name) {
-    for (const prefix of Object.keys(GROUP_TITLES)) {
-        if (prefix && name.startsWith(prefix)) return prefix;
-    }
-    return "";
-}
-
-function recipePanel(node) {
-    const ui = panelChrome(node, "prompt_recipe");
-    const { picker, saveBtn, editor, setStatus } = ui;
-
-    // No text editor here: this panel picks blocks, it does not write them.
-    // Hidden rather than removed so panelChrome's layout stays one shape.
-    editor.style.display = "none";
-
-    const rows = document.createElement("div");
-    rows.style.cssText = "display:flex;flex-direction:column;gap:4px;flex:1;"
-        + "overflow:auto;";
-    keepEvents(rows);
-    editor.parentNode.insertBefore(rows, editor);
-
-    const delBtn = document.createElement("button");
-    delBtn.textContent = "Delete";
-    delBtn.style.cssText = "padding:2px 8px;font-size:11px;cursor:pointer;";
-    keepEvents(delBtn);
-    saveBtn?.parentNode?.append(delBtn);
-
-    const recipeW = hideBackingWidget(node, "recipe");
-    let blocks = [];        // [{name, versions}]
-    let saved = new Map();  // name -> slots
-
-    const slotCount = () => {
-        const w = widgetOf(node, "slots");
-        return Math.max(1, Math.min(Number(w?.value ?? 3) || 3, 6));
-    };
-
-    // One row: which block fills this slot, and which of its versions.
-    function buildRow(index, slot) {
-        const row = document.createElement("div");
-        row.style.cssText = "display:flex;gap:4px;align-items:center;";
-        const label = document.createElement("span");
-        label.textContent = `${index + 1}`;
-        label.style.cssText = "opacity:.55;width:12px;text-align:right;";
-        const block = document.createElement("select");
-        block.style.cssText = "flex:1;min-width:0;font-size:11px;"
-            + `background:${HUB.surface1};color:${HUB.ink};`
-            + `border:1px solid ${HUB.hairlineStrong};border-radius:4px;`;
-        keepEvents(block);
-        const empty = document.createElement("option");
-        empty.value = "";
-        empty.textContent = "— empty —";
-        block.appendChild(empty);
-        const groups = new Map();
-        for (const b of blocks) {
-            const key = groupKeyOf(b.name);
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key).push(b);
-        }
-        for (const [key, title] of Object.entries(GROUP_TITLES)) {
-            const rowsOf = groups.get(key) ?? [];
-            if (!rowsOf.length) continue;
-            const g = document.createElement("optgroup");
-            g.label = title;
-            for (const b of rowsOf) {
-                const o = document.createElement("option");
-                o.value = b.name;
-                o.textContent = b.name.replace(key, "").replace(/\.md$/, "");
-                g.appendChild(o);
-            }
-            block.appendChild(g);
-        }
-        const version = document.createElement("select");
-        version.style.cssText = "width:96px;font-size:11px;"
-            + `background:${HUB.surface1};color:${HUB.ink};`
-            + `border:1px solid ${HUB.hairlineStrong};border-radius:4px;`;
-        keepEvents(version);
-
-        const fillVersions = () => {
-            const found = blocks.find((b) => b.name === block.value);
-            const names = found?.versions ?? [];
-            version.replaceChildren();
-            const top = document.createElement("option");
-            top.value = "";
-            top.textContent = names.length > 1 ? "top" : "—";
-            version.appendChild(top);
-            for (const v of names) {
-                if (!v) continue;
-                const o = document.createElement("option");
-                o.value = v;
-                o.textContent = v;
-                version.appendChild(o);
-            }
-            version.disabled = version.children.length < 2;
-        };
-
-        // A block the recipe names that is gone from disk stays selectable:
-        // dropping it to "empty" would silently change what the queue serves.
-        if (slot?.block && !blocks.some((b) => b.name === slot.block)) {
-            const o = document.createElement("option");
-            o.value = slot.block;
-            o.textContent = `${slot.block} (missing)`;
-            block.appendChild(o);
-        }
-        block.value = slot?.block ?? "";
-        fillVersions();
-        version.value = slot?.version ?? "";
-        block.addEventListener("change", () => {
-            fillVersions();
-            persist(false);
-        });
-        version.addEventListener("change", () => persist(false));
-        row.append(label, block, version);
-        row._read = () => ({ block: block.value, version: version.value });
-        return row;
-    }
-
-    // `slots` is a recipe's own list and is authoritative — a slot it does not
-    // fill is EMPTY. Carrying the previous rows over is only right when the
-    // slot COUNT changed and the recipe did not: switching recipe otherwise
-    // left the last one's blocks sitting in the rows past the new one's end,
-    // which is how an appliance flip ended up in the food recipe.
-    function renderRows(slots) {
-        const want = slotCount();
-        const kept = slots ? null
-                           : [...rows.children].map((r) => r._read?.() ?? null);
-        rows.replaceChildren();
-        for (let i = 0; i < want; i += 1) {
-            rows.appendChild(buildRow(i, slots?.[i] ?? kept?.[i] ?? null));
-        }
-    }
-
-    // The recipe decides how many slots there are; the widget follows it, or
-    // the node serves outputs the panel is not showing.
-    function showRecipe(name) {
-        const slots = saved.get(name) ?? [];
-        const w = widgetOf(node, "slots");
-        if (w && slots.length) {
-            // A combo's value is its option, and its options are strings —
-            // writing the number leaves the dropdown blank on the next draw.
-            w.value = String(Math.max(1, Math.min(slots.length, 6)));
-        }
-        renderRows(slots);
-        return slots;
-    }
-
-    function readSlots() {
-        return [...rows.children].map((r) => r._read());
-    }
-
-    async function refresh() {
-        const project = projectOf(node);
-        if (!project) {
-            picker.replaceChildren();
-            rows.replaceChildren();
-            setStatus("wire an order, or set project_path", true);
-            return;
-        }
-        try {
-            const [versions, list] = await Promise.all([
-                getJson(`/symbiotica/prompt-versions?project=${
-                    encodeURIComponent(project)}${bookQuery(node)}`),
-                getJson(`/symbiotica/recipe-list?project=${
-                    encodeURIComponent(project)}${bookQuery(node)}`),
-            ]);
-            blocks = versions.blocks ?? [];
-            saved = new Map((list.recipes ?? []).map((r) => [r.name, r.slots]));
-            const keep = valueText(recipeW) || picker.value;
-            picker.replaceChildren();
-            groupInto(picker, "Recipes",
-                      [...saved.keys()].map((n) => ({
-                          name: n, title: n,
-                          chars: (saved.get(n) ?? []).length,
-                      })));
-            groupInto(picker, "Follow the order",
-                      [{ name: FOLLOW_CATEGORY, title: FOLLOW_CATEGORY,
-                         chars: "auto" }]);
-            groupInto(picker, "New",
-                      [{ name: NEW_RECIPE, title: "+ new recipe…",
-                         chars: "?" }]);
-            if (keep === FOLLOW_CATEGORY) {
-                picker.value = FOLLOW_CATEGORY;
-                if (recipeW) recipeW.value = FOLLOW_CATEGORY;
-                node.title = "Recipe — follows the category";
-                renderRows(null);
-                setStatus("serves the recipe named after the asset's category");
-                return;
-            }
-            const pick = saved.has(keep) ? keep : [...saved.keys()][0] ?? "";
-            picker.value = pick || NEW_RECIPE;
-            if (recipeW) recipeW.value = pick;
-            node.title = pick ? `Recipe — ${pick}` : "Symbiotica Prompt Recipe";
-            const slots = showRecipe(pick);
-            setStatus(pick ? `${slots.length} blocks`
-                           : "no recipes yet — pick “+ new recipe…”",
-                      !pick);
-        } catch (err) {
-            setStatus(String(err.message || err), true);
-        }
-    }
-
-    picker.addEventListener("change", async () => {
-        if (picker.value === NEW_RECIPE) {
-            const typed = await askText("New recipe name — the category it "
-                                        + "serves reads best (Decoration):");
-            if (!typed?.trim()) { await refresh(); return; }
-            const name = typed.trim();
-            groupInto(picker, "Recipes",
-                      [{ name, title: name, chars: "new" }]);
-            picker.value = name;
-            if (recipeW) recipeW.value = name;
-            node.title = `Recipe — ${name}`;
-            renderRows(null);
-            setStatus("new recipe — pick its blocks, then Save");
-            return;
-        }
-        if (recipeW) recipeW.value = picker.value;
-        node.setDirtyCanvas?.(true, true);
-        if (picker.value === FOLLOW_CATEGORY) {
-            node.title = "Recipe — follows the category";
-            renderRows(null);
-            setStatus("serves the recipe named after the asset's category");
-            return;
-        }
-        node.title = `Recipe — ${picker.value}`;
-        setStatus(`${showRecipe(picker.value).length} blocks`);
-    });
-
-    // The node serves the recipe FILE, so a row the panel shows but has not
-    // written is a lie: he wired text_3 to a preview and got nothing back
-    // because the third row was still only on screen. Every change writes.
-    async function persist(loud) {
-        const project = projectOf(node);
-        const name = picker.value;
-        if (!project || !name || name === NEW_RECIPE
-            || name === FOLLOW_CATEGORY) return;
-        if (saveBtn) saveBtn.disabled = true;
-        try {
-            const res = await postJson("/symbiotica/recipe-write", {
-                project, name, slots: readSlots(), subfolder: bookOf(node),
-            });
-            saved.set(name, res.slots);
-            setStatus(`${res.slots.length} blocks`);
-            if (loud) toastSaved(`${name} — ${res.slots.length} blocks`);
-            announceSaved(project);
-        } catch (err) {
-            setStatus(String(err.message || err), true);
-        } finally {
-            if (saveBtn) saveBtn.disabled = false;
-        }
-    }
-
-    saveBtn?.addEventListener("click", () => persist(true));
-
-    delBtn.addEventListener("click", async () => {
-        const project = projectOf(node);
-        const name = picker.value;
-        if (!project || !name || name === NEW_RECIPE
-            || name === FOLLOW_CATEGORY) return;
-        if (!(await askConfirm(
-            `Delete the recipe ${name}? Its blocks stay on disk.`))) return;
-        try {
-            await postJson("/symbiotica/recipe-delete",
-                           { project, name, subfolder: bookOf(node) });
-            if (recipeW) recipeW.value = "";
-            await refresh();
-        } catch (err) {
-            setStatus(String(err.message || err), true);
-        }
-    });
-
-    // The slot count is a native widget, so it changes without the panel
-    // hearing about it — follow it, or the rows and the outputs disagree.
-    const slotsW = widgetOf(node, "slots");
-    if (slotsW) {
-        const orig = slotsW.callback;
-        slotsW.callback = function () {
-            orig?.apply(this, arguments);
-            renderRows(null);
-            persist(false);
-        };
-    }
-
-    node._symRefreshBook = refresh;
-    // What the last run actually served. The category on the order wire beats
-    // the picker, so after a queue the panel follows the run rather than
-    // showing the name that lost — otherwise the rows on screen are not the
-    // blocks the render used. The widget is left alone: it is the fallback for
-    // a category the book has no recipe for.
-    node._symShowServed = (name, served = {}) => {
-        if (!name || !saved.has(name)) return;
-        picker.value = name;
-        const blocks = showRecipe(name).length;
-        // The sizes of what actually went out, not of what the file names: a
-        // row that reads right over an empty block is the failure this line
-        // exists to show.
-        const chars = (served.chars ?? []).filter((n) => Number.isFinite(n));
-        setStatus(`${blocks} blocks · from the asset's category`
-                  + (chars.length ? ` · ${chars.join(" + ")} chars` : ""));
-    };
-    onBookSaved(node, refresh);
-    queueMicrotask(refresh);
-}
-
 const PANELS = {
-    [BOOK]: { build: bookPanel, minW: 420, minH: 460 },
     [BLOCK]: { build: blockPanel, minW: 380, minH: 400 },
-    [COMPOSE]: { build: composePanel, minW: 420, minH: 460 },
-    [RECIPE]: { build: recipePanel, minW: 460, minH: 500 },
 };
-
-// The recipe a run actually served. With an order wired the CATEGORY decides
-// the name, and that decision happens in Python — so the panel is told, rather
-// than guessing, and the node titles itself with what it just served.
-api.addEventListener("symbiotica.recipe", (event) => {
-    const detail = event?.detail ?? {};
-    if (detail.node_id == null) return;
-    const node = app.graph?.getNodeById?.(Number(detail.node_id))
-        ?? app.graph?.getNodeById?.(detail.node_id);
-    if (!node || !detail.name) return;
-    node._symServedRecipe = String(detail.name);
-    node.title = `Recipe — ${detail.name}`;
-    node._symShowServed?.(String(detail.name), detail);
-    node.setDirtyCanvas?.(true, true);
-});
 
 // The block a Prompt Block actually edited. Same reason as the recipe push
 // above: with a `category` wired the recipe names the block, in Python, at run
