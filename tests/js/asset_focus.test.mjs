@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, fire, link, reset, tick } from "./comfy_stub.mjs";
+import { app, create, emit, fire, link, reset, tick } from "./comfy_stub.mjs";
 import "../../web/js/asset_focus.js";
 
 const ASSETS = [
@@ -625,15 +625,52 @@ test("choosing All assets clears the pick rather than naming it", async () => {
     assert.ok(rows(node).every((r) => /opacity:\.75/.test(r.style.cssText)));
 });
 
-test("the selection widgets sit above the ones that narrow it", async () => {
+test("the selection widgets sit above the ones that narrow it, the button last", async () => {
     // The schema appends project/month/feature (saved graphs restore by
-    // position); on screen the order has to read top-down.
-    const node = await focusNode();
+    // position); on screen the order has to read top-down, and the button
+    // does not sit between two dropdowns.
+    // The schema's widget order, as ComfyUI creates them.
+    const node = await focusNode({ order: null, category: "", asset: "",
+                                   project_path: "", month: "", feature: "",
+                                   ref: "" });
     const names = node.widgets.map((w) => w.name);
-    for (const name of ["project_path", "month", "feature"]) {
-        assert.ok(names.indexOf(name) < names.indexOf("category"),
-                  `${name} should precede category`);
-    }
+    // `order` is a socket on the real node; the stub carries it as a widget.
+    const shown = names.filter(
+        (n) => !["ref", "focus_panel", "order"].includes(n));
+    assert.deepEqual(shown, ["project_path", "month", "feature",
+                             "category", "asset", "📁 Read folder"]);
+});
+
+test("ref takes no room on the canvas — the tile click is the picker", async () => {
+    const node = await focusNode({ ref: "" });
+    const ref = widgetOf(node, "ref");
+    assert.ok(ref, "the widget still carries the file to Python");
+    assert.equal(ref.hidden, true);
+    assert.deepEqual(ref.computeSize(), [0, -4]);
+});
+
+test("the category dropdown lists what the run reported", async () => {
+    // "category selector doesn't work anymore": the panel showed the run's
+    // list while the dropdown read only the canvas's own parse, which a wired
+    // project it cannot read leaves empty — so it offered "All" and nothing.
+    const node = await focusNode();
+    node._symEvents = [];
+    node._symFocusCategories = ["Food - 3 stages 1x1", "Decoration"];
+    assert.deepEqual(widgetOf(node, "category").options.values(),
+                     ["All", "Decoration", "Food - 3 stages 1x1"]);
+});
+
+test("the run's categories arrive with its assets", async () => {
+    const node = await focusNode();
+    node._symEvents = [];
+    emit("symbiotica.focus", {
+        node_id: String(node.id), refs_root: "",
+        categories: ["Decoration", "HUD Icon 1x1"],
+        assets: [{ name: "Bunting", category: "Decoration", refs: [] }],
+    });
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(widgetOf(node, "category").options.values(),
+                     ["All", "Decoration", "HUD Icon 1x1"]);
 });
 
 test("it lists its own parse when no order is wired", async () => {

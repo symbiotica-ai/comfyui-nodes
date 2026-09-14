@@ -1,5 +1,5 @@
 # ABOUTME: V3 ComfyUI nodes for the order pipeline — Studio Library, Asset
-# ABOUTME: Focus, Prompt Block, Order Tracker. Thin wrappers over py/pipeline/*.
+# ABOUTME: Focus, Prompts, Order Tracker. Thin wrappers over py/pipeline/*.
 from __future__ import annotations
 
 import hashlib
@@ -15,15 +15,9 @@ from .order_loader import event_spec, load_order
 from .order_sheet import bucket_for, canvas_size, category_recipe
 from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import assets_by_category, save_paths
-from .prompt_book import BOOK_DIR
-from .prompt_store import PromptPathError, read_block, resolve as resolve_block
 
 Order = io.Custom("SYMBIOTICA_ORDER")
 
-# How many blocks a recipe serves. Shared by the Recipe (one output per slot)
-# and the Prompt Block (which slot of the recipe it edits) so a wire from
-# `text_N` and a `slot` of N cannot mean different things.
-SLOT_MAX = 6
 
 def _push(event: str, payload: dict) -> None:
     """Fire-and-forget UI push; absent/failed server must never break execution."""
@@ -452,11 +446,23 @@ class SymbioticaAssetFocus(io.ComfyNode):
         # reference art beside each name, so every ref file goes over with the
         # root they are relative to — the root whoever parsed the order
         # registered, which is what lets the thumbnail route serve out of it.
+        # Every category the EVENT holds, not just the narrowed one: the
+        # `category` dropdown is built from this when the canvas has no parse
+        # of its own (a wired project it cannot read), and a list narrowed to
+        # the current pick would offer nothing to switch to.
+        categories = []
+        for a in order.get("assets", []) or []:
+            if not str(a.get("assetName", "") or "").strip():
+                continue
+            recipe = category_recipe(a)
+            if recipe and recipe not in categories:
+                categories.append(recipe)
         _push("symbiotica.focus", {
             "node_id": str(getattr(getattr(cls, "hidden", None),
                                    "unique_id", "")),
             "feature": str(order.get("feature", "")),
             "refs_root": str(order.get("refsRoot", "") or ""),
+            "categories": categories,
             "assets": [{"name": a["assetName"], "category": a["category"],
                         "canvas": a.get("canvas", ""),
                         "refs": list(raw.get(a["assetName"], {})
@@ -510,213 +516,43 @@ class SymbioticaAssetFocus(io.ComfyNode):
                              [canvas_size(raw.get(i["assetName"], i))[1] for i in picked])
 
 
-def _prompt_node_project(project_path):
-    """The project a prompt-book canvas node reads: its own value — typed or
-    delivered on the wire — nothing else. These nodes sit downstream of the
-    neighbouring block's `project_path` output, which is already resolved, so
-    there is no order to walk."""
-    cand = str(project_path or "").strip()
-    return cand if cand and os.path.isdir(cand) else ""
-
-
 class SymbioticaPromptBlock(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
         return io.Schema(
             node_id="SymbioticaPromptBlock",
-            display_name="Symbiotica Prompt Block",
+            display_name="Prompts (Symbiotica)",
             category="symbiotica/pipeline",
-            description="One block of the prompt book, edited on the canvas — "
-                        "a shared rule, an image-model block, or an asset "
-                        "type. Several of these side by side ARE the book, "
-                        "laid out like the string-literal graphs they replace, "
-                        "except a save here lands in "
-                        "<project>/<subfolder>/ where every queue reads it. Set "
-                        "project_path, and chain block to block through the "
-                        "`project_path` passthrough so one wire feeds the row. "
-                        "Wire Asset Focus's `category` in and this becomes a "
-                        "window onto that category's recipe slot: the asset "
-                        "picks the block, you read it, edit it and pass it on.",
+            description="A text file on the canvas. Point it at a path, "
+                        "pick a folder under it and a file in that folder, "
+                        "read and edit it here, save it back. The output is "
+                        "the text as shown.",
             inputs=[
-                io.String.Input("project_path", default="",
-                                tooltip="Client project folder holding the "
-                                        "prompt book. Type it, or wire a "
-                                        "neighbouring block's `project_path` "
-                                        "passthrough."),
-                io.String.Input("block", default="",
-                                tooltip="Which block this node edits: a type "
-                                        "block (Chair.md), a shared rule "
-                                        "(_rules/02-inputs.md) or an image "
-                                        "block (_image/01-image-model.md). "
-                                        "The panel's picker fills this in. "
-                                        "Ignored while `category` is wired — "
-                                        "then the recipe names the block."),
-                io.Combo.Input("slot",
-                               options=[str(i) for i in
-                                        range(1, SLOT_MAX + 1)],
-                               default="1",
-                               tooltip="Which slot of the category's recipe "
-                                       "this node edits, when a `category` is "
-                                       "wired in. Ignored otherwise."),
-                # AFTER `slot`, the last widget: `widgets_values` restores
-                # positionally, so a widget inserted ahead of one that already
-                # exists takes its saved value. `category` and `text_in` are
-                # socket inputs and hold no slot in that array.
-                io.String.Input("subfolder", default=BOOK_DIR,
-                                tooltip="The folder inside the project that "
-                                        "holds the book. `prompts` unless this "
-                                        "project keeps its blocks somewhere "
-                                        "else — a name, not a path, and it "
-                                        "cannot climb out of the project."),
-                io.String.Input("category", optional=True, force_input=True,
-                                tooltip="Wire Asset Focus's `category` here "
-                                        "and this node edits whatever "
-                                        "`_recipes/<category>.json` names in "
-                                        "`slot` — switch asset type and the "
-                                        "block on screen follows, with "
-                                        "nothing to pick."),
-                io.String.Input("text_in", force_input=True, optional=True,
-                                tooltip="The previous block's `text`, which "
-                                        "this node appends its own block to. "
-                                        "Ignored while a `category` is wired — "
-                                        "this node is then a window onto that "
-                                        "recipe's slot, not a link in a "
-                                        "chain."),
+                io.String.Input("path", default="",
+                                tooltip="The folder holding the prompts. Type "
+                                        "it, or wire a string. Its sub-folders "
+                                        "fill the `folder` dropdown."),
+                io.String.Input("folder", default="",
+                                tooltip="Which sub-folder of the path, "
+                                        "relative to it (`_rules`). `/` is "
+                                        "the path itself."),
+                io.String.Input("file", default="",
+                                tooltip="Which file in that folder. The "
+                                        "dropdown lists what the folder "
+                                        "holds."),
+                io.String.Input("text", default="", multiline=True,
+                                tooltip="The file's text. Edit here; "
+                                        "`save file` writes it back."),
             ],
             outputs=[
-                io.String.Output(display_name="project_path",
-                                 tooltip="Passthrough of the project, so "
-                                         "blocks chain on one wire instead of "
-                                         "fanning every node back to the "
-                                         "book."),
                 io.String.Output(display_name="text",
-                                 tooltip="This node's block, ready for the "
-                                         "LLM. Chained (no `category` wired) "
-                                         "it is everything so far: text_in "
-                                         "plus this block, blank-line "
-                                         "separated, so the LAST block in a "
-                                         "row carries the whole prompt."),
+                                 tooltip="The text as shown."),
             ],
-            # A push needs the node id to reach the right panel: which block a
-            # wired category names is decided at run time, and without the id
-            # the panel keeps showing whatever was last picked by hand.
-            hidden=[io.Hidden.unique_id],
         )
 
-    @staticmethod
-    def _slot_index(slot):
-        """`slot` as a 0-based index, clamped. Never raises: the widget is
-        written by the panel from a wire, and a stray value must not kill the
-        queue."""
-        try:
-            n = int(str(slot or "1").strip() or 1)
-        except ValueError:
-            n = 1
-        return max(1, min(n, SLOT_MAX)) - 1
-
     @classmethod
-    def _pick(cls, project, block="", slot="1", category="", subfolder=None):
-        """Which block this node edits, as `(name, version, from_recipe)`.
-
-        A wired category beats the picker: the whole point is that switching
-        asset type re-points this editor with nothing to choose. It only wins
-        when the recipe actually names something in this slot — an absent
-        recipe or a short one falls back to the picked block rather than
-        blanking the panel the user is typing into.
-        """
-        cat = str(category or "").strip()
-        if not cat:
-            return str(block or "").strip(), "", False
-        from .prompt_book import read_recipe
-        picked = read_recipe(project, cat, subfolder)
-        i = cls._slot_index(slot)
-        if i < len(picked) and picked[i].get("block"):
-            return picked[i]["block"], picked[i].get("version", ""), True
-        return str(block or "").strip(), "", False
-
-    @classmethod
-    def fingerprint_inputs(cls, project_path="", subfolder=BOOK_DIR, block="",
-                           slot="1", category="", text_in=None):
-        # Widgets only — a linked project reads as None here (see Category
-        # Prompts), so fall back to the projects executions registered. Hash
-        # the one file this node edits; never raise — a raise becomes NaN and
-        # re-bills every descendant on each queue press.
-        one = _one
-        cat = str(one(category) or "").strip()
-        # The category and the slot are what NAME the file when a recipe
-        # drives this node, so they belong in the hash even though the name
-        # below is derived from them — a recipe edited to point slot 2 at a
-        # different block changes nothing else here.
-        # The subfolder names the file as much as the block does, so a book
-        # moved to another folder must not read as the same hash.
-        h = hashlib.sha256(
-            f"block:{str(block or '').strip()}:{cat}:{one(slot, '1')}"
-            f":{str(subfolder or '').strip()}".encode())
-        candidates = [str(project_path or "").strip()]
-        if not candidates[0]:
-            candidates = _executed_projects()
-        for project in candidates:
-            if not project:
-                continue
-            h.update(project.encode())
-            try:
-                name, version, _ = cls._pick(project, block, one(slot, "1"),
-                                             cat, subfolder)
-                h.update(f"{name}:{version}".encode())
-                st = os.stat(resolve_block(project, name, subfolder))
-                h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
-            except (PromptPathError, OSError, ValueError):
-                pass
-        return h.hexdigest()
-
-    @classmethod
-    def execute(cls, project_path="", subfolder=BOOK_DIR, block="", slot="1",
-                category="", text_in=None) -> io.NodeOutput:
-        from .prompt_book import pick_version
-
-        one = _one
-        project = _prompt_node_project(project_path)
-        if not project:
-            raise ValueError(
-                "no project folder to read the prompt book from — set "
-                "project_path, or wire a neighbouring block's passthrough")
-        name, version, from_recipe = cls._pick(
-            project, block, one(slot, "1"), one(category), subfolder)
-        if not name:
-            raise ValueError(
-                "no block picked — choose one in the panel, or wire a "
-                "`category` whose recipe names one")
-        # Empty rather than a raise when the file is not there yet: this node
-        # is the editor the block is written in, so it has to run before its
-        # first save. The composed architect prompts still raise on absence —
-        # they are read by nodes that can do nothing without them.
-        try:
-            body = read_block(project, name, subfolder)
-        except PromptPathError:
-            body = ""
-        text = pick_version(body, version) if from_recipe else body.strip()
-        if from_recipe:
-            # Recipe-driven, so `text_in` is the SAME prompt arriving off the
-            # wire — appending it would emit the block twice. This node is a
-            # window onto the recipe's slot here, not a link in a chain.
-            out = text
-        else:
-            # Chained: this node's output is everything so far. The join is the
-            # same blank line compose_prompt uses, so a hand-chained row reads
-            # the same as the book-composed prompt.
-            out = "\n\n".join(
-                p for p in (str(text_in or "").strip(), text) if p)
-        # The panel cannot know which block a wired category named — that is
-        # decided here, at run time — so it is told, the same way the Recipe
-        # tells its own panel which recipe it served.
-        if from_recipe:
-            _push("symbiotica.block", {
-                "node_id": str(getattr(getattr(cls, "hidden", None),
-                                       "unique_id", "")),
-                "name": name,
-                "version": version,
-            })
-        return io.NodeOutput(project, out)
+    def execute(cls, path="", folder="", file="", text="") -> io.NodeOutput:
+        return io.NodeOutput(str(_one(text) or ""))
 
 
 def _pick_folders(values):

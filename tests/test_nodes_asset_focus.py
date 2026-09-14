@@ -207,6 +207,25 @@ class TestWhatThePanelIsTold:
         run(nodes_mod, order=ORDER, category="Decoration")
         assert [a["name"] for a in self.detail(pushed)["assets"]] == ["Bunting"]
 
+    def test_every_category_of_the_event_goes_over_even_when_narrowed(
+            self, nodes_mod, pushed):
+        """The `category` dropdown is built from this when the canvas has no
+        parse of its own. Narrowed to Decoration it still has to offer the
+        other categories, or there is nothing to switch to — "category
+        selector doesn't work anymore"."""
+        run(nodes_mod, order=ORDER, category="Decoration")
+        assert self.detail(pushed)["categories"] == ["Food - 3 stages",
+                                                     "Decoration"]
+
+    def test_categories_are_recipes_split_by_canvas(self, nodes_mod, pushed):
+        order = {**ORDER, "assets": [
+            {**ORDER["assets"][0], "canvas": "128x128"},
+            {**ORDER["assets"][1], "canvas": "128x256"},
+            ORDER["assets"][2]]}
+        run(nodes_mod, order=order)
+        assert self.detail(pushed)["categories"] == [
+            "Food - 3 stages 1x1", "Food - 3 stages 1x2", "Decoration"]
+
 
 class TestTheBucketOnTheWire:
     def test_a_row_with_no_prep_bucket_carries_its_canvas_in_tiles(

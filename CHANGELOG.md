@@ -8,6 +8,29 @@ node's inputs, outputs, or id says so at the top of its entry.
 
 ## 2026.9.23
 
+**BREAKING — `Prompt Block` becomes `Prompts (Symbiotica)`.** Same node id
+(`SymbioticaPromptBlock`), new inputs and outputs, so a graph holding one opens
+with the node there and its wires dropped.
+
+It is now a text file on the canvas, nothing more: `path` (typed, or wired —
+it climbs an order-passing hop to find the string behind it), a `folder`
+dropdown of that path's sub-folders, a `file` dropdown of what the folder
+holds, and the text itself, edited in the panel and written back with
+**save file**. One output, `text`, the text as shown. A save is announced to
+every other Prompts node on the same file, so two panels cannot disagree.
+
+Gone with it: the `project_path`, `block`, `slot`, `subfolder`, `category` and
+`text_in` inputs, the `project_path` passthrough output, the recipe-slot
+window (a wired `category` naming the block), and version picking. The routes
+`prompt-book`, `prompt-read` and `prompt-write` are now `prompts-list`,
+`prompts-read` and `prompts-write`, plus `prompts-mkdir` and `prompts-rename`
+for the panel's two **new** buttons. `web/js/prompt_book.js` is
+`web/js/prompts.js`.
+
+**Asset Focus** sends the panel every category the event holds, not just the
+narrowed one, so a canvas that cannot parse its own project still has a
+`category` dropdown with something to switch to.
+
 **BREAKING — the Neural Sins and Hypereel arc is removed (33 nodes).** A
 workflow holding one of them opens with a red missing-node box. The old pack
 stays on the registry, so pin `2026.9.22` to keep a graph that still needs

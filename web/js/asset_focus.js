@@ -166,10 +166,18 @@ function inCategory(asset, pick) {
 // the order the spreadsheet happens to list them is a list you have to scan
 // every time. Compared with `localeCompare` so "Cashier's Desk" files where a
 // person looks for it rather than where its apostrophe's code point puts it.
+//
+// Two sources, merged: the folder parse the canvas made itself, and the list
+// the last run pushed. A wired project the canvas cannot read leaves the parse
+// empty while the run knows every category — and the run's list is what the
+// panel is already showing, so the dropdown has to agree with it.
 function categoriesOf(node) {
     const found = [];
     for (const asset of publishedAssets(node)?.assets ?? []) {
         const category = categoryRecipeOf(asset);
+        if (category && !found.includes(category)) found.push(category);
+    }
+    for (const category of node._symFocusCategories ?? []) {
         if (category && !found.includes(category)) found.push(category);
     }
     return [ALL_CATEGORIES,
@@ -177,11 +185,13 @@ function categoriesOf(node) {
                                                     { sensitivity: "base" }))];
 }
 
-// Put the order-reading widgets above the ones that narrow it. Order on screen
-// is the order of `node.widgets`, and it is free to differ from the schema's —
-// which is fixed by what saved graphs restore positionally, not by what reads
-// well.
-const SELECTION_ORDER = ["project_path", "month", "feature", "📁 Read folder"];
+// Put the order-reading widgets above the ones that narrow it, and the button
+// under all of them — a button between two dropdowns reads as a break in the
+// form. Order on screen is the order of `node.widgets`, and it is free to
+// differ from the schema's — which is fixed by what saved graphs restore
+// positionally, not by what reads well.
+const SELECTION_ORDER = ["project_path", "month", "feature", "category", "asset",
+                         "📁 Read folder"];
 
 function hoistSelectionWidgets(node) {
     const wanted = SELECTION_ORDER
@@ -191,6 +201,15 @@ function hoistSelectionWidgets(node) {
     if (!wanted.length) return;
     node.widgets = [...wanted,
                     ...node.widgets.filter((w) => !wanted.includes(w))];
+}
+
+// `ref` is set by clicking a tile, and a second control for the same choice is
+// the same thing twice. The widget stays — it is how the file reaches Python
+// and a saved workflow — but it takes no room on the canvas.
+function hideWidget(w) {
+    if (!w) return;
+    w.hidden = true;
+    w.computeSize = () => [0, -4];
 }
 
 function focusPanel(node) {
@@ -608,6 +627,7 @@ function focusPanel(node) {
         refWidget.serializeValue = () =>
             (refWidget.value === FIRST_REF ? "" : refWidget.value);
         if (!refWidget.value) refWidget.value = FIRST_REF;
+        hideWidget(refWidget);
     }
 
     node._symRenderFocus = render;
@@ -624,6 +644,7 @@ function focusPanel(node) {
         // would show the previous feature's assets over the new one's — and it
         // is the list that wins in `render`.
         node._symFocusAssets = [];
+        node._symFocusCategories = [];
         // A feature whose events are not parsed yet is worth asking about
         // again; `publishOrder` repeats itself only when something changed, so
         // an ask that answers the same thing does not come back round.
@@ -711,6 +732,8 @@ api.addEventListener("symbiotica.focus", (event) => {
         ?? app.graph?.getNodeById?.(detail.node_id);
     if (!node) return;
     node._symFocusAssets = Array.isArray(detail.assets) ? detail.assets : [];
+    node._symFocusCategories = Array.isArray(detail.categories)
+        ? detail.categories.map(String) : [];
     // The run's own reference root, so the thumbnails load from a graph whose
     // source node has published nothing to the canvas.
     node._symFocusRefsRoot = String(detail.refs_root ?? "");

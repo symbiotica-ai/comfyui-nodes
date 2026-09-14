@@ -12,8 +12,8 @@ from server import PromptServer
 
 from . import studio_library as studio_library_mod
 from .paths import parse_roots, resolve_within
-from .prompt_book import book_subfolder
-from .prompt_store import PromptPathError, list_book, read_block, write_block
+from .prompt_store import (PromptPathError, list_files, list_folders,
+                           make_folder, read_file, rename, write_file)
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
@@ -158,24 +158,6 @@ def _expand_project(value: str) -> str:
     Volume; anything else passes through for the route's own checks."""
     return studio_library_mod.expand_studio_path(
         studio_library_mod.STUDIO_ASSETS_DIR, value)
-
-
-def _book(source) -> str:
-    """The prompt book's subfolder as the node sent it — a query string on the
-    GET routes, a JSON body on the POSTs. Absent means the default, so a panel
-    that has not been updated still reaches the same book it always did.
-
-    Validated HERE rather than in each handler: the value comes off a widget
-    anyone can type into, and a name that climbs out of the project is a 400 on
-    every route at once instead of a 500 on whichever one forgot to catch it.
-    """
-    raw = (str(source.query.get("subfolder", "") or "")
-           if hasattr(source, "query")
-           else str((source or {}).get("subfolder") or ""))
-    try:
-        return book_subfolder(raw)
-    except ValueError as exc:
-        raise web.HTTPBadRequest(reason=str(exc)) from None
 
 
 def _template_dir() -> str | None:
@@ -388,48 +370,88 @@ def register_project(path: str) -> None:
             _projects.add(real)
 
 
-@PromptServer.instance.routes.get("/symbiotica/prompt-book")
-async def prompt_book(request):
-    """The project's editable blocks: shared rules first, then type blocks.
-
-    Same project expansion as the template routes — the node sends whatever its
-    project_path resolves to, which on Modal is the volume-relative
-    studios/<slug>/… form and points at no book at all unexpanded.
-    """
-    project = _expand_project(request.query.get("project", ""))
-    if not project:
-        return web.json_response({"error": "project required"}, status=400)
-    return web.json_response({"ok": True, **list_book(project, _book(request))})
+def _prompt_folder(value) -> str:
+    """The folder a Prompts panel names. Same expansion as the template routes:
+    on Modal the wire carries the volume-relative studios/<slug>/… form, which
+    points at no folder at all unexpanded."""
+    return _expand_project(str(value or "").strip())
 
 
-@PromptServer.instance.routes.get("/symbiotica/prompt-read")
-async def prompt_read(request):
-    project = _expand_project(request.query.get("project", ""))
+async def _json_body(request) -> dict:
     try:
-        text = read_block(project, request.query.get("name", ""),
-                          _book(request))
+        body = await request.json()
+    except Exception:
+        body = {}
+    return body if isinstance(body, dict) else {}
+
+
+@PromptServer.instance.routes.get("/symbiotica/prompts-list")
+async def prompts_list(request):
+    """Every sub-folder and every prompt file under the path, relative to
+    it, in one answer: the panel derives the folder dropdown and the file
+    dropdown from it without a request per click."""
+    folder = _prompt_folder(request.query.get("folder", ""))
+    if not folder:
+        return web.json_response({"error": "folder required"}, status=400)
+    return web.json_response({"ok": True, "folders": list_folders(folder),
+                              "files": list_files(folder)})
+
+
+@PromptServer.instance.routes.get("/symbiotica/prompts-read")
+async def prompts_read(request):
+    folder = _prompt_folder(request.query.get("folder", ""))
+    try:
+        text = read_file(folder, request.query.get("name", ""))
     except PromptPathError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     return web.json_response({"ok": True, "text": text})
 
 
-@PromptServer.instance.routes.post("/symbiotica/prompt-write")
-async def prompt_write(request):
-    """Save one block. A .bak of what it replaced sits beside it — an editor
-    that can silently lose a tuned 6k-character rule is not one to trust."""
+@PromptServer.instance.routes.post("/symbiotica/prompts-write")
+async def prompts_write(request):
+    """Save one file. A .bak of what it replaced sits beside it — an editor
+    that can silently lose a tuned 6k-character prompt is not one to trust."""
+    body = await _json_body(request)
+    folder = _prompt_folder(body.get("folder"))
     try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    project = _expand_project(str(body.get("project") or ""))
-    try:
-        saved = write_block(project, str(body.get("name") or ""),
-                            body.get("text"), _book(body))
+        saved = write_file(folder, str(body.get("name") or ""),
+                           body.get("text"))
     except PromptPathError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except OSError as exc:
         return web.json_response({"error": f"cannot save: {exc}"}, status=500)
     return web.json_response({"ok": True, **saved})
+
+
+@PromptServer.instance.routes.post("/symbiotica/prompts-mkdir")
+async def prompts_mkdir(request):
+    """Create a sub-folder inside the prompt folder."""
+    body = await _json_body(request)
+    folder = _prompt_folder(body.get("folder"))
+    try:
+        made = make_folder(folder, str(body.get("name") or ""))
+    except PromptPathError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except OSError as exc:
+        return web.json_response({"error": f"cannot create: {exc}"},
+                                 status=500)
+    return web.json_response({"ok": True, **made})
+
+
+@PromptServer.instance.routes.post("/symbiotica/prompts-rename")
+async def prompts_rename(request):
+    """Rename a file or a sub-folder inside the prompt folder."""
+    body = await _json_body(request)
+    folder = _prompt_folder(body.get("folder"))
+    try:
+        moved = rename(folder, str(body.get("from") or ""),
+                       str(body.get("to") or ""))
+    except PromptPathError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except OSError as exc:
+        return web.json_response({"error": f"cannot rename: {exc}"},
+                                 status=500)
+    return web.json_response({"ok": True, **moved})
 
 
 @PromptServer.instance.routes.post("/symbiotica/tracker-reject")

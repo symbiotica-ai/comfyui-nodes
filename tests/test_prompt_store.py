@@ -1,136 +1,186 @@
-# ABOUTME: Read/write access to a project's prompt book — containment rules the
-# ABOUTME: editor route depends on, and the backup a save leaves behind.
+# ABOUTME: Read/write access to a folder of prompt files — the listing the
+# ABOUTME: Prompts dropdown shows, containment, the backup a save leaves behind.
 import os
 
 import pytest
 
-from pipeline.prompt_store import (PromptPathError, list_book, read_block,
-                                   resolve, write_block)
+from pipeline.prompt_store import (PromptPathError, list_files, list_folders,
+                                   make_folder, read_file, rename,
+                                   resolve_file, write_file)
 
 
-def _book(tmp_path, rules=None, image=None, **types):
+def _folder(tmp_path, **files):
     d = tmp_path / "prompts"
     d.mkdir()
-    for stem, text in types.items():
-        (d / f"{stem}.md").write_text(text)
-    for folder, files in (("_rules", rules), ("_image", image)):
-        if not files:
-            continue
-        r = d / folder
-        r.mkdir()
-        for stem, text in files.items():
-            (r / f"{stem}.md").write_text(text)
-    return str(tmp_path)
+    for name, text in files.items():
+        path = d / name.replace("__", "/")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return str(d)
 
 
-def test_lists_rules_first_then_types(tmp_path):
-    p = _book(tmp_path, rules={"01-a": "A", "02-b": "BB"},
-              **{"Chair": "CHAIR", "Decoration": "DECO"})
-    book = list_book(p)
-    assert [e["name"] for e in book["rules"]] == ["_rules/01-a.md",
-                                                  "_rules/02-b.md"]
-    assert [e["name"] for e in book["types"]] == ["Chair.md", "Decoration.md"]
-    assert book["types"][0]["title"] == "Chair"
-    assert book["rules"][1]["chars"] == 2
+# --- listing ------------------------------------------------------------------
+
+def test_lists_every_text_file_with_its_subfolder(tmp_path):
+    p = _folder(tmp_path, **{"_rules__01-a.md": "A", "Chair.md": "C",
+                             "notes.txt": "N", "_image__01-model.md": "M"})
+    assert list_files(p) == ["Chair.md", "_image/01-model.md",
+                             "_rules/01-a.md", "notes.txt"]
 
 
-def test_a_book_with_no_rules_lists_only_types(tmp_path):
-    p = _book(tmp_path, **{"Chair": "C"})
-    assert list_book(p)["rules"] == []
+def test_a_nested_subfolder_is_listed_too(tmp_path):
+    p = _folder(tmp_path, **{"a__b__deep.md": "D"})
+    assert list_files(p) == ["a/b/deep.md"]
 
 
-def test_reads_a_type_block_and_a_shared_rule(tmp_path):
-    p = _book(tmp_path, rules={"03-light": "LIGHT"}, **{"Chair": "CHAIR"})
-    assert read_block(p, "Chair.md") == "CHAIR"
-    assert read_block(p, "_rules/03-light.md") == "LIGHT"
+def test_backups_dotfiles_and_other_types_are_not_listed(tmp_path):
+    p = _folder(tmp_path, **{"Chair.md": "C", "Chair.md.bak": "OLD",
+                             ".hidden.md": "H", "recipe.json": "{}",
+                             ".git__x.md": "G"})
+    assert list_files(p) == ["Chair.md"]
 
 
-def test_traversal_out_of_the_book_is_refused(tmp_path):
-    # The route hands user input straight to this — a crafted name must not be
-    # able to read or overwrite a file outside the project's prompts folder.
-    p = _book(tmp_path, **{"Chair": "C"})
-    (tmp_path / "secret.md").write_text("SECRET")
-    for name in ("../secret.md", "../../etc/passwd.md", "_rules/../../s.md"):
-        with pytest.raises(PromptPathError):
-            resolve(p, name)
+def test_a_missing_folder_lists_nothing(tmp_path):
+    assert list_files(str(tmp_path / "nope")) == []
+    assert list_files("") == []
 
 
-def test_a_nested_folder_is_refused(tmp_path):
-    # Prompts live in the book or its _rules/ — nowhere else, so a name cannot
-    # quietly create a folder the composer will never read from.
-    p = _book(tmp_path, **{"Chair": "C"})
-    with pytest.raises(PromptPathError, match="_rules"):
-        resolve(p, "deeper/Chair.md")
+def test_lists_every_subfolder_including_empty_and_nested(tmp_path):
+    p = _folder(tmp_path, **{"_rules__01-a.md": "A", "a__b__deep.md": "D"})
+    os.makedirs(os.path.join(p, "_flip"))            # empty: still offered
+    os.makedirs(os.path.join(p, ".git", "objects"))  # dot-folder: never
+    assert list_folders(p) == ["_flip", "_rules", "a", "a/b"]
 
 
-def test_a_non_markdown_name_is_refused(tmp_path):
-    p = _book(tmp_path, **{"Chair": "C"})
-    with pytest.raises(PromptPathError, match="not a prompt file"):
-        resolve(p, "Chair.txt")
+def test_a_missing_path_lists_no_folders(tmp_path):
+    assert list_folders(str(tmp_path / "nope")) == []
+    assert list_folders("") == []
 
 
-def test_no_project_is_refused(tmp_path):
-    with pytest.raises(PromptPathError, match="no project"):
-        resolve("", "Chair.md")
+# --- containment --------------------------------------------------------------
 
+def test_traversal_out_of_the_folder_is_refused(tmp_path):
+    p = _folder(tmp_path)
+    (tmp_path / "secret.md").write_text("S")
+    with pytest.raises(PromptPathError):
+        resolve_file(p, "../secret.md")
+    with pytest.raises(PromptPathError):
+        read_file(p, "../secret.md")
+
+
+def test_a_non_text_name_is_refused(tmp_path):
+    p = _folder(tmp_path)
+    with pytest.raises(PromptPathError):
+        resolve_file(p, "recipe.json")
+    with pytest.raises(PromptPathError):
+        resolve_file(p, "Chair.md.bak")
+
+
+def test_no_folder_is_refused(tmp_path):
+    with pytest.raises(PromptPathError):
+        resolve_file("", "Chair.md")
+    with pytest.raises(PromptPathError):
+        resolve_file(str(tmp_path), "")
+
+
+def test_a_txt_file_reads_and_writes(tmp_path):
+    p = _folder(tmp_path, **{"notes.txt": "N\n"})
+    assert read_file(p, "notes.txt") == "N\n"
+    write_file(p, "notes.txt", "NN")
+    assert read_file(p, "notes.txt") == "NN\n"
+
+
+# --- saving -------------------------------------------------------------------
 
 def test_saving_keeps_a_backup_of_what_it_replaced(tmp_path):
-    p = _book(tmp_path, **{"Chair": "ORIGINAL"})
-    write_block(p, "Chair.md", "EDITED")
-    assert read_block(p, "Chair.md") == "EDITED\n"
-    assert (tmp_path / "prompts" / "Chair.md.bak").read_text() == "ORIGINAL"
+    p = _folder(tmp_path, **{"Chair.md": "OLD\n"})
+    out = write_file(p, "Chair.md", "NEW\n")
+    assert out == {"name": "Chair.md", "chars": 4}
+    assert read_file(p, "Chair.md") == "NEW\n"
+    assert open(os.path.join(p, "Chair.md.bak")).read() == "OLD\n"
 
 
-def test_saving_a_shared_rule_works_and_backs_up(tmp_path):
-    p = _book(tmp_path, rules={"03-light": "SOFT"}, **{"Chair": "C"})
-    write_block(p, "_rules/03-light.md", "HARD RIM")
-    assert read_block(p, "_rules/03-light.md") == "HARD RIM\n"
-    assert (tmp_path / "prompts" / "_rules" / "03-light.md.bak").read_text() \
-        == "SOFT"
-
-
-def test_a_new_rule_can_be_created(tmp_path):
-    p = _book(tmp_path, rules={"01-a": "A"}, **{"Chair": "C"})
-    write_block(p, "_rules/05-new.md", "NEW RULE")
-    assert "_rules/05-new.md" in [e["name"] for e in list_book(p)["rules"]]
+def test_a_new_file_in_a_new_subfolder_is_created(tmp_path):
+    p = _folder(tmp_path)
+    write_file(p, "_rules/09-new.md", "RULE")
+    assert read_file(p, "_rules/09-new.md") == "RULE\n"
+    assert not os.path.exists(os.path.join(p, "_rules", "09-new.md.bak"))
 
 
 def test_a_trailing_newline_is_added_once(tmp_path):
-    p = _book(tmp_path, **{"Chair": "C"})
-    write_block(p, "Chair.md", "TEXT\n")
-    assert read_block(p, "Chair.md") == "TEXT\n"
+    p = _folder(tmp_path)
+    write_file(p, "A.md", "x\n")
+    assert read_file(p, "A.md") == "x\n"
+    write_file(p, "B.md", "")
+    assert read_file(p, "B.md") == ""
 
 
-def test_lists_the_image_blocks_as_their_own_group(tmp_path):
-    p = _book(tmp_path, rules={"01-a": "A"}, image={"01-image-model": "STYLE"},
-              **{"Chair": "C"})
-    book = list_book(p)
-    assert [e["name"] for e in book["image"]] == ["_image/01-image-model.md"]
-    # And they stay out of the other two groups — the panel shows three lists.
-    assert [e["name"] for e in book["types"]] == ["Chair.md"]
-    assert [e["name"] for e in book["rules"]] == ["_rules/01-a.md"]
+def test_a_backslash_name_is_read_as_a_path(tmp_path):
+    p = _folder(tmp_path, **{"_rules__01-a.md": "A"})
+    assert read_file(p, "_rules\\01-a.md") == "A"
+    assert write_file(p, "_rules\\01-a.md", "B")["name"] == "_rules/01-a.md"
 
 
-def test_a_book_with_no_image_folder_lists_an_empty_group(tmp_path):
-    p = _book(tmp_path, **{"Chair": "C"})
-    assert list_book(p)["image"] == []
+# --- folders ------------------------------------------------------------------
+
+def test_a_subfolder_is_created_inside_the_folder(tmp_path):
+    p = _folder(tmp_path)
+    assert make_folder(p, "_flip") == {"name": "_flip"}
+    assert os.path.isdir(os.path.join(p, "_flip"))
+    assert make_folder(p, "_flip") == {"name": "_flip"}   # existing is fine
+    assert make_folder(p, "a/b/") == {"name": "a/b"}
+    assert os.path.isdir(os.path.join(p, "a", "b"))
 
 
-def test_an_image_block_can_be_read_and_created(tmp_path):
-    p = _book(tmp_path, **{"Chair": "C"})
-    write_block(p, "_image/01-image-model.md", "FLAT CEL SHADING")
-    assert read_block(p, "_image/01-image-model.md") == "FLAT CEL SHADING\n"
-    assert os.path.isdir(str(tmp_path / "prompts" / "_image"))
+def test_a_folder_cannot_climb_out(tmp_path):
+    p = _folder(tmp_path)
+    with pytest.raises(PromptPathError):
+        make_folder(p, "../escape")
+    with pytest.raises(PromptPathError):
+        make_folder(p, "")
+    with pytest.raises(PromptPathError):
+        make_folder(p, ".")
+    assert not os.path.exists(str(tmp_path / "escape"))
 
 
-def test_backups_are_not_listed_as_blocks(tmp_path):
-    # .bak and .before-split sit beside the real files; listing them would offer
-    # the user a "prompt" that the composer never reads.
-    p = _book(tmp_path, **{"Chair": "C"})
-    write_block(p, "Chair.md", "EDITED")
-    (tmp_path / "prompts" / "Chair.md.before-split").write_text("OLD")
-    assert [e["name"] for e in list_book(p)["types"]] == ["Chair.md"]
+# --- renaming -----------------------------------------------------------------
 
+def test_a_file_is_renamed_in_place(tmp_path):
+    p = _folder(tmp_path, **{"_rules__01-a.md": "A"})
+    assert rename(p, "_rules/01-a.md", "_rules/01-b.md") == {
+        "from": "_rules/01-a.md", "to": "_rules/01-b.md"}
+    assert list_files(p) == ["_rules/01-b.md"]
+    assert read_file(p, "_rules/01-b.md") == "A"
+
+
+def test_a_folder_is_renamed_with_everything_in_it(tmp_path):
+    p = _folder(tmp_path, **{"_rules__01-a.md": "A", "_rules__old__x.md": "X"})
+    rename(p, "_rules", "rules")
+    assert list_folders(p) == ["rules", "rules/old"]
+    assert list_files(p) == ["rules/01-a.md", "rules/old/x.md"]
+
+
+def test_a_rename_never_lands_on_an_existing_name(tmp_path):
+    p = _folder(tmp_path, **{"A.md": "A", "B.md": "B"})
+    with pytest.raises(PromptPathError):
+        rename(p, "A.md", "B.md")
+    assert read_file(p, "B.md") == "B"
+
+
+def test_a_rename_stays_inside_and_keeps_a_prompt_extension(tmp_path):
+    p = _folder(tmp_path, **{"A.md": "A"})
+    with pytest.raises(PromptPathError):
+        rename(p, "A.md", "../A.md")
+    with pytest.raises(PromptPathError):
+        rename(p, "A.md", "A.json")
+    with pytest.raises(PromptPathError):
+        rename(p, "missing.md", "B.md")
+    with pytest.raises(PromptPathError):
+        rename(p, "", "B")
+    assert list_files(p) == ["A.md"]
+
+
+# --- recipes ------------------------------------------------------------------
 
 class TestRecipes:
     """A recipe is a saved set of blocks — the preset that turns "change three
@@ -178,11 +228,3 @@ class TestRecipes:
         assert delete_recipe(str(tmp_path), "Gone")["removed"] is True
         assert recipes(str(tmp_path)) == []
         assert (book / "_rules" / "01-llm-prompt.md").exists()
-
-    def test_a_flip_block_is_editable(self, tmp_path):
-        """`_flip` holds prompts nothing composes — they still have to be
-        readable and writable by the same panel."""
-        from pipeline.prompt_store import read_block, write_block
-        (tmp_path / "prompts" / "_flip").mkdir(parents=True)
-        write_block(str(tmp_path), "_flip/01-flip.md", "MIRROR\n")
-        assert read_block(str(tmp_path), "_flip/01-flip.md") == "MIRROR\n"

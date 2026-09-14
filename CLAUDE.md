@@ -91,7 +91,7 @@ becomes a floor the user cannot drag past — answer it with the content and the
 node will not shrink below its content; answer it with "the space below me"
 and the node can never shrink at all. Both shipped here, and both cost days.
 
-The shape that works, in every panel in this pack (`pick.js`, `prompt_book.js`,
+The shape that works, in every panel in this pack (`pick.js`,
 `asset_focus.js`, `order_pipeline.js`):
 
 - no `computeSize` on the DOM widget
