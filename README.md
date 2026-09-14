@@ -1,6 +1,6 @@
 # Symbiotica
 
-All-in-one creative pack for ComfyUI. Agents, image and video generation, audio, transcription, captions, and video composition — in one install.
+Creative pack for ComfyUI: Claude and Gemini routed through Cloudflare AI Gateway, and the order pipeline that turns a game's asset list into finished renders.
 
 ## Install
 
@@ -59,36 +59,7 @@ pip install -r symbiotica/requirements.txt
   wins, and a gateway URL missing either its token or its studio is an error
   rather than a quiet fall back to a personal or shared key.
 
-### Audio & transcription
-- `NS Whisper Transcribe` — local faster-whisper transcription with optional initial-prompt biasing
-- `NS Google Transcribe` — Google Speech-to-Text API
-- `NS Music` — generated music track sized to your video
-- `NS Sound Effects` — ElevenLabs-driven SFX from JSON cue lists
-- `NS Voice Atmosphere` — reverb / room tone via scipy fftconvolve
-- `NS Submagic Captions` — Submagic-rendered captions
-
-### Captions, overlays, video composition
-- `NS Caption Overlay` / `NS Caption Style` — Remotion-rendered captions
-- `NS Visual Overlay` — Remotion-rendered Instagram / TikTok / Facebook chrome
-- `NS Video Concat Multi` — stitch multiple clips
-- `NS Video Effects` — speed, crop, flip, etc.
-- `NS Video Overlay` — overlay one video on another
-- `NS Get Video Components` / `NS Create Video` — frame ↔ video conversion utilities
-- `NS Transition Settings` — transition config between clips
-
-### Camera and film look
-- `Camera Shake` — seeded Perlin handheld wiggle on a VIDEO
-- `Focus Pull` — animated depth-of-field rack between two focus points
-- `Film Grain` — analog grain, with per-channel weighting
-- `Chromatic Aberration` — corner-weighted RGB split
-
-### Product research
-- `Product Gallery Scrape` — an e-commerce product page's gallery, split into
-  product-only / on-model / other IMAGE batches
-- `Product Image Sort` — orders a gallery batch by category
-
 ### Workflow utilities
-- `NS Qwen Resolution` — common Qwen-friendly resolutions
 - `Load Text File` — one text file as a STRING
 - `Load Text List` — one text file's blank-line-separated blocks as a list,
   emitting `(prompts, names, count)`
@@ -240,51 +211,6 @@ watch or edit what that asset needs.
   in the model loader node, not by path; it says how many it left out and
   `show` lists them anyway.
 
-## Hypereel (streamer-reel pipeline)
-
-The Hypereel product ported node for node from the Symbiotica platform: find viral
-moments in gameplay, cut them, animate a consistent streamer facecam, and stack
-facecam over real gameplay into a vertical reel.
-
-- `Hypereel Product Scrape (URL to references)` — scrapes a product, app, or
-  app-store page into a logo + screenshots (IMAGE outputs) and a product summary for
-  the script LLM; follows the first app-store link for the curated promo screens,
-  promotes the AppIcon to logo, drops badges and template URLs, and refuses
-  non-public targets (SSRF-guarded — the host is resolved before it is trusted)
-- `Hypereel UGC Presets (style · hook · setting)` — the platform's UGC preset
-  catalogs as dropdowns: pick a style, hook and setting by name and get each template
-  plus a combined pre-labeled block (STYLE NOTE / HOOK PATTERN / SETTING NOTE) ready
-  to concatenate after the product summary
-- `Hypereel Analysis Prompt (auto duration)` — builds the highlight-analysis prompt
-  from the video itself: the real duration becomes the timestamp boundary line and
-  the same number feeds Highlight Pick's `source_duration` guard, so the prompt and
-  the guard can never disagree
-- `Hypereel Highlight Pick` — parses a Gemini highlight list (`HIGHLIGHT n |
-  start=.. | end=.. | label | WHY: .. | MOOD: ..`, seconds or MM:SS) and exposes one
-  highlight's start/end/duration plus the text row for the script LLM
-- `Hypereel Duration Parse (script to prompt + seconds)` — reads the script LLM's
-  output, strips the trailing `DURATION: N` line and returns the clean prompt plus
-  the clamped seconds (4–15, default 12 when the line is missing); wire the prompt
-  onward and the seconds into the video node's duration input
-- `Hypereel Clip (cut by seconds)` — cuts a `[start, start+duration]` window out of a
-  VIDEO with ffmpeg. No frame tensors: a 7-minute or 7-hour source costs the same.
-  The window is clamped inside the source, so a highlight near EOF still yields a
-  full slice
-- `Hypereel Screen Glow (light from gameplay)` — samples the gameplay's per-frame
-  mean color (an explosion flashes orange, a dark corridor goes dim) and
-  screen-blends it onto the facecam as a bottom-up monitor glow, frame-locked to the
-  footage; the facecam's own audio passes through untouched
-- `Hypereel Stack Composite (facecam over gameplay)` — named layout templates:
-  vertical facecam-top 40/60 (the platform's Modal geometry), vertical half/half,
-  and gameplay-full layouts (vertical or horizontal) with the facecam PiP in a
-  chosen corner. Voice at full volume with game audio mixed at a gain only when the
-  gameplay has an audio track (`amix ... normalize=0` so the voice is never
-  halved), up to 4 pairs hard-cut-concatenated in order. Wire a keyer's MASK into a
-  pair to drop the facecam in as a cutout silhouette instead of a rectangle
-
-Runs anywhere ffmpeg exists — local mac (Homebrew) or a Modal image with
-`apt_install("ffmpeg")`.
-
 ## Configuration
 
 ### API keys
@@ -302,10 +228,7 @@ Two ways, checked in this order (after any per-node `api_key` widget):
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude, including the Claude node's direct arm |
 | `GEMINI_API_KEY` | Gemini |
-| `XAI_API_KEY` | Grok |
-| `ELEVENLABS_API_KEY` | ElevenLabs (sound effects) |
-| `SUBMAGIC_API_KEY` | Submagic (captions) |
-| `GOOGLE_API_KEY` | Google Speech-to-Text, and the Gemini image node's second choice after `GEMINI_API_KEY` |
+| `GOOGLE_API_KEY` | The Gemini image node's second choice after `GEMINI_API_KEY` |
 
 Per-node `api_key` widget overrides the env var.
 
@@ -390,11 +313,6 @@ Absolute paths, separated by commas, semicolons or newlines. Without this a
 project outside those folders browses empty: a request cannot make a folder
 readable by naming it, or asking to browse a folder would be what grants access
 to it.
-
-## Heads up
-
-- **`faster-whisper`** is in the deps. First run of `NS Whisper Transcribe` downloads model weights — can be a few GB depending on the model size you pick.
-- **Remotion-rendered nodes** (captions, overlays) need Node.js installed system-wide. The package ships a pre-built Remotion bundle so no `npm install` is needed at install time, but the renderer subprocess still requires `node` on `PATH`.
 
 ## Tests
 

@@ -6,6 +6,44 @@ restarts each month. Releases through `2.43.0` used semantic versioning.
 Because the version no longer encodes compatibility, any release that changes a
 node's inputs, outputs, or id says so at the top of its entry.
 
+## 2026.9.23
+
+**BREAKING — the Neural Sins and Hypereel arc is removed (33 nodes).** A
+workflow holding one of them opens with a red missing-node box. The old pack
+stays on the registry, so pin `2026.9.22` to keep a graph that still needs
+them. They are a separate product line and are no longer run from here.
+
+Gone: audio and transcription (`NS Whisper Transcribe`, `NS Google Transcribe`,
+`NS Music`, `NS Sound Effects`, `NS Voice Atmosphere`, `NS Submagic Captions`),
+captions and video composition (`NS Caption Overlay`, `NS Caption Style`,
+`NS Visual Overlay`, `NS Video Concat Multi`, `NS Video Effects`,
+`NS Video Overlay`, `NS Get Video Components`, `NS Create Video`,
+`NS Transition Settings`), the camera and film look set (`Camera Shake`,
+`Focus Pull`, `Film Grain`, `Chromatic Aberration`), product research
+(`Product Gallery Scrape`, `Product Image Sort`), the Grok nodes
+(`NS Grok Client`, `NS Grok Imagine Image`, `NS Grok Imagine Video`),
+`NS Qwen Resolution`, and the eight `Hypereel` nodes.
+
+**Twelve nodes remain**, all untouched: `Claude`, `Gemini Image`,
+`Control Image`, `Module`, `Recipes`, `Studio Library`, `Asset Focus`,
+`Prompt Block`, `Order Tracker`, `Load Text File`, `Load Text List` and
+`Split Prompts`.
+
+What went with them:
+
+- **`remotion/`** — the caption and overlay renderer, its sources and its
+  committed 6.5 MB bundle. Node.js is no longer needed to run the pack.
+- **`faster-whisper`** leaves `requirements.txt` and `pyproject.toml`; no
+  install now downloads model weights on first run.
+- **Settings → Symbiotica → API Keys** drops `XAI_API_KEY`,
+  `ELEVENLABS_API_KEY` and `SUBMAGIC_API_KEY`. Anthropic and Gemini stay.
+- `assets/overlays/`, `assets/whoosh.mp3`, `web/js/video_concat.js`, the
+  21 private helper modules the arc used, and their 13 test files.
+
+**Also cleared out**, none of it shipped: `docs/superpowers/` (14 plans and
+specs, all for nodes deleted in 2026.9.22), `docs/unused-nodes.md`, and 48 dead
+branches on the remote.
+
 ## 2026.9.22
 
 **BREAKING — 100 nodes removed.** A workflow holding one of them opens with a

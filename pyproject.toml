@@ -1,7 +1,7 @@
 [project]
 name = "symbiotica"
-description = "Creative pack for ComfyUI: Claude and Gemini image/text nodes routed through Cloudflare AI Gateway, the order pipeline (Asset Focus, Prompt Block, Order Tracker, Studio Library, Recipes), audio and transcription (Whisper, ElevenLabs, Submagic), Remotion-rendered overlays and captions, and video composition utilities."
-version = "2026.9.22"
+description = "Creative pack for ComfyUI: Claude and Gemini image/text nodes routed through Cloudflare AI Gateway, and the order pipeline (Asset Focus, Prompt Block, Order Tracker, Studio Library, Recipes, Control Image, Modules)."
+version = "2026.9.23"
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,13 +14,7 @@ keywords = [
     "llm",
     "claude",
     "gemini",
-    "grok",
-    "whisper",
-    "elevenlabs",
-    "remotion",
-    "captions",
-    "video",
-    "audio",
+    "pipeline",
 ]
 classifiers = [
     "License :: OSI Approved :: MIT License",
@@ -30,7 +24,6 @@ classifiers = [
 dependencies = [
     "requests>=2.31.0",
     "pillow>=10.0.0",
-    "faster-whisper",
 ]
 
 [project.urls]

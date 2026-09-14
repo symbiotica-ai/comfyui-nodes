@@ -1,10 +1,10 @@
-# ABOUTME: Import-and-register guard for the eight nodes that lived only on the
+# ABOUTME: Import-and-register guard for the text loaders that lived only on the
 # ABOUTME: Modal volume until 2026-08-04 and had never been committed.
 
 # Why this file exists: `__init__.py` discovers nodes by importing every
 # non-underscore module under py/ and swallowing any failure into a printed
 # traceback. A module that stops importing therefore removes its nodes from the
-# menu silently. These eight arrived without a single test, so an import guard is
+# menu silently. These arrived without a single test, so an import guard is
 # the floor: if one of them breaks, the suite says so instead of the node quietly
 # vanishing from a running ComfyUI.
 
@@ -16,14 +16,8 @@ import pytest
 
 # module name -> the keys it must contribute to NODE_CLASS_MAPPINGS
 RESCUED = {
-    "camera_shake": ["CameraShake"],
-    "film_grain": ["FilmGrain"],
-    "focus_pull": ["FocusPull"],
-    "chromatic_aberration": ["ChromaticAberration"],
     "text_file": ["LoadTextFile"],
     "text_list": ["LoadTextList"],
-    "product_gallery_scrape": ["NSProductGalleryScrape"],
-    "product_image_sort": ["NSProductImageSort"],
 }
 
 

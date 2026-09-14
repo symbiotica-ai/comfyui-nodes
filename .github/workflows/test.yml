@@ -25,11 +25,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # The suite needs pillow (compose/markers), requests (the grok/wavespeed
-      # API clients), and torch — which those clients pull transitively via
-      # utils.imageurl2tensor. torch is a ComfyUI-provided runtime dep the repo
-      # never declares, so a clean checkout needs the CPU wheel explicitly.
-      # faster-whisper stays out (heavy, imported lazily).
+      # The suite needs pillow (compose), requests (the gateway transport), and
+      # torch — the image nodes and the pipeline tensor helpers import it.
+      # torch is a ComfyUI-provided runtime dep the repo never declares, so a
+      # clean checkout needs the CPU wheel explicitly.
       - name: Install test dependencies
         run: |
           python -m pip install pytest pillow requests numpy

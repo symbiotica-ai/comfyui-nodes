@@ -1,9 +1,6 @@
 # Paths kept in git but left out of the zip published to the registry.
 # Users install the pack; they do not need its sources, tests, or notes.
 
-remotion/src/
-remotion/node_modules/
-remotion/package-lock.json
 *.map
 
 tests/
@@ -12,6 +9,3 @@ docs/
 .github/
 
 CHANGELOG.md
-
-# Preset templates are not distributed.
-py/_hypereel_preset_data.py
