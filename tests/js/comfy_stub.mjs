@@ -12,6 +12,7 @@ export function setLatency(ms) { latencyMs = ms; }
 export function reset() {
     latencyMs = 0;  // a test that fails mid-way must not slow the next one
     calls.length = 0;
+    images.length = 0;
     repaints.count = 0;
     canvasCalls.select.length = 0;
     canvasCalls.center.length = 0;
@@ -100,6 +101,30 @@ globalThis.window = {
 };
 globalThis.requestAnimationFrame = (cb) => cb();
 
+// Every src a node asked for, newest last — a preview's whole observable
+// behaviour is which URL it reached for.
+export const images = [];
+
+// A node that previews a file builds an Image and swaps it in on load. The
+// browser's is async, so this one is too: setting `src` schedules onload rather
+// than firing it inline, which is what lets a test see the node's own guard
+// (the value changed while the image was loading) do its job.
+globalThis.Image = class {
+    constructor() {
+        this._src = "";
+        this.onload = null;
+        this.onerror = null;
+    }
+
+    get src() { return this._src; }
+
+    set src(value) {
+        this._src = String(value ?? "");
+        images.push(this._src);
+        queueMicrotask(() => this.onload?.());
+    }
+};
+
 // --- api ---------------------------------------------------------------------
 // A module registers its execution-message listeners once, at import time, so
 // these are deliberately NOT cleared by reset() — dropping them would silently
@@ -152,6 +177,11 @@ export const app = {
     graph: {
         links: {},
         getNodeById: (id) => nodes.get(id) ?? null,
+        // LiteGraph's graph carries this as well as each node — the modules
+        // that repaint after an async load (Control Image's preview and its
+        // listing) reach for the graph's, and without it the call throws
+        // inside a .then() and surfaces as an unhandled rejection.
+        setDirtyCanvas() { repaints.count++; },
         // LiteGraph keeps every node on the graph in `_nodes`, which is how
         // code broadcasts to the canvas rather than walking wires. Without it
         // a broadcast reaches nothing and its test passes for the wrong

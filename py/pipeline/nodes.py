@@ -37,8 +37,8 @@ from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import (assets_by_category, dataset_dir,
                            pick_reference_per_category, save_paths)
 from .project_layout import project_root_of
-from .prompt_book import (compose_image_prompt, image_dir, prompts_dir,
-                          resolve_category_prompts)
+from .prompt_book import (BOOK_DIR, compose_image_prompt, image_dir,
+                          prompts_dir, resolve_category_prompts)
 from .prompt_store import PromptPathError, read_block, resolve as resolve_block
 from .texture_pack import PackSettings
 
@@ -1721,7 +1721,7 @@ class SymbioticaPromptBlock(io.ComfyNode):
                         "type. Several of these side by side ARE the book, "
                         "laid out like the string-literal graphs they replace, "
                         "except a save here lands in "
-                        "<project>/prompts/ where every queue reads it. Wire "
+                        "<project>/<subfolder>/ where every queue reads it. Wire "
                         "the Prompt Book's `project_path` output in, and chain "
                         "block to block through `project` so one wire feeds "
                         "the row. Wire a Prompt Recipe's `text_N` into "
@@ -1751,6 +1751,16 @@ class SymbioticaPromptBlock(io.ComfyNode):
                                        "`text_in` comes from a Prompt "
                                        "Recipe — wiring `text_3` in makes "
                                        "this 3."),
+                # AFTER `slot`, the last widget: `widgets_values` restores
+                # positionally, so a widget inserted ahead of one that already
+                # exists takes its saved value. `category` and `text_in` are
+                # socket inputs and hold no slot in that array.
+                io.String.Input("subfolder", default=BOOK_DIR,
+                                tooltip="The folder inside the project that "
+                                        "holds the book. `prompts` unless this "
+                                        "project keeps its blocks somewhere "
+                                        "else — a name, not a path, and it "
+                                        "cannot climb out of the project."),
                 io.String.Input("category", optional=True, force_input=True,
                                 tooltip="Wire Asset Focus's `category` here "
                                         "and this node edits whatever "
@@ -1798,7 +1808,7 @@ class SymbioticaPromptBlock(io.ComfyNode):
         return max(1, min(n, SLOT_MAX)) - 1
 
     @classmethod
-    def _pick(cls, project, block="", slot="1", category=""):
+    def _pick(cls, project, block="", slot="1", category="", subfolder=None):
         """Which block this node edits, as `(name, version, from_recipe)`.
 
         A wired category beats the picker: the whole point is that switching
@@ -1811,15 +1821,15 @@ class SymbioticaPromptBlock(io.ComfyNode):
         if not cat:
             return str(block or "").strip(), "", False
         from .prompt_book import read_recipe
-        picked = read_recipe(project, cat)
+        picked = read_recipe(project, cat, subfolder)
         i = cls._slot_index(slot)
         if i < len(picked) and picked[i].get("block"):
             return picked[i]["block"], picked[i].get("version", ""), True
         return str(block or "").strip(), "", False
 
     @classmethod
-    def fingerprint_inputs(cls, project_path="", block="", slot="1",
-                           category="", text_in=None):
+    def fingerprint_inputs(cls, project_path="", subfolder=BOOK_DIR, block="",
+                           slot="1", category="", text_in=None):
         # Widgets only — a linked project reads as None here (see Category
         # Prompts), so fall back to the projects executions registered. Hash
         # the one file this node edits; never raise — a raise becomes NaN and
@@ -1830,8 +1840,11 @@ class SymbioticaPromptBlock(io.ComfyNode):
         # drives this node, so they belong in the hash even though the name
         # below is derived from them — a recipe edited to point slot 2 at a
         # different block changes nothing else here.
+        # The subfolder names the file as much as the block does, so a book
+        # moved to another folder must not read as the same hash.
         h = hashlib.sha256(
-            f"block:{str(block or '').strip()}:{cat}:{one(slot, '1')}".encode())
+            f"block:{str(block or '').strip()}:{cat}:{one(slot, '1')}"
+            f":{str(subfolder or '').strip()}".encode())
         candidates = [str(project_path or "").strip()]
         if not candidates[0]:
             candidates = _executed_projects()
@@ -1841,17 +1854,17 @@ class SymbioticaPromptBlock(io.ComfyNode):
             h.update(project.encode())
             try:
                 name, version, _ = cls._pick(project, block, one(slot, "1"),
-                                             cat)
+                                             cat, subfolder)
                 h.update(f"{name}:{version}".encode())
-                st = os.stat(resolve_block(project, name))
+                st = os.stat(resolve_block(project, name, subfolder))
                 h.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
             except (PromptPathError, OSError, ValueError):
                 pass
         return h.hexdigest()
 
     @classmethod
-    def execute(cls, project_path="", block="", slot="1", category="",
-                text_in=None) -> io.NodeOutput:
+    def execute(cls, project_path="", subfolder=BOOK_DIR, block="", slot="1",
+                category="", text_in=None) -> io.NodeOutput:
         from .prompt_book import pick_version
 
         one = SymbioticaCategoryPrompts._one
@@ -1861,7 +1874,7 @@ class SymbioticaPromptBlock(io.ComfyNode):
                 "no project folder to read the prompt book from — wire the "
                 "Prompt Book's `project_path` output, or set project_path")
         name, version, from_recipe = cls._pick(
-            project, block, one(slot, "1"), one(category))
+            project, block, one(slot, "1"), one(category), subfolder)
         if not name:
             raise ValueError(
                 "no block picked — choose one in the panel, or wire a "
@@ -1871,7 +1884,7 @@ class SymbioticaPromptBlock(io.ComfyNode):
         # first save. The composed architect prompts still raise on absence —
         # they are read by nodes that can do nothing without them.
         try:
-            body = read_block(project, name)
+            body = read_block(project, name, subfolder)
         except PromptPathError:
             body = ""
         text = pick_version(body, version) if from_recipe else body.strip()

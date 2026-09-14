@@ -1,5 +1,5 @@
 # ABOUTME: Read/write access to a project's prompt book for the editor panel —
-# ABOUTME: confined to <project>/prompts/, shared _rules/ blocks and type blocks.
+# ABOUTME: confined to <project>/<book>/, shared _rules/ blocks and type blocks.
 import json
 import os
 
@@ -12,11 +12,11 @@ class PromptPathError(Exception):
     """A name that does not resolve inside the project's prompt book."""
 
 
-def _root(project_path):
-    return os.path.realpath(prompts_dir(project_path))
+def _root(project_path, subfolder=None):
+    return os.path.realpath(prompts_dir(project_path, subfolder))
 
 
-def resolve(project_path, name):
+def resolve(project_path, name, subfolder=None):
     """The absolute path of one prompt file, or raise.
 
     `name` is a type block (`Chair.md`), a shared rule
@@ -33,7 +33,7 @@ def resolve(project_path, name):
     name = str(name or "").strip().replace("\\", "/")
     if not name or not name.endswith(".md"):
         raise PromptPathError(f"not a prompt file: {name!r}")
-    root = _root(project_path)
+    root = _root(project_path, subfolder)
     path = os.path.realpath(os.path.join(root, name))
     if path != root and not path.startswith(root + os.sep):
         raise PromptPathError(f"outside the prompt book: {name!r}")
@@ -47,12 +47,12 @@ def resolve(project_path, name):
     return path
 
 
-def list_book(project_path):
+def list_book(project_path, subfolder=None):
     """Every editable block: the shared rules first, in composition order, then
     the image-model blocks, then the per-type blocks. Each entry carries the
     size so the panel can show what it is about to open without reading all of
     them."""
-    root = _root(project_path)
+    root = _root(project_path, subfolder)
 
     def entries(directory, prefix):
         try:
@@ -78,14 +78,14 @@ def list_book(project_path):
     }
 
 
-def recipes(project_path):
+def recipes(project_path, subfolder=None):
     """Every saved preset with its slots, so the Recipe panel fills its
     dropdowns from one request."""
-    return [{"name": n, "slots": read_recipe(project_path, n)}
-            for n in list_recipes(project_path)]
+    return [{"name": n, "slots": read_recipe(project_path, n, subfolder)}
+            for n in list_recipes(project_path, subfolder)]
 
 
-def write_recipe(project_path, name, slots):
+def write_recipe(project_path, name, slots, subfolder=None):
     """Save one preset. The block names are checked against the book the same
     way a block save is — a recipe that can name any path on disk would make
     the reader a file-read primitive."""
@@ -98,11 +98,12 @@ def write_recipe(project_path, name, slots):
         if not block:
             clean.append({"block": "", "version": ""})
             continue
-        resolve(project_path, block)   # raises when it is not in the book
+        # raises when it is not in the book
+        resolve(project_path, block, subfolder)
         clean.append({"block": block,
                       "version": str((slot or {}).get("version", "")
                                      or "").strip()})
-    directory = recipes_dir(project_path)
+    directory = recipes_dir(project_path, subfolder)
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, f"{name}.json")
     with open(path, "w", encoding="utf-8") as fh:
@@ -111,12 +112,12 @@ def write_recipe(project_path, name, slots):
     return {"name": name, "slots": clean}
 
 
-def delete_recipe(project_path, name):
+def delete_recipe(project_path, name, subfolder=None):
     """Remove one preset. The blocks it named stay — a recipe is a pointer."""
     name = str(name or "").strip()
     if not name or "/" in name or "\\" in name or name.startswith("."):
         raise PromptPathError(f"not a recipe name: {name!r}")
-    path = os.path.join(recipes_dir(project_path), f"{name}.json")
+    path = os.path.join(recipes_dir(project_path, subfolder), f"{name}.json")
     try:
         os.remove(path)
     except OSError:
@@ -124,8 +125,8 @@ def delete_recipe(project_path, name):
     return {"name": name, "removed": True}
 
 
-def read_block(project_path, name):
-    path = resolve(project_path, name)
+def read_block(project_path, name, subfolder=None):
+    path = resolve(project_path, name, subfolder)
     try:
         with open(path, encoding="utf-8") as fh:
             return fh.read()
@@ -133,14 +134,14 @@ def read_block(project_path, name):
         raise PromptPathError(f"cannot read {name!r}: {exc}") from exc
 
 
-def write_block(project_path, name, text):
+def write_block(project_path, name, text, subfolder=None):
     """Save one block, keeping a single .bak of what it replaced.
 
     One backup, not a version history: this editor is for tightening a rule in
     place, and the history that matters — which prompt produced which image —
     is provenance's job, not a pile of timestamped copies here.
     """
-    path = resolve(project_path, name)
+    path = resolve(project_path, name, subfolder)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.isfile(path):
         try:

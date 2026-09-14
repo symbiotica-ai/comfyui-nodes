@@ -290,7 +290,8 @@ test("changing a row writes the recipe — the node serves the file, not the DOM
 
 // --- a Prompt Block fed by the Recipe ---------------------------------------
 
-async function blockNode(seen, { originSlot = 0, wire = true } = {}) {
+async function blockNode(seen, { originSlot = 0, wire = true,
+                                subfolder = "prompts" } = {}) {
     reset();
     app.graph._nodes = [];
     setResponder(router(seen));
@@ -298,7 +299,7 @@ async function blockNode(seen, { originSlot = 0, wire = true } = {}) {
     recipe.outputs = [];
     const block = await create("SymbioticaPromptBlock",
                                { project_path: "/p/bakery", block: "Chair.md",
-                                 slot: "1" });
+                                 slot: "1", subfolder });
     block.inputs = [];
     if (wire) link(recipe, block, "text_in", originSlot);
     app.graph._nodes = [recipe, block];
@@ -367,4 +368,58 @@ test("an unsaved edit is not overwritten by the run's block", async () => {
     for (let i = 0; i < 20; i++) await tick();
     assert.equal(blockParts(node).editor.value, "MY UNSAVED REWRITE");
     assert.match(blockParts(node).status.textContent, /save or discard/);
+});
+
+// --- the book's subfolder -----------------------------------------------------
+// `prompts` is a default, not a constant: the Block node carries a `subfolder`
+// widget and every request the panel makes has to name the same folder, or the
+// panel lists one book and the queue reads another.
+
+const listings = (seen) =>
+    seen.filter((c) => c.route.startsWith("/symbiotica/prompt-book"));
+
+test("an untouched node still names the default book", async () => {
+    // The widget shows `prompts` rather than sitting empty, so the folder it
+    // reads is on screen — and that is the value the request carries.
+    const seen = [];
+    await blockNode(seen);
+    const listed = listings(seen);
+    assert.ok(listed.length, "the panel lists the book");
+    assert.ok(listed[0].route.includes("subfolder=prompts"),
+              `expected subfolder=prompts in ${listed[0].route}`);
+});
+
+test("a named subfolder rides on every listing request", async () => {
+    const seen = [];
+    await blockNode(seen, { subfolder: "briefs" });
+    for (const call of listings(seen)) {
+        assert.ok(call.route.includes("subfolder=briefs"),
+                  `expected subfolder=briefs in ${call.route}`);
+    }
+});
+
+test("a save names the subfolder it was read from", async () => {
+    const seen = [];
+    const node = await blockNode(seen, { subfolder: "briefs" });
+    const { picker, save, editor } = blockParts(node);
+    picker.value = "Chair.md";
+    editor.value = "NEW TEXT";
+    fire(save, "click");
+    for (let i = 0; i < 20; i++) await tick();
+    const write = seen.find((c) => c.route.startsWith("/symbiotica/prompt-write"));
+    assert.ok(write, "the save posted");
+    assert.equal(JSON.parse(write.init.body).subfolder, "briefs");
+});
+
+test("retyping the subfolder re-lists the book", async () => {
+    const seen = [];
+    const node = await blockNode(seen);
+    const before = listings(seen).length;
+    const w = node.widgets.find((x) => x.name === "subfolder");
+    w.value = "briefs";
+    w.callback?.call(w, "briefs");
+    for (let i = 0; i < 20; i++) await tick();
+    const after = listings(seen);
+    assert.ok(after.length > before, "the panel re-listed");
+    assert.ok(after[after.length - 1].route.includes("subfolder=briefs"));
 });

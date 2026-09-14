@@ -16,8 +16,8 @@ from . import studio_library as studio_library_mod
 from .compose import scan_images
 from .order_sheet import slugify
 from .paths import parse_roots, resolve_within
-from .prompt_book import (MissingPromptsError, compose_detail, list_versions,
-                          parse_recipe)
+from .prompt_book import (MissingPromptsError, book_subfolder, compose_detail,
+                          list_versions, parse_recipe)
 from .prompt_store import (PromptPathError, delete_recipe, list_book,
                            read_block, recipes, write_block, write_recipe)
 from .pack_library import (
@@ -175,6 +175,24 @@ def _expand_project(value: str) -> str:
         studio_library_mod.STUDIO_ASSETS_DIR, value)
 
 
+def _book(source) -> str:
+    """The prompt book's subfolder as the node sent it — a query string on the
+    GET routes, a JSON body on the POSTs. Absent means the default, so a panel
+    that has not been updated still reaches the same book it always did.
+
+    Validated HERE rather than in each handler: the value comes off a widget
+    anyone can type into, and a name that climbs out of the project is a 400 on
+    every route at once instead of a 500 on whichever one forgot to catch it.
+    """
+    raw = (str(source.query.get("subfolder", "") or "")
+           if hasattr(source, "query")
+           else str((source or {}).get("subfolder") or ""))
+    try:
+        return book_subfolder(raw)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(reason=str(exc)) from None
+
+
 def _template_dir() -> str | None:
     """ComfyUI's output/templates folder, or None when folder_paths is absent
     (unit tests import this module with server/aiohttp stubbed)."""
@@ -261,6 +279,50 @@ async def browse_refs(request):
         return web.json_response({"error": "folder is outside every allowed root"},
                                  status=403)
     return web.json_response(result)
+
+
+@PromptServer.instance.routes.get("/symbiotica/control-images")
+async def control_images(request):
+    """The Control Image library for one root and folder — what the node's
+    dropdown offers. Both are widgets, so the listing cannot be built when the
+    node class is registered; the canvas asks here whenever either changes.
+
+    A root outside ComfyUI's input directory has to be one this process is
+    already entitled to see — `declared_roots` carries the studio-assets mount,
+    ComfyUI's own directories and whatever the operator declared — so asking to
+    browse a folder is never what grants access to it. The answer carries the
+    resolved folder back, because the preview of a file on another mount goes
+    through `local-image`, which needs the absolute path.
+    """
+    import folder_paths
+
+    try:
+        from .._control_image import (control_folder, control_root,
+                                      list_control_images)
+    except ImportError:
+        # The pack is imported as `<pack>.py.pipeline.routes` inside ComfyUI and
+        # as a top-level `pipeline` under the test harness, where `..` is above
+        # the root package. Same module either way — `py/` is on the path there.
+        from _control_image import (control_folder, control_root,
+                                    list_control_images)
+
+    inputs = folder_paths.get_input_directory()
+    root = request.query.get("root", "")
+    try:
+        folder = control_folder(request.query.get("folder", ""))
+        library = control_root(inputs, folder, root)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    # Only the library subtree becomes servable, never the whole mount it is on.
+    if root and not register_root_within(library):
+        return web.json_response(
+            {"error": f"{library} is outside every allowed root"}, status=403)
+    return web.json_response({
+        "ok": True,
+        "folder": folder,
+        "library": library,
+        "images": list_control_images(inputs, folder, root),
+    })
 
 
 @PromptServer.instance.routes.get("/symbiotica/list-orders")
@@ -664,14 +726,15 @@ async def prompt_book(request):
     project = _expand_project(request.query.get("project", ""))
     if not project:
         return web.json_response({"error": "project required"}, status=400)
-    return web.json_response({"ok": True, **list_book(project)})
+    return web.json_response({"ok": True, **list_book(project, _book(request))})
 
 
 @PromptServer.instance.routes.get("/symbiotica/prompt-read")
 async def prompt_read(request):
     project = _expand_project(request.query.get("project", ""))
     try:
-        text = read_block(project, request.query.get("name", ""))
+        text = read_block(project, request.query.get("name", ""),
+                          _book(request))
     except PromptPathError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     return web.json_response({"ok": True, "text": text})
@@ -694,7 +757,8 @@ async def prompt_compose(request):
         # its widget picks will compose. Absent, the top versions compose,
         # which is the book as it stands.
         detail = compose_detail(project, request.query.get("category", ""),
-                                parse_recipe(request.query.get("recipe", "")))
+                                parse_recipe(request.query.get("recipe", "")),
+                                _book(request))
     except (MissingPromptsError, ValueError) as exc:
         return web.json_response({"error": str(exc)}, status=400)
     return web.json_response({"ok": True, **detail})
@@ -707,7 +771,8 @@ async def prompt_versions(request):
     project = _expand_project(request.query.get("project", ""))
     if not project:
         return web.json_response({"error": "project required"}, status=400)
-    return web.json_response({"ok": True, "blocks": list_versions(project)})
+    return web.json_response(
+        {"ok": True, "blocks": list_versions(project, _book(request))})
 
 
 @PromptServer.instance.routes.get("/symbiotica/layouts")
@@ -730,7 +795,8 @@ async def recipe_list(request):
     project = _expand_project(request.query.get("project", ""))
     if not project:
         return web.json_response({"error": "project required"}, status=400)
-    return web.json_response({"ok": True, "recipes": recipes(project)})
+    return web.json_response(
+        {"ok": True, "recipes": recipes(project, _book(request))})
 
 
 @PromptServer.instance.routes.post("/symbiotica/recipe-write")
@@ -742,7 +808,7 @@ async def recipe_write(request):
     project = _expand_project(str(body.get("project") or ""))
     try:
         saved = write_recipe(project, str(body.get("name") or ""),
-                             body.get("slots") or [])
+                             body.get("slots") or [], _book(body))
     except PromptPathError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except OSError as exc:
@@ -758,7 +824,8 @@ async def recipe_delete(request):
         body = {}
     project = _expand_project(str(body.get("project") or ""))
     try:
-        gone = delete_recipe(project, str(body.get("name") or ""))
+        gone = delete_recipe(project, str(body.get("name") or ""),
+                             _book(body))
     except PromptPathError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     return web.json_response({"ok": True, **gone})
@@ -775,7 +842,7 @@ async def prompt_write(request):
     project = _expand_project(str(body.get("project") or ""))
     try:
         saved = write_block(project, str(body.get("name") or ""),
-                            body.get("text"))
+                            body.get("text"), _book(body))
     except PromptPathError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except OSError as exc:

@@ -87,6 +87,20 @@ function projectOf(node, seen = new Set()) {
     return "";
 }
 
+// The book's subfolder is the node's OWN widget, never inherited down a wire:
+// `project_path` is the only thing that chains, and a block reading a different
+// folder from the one it was wired to is a silent disagreement rather than an
+// error. A node without the widget sends nothing and the server uses the
+// default, which is every panel that is not a Prompt Block.
+function bookOf(node) {
+    return valueText(widgetOf(node, "subfolder"));
+}
+
+const bookQuery = (node) => {
+    const book = bookOf(node);
+    return book ? `&subfolder=${encodeURIComponent(book)}` : "";
+};
+
 async function getJson(route) {
     const r = await api.fetchApi(route);
     const body = await r.json().catch(() => ({}));
@@ -291,7 +305,7 @@ function bookPanel(node) {
     async function loadComposed(project, category) {
         const { text, blocks } = await getJson(
             `/symbiotica/prompt-compose?project=${encodeURIComponent(project)}`
-            + `&category=${encodeURIComponent(category)}`);
+            + `&category=${encodeURIComponent(category)}` + bookQuery(node));
         loaded = { name: COMPOSED + category, text };
         editor.value = text;
         setEditable(false);
@@ -318,7 +332,7 @@ function bookPanel(node) {
             }
             const { text } = await getJson(
                 `/symbiotica/prompt-read?project=${encodeURIComponent(project)}`
-                + `&name=${encodeURIComponent(name)}`);
+                + `&name=${encodeURIComponent(name)}` + bookQuery(node));
             loaded = { name, text };
             editor.value = text;
             setEditable(true);
@@ -341,7 +355,8 @@ function bookPanel(node) {
         }
         try {
             const book = await getJson(
-                `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`);
+                `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`
+                + bookQuery(node));
             const keep = picker.value;
             picker.replaceChildren();
             // Rules first, in composition order — the same order they appear in
@@ -398,6 +413,7 @@ function bookPanel(node) {
         try {
             const res = await postJson("/symbiotica/prompt-write", {
                 project, name: picker.value, text: editor.value,
+                subfolder: bookOf(node),
             });
             loaded = { name: picker.value, text: editor.value };
             setStatus(`saved — ${res.chars} chars (.bak kept)`);
@@ -455,7 +471,7 @@ function blockPanel(node) {
             }
             const { text } = await getJson(
                 `/symbiotica/prompt-read?project=${encodeURIComponent(project)}`
-                + `&name=${encodeURIComponent(name)}`);
+                + `&name=${encodeURIComponent(name)}` + bookQuery(node));
             loaded = { name, text };
             editor.value = text;
             setStatus(`${text.length} chars`);
@@ -476,7 +492,8 @@ function blockPanel(node) {
         }
         try {
             const book = await getJson(
-                `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`);
+                `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`
+                + bookQuery(node));
             const keep = valueText(blockW) || picker.value;
             picker.replaceChildren();
             groupInto(picker, "Game rules — apply to every type", book.rules);
@@ -552,6 +569,7 @@ function blockPanel(node) {
         try {
             const res = await postJson("/symbiotica/prompt-write", {
                 project, name: picker.value, text: editor.value,
+                subfolder: bookOf(node),
             });
             loaded = { name: picker.value, text: editor.value };
             setStatus(`saved — ${res.chars} chars (.bak kept)`);
@@ -609,7 +627,7 @@ function composePanel(node) {
             const { text, blocks } = await getJson(
                 `/symbiotica/prompt-compose?project=`
                 + `${encodeURIComponent(project)}`
-                + `&category=${encodeURIComponent(category)}`);
+                + `&category=${encodeURIComponent(category)}` + bookQuery(node));
             editor.value = text;
             blocksBar.textContent = blocks
                 .map((b) => `${b.name} (${b.chars})`).join("  +  ");
@@ -631,7 +649,8 @@ function composePanel(node) {
         }
         try {
             const book = await getJson(
-                `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`);
+                `/symbiotica/prompt-book?project=${encodeURIComponent(project)}`
+                + bookQuery(node));
             const keep = valueText(catW) || picker.value;
             picker.replaceChildren();
             groupInto(picker, "Asset type", (book.types ?? []).map(
@@ -840,9 +859,9 @@ function recipePanel(node) {
         try {
             const [versions, list] = await Promise.all([
                 getJson(`/symbiotica/prompt-versions?project=${
-                    encodeURIComponent(project)}`),
+                    encodeURIComponent(project)}${bookQuery(node)}`),
                 getJson(`/symbiotica/recipe-list?project=${
-                    encodeURIComponent(project)}`),
+                    encodeURIComponent(project)}${bookQuery(node)}`),
             ]);
             blocks = versions.blocks ?? [];
             saved = new Map((list.recipes ?? []).map((r) => [r.name, r.slots]));
@@ -918,7 +937,7 @@ function recipePanel(node) {
         if (saveBtn) saveBtn.disabled = true;
         try {
             const res = await postJson("/symbiotica/recipe-write", {
-                project, name, slots: readSlots(),
+                project, name, slots: readSlots(), subfolder: bookOf(node),
             });
             saved.set(name, res.slots);
             setStatus(`${res.slots.length} blocks`);
@@ -941,7 +960,8 @@ function recipePanel(node) {
         if (!(await askConfirm(
             `Delete the recipe ${name}? Its blocks stay on disk.`))) return;
         try {
-            await postJson("/symbiotica/recipe-delete", { project, name });
+            await postJson("/symbiotica/recipe-delete",
+                           { project, name, subfolder: bookOf(node) });
             if (recipeW) recipeW.value = "";
             await refresh();
         } catch (err) {
@@ -1026,6 +1046,18 @@ registerSymbioticaExtension(app, {
             this.size[0] = Math.max(this.size[0], spec.minW);
             this.size[1] = Math.max(this.size[1], spec.minH);
             spec.build(this);
+            const self = this;
+            // Retyping the subfolder points the panel at a different book, so
+            // it has to re-list — the same reason a rewired project does.
+            const book = this.widgets?.find((w) => w.name === "subfolder");
+            if (book) {
+                const cb = book.callback;
+                book.callback = function () {
+                    const out = cb?.apply(this, arguments);
+                    queueMicrotask(() => self._symRefreshBook?.());
+                    return out;
+                };
+            }
         };
         const origCfg = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {

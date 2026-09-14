@@ -218,12 +218,20 @@ Wrappers around Wavespeed's hosted endpoints.
   stays the plain sheet name.
 
 ### Control images
-- `Control Image` (Symbiotica/Images) — Load Image scoped to the shared
-  library `input/controlnet/`. The dropdown lists every image under it,
-  subfolders included, as `folder/name.png`; outputs IMAGE and MASK. Upload
-  there from the hub's storage browser (volume `user-inputs`); new files
-  show after a browser reload. Title it `recipe:control_image` and a recipe
-  stores the relative path.
+- `Control Image` (Symbiotica/Images) — Load Image scoped to a shared library,
+  named by two widgets. `root` is the directory it sits in: empty means
+  ComfyUI's own input directory, and the shared library is
+  `/studio-assets/_platform/resources`, which the canvas editor and the
+  per-user render sandboxes mount whole. (The ENGINE tier mounts
+  `/studio-assets` at its own studio's subtree, so `_platform` is not visible
+  there.) `folder` is the library inside it, `controlnet` by default — a name,
+  never a path out of the root. The dropdown lists every image under that
+  folder, subfolders included, as `folder/name.png`, and re-lists whenever
+  either widget changes; outputs IMAGE and MASK. On the input directory it
+  reads through ComfyUI's own `LoadImage`; on any other mount it reads the
+  file directly, to the same conventions (mask is `1 - alpha`, and a file with
+  no alpha gets the 64x64 all-zero stand-in). Title it `recipe:control_image`
+  and a recipe stores the relative path.
 
 ### Recipes (one template, one workflow per recipe)
 - `Recipes` (Symbiotica/Recipes) — a **project** is one template workflow,

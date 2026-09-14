@@ -1,5 +1,5 @@
 # ABOUTME: Resolves an order's asset types to the architect system prompts kept
-# ABOUTME: one per type under <project>/prompts/<Exact Category Name>.md.
+# ABOUTME: one per type under <project>/<book>/<Exact Category Name>.md.
 import json
 import os
 import re
@@ -20,9 +20,36 @@ class MissingPromptsError(Exception):
                          f"{noun} in this order:\n{lines}")
 
 
-def prompts_dir(project_path):
-    """The prompt book lives beside the project's orders and templates."""
-    return os.path.join(project_path, "prompts")
+# The book's folder inside the project, when nothing names another one. It is a
+# DEFAULT, not the answer: the nodes carry a `subfolder` widget, so a project that
+# keeps its blocks somewhere else is a value typed on the canvas rather than a
+# patch here.
+BOOK_DIR = "prompts"
+
+
+def book_subfolder(subfolder=None):
+    """The book's folder name, normalised. Empty means `BOOK_DIR`.
+
+    This value arrives from a node widget and from an HTTP query, so a name that
+    is absolute or climbs out of the project is refused rather than joined — the
+    book is a place inside the project, and every containment check below is
+    written against a root that is actually in there.
+    """
+    name = str(subfolder or "").strip().replace("\\", "/").rstrip("/")
+    if not name:
+        return BOOK_DIR
+    # A leading slash is REFUSED, not stripped: "/etc" means the absolute path,
+    # and quietly reading it as a name inside the root would send the node to a
+    # different folder than the one that was typed, with nothing said.
+    if name.startswith("/") or any(p in ("", ".", "..") for p in name.split("/")):
+        raise ValueError(f"not a folder inside the project: {subfolder!r}")
+    return name
+
+
+def prompts_dir(project_path, subfolder=None):
+    """The prompt book lives beside the project's orders and templates, in the
+    folder the node names."""
+    return os.path.join(project_path, book_subfolder(subfolder))
 
 
 RULES_DIR = "_rules"
@@ -37,35 +64,36 @@ RECIPES_DIR = "_recipes"
 BLOCK_DIRS = (RULES_DIR, IMAGE_DIR, FLIP_DIR)
 
 
-def rules_dir(project_path):
+def rules_dir(project_path, subfolder=None):
     """The game-wide rules every asset type is composed with."""
-    return os.path.join(prompts_dir(project_path), RULES_DIR)
+    return os.path.join(prompts_dir(project_path, subfolder), RULES_DIR)
 
 
-def flip_dir(project_path):
+def flip_dir(project_path, subfolder=None):
     """Blocks that are handed to a model on their own rather than composed —
     the mirror rewriter is one. They are in the book so one panel edits every
     prompt the pipeline uses, and out of `compose_*` because nothing composes
     them."""
-    return os.path.join(prompts_dir(project_path), FLIP_DIR)
+    return os.path.join(prompts_dir(project_path, subfolder), FLIP_DIR)
 
 
-def recipes_dir(project_path):
+def recipes_dir(project_path, subfolder=None):
     """Saved presets: one JSON file per recipe, naming the blocks it serves."""
-    return os.path.join(prompts_dir(project_path), RECIPES_DIR)
+    return os.path.join(prompts_dir(project_path, subfolder), RECIPES_DIR)
 
 
-def list_recipes(project_path):
+def list_recipes(project_path, subfolder=None):
     """Recipe names on disk, sorted. Names, not bodies — the picker shows
     these and one read follows the pick."""
     try:
-        return sorted(n[:-5] for n in os.listdir(recipes_dir(project_path))
+        return sorted(n[:-5]
+                      for n in os.listdir(recipes_dir(project_path, subfolder))
                       if n.endswith(".json"))
     except OSError:
         return []
 
 
-def read_recipe(project_path, name):
+def read_recipe(project_path, name, subfolder=None):
     """One recipe's slots, `[{"block": name, "version": name}]`.
 
     An absent or unreadable recipe is an empty list, not an error: the node
@@ -75,7 +103,7 @@ def read_recipe(project_path, name):
     name = str(name or "").strip()
     if not name:
         return []
-    path = os.path.join(recipes_dir(project_path), f"{name}.json")
+    path = os.path.join(recipes_dir(project_path, subfolder), f"{name}.json")
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -92,7 +120,7 @@ def read_recipe(project_path, name):
     return out
 
 
-def image_dir(project_path):
+def image_dir(project_path, subfolder=None):
     """The system prompt handed to the IMAGE model, not to the architect.
 
     A second document, kept in the book beside the rules so one panel edits
@@ -100,7 +128,7 @@ def image_dir(project_path):
     drawn. Blocks rather than a single file, so the same numeric-prefix
     ordering works here the day it needs splitting.
     """
-    return os.path.join(prompts_dir(project_path), IMAGE_DIR)
+    return os.path.join(prompts_dir(project_path, subfolder), IMAGE_DIR)
 
 
 VERSION_MARK = re.compile(r"^[ \t]*<!--\s*version:\s*([^>]+?)\s*-->[ \t]*$",
@@ -171,14 +199,14 @@ def parse_recipe(text):
     return pins
 
 
-def list_versions(project_path):
+def list_versions(project_path, subfolder=None):
     """Every block with its version names, in composition order — rules,
     image, types. Names only: the Recipe panel pins by name, and the Block
     node is where a version's text is previewed."""
     out = []
-    folders = [(os.path.join(prompts_dir(project_path), d), f"{d}/")
-               for d in BLOCK_DIRS]
-    folders.append((prompts_dir(project_path), ""))
+    root = prompts_dir(project_path, subfolder)
+    folders = [(os.path.join(root, d), f"{d}/") for d in BLOCK_DIRS]
+    folders.append((root, ""))
     for directory, prefix in folders:
         try:
             names = sorted(n for n in os.listdir(directory)
@@ -230,13 +258,13 @@ def read_named_blocks(directory, prefix="", recipe=None):
     return blocks
 
 
-def read_rule_blocks(project_path, recipe=None):
+def read_rule_blocks(project_path, recipe=None, subfolder=None):
     """The shared rule blocks, in filename order, blanks dropped."""
     return [text for _, text in read_named_blocks(
-        rules_dir(project_path), f"{RULES_DIR}/", recipe)]
+        rules_dir(project_path, subfolder), f"{RULES_DIR}/", recipe)]
 
 
-def compose_image_prompt(project_path, recipe=None):
+def compose_image_prompt(project_path, recipe=None, subfolder=None):
     """The image model's system prompt: every `_image/` block, in order.
 
     Empty when the folder is absent, because the node carrying this output is
@@ -246,7 +274,7 @@ def compose_image_prompt(project_path, recipe=None):
     """
     return "\n\n".join(
         text for _, text in read_named_blocks(
-            image_dir(project_path), f"{IMAGE_DIR}/", recipe))
+            image_dir(project_path, subfolder), f"{IMAGE_DIR}/", recipe))
 
 
 def compose_prompt(rule_blocks, type_block):
@@ -261,7 +289,7 @@ def compose_prompt(rule_blocks, type_block):
     return "\n\n".join(parts)
 
 
-def compose_detail(project_path, category, recipe=None):
+def compose_detail(project_path, category, recipe=None, subfolder=None):
     """One asset type's composed prompt, plus the blocks that built it.
 
     The text comes out of the same `read_named_blocks` + `compose_prompt` pair
@@ -274,8 +302,9 @@ def compose_detail(project_path, category, recipe=None):
     if not cat:
         raise ValueError("no asset type to compose — pick one")
     recipe = recipe or {}
-    rules = read_named_blocks(rules_dir(project_path), f"{RULES_DIR}/", recipe)
-    path = os.path.join(prompts_dir(project_path), f"{cat}.md")
+    rules = read_named_blocks(rules_dir(project_path, subfolder),
+                              f"{RULES_DIR}/", recipe)
+    path = os.path.join(prompts_dir(project_path, subfolder), f"{cat}.md")
     try:
         with open(path, encoding="utf-8") as fh:
             type_text = fh.read()
@@ -290,7 +319,7 @@ def compose_detail(project_path, category, recipe=None):
     return {"text": text, "blocks": blocks}
 
 
-def resolve_category_prompts(project_path, categories):
+def resolve_category_prompts(project_path, categories, subfolder=None):
     """One prompt text per category, in the order given — repeats included, so
     the result lines up with the sheets the categories came from.
 
@@ -306,10 +335,10 @@ def resolve_category_prompts(project_path, categories):
     # The filename IS the category, verbatim: "Food - 3 stages.md", not a slug.
     # One name, one file — so the folder reads as the order sheet's own type
     # list and there is no transform to get wrong in either direction.
-    root = prompts_dir(project_path)
+    root = prompts_dir(project_path, subfolder)
     # Read once for the whole order: the shared blocks are the same for every
     # type, so composing per category must not re-read them per category.
-    rule_blocks = read_rule_blocks(project_path)
+    rule_blocks = read_rule_blocks(project_path, subfolder=subfolder)
     texts, missing = {}, []
     for cat in dict.fromkeys(c.strip() for c in categories):
         path = os.path.join(root, f"{cat}.md")
@@ -331,24 +360,25 @@ def resolve_category_prompts(project_path, categories):
     return [texts[c.strip()] for c in categories]
 
 
-def compose_recipe(project_path, category, recipe=None):
+def compose_recipe(project_path, category, recipe=None, subfolder=None):
     """Both composed prompts under one recipe: the architect system prompt for
     `category` and the image model's system prompt. Unpinned blocks compose
     their top version, so an empty recipe equals the book as-is."""
     recipe = recipe or {}
-    detail = compose_detail(project_path, category, recipe)
+    detail = compose_detail(project_path, category, recipe, subfolder)
     return {"system_prompt": detail["text"],
-            "image_prompt": compose_image_prompt(project_path, recipe)}
+            "image_prompt": compose_image_prompt(project_path, recipe,
+                                                 subfolder)}
 
 
-def compose_indexed(project_path, category, index=1):
+def compose_indexed(project_path, category, index=1, subfolder=None):
     """Both composed prompts at one version slot: every block contributes its
     `index`-th version (1-based), or its top one when it has fewer. Slot 1 is
     therefore always the book exactly as it stands."""
     idx = max(1, int(index or 1))
     recipe = {}
-    for block in list_versions(project_path):
+    for block in list_versions(project_path, subfolder):
         names = block["versions"]
         if idx <= len(names):
             recipe[block["name"]] = names[idx - 1]
-    return compose_recipe(project_path, category, recipe)
+    return compose_recipe(project_path, category, recipe, subfolder)

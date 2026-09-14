@@ -28,11 +28,11 @@ def nodes_mod(monkeypatch, tmp_path):
     sys.modules.pop("pipeline.nodes", None)
 
 
-def _project(tmp_path, **files):
+def _project(tmp_path, book="prompts", **files):
     proj = tmp_path / "bakery"
-    (proj / "prompts" / "_rules").mkdir(parents=True)
+    (proj / book / "_rules").mkdir(parents=True)
     for name, text in files.items():
-        path = proj / "prompts" / name.replace("__", "/")
+        path = proj / book / name.replace("__", "/")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     return proj
@@ -46,6 +46,46 @@ def test_block_reads_its_file_and_passes_the_project_through(nodes_mod,
     out = nodes_mod.SymbioticaPromptBlock.execute(
         project_path=str(proj), block="_rules/01-game.md")
     assert out.args == (str(proj), "GAME RULES")
+
+
+def test_block_reads_the_subfolder_it_names(nodes_mod, tmp_path):
+    # The book's folder is a widget, so a project keeping its blocks anywhere
+    # but `prompts/` is a value typed on the canvas.
+    proj = _project(tmp_path, book="briefs",
+                    **{"_rules__01-game.md": "BRIEF RULES\n"})
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), subfolder="briefs",
+        block="_rules/01-game.md")
+    assert out.args == (str(proj), "BRIEF RULES")
+
+
+def test_block_default_subfolder_is_still_prompts(nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{"_rules__01-game.md": "GAME RULES\n"})
+    default = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), block="_rules/01-game.md")
+    spelled = nodes_mod.SymbioticaPromptBlock.execute(
+        project_path=str(proj), subfolder="prompts", block="_rules/01-game.md")
+    assert default.args == spelled.args == (str(proj), "GAME RULES")
+
+
+def test_block_refuses_a_subfolder_that_climbs_out(nodes_mod, tmp_path):
+    proj = _project(tmp_path, **{"_rules__01-game.md": "GAME RULES\n"})
+    with pytest.raises(ValueError):
+        nodes_mod.SymbioticaPromptBlock.execute(
+            project_path=str(proj), subfolder="../..",
+            block="_rules/01-game.md")
+
+
+def test_block_fingerprint_follows_the_subfolder(nodes_mod, tmp_path):
+    # Two books, same block name, different text: the hash has to tell them
+    # apart or a switched folder serves the previous run's cached output.
+    proj = _project(tmp_path, **{"_rules__01-game.md": "ONE\n"})
+    (proj / "briefs" / "_rules").mkdir(parents=True)
+    (proj / "briefs" / "_rules" / "01-game.md").write_text("TWO\n")
+    fp = nodes_mod.SymbioticaPromptBlock.fingerprint_inputs
+    assert fp(project_path=str(proj), block="_rules/01-game.md") != \
+        fp(project_path=str(proj), subfolder="briefs",
+           block="_rules/01-game.md")
 
 
 def test_block_missing_file_is_empty_not_an_error(nodes_mod, tmp_path):
