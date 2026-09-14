@@ -46,6 +46,39 @@ const GATEWAY = [
     },
 ];
 
+// The Symbiotica Modal render engine, for the Modal Render node and the
+// Modal remote nodes. The endpoint is the hub's symbiotica-comfy api URL;
+// the token pair is a Modal PROXY auth token (wk-…/ws-…), the one in the
+// hub's symbiotica-comfy-proxy-token secret — a CLI token is refused.
+const MODAL = [
+    {
+        env: "MODAL_ENDPOINT_URL",
+        name: "Render endpoint URL",
+        tooltip: "https://symbiotica-<env>--symbiotica-comfy-api.modal.run",
+    },
+    {
+        env: "MODAL_TOKEN_ID",
+        name: "Proxy token id (wk-…)",
+        secret: true,
+        tooltip: "Sent as Modal-Key on every submit and status call.",
+    },
+    {
+        env: "MODAL_TOKEN_SECRET",
+        name: "Proxy token secret (ws-…)",
+        secret: true,
+        tooltip: "Sent as Modal-Secret on every submit and status call.",
+    },
+    {
+        env: "RNP_SERVER_URL",
+        name: "Remote nodes server URL",
+        secret: true,
+        tooltip: "The Symbiotica RNP server, access token included in the "
+            + "path: https://…-symbiotica-rnp-api.modal.run/t/<token>. The "
+            + "remote nodes are fetched from it when ComfyUI starts; leave "
+            + "empty to register none.",
+    },
+];
+
 // Folders outside ComfyUI's own input/output that the asset and template
 // browsers may read. A request cannot name its own folder, so a project kept
 // elsewhere is declared here once.
@@ -71,6 +104,15 @@ registerSymbioticaExtension(app, {
             category: ["Symbiotica", "AI Gateway", env],
             type: "text",
             defaultValue: defaultValue ?? "",
+            ...(secret ? { attrs: { type: "password" } } : {}),
+            tooltip,
+        })),
+        ...MODAL.map(({ env, name, tooltip, secret }) => ({
+            id: `Symbiotica.${env}`,
+            name,
+            category: ["Symbiotica", "Modal", env],
+            type: "text",
+            defaultValue: "",
             ...(secret ? { attrs: { type: "password" } } : {}),
             tooltip,
         })),

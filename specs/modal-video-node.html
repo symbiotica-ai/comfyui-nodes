@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Modal Video node for ComfyUI Desktop</title>
+<style>
+:root{--bg:#f6f5f2;--ink:#1c1c1a;--mute:#6b6a66;--line:#d9d7d1;--acc:#2a5d9f;--acc2:#e8eef7;--ok:#2f7d4f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,Inter,Segoe UI,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:26px;margin:0 0 8px}
+h2{font-size:17px;margin:34px 0 8px;letter-spacing:.02em;text-transform:uppercase;color:var(--mute)}
+h3{font-size:16px;margin:18px 0 4px}
+ul.terse{margin:0;padding-left:18px}
+ul.terse li{margin:2px 0}
+p.chain{font-family:ui-monospace,Menlo,monospace;font-size:13.5px;background:var(--acc2);padding:10px 12px;border-left:3px solid var(--acc);margin:8px 0 14px}
+figure{margin:12px 0}
+figure img{width:100%;border:1px solid var(--line);border-radius:6px;display:block}
+figcaption{font-size:12.5px;color:var(--mute);margin-top:4px}
+.stage{padding:10px 0 4px;border-top:1px solid var(--line)}
+details.meta summary{cursor:pointer;color:var(--mute);font-size:13px}
+dl{display:grid;grid-template-columns:110px 1fr;gap:2px 10px;font-size:13px;margin:6px 0 0}
+dt{color:var(--mute)}dd{margin:0;font-family:ui-monospace,Menlo,monospace}
+table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0}
+th,td{text-align:left;vertical-align:top;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--mute);font-weight:600;font-size:12.5px;text-transform:uppercase}
+tr.pick td{background:var(--acc2)}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;background:var(--ok);color:#fff;margin-left:6px;vertical-align:middle}
+details{margin:6px 0}
+details summary{cursor:pointer}
+#handoff ul{padding-left:18px;font-size:14px}
+code{font-family:ui-monospace,Menlo,monospace;font-size:13px;background:#ecebe6;padding:0 4px;border-radius:3px}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <h1>Modal Video node for ComfyUI Desktop</h1>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-09-14T18:56:58Z</dd>
+        <dt>modified</dt>     <dd>2026-09-14T18:56:58Z, 2026-09-14T22:40:00Z</dd>
+        <dt>commits</dt>      <dd>46f6530</dd>
+        <dt>agent name</dt>   <dd>claude-fable-5-1</dd>
+        <dt>session id</dt>   <dd>session_017HVBbYFeSiBpYJitAnr1Ne</dd>
+        <dt>back refs</dt>    <dd>symbiotica-hub/services/comfy-modal/app.py, apps/web/src/lib/comfy/gpu-client.ts</dd>
+        <dt>forward refs</dt> <dd>py/modal_render.py, py/modal_remote_nodes.py, modal/rnp_server.py</dd>
+      </dl>
+    </details>
+  </header>
+
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <ul class="terse">
+      <li>Desktop ComfyUI, no GPU: load an image, wire it into one node, get a video back on the canvas.</li>
+      <li>The render runs on the hub's existing Modal ComfyUI, through the same submit/poll door the web UI uses.</li>
+    </ul>
+  </section>
+
+  <section id="options">
+    <h2>Options</h2>
+    <table>
+      <tr><th></th><th>How</th><th>Fits</th><th>Cost</th></tr>
+      <tr class="pick">
+        <td><b>O1</b><span class="tag">pick</span></td>
+        <td>One node in this pack calls the hub's Modal <code>/submit</code> + <code>/status</code> endpoint with a pinned image-to-video graph. Same lane Alex's web UI uses today.</td>
+        <td>Already deployed, already proxy-authed, already carries video as base64. Only the node is new.</td>
+        <td>Small. One Python node, a Modal key pair on the desktop.</td>
+      </tr>
+      <tr>
+        <td><b>O2</b></td>
+        <td>Comfy-Org's <a href="https://github.com/Comfy-Org/comfy-remote-nodes">Remote Node Protocol</a>: a Modal web endpoint advertises nodes, the official client package auto-creates them in Desktop.</td>
+        <td>Official direction, video-by-URL built in. Server spec lives in a private Comfy-Org repo, one server per process, env-var config, early.</td>
+        <td>Medium-large. A new RNP server on Modal plus catching a moving spec.</td>
+      </tr>
+      <tr>
+        <td><b>O3</b></td>
+        <td>Subgraph shippers (<a href="https://github.com/city96/ComfyUI_NetDist">NetDist</a>, <a href="https://github.com/LatentRat/comfy_remote_run">comfy_remote_run</a>, <a href="https://github.com/robertvoy/ComfyUI-Distributed">Distributed</a>): the local graph sends a slice to a reachable remote ComfyUI.</td>
+        <td>Any graph, built on the canvas. Needs a long-lived ComfyUI URL with no auth, same nodes and models both sides, image-only returns, all third-party.</td>
+        <td>Medium, plus a tunnel to keep alive. Wrong shape for serverless Modal.</td>
+      </tr>
+    </table>
+    <details>
+      <summary>Rejected: Comfy Cloud nodes</summary>
+      <p>Core since v0.34.5, runs on Comfy's GPUs, credits per second. Fixed catalogue, no own models or LoRAs, not Modal. Fine for a demo, not for the studio pipeline.</p>
+    </details>
+  </section>
+
+  <section id="flow">
+    <h2>Flow (O1)</h2>
+    <p class="chain">load image on canvas &gt; Modal Video node uploads image &gt; bind pinned i2v graph &gt; submit to Modal &gt; poll status &gt; video on canvas</p>
+    <figure>
+      <img src="modal-video-node/flow.png" alt="Load Image, Modal Video node, then Upload, Submit graph, Poll, Video on Modal">
+      <figcaption>Desktop sends one image and a graph, Modal returns one clip.</figcaption>
+    </figure>
+  </section>
+
+  <section id="stages">
+    <h2>Stages</h2>
+
+    <div class="stage">
+      <h3>1. Canvas input</h3>
+      <ul class="terse">
+        <li><b>In</b> an IMAGE from any node, plus widgets: recipe (which pinned i2v graph), prompt, length, seed.</li>
+        <li><b>Does</b> the node is a normal Comfy node. Nothing runs until the queue reaches it.</li>
+        <li><b>Out</b> image tensor and settings, in memory.</li>
+        <li><b>Why here</b> the user never leaves the canvas. No web UI, no upload dialog.</li>
+      </ul>
+    </div>
+
+    <div class="stage">
+      <h3>2. Ship the image</h3>
+      <ul class="terse">
+        <li><b>In</b> the image tensor.</li>
+        <li><b>Does</b> encode to PNG, upload to the Modal user-inputs volume, the same door the hub's img2img upload uses.</li>
+        <li><b>Out</b> a filename the remote ComfyUI can load.</li>
+        <li><b>Why here</b> the submit endpoint takes a graph, not bytes. The image has to be on the volume first.</li>
+      </ul>
+    </div>
+
+    <div class="stage">
+      <h3>3. Bind the graph</h3>
+      <ul class="terse">
+        <li><b>In</b> the pinned image-to-video API graph for the chosen recipe, plus filename, prompt, length, seed.</li>
+        <li><b>Does</b> rewrite the loader node to the uploaded filename and the prompt/length/seed widgets. Same binding the engine lane does before a Draw.</li>
+        <li><b>Out</b> a complete API-format graph.</li>
+        <li><b>Why here</b> the model, loaders and sampler are fixed server-side. The desktop only fills the blanks.</li>
+      </ul>
+    </div>
+
+    <div class="stage">
+      <h3>4. Submit and poll</h3>
+      <ul class="terse">
+        <li><b>In</b> the bound graph, Modal key and secret from the desktop environment.</li>
+        <li><b>Does</b> POST submit, get a call id, poll status every 2 s. Progress shows on the node. Cancel on interrupt.</li>
+        <li><b>Out</b> a succeeded payload: base64 bytes plus extension.</li>
+        <li><b>Why here</b> this is the exact contract the web UI's GPU client already speaks. No server change to start.</li>
+      </ul>
+      <figure>
+        <img src="modal-video-node/poll.png" alt="Submit, call id, Poll loop while running, then Succeeded or Failed">
+        <figcaption>Submit once, poll until succeeded or failed.</figcaption>
+      </figure>
+    </div>
+
+    <div class="stage">
+      <h3>5. Video on canvas</h3>
+      <ul class="terse">
+        <li><b>In</b> base64 mp4.</li>
+        <li><b>Does</b> write to the desktop output folder, return a VIDEO output and an inline preview.</li>
+        <li><b>Out</b> VIDEO socket, wirable into Save Video or any video node.</li>
+        <li><b>Why here</b> the clip lands where the rest of the graph expects it, and on disk for the order.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="check">
+    <h2>Check</h2>
+    <ul class="terse">
+      <li>Canvas input: node appears under Symbiotica, IMAGE socket accepts Load Image.</li>
+      <li>Ship the image: the file shows up in the user-inputs volume listing.</li>
+      <li>Bind the graph: the submitted graph names that file and the typed prompt.</li>
+      <li>Submit and poll: status goes running, then succeeded, inside 9 minutes.</li>
+      <li>Video on canvas: the preview plays, the mp4 is in the output folder, Save Video accepts the socket.</li>
+    </ul>
+  </section>
+
+  <section id="handoff">
+    <details>
+      <summary>Handoff notes for implementation</summary>
+      <ul>
+        <li><b>Endpoint</b> symbiotica-hub <code>services/comfy-modal/app.py</code> <code>api()</code> asgi app, <code>requires_proxy_auth</code>. <code>POST /submit</code> body <code>{"workflow": &lt;api graph&gt;}</code> → <code>{"call_id"}</code>. <code>GET /status?call_id=</code> → 202 running, 200 <code>{"status":"succeeded","image_b64","ext"}</code> or failed. Headers <code>Modal-Key</code>, <code>Modal-Secret</code>. Reference client <code>apps/web/src/lib/comfy/gpu-client.ts</code> (2 s poll, 285 polls).</li>
+        <li><b>Known caps</b> only the first history output returns, 540 s server-side cap, clip travels as base64 JSON with no size guard (5.9 MB seen). Video already passes: SaveVideo writes into history images, ext mp4/webm/mov.</li>
+        <li><b>Image upload</b> volume <code>symbiotica-comfy-user-inputs</code> mounted as ComfyUI input dir. Hub route <code>/volumes/{name}/upload</code> (app.py:1507) and <code>apps/web/src/routes/api/imagegen/upload</code>. Reuse, do not add a bytes-in-submit path.</li>
+        <li><b>Pinned graphs</b> engine lane reads pinned pairs from R2 and binds via <code>apps/web/src/lib/studio-engine/bind.ts</code> (<code>rewriteLoaders</code>). First version: bundle one i2v API graph in the pack, recipe widget is a combo over bundled graphs. Later: read from <code>symbiotica-comfy-workflows</code> volume.</li>
+        <li><b>Desktop config</b> env vars <code>MODAL_ENDPOINT_URL</code>, <code>MODAL_TOKEN_ID</code>, <code>MODAL_TOKEN_SECRET</code> on the desktop, same names the hub uses. Node reads them like <code>py/pipeline/ai_gateway.py</code> reads the gateway env.</li>
+        <li><b>This pack</b> new v3 node beside <code>py/gemini_image.py</code> (already does image→base64→HTTP→tensor). Tensor helper <code>py/pipeline/reference_images.py:to_tensor</code>. VIDEO output via comfy_api video-from-file, plus PreviewVideo UI. No VIDEO type exists in the pack yet. Expose through the V1 mapping shim like the others. Load <code>comfyui-nodes-dev</code>, <code>comfyui-node-outputs</code>, <code>comfyui-node-datatypes</code> before writing.</li>
+        <li><b>Server change, optional</b> return all outputs from <code>/status</code> (list of {b64, ext, name}) so multi-clip graphs work. Not required for the first cut.</li>
+        <li><b>Rejected</b> O2 RNP: server reference is private, env-var single server, spec still moving. O3 subgraph shippers: need a persistent unauthenticated ComfyUI URL, image-only returns, serverless containers die between calls. Comfy Cloud nodes: catalogue only.</li>
+      </ul>
+    </details>
+  </section>
+
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details>
+      <summary>2026-09-14T22:40Z — O1 and O2 built, Qwen image test</summary>
+      <p>O1 ships as the Modal Render node (recipe combo, prompt, seed, size) calling the hub's submit/status door. O2 ships as an RNP/1 server on Modal (app symbiotica-rnp, token in the URL path) plus a thin RNP client in the pack that fetches the server's nodes at startup; the official Comfy-Org client needs a ComfyUI API newer than Desktop 0.35.1 and is GPL, so it is not vendored. One recipe so far, qwen-image (text to image). Image inputs wait on a hub change: the render container mounts only the models volume. Two canvas workflows live in the local ComfyUI (1) install.</p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

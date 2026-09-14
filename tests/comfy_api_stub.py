@@ -177,6 +177,7 @@ def build_modules():
     # on the canvas rather than only on the wire.
     latest.ui = types.SimpleNamespace(
         PreviewText=lambda value, **kw: types.SimpleNamespace(value=value),
+        PreviewImage=lambda image, **kw: types.SimpleNamespace(image=image),
         SavedResult=SavedResult, SavedImages=SavedImages)
     pkg = types.ModuleType("comfy_api")
     pkg.latest = latest

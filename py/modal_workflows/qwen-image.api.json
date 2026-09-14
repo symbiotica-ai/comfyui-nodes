@@ -1,0 +1,32 @@
+{
+  "_symbiotica": {
+    "title": "Qwen Image",
+    "description": "Text to image on Qwen Image 2512 with the 4-step Lightning LoRA, rendered on the Symbiotica Modal render engine.",
+    "inputs": [
+      ["prompt", "STRING", {"multiline": true, "default": "", "tooltip": "What to draw."}],
+      ["negative", "STRING", {"multiline": true, "default": "", "tooltip": "What to keep out. Lightning runs at cfg 1, so this carries little weight."}],
+      ["seed", "INT", {"default": 0, "min": 0, "max": 18446744073709551615, "tooltip": "Same seed and prompt give the same image."}],
+      ["width", "INT", {"default": 1024, "min": 256, "max": 2048, "step": 16}],
+      ["height", "INT", {"default": 1024, "min": 256, "max": 2048, "step": 16}]
+    ],
+    "bind": {
+      "prompt": ["6", "text"],
+      "negative": ["7", "text"],
+      "seed": ["9", "seed"],
+      "width": ["8", "width"],
+      "height": ["8", "height"]
+    },
+    "estimated_duration_s": 70
+  },
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_2512_fp8_e4m3fn.safetensors", "weight_dtype": "default"}},
+  "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image", "device": "default"}},
+  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+  "4": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors", "strength_model": 1.0}},
+  "5": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["4", 0], "shift": 3.1}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+  "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+  "8": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "9": {"class_type": "KSampler", "inputs": {"model": ["5", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["8", 0], "seed": 0, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+  "10": {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["3", 0]}},
+  "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": "symbiotica-modal/qwen-image"}}
+}
