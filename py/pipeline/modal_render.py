@@ -9,8 +9,10 @@ SETTINGS_HINT = "Settings → Symbiotica → Modal"
 CONNECT_TIMEOUT_S = 10
 READ_TIMEOUT_S = 60
 POLL_S = 2.0
-# The render function's own cap is 540 s; anything past that is a lost call.
-TIMEOUT_S = 600.0
+# The render itself is capped at 540 s on Modal, but that clock starts when a
+# GPU is found; a call can sit queued for many minutes first when the card is
+# scarce. The wait here covers the queue, not just the render.
+TIMEOUT_S = 1800.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -110,9 +112,10 @@ def render(http, transport, workflow, *, sleep, clock, check=lambda: None,
         elapsed = int(clock() - started)
         if elapsed > timeout_s:
             raise RenderFailed(
-                f"Modal render {call_id} still running after {elapsed}s; "
-                f"the engine caps a render at 540s, so this one is lost")
-        progress(f"Modal: rendering {elapsed}s")
+                f"gave up on Modal render {call_id} after {elapsed}s. It is "
+                f"usually still queued for a GPU: run `modal app logs -e dev "
+                f"symbiotica-comfy -f` and look for 'waiting to be scheduled'.")
+        progress(f"Modal: waiting for the render {elapsed}s")
         sleep(poll_s)
 
 

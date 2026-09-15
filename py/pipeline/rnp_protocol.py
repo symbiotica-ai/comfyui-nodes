@@ -12,8 +12,9 @@ PROVIDER_ID = "symbiotica-modal"
 PROVIDER_NAME = "Symbiotica Modal render engine"
 MAX_INLINE_PAYLOAD_BYTES = 8 * 1024 * 1024
 POLL_INTERVAL_S = 2.0
-SOFT_TIMEOUT_S = 540.0
-HARD_TIMEOUT_S = 600.0
+# A queued render can wait many minutes for a GPU before its own 540 s cap starts.
+SOFT_TIMEOUT_S = 1500.0
+HARD_TIMEOUT_S = 1800.0
 NODE_ID_PREFIX = "SymbioticaModalRnp_"
 CATEGORY = "symbiotica/modal"
 

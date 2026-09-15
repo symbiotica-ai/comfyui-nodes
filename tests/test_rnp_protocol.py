@@ -48,7 +48,7 @@ def test_descriptor_parses_with_the_pack_client():
     assert spec.inputs[2][1] == "INT"
     assert spec.outputs == (("IMAGE", "image"),)
     assert spec.poll_interval_s == 2.0
-    assert spec.hard_timeout_s == 600.0
+    assert spec.hard_timeout_s == 1800.0
 
 
 def test_schema_hash_moves_with_the_inputs():

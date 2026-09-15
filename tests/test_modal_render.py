@@ -66,7 +66,7 @@ def test_render_submits_polls_and_decodes():
     assert http.calls[1][1] == "https://x.modal.run/status"
     assert http.calls[1][2]["params"] == {"call_id": "fc-1"}
     assert shown[0] == "Modal: queued"
-    assert shown[1].startswith("Modal: rendering")
+    assert shown[1].startswith("Modal: waiting for the render")
 
 
 def test_render_reports_a_failed_run_with_the_engine_reason():
@@ -85,7 +85,7 @@ def test_render_401_points_at_the_proxy_token():
 def test_render_stops_waiting_past_the_budget():
     http = FakeHttp(Response(200, {"call_id": "fc-1"}),
                     *[Response(202, {"status": "running"})] * 5)
-    with pytest.raises(modal_render.RenderFailed, match="still running after"):
+    with pytest.raises(modal_render.RenderFailed, match="gave up on Modal render.*waiting to be scheduled"):
         run(http, timeout_s=5)
 
 
