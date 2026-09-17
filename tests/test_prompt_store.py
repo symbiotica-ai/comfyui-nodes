@@ -40,6 +40,15 @@ def test_backups_dotfiles_and_other_types_are_not_listed(tmp_path):
     assert list_files(p) == ["Chair.md"]
 
 
+def test_a_file_with_no_extension_is_a_prompt_and_reads_back(tmp_path):
+    # The platform's file manager drops files in without one, and the node
+    # saying "[no files in folder]" over one is a lie about what is there.
+    p = _folder(tmp_path, **{"llm-prompts/llm-sp-chair": "SYSTEM PROMPT\n",
+                             "llm-prompts/pic.png": "x"})
+    assert list_files(p) == ["llm-prompts/llm-sp-chair"]
+    assert read_file(p, "llm-prompts/llm-sp-chair") == "SYSTEM PROMPT\n"
+
+
 def test_a_missing_folder_lists_nothing(tmp_path):
     assert list_files(str(tmp_path / "nope")) == []
     assert list_files("") == []

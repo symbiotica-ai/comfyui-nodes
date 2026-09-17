@@ -51,3 +51,22 @@ def test_prompts_is_four_widgets_and_one_output(nodes_mod):
     assert [o.display_name for o in schema.outputs] == ["text"]
     text = schema.inputs[3]
     assert text.multiline is True
+
+
+def test_prompts_is_an_output_node_so_it_can_be_queued_alone(nodes_mod):
+    # A path arriving through a Get node has no value on the canvas. Queueing
+    # the node is how the path is read, and a node with nothing downstream is
+    # only queueable as an output node.
+    schema = nodes_mod.SymbioticaPromptBlock.define_schema()
+    assert schema.is_output_node is True
+
+
+def test_a_run_hands_the_path_it_received_back_to_the_canvas(nodes_mod, monkeypatch):
+    pushed = []
+    monkeypatch.setattr(nodes_mod, "_push",
+                        lambda event, payload: pushed.append((event, payload)))
+    nodes_mod.SymbioticaPromptBlock.execute(
+        path="/studio-assets/_platform/resources", folder="/", file="a.md",
+        text="X")
+    assert pushed[0][0] == "symbiotica.prompts"
+    assert pushed[0][1]["path"] == "/studio-assets/_platform/resources"

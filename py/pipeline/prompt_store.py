@@ -6,8 +6,19 @@ import os
 from .prompt_book import list_recipes, prompts_dir, read_recipe, recipes_dir
 
 # What the Prompts node lists and edits. Anything else in the folder — backups,
-# recipes, images — is not a prompt and stays out of the dropdown.
+# recipes, images — is not a prompt and stays out of the dropdown. A name with
+# no extension at all is a prompt too: a file written by hand or dropped in by
+# the platform's file manager often has none, and the node saying "[no files in
+# folder]" over one is a lie about what is there.
 TEXT_SUFFIXES = (".md", ".txt")
+
+
+def is_prompt_name(name):
+    """Is this a name the prompt editor lists, reads and writes?"""
+    base = str(name or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+    if not base or base.startswith("."):
+        return False
+    return base.lower().endswith(TEXT_SUFFIXES) or "." not in base
 
 
 class PromptPathError(Exception):
@@ -42,7 +53,7 @@ def resolve_file(folder, name):
     """
     root = _root(folder)
     clean = str(name or "").strip().replace("\\", "/")
-    if not clean.lower().endswith(TEXT_SUFFIXES):
+    if not is_prompt_name(clean):
         raise PromptPathError(f"not a prompt file: {name!r}")
     path = _inside(root, clean, "file")
     if path == root:
@@ -67,7 +78,7 @@ def list_files(folder):
         for fname in filenames:
             if fname.startswith("."):
                 continue
-            if fname.lower().endswith(TEXT_SUFFIXES):
+            if is_prompt_name(fname):
                 rel = os.path.relpath(os.path.join(dirpath, fname), root)
                 found.append(rel.replace(os.sep, "/"))
     return sorted(found)
@@ -151,7 +162,7 @@ def rename(folder, src, dst):
         raise PromptPathError("the path itself cannot be renamed")
     if not os.path.exists(src_path):
         raise PromptPathError(f"nothing called {src_rel!r}")
-    if os.path.isfile(src_path) and not dst_rel.lower().endswith(TEXT_SUFFIXES):
+    if os.path.isfile(src_path) and not is_prompt_name(dst_rel):
         raise PromptPathError(f"not a prompt file: {dst_rel!r}")
     if os.path.exists(dst_path):
         raise PromptPathError(f"{dst_rel!r} already exists")

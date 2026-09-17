@@ -228,6 +228,41 @@ export function slotKey(node, matches) {
 
 const isToggleNode = (node) => String(node?.title ?? "").trimEnd().endsWith("?");
 
+// rgthree's Fast Group Bypasser/Muter: one row per group, every row widget
+// named RGTHREE_TOGGLE_AND_NAV and holding `{toggled}`, so the group's title
+// is the only thing that tells two rows apart -- read by name they are one
+// widget, and the slot recorded the first group's `{"toggled": true}` for the
+// whole node. Assigning `.value` is inert on these: `toggle(bool)` is what
+// moves the group.
+const toggledOf = (widget) => (widget?.value && typeof widget.value === "object"
+    && !Array.isArray(widget.value) && "toggled" in widget.value)
+    ? !!widget.value.toggled : null;
+
+const groupTitleOf = (widget) => String(widget?.group?.title
+    ?? String(widget?.label ?? "").replace(/^Enable\s+/i, "")).trim();
+
+export function groupSwitches(widgets) {
+    return (widgets ?? []).filter((w) => toggledOf(w) !== null && groupTitleOf(w));
+}
+
+// Every setting a node carries, by widget name: a recipe is the whole node,
+// not its first widget. A widget the canvas feeds through a wire is left out
+// for the same reason a subgraph's wired input is -- the wire is the value,
+// and recording the empty box it sits in would write that emptiness onto
+// every recipe.
+export function widgetValues(node, widgets) {
+    const wired = new Set();
+    for (const inp of node?.inputs ?? []) {
+        if (inp.widget && inp.link != null) wired.add(inp.widget.name ?? inp.name);
+    }
+    const out = {};
+    for (const w of widgets ?? []) {
+        if (!w.name || wired.has(w.name) || w.name in out) continue;
+        out[w.name] = w.value;
+    }
+    return out;
+}
+
 // ----------------------------------------------------------------- cells --
 
 export function cellText(value) {
@@ -303,14 +338,10 @@ export function projectToTable(project, slots) {
     const recipes = project?.recipes ?? {};
     const columns = [SHARED, ...sortedRecipes(Object.keys(recipes))];
     const valuesOf = (column) => (column === SHARED ? project?.shared ?? {} : recipes[column] ?? {});
-    const keys = slots.map((s) => s.key);
-    const orphans = [];
-    for (const column of columns) {
-        for (const key of Object.keys(valuesOf(column))) {
-            if (!keys.includes(key) && !orphans.includes(key)) orphans.push(key);
-        }
-    }
-    const rows = [...keys.map((key) => ({ key, orphan: false })), ...orphans.map((key) => ({ key, orphan: true }))];
+    // A row is a slot the canvas has. A key the project still holds for a slot
+    // that is gone -- a node unpainted, renamed or deleted -- is not a row, so
+    // it leaves the table on sight and the file on the next save.
+    const rows = slots.map((s) => ({ key: s.key }));
     for (const row of rows) {
         row.cells = {};
         for (const column of columns) row.cells[column] = cellText(valuesOf(column)[row.key]);
@@ -372,9 +403,14 @@ function liveSlotValues(graph, color) {
                 if (widget) promoted[name] = widget.value;
             }
             values[key] = promoted;
+        } else if (groupSwitches(node.widgets).length) {
+            const groups = {};
+            for (const w of groupSwitches(node.widgets)) groups[groupTitleOf(w)] = toggledOf(w);
+            values[key] = groups;
         } else {
-            const widget = (node.widgets ?? []).find((w) => w.type !== "button");
-            if (widget) values[key] = widget.value;
+            const widgets = (node.widgets ?? []).filter((w) => w.type !== "button");
+            if (widgets.length > 1) values[key] = widgetValues(node, widgets);
+            else if (widgets.length) values[key] = widgets[0].value;
         }
     }
     return values;
@@ -401,6 +437,13 @@ export function liveSlots(graph, color) {
                 if (widget) promoted[name] = widget.value;
             }
             out[key] = { key, kind: "dict", default: promoted, widgets: widgets.length };
+        } else if (groupSwitches(widgets).length) {
+            const groups = {};
+            for (const w of groupSwitches(widgets)) groups[groupTitleOf(w)] = toggledOf(w);
+            out[key] = { key, kind: "dict", default: groups, widgets: widgets.length };
+        } else if (widgets.length > 1) {
+            out[key] = { key, kind: "dict", default: widgetValues(node, widgets),
+                         widgets: widgets.length };
         } else {
             out[key] = { key, kind: "scalar", default: widgets[0]?.value ?? null, widgets: widgets.length };
         }
@@ -459,7 +502,10 @@ export function applyValuesToNodes(nodes, values, color) {
         if (isToggleNode(node)) {
             node.mode = value ? 0 : 4;
         } else if (value && typeof value === "object" && !Array.isArray(value)) {
+            const switches = groupSwitches(widgets);
             for (const [name, item] of Object.entries(value)) {
+                const group = switches.find((w) => groupTitleOf(w) === name);
+                if (group) { group.toggle?.(!!item); continue; }
                 const widget = widgets.find((w) => w.name === name);
                 if (widget) widget.value = item;
             }
@@ -468,6 +514,10 @@ export function applyValuesToNodes(nodes, values, color) {
         } else if (widgets[0]) {
             widgets[0].value = value;
         }
+        // A panel node reads its widgets once and caches what it found; the
+        // Prompts node would show the previous file's text under the loaded
+        // recipe's file name until something asked it to look again.
+        node._symRefreshPrompts?.();
         seen.add(key);
         if (!applied.includes(key)) applied.push(key);
     }
@@ -836,11 +886,8 @@ function recipePanel(node) {
         function slotRows(section, column, row) {
             const slot = byKey[row.key];
             const inherited = column === SHARED ? "" : (row.cells[SHARED] ?? "");
-            const label = el("div", "padding:4px 3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                + (row.orphan ? `color:${HUB.inkSubtle};text-decoration:line-through;` : ""), row.key);
-            label.title = row.orphan
-                ? "The template has no slot with this name any more; the value is ignored."
-                : slot?.kind === "toggle" ? "true or false"
+            const label = el("div", "padding:4px 3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", row.key);
+            label.title = slot?.kind === "toggle" ? "true or false"
                 : `Template: ${cellText(slot?.default)}${slot?.widgets > 1 && slot?.kind !== "dict" ? ` (a JSON list sets all ${slot.widgets} widgets)` : ""}`;
             section.appendChild(label);
             if (slot?.kind === "dict") {

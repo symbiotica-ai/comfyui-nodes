@@ -105,6 +105,52 @@ Full mechanism, the layout functions and a checklist:
 `.claude/skills/comfyui-node-frontend/api-reference.md` → "Sizing a DOM widget,
 and keeping the node RESIZABLE".
 
+## A value that arrives on a wire
+
+He wires almost everything through KJNodes **Set/Get** nodes. A GetNode's only
+widget holds the NAME of the constant, not its value, so any canvas-side walk
+(`nodeOutputString`, `resolveText`) reads `$$controlnet` and points the panel at
+a folder called that. There is no way to resolve it without running the graph.
+
+The shape that works, in `prompts.js` and `control_image.js`:
+
+- the node is an **output node** (`is_output_node=True`, or `OUTPUT_NODE = True`
+  on a V1 class), so he can queue it alone with nothing wired downstream
+- `execute`/`load` pushes what it actually received —
+  `_push("symbiotica.<node>", {"node_id": ..., "path": ...})`, needs
+  `unique_id` hidden — and the extension stores it in
+  `node.properties.symbiotica_ran_path`, which serialises with the workflow
+- the panel's resolver prefers a TYPED widget, then the run's value, then the
+  static walk; the walk only ever stands in until the first run
+
+**`VALIDATE_INPUTS` must not refuse an input that arrives on a wire.** It runs
+before anything executes, so a wired widget is EMPTY there — validating it
+rejects every node on his canvas with "a node rejected one or more input
+values". Return `True` for the empty case and let execution be where a bad
+value fails.
+
+**A route the canvas fetches has to exist.** `/symbiotica/local-image` was
+deleted with the obsolete nodes in `0a4f14d` while two panels still called it,
+and every preview outside ComfyUI's `input/` 404'd for weeks with nothing in
+the tests to catch it — the allowlist was tested, the handler was not.
+
+## What a Recipes slot captures
+
+A painted slot node is captured whole, not by its first widget
+(`liveSlotValues`, `web/js/recipes.js`):
+
+- one widget → the value itself
+- more than one → a dict of every widget BY NAME, with any widget fed by a wire
+  left out (the wire is the value; recording the empty box writes that emptiness
+  into every recipe)
+- a subgraph → its promoted inputs, wired ones left out
+- rgthree's **Fast Group Bypasser** → one entry per GROUP TITLE. Every row
+  widget is named `RGTHREE_TOGGLE_AND_NAV` and holds `{toggled}`, so by name
+  they are one widget; loading calls `widget.toggle(bool)`, because assigning
+  `.value` is inert and the group never moves.
+- a key in the project file with no slot on the canvas is not a row: it leaves
+  the table on sight and the file on the next `save project`.
+
 ## Repo ground rules
 
 - Tests: run `pytest` from the repo root (tests stub `comfy_api`; see

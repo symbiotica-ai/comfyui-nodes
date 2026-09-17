@@ -170,47 +170,58 @@ def _template_dir() -> str | None:
     return os.path.join(folder_paths.get_output_directory(), "templates")
 
 
+@PromptServer.instance.routes.get("/symbiotica/local-image")
+async def local_image(request):
+    """One image file, for a canvas preview of something outside ComfyUI's own
+    directories — the studio-assets mount a Control Image node or a picker
+    reads. Served only from a root something already registered: browsing a
+    folder registers it, and so does a node that loaded a file from it.
+
+    Deleted with the obsolete nodes in 0a4f14d while two panels were still
+    calling it (`web/js/control_image.js`, `web/js/browser_chrome.js`), which
+    is why every preview outside `input/` has been a 404 since.
+    """
+    resolved = is_allowed(request.query.get("path", ""))
+    if resolved is None:
+        return web.json_response({"error": "not an allowed image path"},
+                                 status=403)
+    return web.FileResponse(resolved,
+                            headers={"Cache-Control": "private, max-age=60"})
+
+
 @PromptServer.instance.routes.get("/symbiotica/control-images")
 async def control_images(request):
-    """The Control Image library for one root and folder — what the node's
-    dropdown offers. Both are widgets, so the listing cannot be built when the
-    node class is registered; the canvas asks here whenever either changes.
+    """Every image under the folder a Control Image node points at, relative to
+    it, sub-folders included — what the node's dropdown offers.
 
-    A root outside ComfyUI's input directory has to be one this process is
-    already entitled to see — `declared_roots` carries the studio-assets mount,
-    ComfyUI's own directories and whatever the operator declared — so asking to
-    browse a folder is never what grants access to it. The answer carries the
-    resolved folder back, because the preview of a file on another mount goes
-    through `local-image`, which needs the absolute path.
+    The folder is a widget, so the listing cannot be built when the node class
+    is registered; the canvas asks here whenever the path changes. A folder
+    outside ComfyUI's own directories has to be one this process is already
+    entitled to see — `declared_roots` carries the studio-assets mount and
+    whatever the operator declared — so asking to browse a folder is never what
+    grants access to it. Browsing also registers it, because the preview of
+    each file goes back through `local-image`.
     """
-    import folder_paths
-
     try:
-        from .._control_image import (control_folder, control_root,
-                                      list_control_images)
+        from .._control_image import library_dir, list_control_images
     except ImportError:
         # The pack is imported as `<pack>.py.pipeline.routes` inside ComfyUI and
         # as a top-level `pipeline` under the test harness, where `..` is above
         # the root package. Same module either way — `py/` is on the path there.
-        from _control_image import (control_folder, control_root,
-                                    list_control_images)
+        from _control_image import library_dir, list_control_images
 
-    inputs = folder_paths.get_input_directory()
-    root = request.query.get("root", "")
+    raw = request.query.get("path", "")
     try:
-        folder = control_folder(request.query.get("folder", ""))
-        library = control_root(inputs, folder, root)
+        library = library_dir(raw)
     except ValueError as exc:
         return web.json_response({"error": str(exc)}, status=400)
-    # Only the library subtree becomes servable, never the whole mount it is on.
-    if root and not register_root_within(library):
+    if not register_root_within(library):
         return web.json_response(
             {"error": f"{library} is outside every allowed root"}, status=403)
     return web.json_response({
         "ok": True,
-        "folder": folder,
         "library": library,
-        "images": list_control_images(inputs, folder, root),
+        "images": list_control_images(raw),
     })
 
 
@@ -385,16 +396,40 @@ async def _json_body(request) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+def _sync_root(folder):
+    """The mount to refresh for a folder: the studio-assets root when the
+    folder is inside it, so a prompts browse and a Studio Library browse share
+    the one coalesced walk, else the folder itself."""
+    root = studio_library_mod.STUDIO_ASSETS_DIR
+    try:
+        real = os.path.realpath(folder)
+        root_real = os.path.realpath(root)
+    except (ValueError, OSError):
+        return folder
+    return root if real == root_real or real.startswith(root_real + os.sep) else folder
+
+
 @PromptServer.instance.routes.get("/symbiotica/prompts-list")
 async def prompts_list(request):
     """Every sub-folder and every prompt file under the path, relative to
     it, in one answer: the panel derives the folder dropdown and the file
-    dropdown from it without a request per click."""
+    dropdown from it without a request per click.
+
+    `sync=1` refreshes the mount first, the same walk a Studio Library browse
+    makes: a file added from outside this sandbox — the platform's file
+    manager — is not on the mount until something goes and looks, and the
+    panel's "[no files in folder]" over a folder that HAS one is that."""
     folder = _prompt_folder(request.query.get("folder", ""))
     if not folder:
         return web.json_response({"error": "folder required"}, status=400)
-    return web.json_response({"ok": True, "folders": list_folders(folder),
-                              "files": list_files(folder)})
+    outcome = None
+    if request.query.get("sync") == "1":
+        outcome = await _coalesced_sync(_sync_root(folder))
+    body = {"ok": True, "folders": list_folders(folder),
+            "files": list_files(folder)}
+    if outcome:
+        body["sync"] = outcome
+    return web.json_response(body)
 
 
 @PromptServer.instance.routes.get("/symbiotica/prompts-read")

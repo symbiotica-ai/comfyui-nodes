@@ -406,3 +406,51 @@ def test_a_clean_sync_says_so(routes_mod, monkeypatch, tmp_path):
     monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
     asyncio.run(routes_mod.studio_library(_req(sync="1")))
     assert routes_mod._captured["body"]["sync"] == "refreshed"
+
+
+def _prompt_tree(tmp_path):
+    root = tmp_path / "studio-assets"
+    _touch(root / "_platform" / "resources" / "llm-prompts" / "llm-sp-chair",
+           b"SYSTEM PROMPT\n")
+    return root
+
+
+def test_a_prompts_browse_refreshes_the_mount_before_listing(routes_mod, monkeypatch, tmp_path):
+    # A file added from the platform's file manager is not on this sandbox's
+    # mount until something goes and looks.
+    root = _prompt_tree(tmp_path)
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(root))
+    spawned = []
+
+    class _Proc:
+        async def wait(self):
+            return 0
+
+    async def _fake_exec(*a, **k):
+        spawned.append(a)
+        return _Proc()
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+    routes_mod._SYNCS.clear()
+    folder = str(root / "_platform" / "resources")
+    asyncio.run(routes_mod.prompts_list(_req(folder=folder, sync="1")))
+    body = routes_mod._captured["body"]
+    # The walk is asked for on the MOUNT, not the folder, so it is the same
+    # coalesced walk a Studio Library browse makes.
+    assert spawned == [("sync", str(root))]
+    assert body["sync"] == "refreshed"
+    assert body["files"] == ["llm-prompts/llm-sp-chair"]
+
+
+def test_a_repeat_prompts_listing_does_not_walk_the_mount(routes_mod, monkeypatch, tmp_path):
+    root = _prompt_tree(tmp_path)
+    monkeypatch.setattr(routes_mod.studio_library_mod, "STUDIO_ASSETS_DIR", str(root))
+
+    async def _fake_exec(*a, **k):
+        raise AssertionError("listed without sync=1 should not walk the mount")
+
+    monkeypatch.setattr(routes_mod.asyncio, "create_subprocess_exec", _fake_exec)
+    routes_mod._SYNCS.clear()
+    asyncio.run(routes_mod.prompts_list(
+        _req(folder=str(root / "_platform" / "resources"))))
+    assert "sync" not in routes_mod._captured["body"]

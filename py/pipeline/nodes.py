@@ -548,10 +548,23 @@ class SymbioticaPromptBlock(io.ComfyNode):
                 io.String.Output(display_name="text",
                                  tooltip="The text as shown."),
             ],
+            hidden=[io.Hidden.unique_id],
+            # An output node so it can be queued on its own. A path arriving
+            # on a wire the canvas cannot read — a Get node, a switch — has no
+            # value until a run, and with nothing downstream there was no way
+            # to make that run happen.
+            is_output_node=True,
         )
 
     @classmethod
     def execute(cls, path="", folder="", file="", text="") -> io.NodeOutput:
+        # The run knows the path the canvas only guessed at, so it hands it
+        # back — the same way Asset Focus hands over its choices.
+        _push("symbiotica.prompts", {
+            "node_id": str(getattr(getattr(cls, "hidden", None),
+                                   "unique_id", "")),
+            "path": str(_one(path) or ""),
+        })
         return io.NodeOutput(str(_one(text) or ""))
 
 

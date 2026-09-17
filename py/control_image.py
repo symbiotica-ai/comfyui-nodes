@@ -1,104 +1,106 @@
-# ABOUTME: Control Image node — picks a control image from a named folder of the
-# ABOUTME: input directory, the shared library every editor and sandbox mounts.
+# ABOUTME: Control Image node — loads one image from a folder the node names,
+# ABOUTME: anywhere on disk, picked from a dropdown of everything under it.
 import os
 
-import folder_paths
+from ._control_image import (control_image_path, file_fingerprint, library_dir,
+                             load_rgba)
 
-from ._control_image import (CONTROL_DIR, base_dir, control_folder,
-                             control_image_path, file_fingerprint,
-                             list_control_images, load_rgba)
+
+def _push(event: str, payload: dict) -> None:
+    """Fire-and-forget UI push; an absent or failed server must never break a
+    render over a dropdown that wanted filling."""
+    try:
+        from server import PromptServer
+        PromptServer.instance.send_sync(event, payload)
+    except Exception:
+        pass
 
 
 class SymbioticaControlImage:
-    """Load Image, scoped to the control-image library: the dropdown lists
-    every image under `input/<folder>` (subfolders included) by relative
-    path, so the value a recipe stores is `bakery/counter.png` and the same
-    file loads on any editor or render sandbox that mounts the inputs.
+    """Load Image, pointed at a folder instead of ComfyUI's input directory.
 
-    Both halves of the location are widgets, not constants here: `root` is the
-    mount the library sits on — empty means ComfyUI's own input directory, and
-    `/studio-assets/_platform/resources` is the shared one every editor and
-    render sandbox mounts — and `folder` is the library inside it.
+    `path` is where the images are — `/studio-assets/_platform/resources/
+    controlnet-images`, the mount every editor and render sandbox sees. `image`
+    is one file under it, named relative to it and sub-folders included, so the
+    value a recipe stores is `general/1x1/1x1-box.png` and the same file loads
+    wherever that folder is mounted.
     """
 
     @classmethod
     def INPUT_TYPES(cls):
-        # Built once, at registration, so it can only list the DEFAULT folder —
-        # a classmethod cannot see a sibling widget's value. The canvas replaces
-        # these values with the current folder's (web/js/control_image.js); this
-        # list is what an API-only caller and the first paint get.
-        files = list_control_images(folder_paths.get_input_directory())
-        # `image` FIRST and the two location widgets after it, because
-        # `widgets_values` restores positionally: a workflow saved when `image`
-        # was the only widget holds `[name]`, and a widget inserted ahead of it
-        # would take that value and leave the pick blank.
+        # Built once, at registration, when no node has said where it reads —
+        # so there is nothing to list here. The canvas fills the dropdown from
+        # the node's own path (web/js/control_image.js).
         return {
             "required": {
-                "image": (files or [f"[no images under input/{CONTROL_DIR}]"], {
-                    "tooltip": "An image under the root and folder below, "
-                               "subfolders included. Upload there from the "
-                               "hub's storage browser; new files appear after "
-                               "a browser reload.",
+                # `image` FIRST: widget values restore positionally, and a
+                # workflow saved before this holds [image, root, folder] —
+                # `path` lands where `root` sat and inherits what it held.
+                "image": (["[set a path]"], {
+                    "tooltip": "A file under `path`, sub-folders included. "
+                               "New files appear after a browser reload.",
                 }),
-                "root": ("STRING", {
+                "path": ("STRING", {
                     "default": "",
-                    "tooltip": "The directory the library sits in. Empty is "
-                               "ComfyUI's own input directory. The shared one "
-                               "is /studio-assets/_platform/resources, which "
-                               "the canvas and the render sandboxes mount — "
-                               "the engine tier does not, it sees only its "
-                               "own studio's subtree.",
-                }),
-                "folder": ("STRING", {
-                    "default": CONTROL_DIR,
-                    "tooltip": "The folder inside `root` that holds the "
-                               "library. A name, not a path, and it cannot "
-                               "climb out of the root. Changing either "
-                               "re-lists `image`.",
+                    "tooltip": "The folder holding the images. An absolute "
+                               "path — /studio-assets/_platform/resources/"
+                               "controlnet-images is the shared one. Type it "
+                               "or wire a string.",
                 }),
             },
+            "hidden": {"unique_id": "UNIQUE_ID"},
         }
+
+    # An output node so it can be queued on its own. A path arriving through a
+    # Get node has no value on the canvas — the Get's only widget holds the
+    # constant's NAME — so running the node is how the dropdown learns where it
+    # reads, and with nothing downstream there would be no way to make that
+    # run happen.
+    OUTPUT_NODE = True
 
     RETURN_TYPES = ("IMAGE", "MASK")
     FUNCTION = "load"
     CATEGORY = "Symbiotica/Images"
-    DESCRIPTION = ("A control image from the shared input library, loaded like "
-                   "Load Image. The folder it reads is a widget.")
+    DESCRIPTION = ("One image from a folder the node points at, loaded like "
+                   "Load Image. The folder is a widget; the pick is a "
+                   "dropdown of everything under it.")
 
-    def load(self, image, root, folder):
-        inputs = folder_paths.get_input_directory()
-        name = control_folder(folder)
-        path = control_image_path(inputs, image, name, root)
-        if base_dir(inputs, root) == inputs:
-            from nodes import LoadImage
-            # Through LoadImage while the library is in its own directory: the
-            # reader ComfyUI has is the one to use where it reaches.
-            return LoadImage().load_image(f"{name}/{image}")
-        # Another mount, which LoadImage cannot reach — every name it takes is
-        # resolved against the input directory. `load_rgba` copies its
-        # conventions so the two paths are the same picture and the same mask.
+    def load(self, image, path, unique_id=None):
+        full = control_image_path(path, image)
+        # The canvas fetches the preview back through `local-image`, which
+        # serves registered roots only.
         from .pipeline.routes import register_root
-        register_root(os.path.dirname(path))
-        return load_rgba(path)
+        register_root(os.path.dirname(full))
+        # The run knows the folder the canvas could only guess at, so it hands
+        # it back — the same way the Prompts node does.
+        _push("symbiotica.control_image",
+              {"node_id": str(unique_id or ""), "path": str(path or "")})
+        return load_rgba(full)
 
     @classmethod
-    def IS_CHANGED(cls, image, root, folder):
+    def IS_CHANGED(cls, image, path, unique_id=None):
         try:
-            return file_fingerprint(control_image_path(
-                folder_paths.get_input_directory(), image, folder, root))
+            return file_fingerprint(control_image_path(path, image))
         except ValueError:
             return ""
 
     @classmethod
-    def VALIDATE_INPUTS(cls, image, root, folder):
+    def VALIDATE_INPUTS(cls, image, path, unique_id=None):
+        # A WIRED path has no widget value here — validation runs before
+        # anything executes, so the Get node feeding it has not spoken yet.
+        # Refusing an empty path at this point rejects every node whose folder
+        # arrives on a wire, which is every node on his canvas. `load` is
+        # where a path that never arrives fails, with the same message.
+        if not str(path or "").strip():
+            return True
         try:
-            name = control_folder(folder)
-            path = control_image_path(folder_paths.get_input_directory(),
-                                      image, name, root)
+            full = control_image_path(path, image)
         except ValueError as e:
             return str(e)
-        if not os.path.isfile(path):
-            return f"no control image {image!r} under {os.path.dirname(path)}"
+        if not os.path.isdir(library_dir(path)):
+            return f"no folder at {path}"
+        if not os.path.isfile(full):
+            return f"no image {image!r} under {path}"
         return True
 
 

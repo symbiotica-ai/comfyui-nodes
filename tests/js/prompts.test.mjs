@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, link, reset, setResponder, tick } from "./comfy_stub.mjs";
+import { app, create, emit, link, reset, setResponder, tick } from "./comfy_stub.mjs";
 import "../../web/js/prompts.js";
 
 const TREE = {
@@ -282,4 +282,73 @@ test("a String node wired into path names the path", async () => {
     const listed = seen.find((c) => c.route.includes("prompts-list"));
     assert.ok(listed, "never listed — the literal did not resolve");
     assert.match(listed.route, /folder=%2Fp%2Fbakery%2Fprompts/);
+});
+
+test("a run hands back a path the canvas cannot read, and the tree fills in", async () => {
+    const seen = [];
+    reset();
+    app.graph._nodes = [];
+    setResponder(router(seen));
+    const node = await create("SymbioticaPromptBlock",
+                              { path: "", folder: "/", file: "Chair.md", text: "" });
+    node.inputs = [];
+    // A Get node: its only widget holds the NAME of the constant, so the
+    // static walk reads "platform_path" as if it were a folder.
+    const getter = await create("GetNode", { Constant: "platform_path" });
+    getter.outputs = [{ name: "STRING", links: [] }];
+    link(getter, node, "path");
+    app.graph._nodes = [getter, node];
+    await node.onNodeCreated?.call(node);
+    await settle();
+
+    emit("symbiotica.prompts",
+         { node_id: node.id, path: "/studio-assets/_platform/resources" });
+    await settle();
+
+    const listed = seen.filter((c) => c.route.includes("prompts-list")).pop();
+    assert.match(listed.route,
+                 /folder=%2Fstudio-assets%2F_platform%2Fresources/);
+    assert.deepEqual(values(node, "folder"),
+                     ["/", "_image", "_rules", "_rules/old"]);
+});
+
+test("the run path is saved with the workflow, so a reload still knows it", async () => {
+    const seen = [];
+    reset();
+    app.graph._nodes = [];
+    setResponder(router(seen));
+    const node = await create("SymbioticaPromptBlock",
+                              { path: "", folder: "/", file: "Chair.md", text: "" });
+    node.inputs = [];
+    const getter = await create("GetNode", { Constant: "platform_path" });
+    getter.outputs = [{ name: "STRING", links: [] }];
+    link(getter, node, "path");
+    app.graph._nodes = [getter, node];
+    await node.onNodeCreated?.call(node);
+    await settle();
+    emit("symbiotica.prompts",
+         { node_id: node.id, path: "/studio-assets/_platform/resources" });
+    await settle();
+    assert.equal(node.properties.symbiotica_ran_path,
+                 "/studio-assets/_platform/resources");
+});
+
+test("arriving at a path refreshes the mount, and re-listing the same one does not", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    const listings = () => seen.filter((c) => c.route.includes("prompts-list"));
+    assert.equal(listings().length, 1);
+    assert.match(listings()[0].route, /sync=1/);
+
+    // Same path again: the walk is a FUSE traversal, not a free call.
+    node._symRefreshPrompts();
+    await settle();
+    assert.equal(listings().length, 2);
+    assert.doesNotMatch(listings()[1].route, /sync=1/);
+
+    // A different path is a new browse session.
+    widget(node, "path").value = "/p/other/prompts";
+    node._symRefreshPrompts();
+    await settle();
+    assert.match(listings()[2].route, /sync=1/);
 });

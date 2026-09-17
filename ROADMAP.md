@@ -67,3 +67,36 @@ still open. Move to an issue when one is picked up.
 - Hub side: the module library dir `user/default/symbiotica-modules` is not
   symlinked to the shared Volume (`canvas_entry.user_tree`), so published
   modules stay per user.
+
+Added 2026-09-17, from the Control Image / Prompts / switch-render-engine work.
+Nothing below was watched on the Modal canvas except where it says otherwise.
+
+- Control Image is now `image` + `path` (`root`/`folder` and the joined default
+  folder are gone). Widget values restore positionally, so `path` inherits what
+  `root` held — every saved Control Image node needs its path looked at once.
+- `/symbiotica/local-image` is restored (it had been deleted in `0a4f14d` while
+  two panels still fetched it; confirmed 404 on the live editor). The restore
+  itself is not verified — it needs a ComfyUI restart.
+- Control Image and Prompts are output nodes that push back the path a run
+  received. Verified on the live editor for Control Image with a TYPED path;
+  the Get-node case has unit tests only.
+- `workflows/_switch-render-engine.json` is now one subgraph (`render-engine`)
+  holding both engine groups, the LazySwitchKJ and one Image Comparer after the
+  switch. Two "missing connection" errors on the switch's branch inputs were
+  answered by matching KJNodes' wildcard slot types; never confirmed on the
+  canvas. The version before the subgraphs is in
+  `workflows/_superseded/_switch-render-engine-before-subgraphs.json`.
+- `Set_$$reference` and `Set_$$controlnet` now sit INSIDE that subgraph. Whether
+  a KJNodes Set inside a subgraph is visible to a Get outside it is untested —
+  if a `Get_$$reference` elsewhere comes up empty, that is why.
+- The Prompts folder listing refreshes the studio-assets mount on the first
+  listing of a path (`prompts-list?sync=1`, the walk the Studio Library browse
+  makes). Unit tests only.
+- `prompt_store` lists a file with NO extension as a prompt. That was inferred
+  from a Volume copy named `llm-sp-chair` — the local file was always
+  `llm-sp-chair.md` and a bad upload dropped the suffix. The rule stands, but
+  the thing that actually fixed it was pushing the resources folder.
+- `~/projects/symbiotica/resources/push.sh` (not this repo) uploads that folder
+  to `symbiotica-comfy-studio-assets:_platform/resources`. One stray is still
+  up there — `prompt-templates/llm-prompts/llm-sp-chair`, the extensionless
+  copy; `./push.sh --prune` deletes it.

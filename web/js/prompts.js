@@ -41,9 +41,20 @@ const joinRel = (folder, name) => (folder ? `${folder}/${name}` : name);
 const dirOf = (rel) => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
 const baseOf = (rel) => rel.slice(rel.lastIndexOf("/") + 1);
 
+// The path the last run received, kept on the node and saved with the
+// workflow so a reload still knows it.
+const RAN_PATH = "symbiotica_ran_path";
+const ranPath = (node) => {
+    const v = node?.properties?.[RAN_PATH];
+    return typeof v === "string" ? v.trim() : "";
+};
+
 // The path a panel reads: this node's own widget, else the string the node
 // wired into `path` outputs — a literal, a switch, a Studio Library path —
 // climbing through an order-passing hop (Asset Focus) to the node behind it.
+// A wire the canvas cannot read — a Get node, whose only widget holds the
+// name of the constant and not its value — is answered by queueing the node:
+// what the run received beats what the walk guessed, until the next run.
 function pathOf(node, seen = new Set()) {
     if (!node || seen.has(node.id)) return "";
     seen.add(node.id);
@@ -51,6 +62,8 @@ function pathOf(node, seen = new Set()) {
     if (typed) return typed;
     const link = node.inputs?.find((i) => i.name === "path")?.link;
     if (link == null) return "";
+    const ran = ranPath(node);
+    if (ran) return ran;
     const origin = app.graph.getNodeById(app.graph.links[link]?.origin_id);
     if (!origin) return "";
     let found = resolveProjectPath(origin) || nodeOutputString(origin, new Set());
@@ -249,8 +262,13 @@ function setupPrompts(node) {
             return;
         }
         try {
+            // A path arrived at for the first time is a browse-session open:
+            // refresh the mount, so a file added from the platform's file
+            // manager is on it. Later refreshes of the same path list what is
+            // already there — the walk is a FUSE traversal, not a free call.
             const { folders, files } = await getJson(
-                `/symbiotica/prompts-list?folder=${encodeURIComponent(path)}`);
+                `/symbiotica/prompts-list?folder=${encodeURIComponent(path)}`
+                + (changed ? "&sync=1" : ""));
             state.folders = folders ?? [];
             state.files = files ?? [];
             state.error = "";
@@ -472,4 +490,20 @@ registerSymbioticaExtension(app, {
             this._symRefreshPrompts?.();
         };
     },
+});
+
+// A run hands back the path it was given, which is the only way to read one
+// that arrives through a Get node. Queue the node on its own and the tree
+// below it fills in.
+api.addEventListener("symbiotica.prompts", (event) => {
+    const detail = event?.detail ?? {};
+    if (detail.node_id == null) return;
+    const node = app.graph?.getNodeById?.(Number(detail.node_id))
+        ?? app.graph?.getNodeById?.(detail.node_id);
+    if (!node) return;
+    const path = typeof detail.path === "string" ? detail.path.trim() : "";
+    if (!path || ranPath(node) === path) return;
+    node.properties = node.properties ?? {};
+    node.properties[RAN_PATH] = path;
+    node._symRefreshPrompts?.();
 });

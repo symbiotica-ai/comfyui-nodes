@@ -100,3 +100,18 @@ def test_ref_image_resolution_stays_inside_root(tmp_path):
     register_root(root)
     assert is_allowed(resolve_ref(root, "Stoves/a.png")) is not None
     assert is_allowed(resolve_ref(root, "../../etc/passwd")) is None
+
+
+def test_the_preview_route_exists_and_serves_only_registered_roots(tmp_path, monkeypatch):
+    # It was deleted in 0a4f14d while two panels still called it, so every
+    # preview outside ComfyUI's own directories 404'd. A route the canvas
+    # fetches has to be reachable, not just allow-listed.
+    routes = _load_routes(monkeypatch)
+    assert hasattr(routes, "local_image")
+    root = tmp_path / "library"
+    root.mkdir()
+    (root / "a.png").write_bytes(b"x")
+    assert routes.is_allowed(str(root / "a.png")) is None
+    routes.register_root(str(root))
+    assert routes.is_allowed(str(root / "a.png")) == os.path.realpath(
+        str(root / "a.png"))

@@ -67,13 +67,12 @@ test("the table has a game column, one column per category, and a row per slot",
     assert.equal(render.cells.shared, '{"lora_name": "bakery.safetensors"}');
 });
 
-test("a key a category carries that the template no longer has still gets a row, marked", () => {
+test("a key a category carries that the canvas has no slot for gets no row, and is dropped on save", () => {
     const r = project();
     r.recipes.appliance1x1.gone = "x";
     const table = projectToTable(r, slots);
-    const row = table.rows.find((r) => r.key === "gone");
-    assert.equal(row.orphan, true);
-    assert.equal(row.cells.appliance1x1, "x");
+    assert.equal(table.rows.find((row) => row.key === "gone"), undefined);
+    assert.equal("gone" in tableToProject(r, table, slots).recipes.appliance1x1, false);
 });
 
 test("the table writes back the recipe it was read from", () => {
@@ -323,24 +322,23 @@ const canvas = () => ({ nodes: [
 test("the canvas describes its own slots the way the saved template does, in key order", () => {
     assert.deepEqual(liveSlots(canvas()), [
         { key: "control_image", kind: "scalar", default: "a.png", widgets: 1 },
-        { key: "grid", kind: "scalar", default: 2, widgets: 2 },
+        // Every widget, not the first: a recipe is the whole node.
+        { key: "grid", kind: "dict", default: { columns: 2, rows: 1 }, widgets: 2 },
         { key: "pre_flip", kind: "toggle", default: false, widgets: 0 },
         { key: "render", kind: "dict", default: { lora_name: "x.safetensors" }, widgets: 2 },
     ]);
     assert.deepEqual(liveSlots({ nodes: [] }), []);
 });
 
-test("re-tabling on a slot change keeps unsaved cells, adds the new slot and strikes the gone one", () => {
+test("re-tabling on a slot change keeps unsaved cells, adds the new slot and drops the gone one", () => {
     const r = project();
     const table = projectToTable(r, slots);
     table.rows.find((row) => row.key === "strength").cells.appliance1x1 = "0.9";
     const renamed = slots.filter((s) => s.key !== "control_image")
         .concat([{ key: "controlnet", kind: "scalar", default: "floor.png", widgets: 1 }]);
     const next = retable(r, table, slots, renamed);
-    const keys = next.rows.map((row) => `${row.key}${row.orphan ? "!" : ""}`);
-    assert.deepEqual(keys, ["grid", "strength", "pre_flip", "render", "controlnet", "control_image!"]);
+    assert.deepEqual(next.rows.map((row) => row.key), ["grid", "strength", "pre_flip", "render", "controlnet"]);
     assert.equal(next.rows.find((row) => row.key === "strength").cells.appliance1x1, "0.9");
-    assert.equal(next.rows.find((row) => row.key === "control_image").cells.appliance1x1, "a.png");
 });
 
 import { colorMatcher, slotKey } from "../../web/js/recipes.js";
@@ -384,4 +382,71 @@ test("the canvas describes painted slots the way it describes titled ones", () =
         : n));
     assert.deepEqual(liveSlots({ nodes }, "purple"), liveSlots(canvas()));
     assert.deepEqual(liveSlots({ nodes }, ""), []);
+});
+
+// rgthree's Fast Group Bypasser: every row widget carries the SAME name and a
+// `{toggled}` value, so the group title is the only thing that tells two rows
+// apart, and `.value = ` is inert -- `toggle(bool)` moves the group.
+function groupBypasser(title, groups) {
+    const widgets = groups.map(([name, on]) => ({
+        name: "RGTHREE_TOGGLE_AND_NAV", type: "custom", label: `Enable ${name}`,
+        group: { title: name }, value: { toggled: on },
+        toggle(v) { this.value.toggled = v; this.moved = true; },
+    }));
+    // painted the match colour, which is what makes it a slot
+    return { title, mode: 0, widgets, inputs: [], color: "#323", bgcolor: "#535" };
+}
+
+test("a fast group bypasser is one row per group, not the first group's toggled", () => {
+    const node = groupBypasser("$$render-engine", [
+        ["render-engine-nano2", true], ["render-engine-qwen-t2i-ctrlnet-lora", false]]);
+    assert.deepEqual(liveSlots({ nodes: [node] }, "purple"), [{
+        key: "$$render-engine", kind: "dict", widgets: 2,
+        default: { "render-engine-nano2": true, "render-engine-qwen-t2i-ctrlnet-lora": false },
+    }]);
+});
+
+test("loading a fast group bypasser's row toggles the group instead of setting a dead value", () => {
+    const node = groupBypasser("$$render-engine", [
+        ["render-engine-nano2", true], ["render-engine-qwen-t2i-ctrlnet-lora", false]]);
+    const report = applyValuesToNodes([node], {
+        "$$render-engine": { "render-engine-nano2": false,
+                             "render-engine-qwen-t2i-ctrlnet-lora": true },
+    }, "purple");
+    assert.deepEqual(node.widgets.map((w) => w.value.toggled), [false, true]);
+    assert.deepEqual(node.widgets.map((w) => w.moved), [true, true]);
+    assert.deepEqual(report.applied, ["$$render-engine"]);
+});
+
+test("a Prompts slot captures folder, file and text, and leaves the wired path out", () => {
+    const node = {
+        title: "recipe:LLM-prompt", mode: 0, color: "#323", bgcolor: "#535",
+        inputs: [{ name: "path", widget: { name: "path" }, link: 7 }],
+        widgets: [{ name: "path", value: "" }, { name: "folder", value: "llm-prompts" },
+                  { name: "new folder", type: "button" },
+                  { name: "file", value: "llm-sp-chair.md" },
+                  { name: "save file", type: "button" },
+                  { name: "text", value: "SYSTEM PROMPT" }],
+    };
+    assert.deepEqual(liveSlots({ nodes: [node] }, "purple"), [{
+        key: "LLM-prompt", kind: "dict", widgets: 4,
+        default: { folder: "llm-prompts", file: "llm-sp-chair.md", text: "SYSTEM PROMPT" },
+    }]);
+});
+
+test("loading a Prompts slot sets its widgets and tells the panel to re-read", () => {
+    let refreshed = 0;
+    const node = {
+        title: "recipe:LLM-prompt", mode: 0, color: "#323", bgcolor: "#535",
+        inputs: [{ name: "path", widget: { name: "path" }, link: 7 }],
+        widgets: [{ name: "path", value: "" }, { name: "folder", value: "llm-prompts" },
+                  { name: "file", value: "old.md" }, { name: "text", value: "OLD" }],
+        _symRefreshPrompts: () => { refreshed += 1; },
+    };
+    applyValuesToNodes([node], {
+        "LLM-prompt": { folder: "llm-prompts", file: "llm-sp-chair.md", text: "NEW" },
+    }, "purple");
+    assert.deepEqual(node.widgets.map((w) => w.value),
+                     ["", "llm-prompts", "llm-sp-chair.md", "NEW"]);
+    assert.equal(refreshed, 1);
 });
