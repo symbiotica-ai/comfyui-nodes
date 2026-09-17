@@ -116,8 +116,8 @@ pip install -r symbiotica/requirements.txt
   either widget changes; outputs IMAGE and MASK. On the input directory it
   reads through ComfyUI's own `LoadImage`; on any other mount it reads the
   file directly, to the same conventions (mask is `1 - alpha`, and a file with
-  no alpha gets the 64x64 all-zero stand-in). Title it `recipe:control_image`
-  and a recipe stores the relative path.
+  no alpha gets the 64x64 all-zero stand-in). Title it `control_image` and
+  paint it the recipe match colour, and a recipe stores the relative path.
 
 ### Recipes (one template, one workflow per recipe)
 - `Recipes` (Symbiotica/Recipes) — a **project** is one template workflow,
@@ -134,7 +134,7 @@ pip install -r symbiotica/requirements.txt
   writes the project; **Generate** saves and writes prefix + recipe `.json`
   files into the output folder (default: the template's folder), overwriting
   the last run. **New** starts a project from the open, saved workflow, named
-  from its `recipe:library` slot (`studios/imperia/bakery` gives
+  from its `library` slot (`studios/imperia/bakery` gives
   `imperia-bakery`). **Delete**, pressed twice, removes the picked project;
   its generated workflows stay.
 - The **recipe** input reads a wired name live: through String, Join
@@ -144,10 +144,18 @@ pip install -r symbiotica/requirements.txt
   saved a second later, and a name change saves the recipe you leave, then
   loads the one you arrive at onto the canvas, or creates it from the canvas
   if it is new.
-- A node in the template titled `recipe:<key>` is a slot for `<key>`. A cell
-  sets the node's first widget; a JSON list (`[2, 1]`) sets every widget; a
-  subgraph instance shows one field per promoted widget; a title ending in
-  `?` (`recipe:pre_flip?`) is a toggle that takes `true` (active) or `false`
+- A node painted the colour in the **match_color** input is a slot, and the
+  node's title is the key: type the colour once here, paint the slots on the
+  canvas. The colour is a LiteGraph palette name (`purple`, `green`, `blue`,
+  `pale_blue`, `cyan`, `red`, `brown`, `yellow`, `black`) or a hex, and it is
+  matched by hue, so the light theme's lighter shade of the same colour counts.
+  A painted node still carrying its type's own name is not a slot — the key is
+  the title. A node titled `recipe:<key>` is a slot whatever its colour, so
+  templates written before this keep working. The colour is saved with the
+  project as `match_color`, which is what Generate matches on the server. A
+  cell sets the node's first widget; a JSON list (`[2, 1]`) sets every widget;
+  a subgraph instance shows one field per promoted widget; a title ending in
+  `?` (`pre_flip?`) is a toggle that takes `true` (active) or `false`
   (bypassed). An empty cell is an absent key: the recipe takes the shared
   value, else the template's own. A key no slot carries refuses the run.
   Projects are files in `user/default/recipes/<name>.json`.

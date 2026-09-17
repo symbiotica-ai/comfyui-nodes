@@ -2,7 +2,8 @@
 // ABOUTME: shared values and one recipe per asset type, save, generate.
 
 // A project is one template workflow plus a table of values. The rows come
-// from the template itself (every node titled `recipe:<key>`), so a new slot
+// from the template itself (every node painted the match colour, its title the
+// slot's name; a node titled `recipe:<key>` still counts), so a new slot
 // on the canvas is a new row here the next time the project is opened. The
 // columns are `shared` (what every recipe takes) and one per recipe. An empty
 // cell is an absent key: the recipe then takes the shared value, or the
@@ -50,6 +51,10 @@ const readProject = (name) => getJson(`/symbiotica/recipes/${encodeURIComponent(
 function toast(severity, summary, detail, life = 5000) {
     app.extensionManager?.toast?.add({ severity, summary, detail, life });
 }
+
+const noSlotsToast = (color) => toast("warn", "No recipe slots on this canvas",
+    color ? `Paint the slot nodes ${color} on the template workflow, or title them recipe:<name>.`
+          : "Type a colour in match_color and paint the slot nodes with it, or title them recipe:<name>.");
 
 const activeWorkflowPath = () => app.extensionManager?.workflow?.activeWorkflow?.path ?? null;
 
@@ -153,6 +158,75 @@ export function recipeSlug(text) {
     return String(text ?? "").toLowerCase().replace(/['’]/g, "")
         .replace(/[^a-z0-9._]+/g, "-").replace(/^-+|-+$/g, "");
 }
+
+// ----------------------------------------------------------------- color --
+
+// A slot is a node painted the match colour: type the colour once on the
+// Recipes node, paint the slots on the canvas. The name comes from LiteGraph's
+// palette (purple, green, blue, pale_blue, cyan, red, brown, yellow, black) or
+// is a hex. Matching is by hue, so the light theme's lighter shade of the same
+// colour still counts. A node titled `recipe:<key>` is still a slot, so
+// templates written before this keep working.
+const PALETTE = {
+    red: "#533", brown: "#593930", green: "#353", blue: "#335",
+    pale_blue: "#3f5159", cyan: "#355", purple: "#535", yellow: "#653", black: "#000",
+};
+const HUE_TOLERANCE = 12;
+const RECIPE_PREFIX = "recipe:";
+
+function hsl(value) {
+    let hex = String(value ?? "").trim().replace(/^#/, "");
+    if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+    if (!/^[0-9a-fA-F]{6}$/.test(hex)) return null;
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const span = max - min;
+    const l = (max + min) / 2;
+    const s = span === 0 ? 0 : span / (1 - Math.abs(2 * l - 1));
+    let h = 0;
+    if (span) {
+        if (max === r) h = 60 * (((g - b) / span) % 6);
+        else if (max === g) h = 60 * ((b - r) / span + 2);
+        else h = 60 * ((r - g) / span + 4);
+    }
+    return { h: (h + 360) % 360, s, l };
+}
+
+// "Is this node painted <token>", or null when nothing was typed.
+export function colorMatcher(token) {
+    const name = String(token ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const target = hsl(PALETTE[name] ?? name);
+    if (!target) return null;
+    return (node) => [node?.bgcolor, node?.color].some((value) => {
+        const own = hsl(value);
+        if (!own) return false;
+        if (target.s < 0.1 || own.s < 0.1) return target.s < 0.1 && own.s < 0.1;
+        const diff = Math.abs(own.h - target.h);
+        return Math.min(diff, 360 - diff) <= HUE_TOLERANCE;
+    });
+}
+
+// A node's own title, empty when it still carries its type's name: a painted
+// node with no title of its own is not a slot, because the key IS the title.
+function ownTitle(node) {
+    const title = String(node?.title ?? "");
+    const base = node?.constructor?.title;
+    return base && title === String(base) ? "" : title;
+}
+
+// The recipe key a node carries: its title, without the `recipe:` prefix and
+// without a toggle's trailing `?`.
+export function slotKey(node, matches) {
+    const title = String(node?.title ?? "");
+    let key;
+    if (title.startsWith(RECIPE_PREFIX)) key = title.slice(RECIPE_PREFIX.length);
+    else if (matches && matches(node)) key = ownTitle(node);
+    else return null;
+    return key.replace(/\?\s*$/, "").trim() || null;
+}
+
+const isToggleNode = (node) => String(node?.title ?? "").trimEnd().endsWith("?");
 
 // ----------------------------------------------------------------- cells --
 
@@ -281,14 +355,13 @@ export function tableToProject(base, table, slots) {
 // The values the open canvas holds for every slot, in the shape a recipe
 // stores them: a toggle's on/off, a subgraph instance's promoted widgets (the
 // wired ones left out), else the node's first widget.
-function liveSlotValues(graph) {
+function liveSlotValues(graph, color) {
     const values = {};
+    const matches = colorMatcher(color);
     for (const node of graph?.nodes ?? []) {
-        const title = String(node.title ?? "");
-        if (!title.startsWith("recipe:")) continue;
-        const key = title.slice("recipe:".length).replace(/\?\s*$/, "").trim();
+        const key = slotKey(node, matches);
         if (!key || key in values) continue;
-        if (title.trimEnd().endsWith("?")) {
+        if (isToggleNode(node)) {
             values[key] = node.mode === 0;
         } else if (node.isSubgraphNode?.()) {
             const promoted = {};
@@ -308,17 +381,16 @@ function liveSlotValues(graph) {
 }
 
 // The slots the open canvas carries, in the shape the server describes a
-// saved template's: a rename, an added or a deleted recipe: node shows at
+// saved template's: a rename, a painted or an unpainted node shows at
 // once instead of after the workflow is saved and the project reopened.
-export function liveSlots(graph) {
+export function liveSlots(graph, color) {
     const out = {};
+    const matches = colorMatcher(color);
     for (const node of graph?.nodes ?? []) {
-        const title = String(node.title ?? "");
-        if (!title.startsWith("recipe:")) continue;
-        const key = title.slice("recipe:".length).replace(/\?\s*$/, "").trim();
+        const key = slotKey(node, matches);
         if (!key || key in out) continue;
         const widgets = (node.widgets ?? []).filter((w) => w.type !== "button");
-        if (title.trimEnd().endsWith("?")) {
+        if (isToggleNode(node)) {
             out[key] = { key, kind: "toggle", default: node.mode === 0, widgets: widgets.length };
         } else if (node.isSubgraphNode?.()) {
             const promoted = {};
@@ -375,17 +447,16 @@ export function columnValues(table, slots, column) {
 
 // The reverse of capture: put a value set onto the canvas's slot nodes, so
 // the recipe can be adjusted with the nodes' own widgets and captured again.
-export function applyValuesToNodes(nodes, values) {
+export function applyValuesToNodes(nodes, values, color) {
     const applied = [];
     const seen = new Set();
+    const matches = colorMatcher(color);
     for (const node of nodes ?? []) {
-        const title = String(node.title ?? "");
-        if (!title.startsWith("recipe:")) continue;
-        const key = title.slice("recipe:".length).replace(/\?\s*$/, "").trim();
+        const key = slotKey(node, matches);
         if (!key || !(key in values)) continue;
         const value = values[key];
         const widgets = (node.widgets ?? []).filter((w) => w.type !== "button");
-        if (title.trimEnd().endsWith("?")) {
+        if (isToggleNode(node)) {
             node.mode = value ? 0 : 4;
         } else if (value && typeof value === "object" && !Array.isArray(value)) {
             for (const [name, item] of Object.entries(value)) {
@@ -466,6 +537,13 @@ function recipePanel(node) {
     // What is on screen: the project as loaded, the template's slots, and the
     // table the person is editing. `dirty` is unsaved edits.
     const state = { name: null, project: null, slots: [], table: null, dirty: false };
+    // The colour that marks a slot: typed on the node, or wired like the name.
+    const matchColor = () => {
+        const wired = textValue(node, "match_color");
+        if (wired) return wired;
+        const widget = node.widgets?.find((w) => w.name === "match_color");
+        return String(widget?.value ?? "").trim();
+    };
     // Which sections are open. A freshly opened project shows its headers only.
     const expanded = new Set();
     let busy = false;
@@ -478,7 +556,10 @@ function recipePanel(node) {
     const statusLine = el("div", `padding:4px 3px;color:${HUB.inkSubtle};`);
 
     function collect() {
-        return tableToProject(state.project, state.table, state.slots);
+        const project = tableToProject(state.project, state.table, state.slots);
+        const color = matchColor();
+        if (color) project.match_color = color; else delete project.match_color;
+        return project;
     }
 
     // Which project this canvas is: looked up by the open workflow's path,
@@ -507,6 +588,9 @@ function recipePanel(node) {
     async function load(name) {
         try {
             const { project, slots } = await readProject(name);
+            const saved = String(project?.match_color ?? "");
+            const widget = node.widgets?.find((w) => w.name === "match_color");
+            if (saved && widget && widget.value !== saved) widget.value = saved;
             state.name = name;
             state.project = project;
             state.slots = slots;
@@ -589,7 +673,7 @@ function recipePanel(node) {
         const template = activeWorkflowPath();
         if (!template) { toast("warn", "Save the workflow first", "A new project takes the open, saved workflow as its template."); return; }
         try {
-            const { name, project, slots } = await postJson("/symbiotica/recipes/new", { template });
+            const { name, project, slots } = await postJson("/symbiotica/recipes/new", { template, match_color: matchColor() });
             state.name = name;
             state.project = project;
             state.slots = slots;
@@ -615,9 +699,9 @@ function recipePanel(node) {
             return;
         }
         const graph = app.canvas?.graph ?? app.graph;
-        const report = applyValuesToNodes(graph?.nodes ?? [], values);
+        const report = applyValuesToNodes(graph?.nodes ?? [], values, matchColor());
         if (!report.applied.length) {
-            toast("warn", "No recipe slots on this canvas", "Open the template workflow, the one with recipe: nodes.");
+            noSlotsToast(matchColor());
             return;
         }
         app.graph?.setDirtyCanvas(true, true);
@@ -634,7 +718,7 @@ function recipePanel(node) {
     async function autoTick() {
         if (!auto.on || auto.busy || !state.table) return;
         const graph = liveGraph();
-        const values = liveSlotValues(graph);
+        const values = liveSlotValues(graph, matchColor());
         if (!Object.keys(values).length) return;
         const sig = slotSignature(values);
         const raw = textValue(node, "recipe");
@@ -670,7 +754,7 @@ function recipePanel(node) {
                     status(`auto: ${verb === "save" ? "saved" : "created"} ${name}`, false);
                 } else if (verb === "load") {
                     loadColumn(name);
-                    auto.last = { name, sig: slotSignature(liveSlotValues(liveGraph())) };
+                    auto.last = { name, sig: slotSignature(liveSlotValues(liveGraph(), matchColor())) };
                     status(`auto: loaded ${name} onto the canvas`, false);
                 }
             }
@@ -680,11 +764,11 @@ function recipePanel(node) {
     }
 
     // The slot list follows the canvas; the saved template's stands in only
-    // while the canvas has no recipe: nodes (or a cell cannot be parsed).
+    // while the canvas has no slot nodes (or a cell cannot be parsed).
     let slotSig = null;
     function syncSlots() {
         if (!state.table) return;
-        const live = liveSlots(liveGraph());
+        const live = liveSlots(liveGraph(), matchColor());
         if (!live.length) return;
         const sig = JSON.stringify(live);
         if (sig === slotSig) return;
@@ -792,9 +876,9 @@ function recipePanel(node) {
         node._symCapture = (column) => captureInto(column);
 
         function captureInto(column) {
-            const values = liveSlotValues(app.canvas?.graph ?? app.graph);
+            const values = liveSlotValues(app.canvas?.graph ?? app.graph, matchColor());
             const found = Object.keys(values).length;
-            if (!found) { toast("warn", "No recipe slots on this canvas", "Open the template workflow, the one with recipe: nodes."); return; }
+            if (!found) { noSlotsToast(matchColor()); return; }
             captureColumn(state.table, state.slots, column, values);
             state.dirty = true;
             expanded.add(column);
@@ -910,10 +994,22 @@ function setupRecipeNode(node) {
     recipePanel(node);
     const applyToggle = () => { if (node._symAuto) node._symAuto.on = !!autoToggle.value; };
     applyToggle();
+    // A workflow saved before match_color existed has one widget value fewer,
+    // so the values land one slot across and match_color gets the old toggle's
+    // boolean. Anything that is not a colour goes back to the default.
+    const fixColor = () => {
+        const widget = node.widgets?.find((w) => w.name === "match_color");
+        if (!widget) return;
+        const value = widget.value;
+        if (value === "" || (typeof value === "string" && colorMatcher(value))) return;
+        widget.value = "purple";
+    };
+    fixColor();
     const onConfigure = node.onConfigure;
     node.onConfigure = function () {
         onConfigure?.apply(this, arguments);
         applyToggle();
+        fixColor();
     };
     if (node.size[1] < 320) node.setSize?.([Math.max(node.size[0], 560), 320]);
 }

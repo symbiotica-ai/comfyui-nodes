@@ -23,6 +23,15 @@ class SymbioticaRecipe:
                                "also the suffix of its workflow's name. Type it or "
                                "connect a text node.",
                 }),
+                "match_color": ("STRING", {
+                    "default": "purple",
+                    "tooltip": "The colour that marks a recipe slot: every node "
+                               "painted it on this workflow is a slot, and its "
+                               "title is the slot's name. A palette name "
+                               "(purple, green, blue, pale_blue, cyan, red, "
+                               "brown, yellow, black) or a hex. A node titled "
+                               "recipe:<name> is a slot whatever its colour.",
+                }),
             },
         }
 
@@ -33,7 +42,7 @@ class SymbioticaRecipe:
                    "values and one recipe per asset type; Generate writes one "
                    "workflow per recipe.")
 
-    def execute(self, recipe=""):
+    def execute(self, recipe="", match_color=""):
         return ()
 
 
@@ -65,7 +74,8 @@ if PromptServer is not None:
             project = read_project(projects_dir(), request.match_info["name"])
             if project is None:
                 return web.json_response({"error": "no such project"}, status=404)
-            slots = template_slots(read_template(_workflows_dir(), project.get("template")))
+            slots = template_slots(read_template(_workflows_dir(), project.get("template")),
+                                   project.get("match_color"))
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response({"project": project, "slots": slots})
@@ -74,11 +84,13 @@ if PromptServer is not None:
     async def projects_new(request):
         body = await request.json()
         try:
-            name, project = new_project(_workflows_dir(), body.get("template"))
+            name, project = new_project(_workflows_dir(), body.get("template"),
+                                        body.get("match_color"))
             if read_project(projects_dir(), name) is not None:
                 return web.json_response({"error": f"project {name!r} exists — pick it instead"}, status=409)
             write_project(projects_dir(), name, project)
-            slots = template_slots(read_template(_workflows_dir(), project["template"]))
+            slots = template_slots(read_template(_workflows_dir(), project["template"]),
+                                   project.get("match_color"))
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response({"name": name, "project": project, "slots": slots})

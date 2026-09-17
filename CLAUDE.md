@@ -110,7 +110,8 @@ and keeping the node RESIZABLE".
 - Tests: run `pytest` from the repo root (tests stub `comfy_api`; see
   `tests/comfy_api_stub.py`). All tests must pass before a PR.
 - JS and Python are parallel implementations of the same draw/compose rules in
-  several places (template editor, prompt book) — change both in one commit.
+  several places (template editor, prompt book, the recipe slot rule in
+  `web/js/recipes.js` and `py/_recipes.py`) — change both in one commit.
 - Versioning is calendar-based (`2026.M.N` in `pyproject.toml`); bump happens
   at release time, not per PR.
 - Deploys: the pack is registry-managed on desktop installs and volume-mounted
@@ -127,4 +128,9 @@ and keeping the node RESIZABLE".
   **recipe** is one asset type in it (`appliance-1x2`), **shared** is what
   every recipe takes. Buttons are two words naming what they act on
   (`new project`, `capture recipe`). Node inputs are Comfy widgets, wirable,
-  never DOM fields, and never the same thing twice.
+  never DOM fields, and never the same thing twice. A recipe slot is a node
+  painted the colour typed in the node's `match_color` input, its title the
+  slot name (`recipe:<key>` titles still work); adding an input to a node
+  shifts the widget values of every workflow already saved with it, so a new
+  input lands on an old canvas holding the value of the widget that used to
+  sit in its place.

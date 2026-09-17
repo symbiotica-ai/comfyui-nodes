@@ -1,8 +1,9 @@
 # ABOUTME: Workflow recipes — a project file holds shared values and one recipe
 # ABOUTME: per asset type; each recipe is written out as one workflow from a template.
 
-# A template is an ordinary workflow whose variable nodes carry a title of the
-# form `recipe:<key>`. A project file (`imperia-bakery`) holds a `shared` block
+# A template is an ordinary workflow whose variable nodes are painted the
+# project's match colour, their title naming the slot (a title of the older
+# form `recipe:<key>` still marks one). A project file (`imperia-bakery`) holds a `shared` block
 # (values every recipe shares: library path, project name, LoRAs) and a
 # `recipes` table, one recipe per asset type (the control image, aspect,
 # preamble and so on that make appliance1x2 differ from appliance1x1).
@@ -16,6 +17,7 @@
 # switches the node between active and bypassed.
 from __future__ import annotations
 
+import colorsys
 import copy
 import json
 import os
@@ -29,6 +31,13 @@ except ImportError:  # tests import py/ as top-level modules
 
 PREFIX = "recipe:"
 TOGGLE = "?"
+# LiteGraph's node palette, by the name the canvas shows for it.
+PALETTE = {
+    "red": "#533", "brown": "#593930", "green": "#353", "blue": "#335",
+    "pale_blue": "#3f5159", "cyan": "#355", "purple": "#535", "yellow": "#653",
+    "black": "#000",
+}
+HUE_TOLERANCE = 12
 MODE_ACTIVE = 0
 MODE_BYPASS = 4
 NAMESPACE = uuid.UUID("5b7a3e8e-1a2c-4a0e-9c1f-6b2b6f6b2e11")
@@ -38,13 +47,63 @@ class RecipeError(ValueError):
     pass
 
 
+# ------------------------------------------------------------------ color --
+
+def _hsl(value):
+    """A colour as (hue 0-360, saturation, lightness), or None."""
+    text = str(value or "").strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(c * 2 for c in text)
+    if not re.fullmatch(r"[0-9a-fA-F]{6}", text):
+        return None
+    r, g, b = (int(text[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    return h * 360, s, l
+
+
+def color_matcher(token):
+    """"Is this node painted <token>", or None when nothing was typed. The
+    token is a palette name or a hex; matching is by hue, so the light theme's
+    lighter shade of the same colour still counts."""
+    name = re.sub(r"[\s-]+", "_", str(token or "").strip().lower())
+    target = _hsl(PALETTE.get(name, name))
+    if target is None:
+        return None
+    th, ts, _ = target
+
+    def matches(node: dict) -> bool:
+        for value in (node.get("bgcolor"), node.get("color")):
+            own = _hsl(value)
+            if own is None:
+                continue
+            oh, os_, _ = own
+            if ts < 0.1 or os_ < 0.1:
+                if ts < 0.1 and os_ < 0.1:
+                    return True
+                continue
+            diff = abs(oh - th)
+            if min(diff, 360 - diff) <= HUE_TOLERANCE:
+                return True
+        return False
+
+    return matches
+
+
 # ------------------------------------------------------------------ slots --
 
-def slot_key(node: dict) -> str | None:
+def slot_key(node: dict, matches=None) -> str | None:
+    """The key a node carries: its title, without the `recipe:` prefix and
+    without a toggle's `?`. A painted node with no title of its own is not a
+    slot — the key IS the title."""
     title = node.get("title")
-    if not isinstance(title, str) or not title.startswith(PREFIX):
+    title = title if isinstance(title, str) else ""
+    if title.startswith(PREFIX):
+        key = title[len(PREFIX):]
+    elif title.strip() and matches is not None and matches(node):
+        key = title
+    else:
         return None
-    key = title[len(PREFIX):].strip()
+    key = key.strip()
     if key.endswith(TOGGLE):
         key = key[:-len(TOGGLE)].strip()
     return key or None
@@ -54,13 +113,14 @@ def is_toggle(node: dict) -> bool:
     return str(node.get("title", "")).rstrip().endswith(TOGGLE)
 
 
-def recipe_slots(workflow: dict) -> dict[str, list[dict]]:
-    """Every root node titled `recipe:<key>`, keyed by <key>. Two nodes may
-    share a key (the same aspect fed to two places). Nodes inside subgraph
-    definitions are not slots: a recipe speaks to the graph's surface."""
+def recipe_slots(workflow: dict, color=None) -> dict[str, list[dict]]:
+    """Every root slot node, keyed by its title. Two nodes may share a key
+    (the same aspect fed to two places). Nodes inside subgraph definitions are
+    not slots: a recipe speaks to the graph's surface."""
     slots: dict[str, list[dict]] = {}
+    matches = color_matcher(color)
     for node in workflow.get("nodes") or []:
-        key = slot_key(node)
+        key = slot_key(node, matches)
         if key:
             slots.setdefault(key, []).append(node)
     return slots
@@ -98,11 +158,11 @@ def _set_value(node: dict, key: str, value) -> None:
         widgets[0] = copy.deepcopy(value)
 
 
-def apply_recipe(workflow: dict, values: dict) -> dict:
+def apply_recipe(workflow: dict, values: dict, color=None) -> dict:
     """Write values into the workflow's slots, in place. A key no slot carries
     is refused: the alternative is a typo that silently renders the template's
     own value at full price."""
-    slots = recipe_slots(workflow)
+    slots = recipe_slots(workflow, color)
     unknown = sorted(k for k in values if k not in slots)
     if unknown:
         raise RecipeError(f"no recipe slot named {', '.join(unknown)} in the template")
@@ -129,13 +189,14 @@ def generate(template: dict, project: dict, recipe: str) -> tuple[dict, dict]:
     if recipe not in recipes:
         raise RecipeError(f"project has no recipe {recipe!r}")
     values = {**(project.get("shared") or {}), **(recipes[recipe] or {})}
+    color = project.get("match_color")
     workflow = copy.deepcopy(template)
     # A key the template has no slot for is a value the panel already shows
     # struck through as ignored (a slot renamed since the capture), so it is
     # reported, not refused: one stale key must not block every workflow.
-    slots = recipe_slots(workflow)
+    slots = recipe_slots(workflow, color)
     ignored = sorted(k for k in values if k not in slots)
-    report = apply_recipe(workflow, {k: v for k, v in values.items() if k in slots})
+    report = apply_recipe(workflow, {k: v for k, v in values.items() if k in slots}, color)
     report["ignored"] = ignored
     workflow["id"] = str(uuid.uuid5(NAMESPACE, workflow_name(project, recipe)))
     workflow["revision"] = 0
@@ -212,7 +273,7 @@ def promote_string_input(workflow: dict, subgraph_name: str, inner_id: int,
 
 # ------------------------------------------------------------------ slots --
 
-def template_slots(workflow: dict) -> list[dict]:
+def template_slots(workflow: dict, color=None) -> list[dict]:
     """What a recipe can set in this template, one entry per key, in canvas
     order: the kind a value takes (toggle, dict for a subgraph instance,
     scalar otherwise), the template's own value, and how many widgets the
@@ -220,7 +281,7 @@ def template_slots(workflow: dict) -> list[dict]:
     subgraph_ids = {s.get("id") for s in
                     ((workflow.get("definitions") or {}).get("subgraphs") or [])}
     out = []
-    for key, nodes in sorted(recipe_slots(workflow).items()):
+    for key, nodes in sorted(recipe_slots(workflow, color).items()):
         node = nodes[0]
         widgets = node.get("widgets_values") or []
         if is_toggle(node):
@@ -310,16 +371,18 @@ def safe_project_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", str(name or "")).strip("-.")
 
 
-def new_project(workflows_dir: str, template_rel) -> tuple[str, dict]:
+def new_project(workflows_dir: str, template_rel, color=None) -> tuple[str, dict]:
     """A project for one template, named from it, with the shared block
     started from the template's own values, no recipes yet, output beside
     the template."""
     rel = _template_rel(template_rel)
-    slots = template_slots(read_template(workflows_dir, rel))
+    slots = template_slots(read_template(workflows_dir, rel), color)
     project = {"template": rel}
     folder = os.path.dirname(rel)
     if folder:
         project["output"] = folder
+    if str(color or "").strip():
+        project["match_color"] = str(color).strip()
     project.update({"workflow_prefix": "",
                     "shared": {s["key"]: copy.deepcopy(s["default"]) for s in slots if s["default"] is not None},
                     "recipes": {}})

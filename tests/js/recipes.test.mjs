@@ -342,3 +342,46 @@ test("re-tabling on a slot change keeps unsaved cells, adds the new slot and str
     assert.equal(next.rows.find((row) => row.key === "strength").cells.appliance1x1, "0.9");
     assert.equal(next.rows.find((row) => row.key === "control_image").cells.appliance1x1, "a.png");
 });
+
+import { colorMatcher, slotKey } from "../../web/js/recipes.js";
+
+const painted = (title, color = "#323", bgcolor = "#535", extra = {}) =>
+    ({ title, color, bgcolor, widgets: [], ...extra });
+
+test("a painted node is a slot named by its title", () => {
+    const matches = colorMatcher("purple");
+    assert.equal(slotKey(painted("llm-prompt"), matches), "llm-prompt");
+    assert.equal(slotKey(painted("pre_flip?"), matches), "pre_flip");
+    assert.equal(slotKey(painted("llm-prompt", "#232", "#353"), matches), null);
+    assert.equal(slotKey({ title: "llm-prompt" }, matches), null);
+});
+
+test("a painted node still carrying its type's name is not a slot", () => {
+    const node = painted("Prompts");
+    node.constructor = { title: "Prompts" };
+    assert.equal(slotKey(node, colorMatcher("purple")), null);
+});
+
+test("the recipe: prefix marks a slot whatever the colour, and is dropped from a painted one", () => {
+    assert.equal(slotKey({ title: "recipe:grid" }, colorMatcher("purple")), "grid");
+    assert.equal(slotKey({ title: "recipe:grid" }, null), "grid");
+    assert.equal(slotKey({ title: "grid" }, null), null);
+    assert.equal(slotKey(painted("recipe:grid"), colorMatcher("purple")), "grid");
+});
+
+test("a hex matches, a lighter shade of the same hue matches, another palette colour does not", () => {
+    assert.ok(colorMatcher("#535")(painted("x")));
+    assert.ok(colorMatcher("purple")(painted("x", "#9b7f9b", "#b39bb3")));
+    assert.ok(colorMatcher("pale blue")({ bgcolor: "#3f5159" }));
+    assert.ok(!colorMatcher("cyan")({ bgcolor: "#3f5159" }));
+    assert.equal(colorMatcher(""), null);
+    assert.equal(colorMatcher("chartreuse"), null);
+});
+
+test("the canvas describes painted slots the way it describes titled ones", () => {
+    const nodes = canvas().nodes.map((n) => (n.title.startsWith("recipe:")
+        ? { ...n, title: n.title.slice("recipe:".length), color: "#323", bgcolor: "#535" }
+        : n));
+    assert.deepEqual(liveSlots({ nodes }, "purple"), liveSlots(canvas()));
+    assert.deepEqual(liveSlots({ nodes }, ""), []);
+});

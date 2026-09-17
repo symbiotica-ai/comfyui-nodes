@@ -39,6 +39,15 @@ still open. Move to an issue when one is picked up.
 
 - The `auto` toggle on the Recipes node (save on edit, load/create on a name
   change) has unit tests only; nobody has watched it on a canvas.
+- Slot matching by colour (2026-09-17) has unit tests only; not yet watched on
+  the Modal canvas, and no template has been converted from `recipe:` titles.
+- A Recipes node saved before `match_color` existed loads it with the old
+  `auto` boolean (widget values land positionally, so they shift one across).
+  Retyping the colour fixes that node; a reset-to-`purple` on configure was
+  written and rejected, so the decision is retype vs. migrate in code.
+- Two painted nodes sharing a title are one slot, silently, the way two
+  `recipe:<key>` nodes always were; a colour is easier to repeat by accident
+  than a title, and nothing warns.
 - `CHANGELOG.md` stops at 2026.9.21; everything since shipped by `push.sh`
   (live name resolver, auto toggle, project resolved from the open workflow,
   two-word buttons, Asset Focus categories split by canvas tiles with

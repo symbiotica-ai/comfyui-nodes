@@ -476,3 +476,72 @@ class TestDeleteProject:
     def test_a_name_cannot_walk_out_of_the_dir(self, library):
         with pytest.raises(RecipeError):
             delete_project(library["recipes"], "../secrets")
+
+
+from _recipes import color_matcher, slot_key, template_slots
+
+
+class TestMatchColor:
+    """A slot is a node painted the project's colour, its title the key."""
+
+    def painted(self, title, color="#323", bgcolor="#535"):
+        return {"id": 1, "type": "String", "title": title, "mode": 0,
+                "color": color, "bgcolor": bgcolor, "widgets_values": ["x"]}
+
+    def test_a_painted_node_is_a_slot_named_by_its_title(self):
+        matches = color_matcher("purple")
+        assert slot_key(self.painted("llm-prompt"), matches) == "llm-prompt"
+        assert slot_key(self.painted("pre_flip?"), matches) == "pre_flip"
+
+    def test_a_node_painted_something_else_is_not_a_slot(self):
+        assert slot_key(self.painted("llm-prompt", "#232", "#353"), color_matcher("purple")) is None
+
+    def test_an_unpainted_node_is_not_a_slot(self):
+        node = {"id": 1, "type": "String", "title": "llm-prompt", "widgets_values": ["x"]}
+        assert slot_key(node, color_matcher("purple")) is None
+
+    def test_a_painted_node_with_no_title_is_not_a_slot(self):
+        node = {"id": 1, "type": "String", "color": "#323", "bgcolor": "#535"}
+        assert slot_key(node, color_matcher("purple")) is None
+
+    def test_the_recipe_prefix_still_marks_a_slot_whatever_the_colour(self):
+        assert slot_key({"title": "recipe:grid"}, color_matcher("purple")) == "grid"
+        assert slot_key({"title": "recipe:grid"}, None) == "grid"
+        assert slot_key({"title": "grid"}, None) is None
+
+    def test_the_prefix_is_dropped_from_a_painted_node_too(self):
+        assert slot_key(self.painted("recipe:grid"), color_matcher("purple")) == "grid"
+
+    def test_a_hex_and_a_lighter_shade_of_the_same_hue_match(self):
+        matches = color_matcher("#535")
+        assert matches(self.painted("x"))
+        # What the light theme stores for the same purple.
+        assert matches(self.painted("x", "#9b7f9b", "#b39bb3"))
+
+    def test_the_palette_names_do_not_bleed_into_each_other(self):
+        for name, hex_ in [("cyan", "#355"), ("blue", "#335"), ("pale_blue", "#3f5159"),
+                           ("green", "#353"), ("purple", "#535"), ("red", "#533"),
+                           ("yellow", "#653"), ("brown", "#593930")]:
+            hits = [other for other in ("cyan", "blue", "pale_blue", "green", "purple",
+                                        "red", "yellow", "brown")
+                    if color_matcher(other)({"bgcolor": hex_})]
+            assert hits == [name], (name, hits)
+
+    def test_nothing_typed_matches_nothing(self):
+        assert color_matcher("") is None
+        assert color_matcher(None) is None
+        assert color_matcher("chartreuse") is None
+
+    def test_a_painted_template_generates_like_a_titled_one(self):
+        wf = template()
+        for node in wf["nodes"]:
+            title = node.get("title") or ""
+            if title.startswith("recipe:"):
+                node["title"] = title[len("recipe:"):]
+                node["bgcolor"] = "#535"
+        slots = template_slots(wf, "purple")
+        assert [s["key"] for s in slots] == [s["key"] for s in template_slots(template())]
+        out, report = generate(wf, {"template": "t.json", "match_color": "purple",
+                                    "shared": {"grid": 4}, "recipes": {"table": {}}}, "table")
+        assert report["applied"] == ["grid"]
+        assert recipe_slots(out, "purple")["grid"][0]["widgets_values"][0] == 4
