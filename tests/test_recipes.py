@@ -407,6 +407,54 @@ class TestTemplateSlots:
         assert [s["key"] for s in template_slots(wf)].count("render_aspect") == 1
 
 
+def muter_template():
+    """A template whose purple Fast Groups Muter switches two render engines."""
+    return {
+        "nodes": [
+            {"id": 1, "type": "Fast Groups Muter (rgthree)", "title": "engine",
+             "color": "#323", "bgcolor": "#535", "pos": [0, 0], "size": [200, 60],
+             "widgets_values": [{"toggled": True}, {"toggled": False}]},
+            {"id": 2, "type": "KSampler", "pos": [520, 120], "size": [100, 50], "mode": 0},
+            {"id": 3, "type": "KSampler", "pos": [520, 520], "size": [100, 50], "mode": 2},
+        ],
+        "groups": [
+            {"title": "render-engine-nano2", "bounding": [500, 100, 300, 300]},
+            {"title": "render-engine-qwen", "bounding": [500, 500, 300, 300]},
+        ],
+    }
+
+
+class TestGroupSwitchSlots:
+    def test_the_template_reports_a_group_switch_as_one_entry_per_group(self):
+        slot = next(s for s in template_slots(muter_template(), "purple") if s["key"] == "engine")
+        assert slot["kind"] == "dict"
+        assert slot["default"] == {"render-engine-nano2": True, "render-engine-qwen": False}
+
+    def test_generate_writes_the_modes_of_the_nodes_in_each_group(self):
+        wf = muter_template()
+        apply_recipe(wf, {"engine": {"render-engine-nano2": False, "render-engine-qwen": True}}, "purple")
+        assert by_id(wf, 2)["mode"] == 2      # nano2 muted
+        assert by_id(wf, 3)["mode"] == 0      # qwen live
+        # The muter itself sits outside both frames and is never touched.
+        assert "mode" not in by_id(wf, 1)
+
+    def test_a_bypasser_bypasses_instead_of_muting(self):
+        wf = muter_template()
+        by_id(wf, 1)["type"] = "Fast Groups Bypasser (rgthree)"
+        apply_recipe(wf, {"engine": {"render-engine-nano2": False, "render-engine-qwen": True}}, "purple")
+        assert by_id(wf, 2)["mode"] == 4
+
+    def test_a_group_the_template_does_not_have_is_refused_by_name(self):
+        wf = muter_template()
+        with pytest.raises(RecipeError, match="render-engine-gone"):
+            apply_recipe(wf, {"engine": {"render-engine-gone": True}}, "purple")
+
+    def test_a_group_value_that_is_not_true_or_false_is_refused(self):
+        wf = muter_template()
+        with pytest.raises(RecipeError, match="on or off"):
+            apply_recipe(wf, {"engine": {"render-engine-nano2": "yes"}}, "purple")
+
+
 class TestReadTemplate:
     def test_reads_by_path_relative_to_the_workflows_dir_with_or_without_the_workflows_prefix(self, library):
         a = read_template(library["workflows"], "recipe-test/bakery-template.json")
@@ -500,9 +548,13 @@ class TestMatchColor:
         node = {"id": 1, "type": "String", "title": "llm-prompt", "widgets_values": ["x"]}
         assert slot_key(node, color_matcher("purple")) is None
 
-    def test_a_painted_node_with_no_title_is_not_a_slot(self):
+    def test_a_painted_node_with_no_title_goes_under_its_type_name(self):
         node = {"id": 1, "type": "String", "color": "#323", "bgcolor": "#535"}
-        assert slot_key(node, color_matcher("purple")) is None
+        assert slot_key(node, color_matcher("purple")) == "String"
+
+    def test_a_painted_subgraph_instance_goes_under_the_subgraphs_name(self):
+        node = {"id": 1, "type": "abc-123", "color": "#323", "bgcolor": "#535"}
+        assert slot_key(node, color_matcher("purple"), {"abc-123": "Render"}) == "Render"
 
     def test_the_recipe_prefix_still_marks_a_slot_whatever_the_colour(self):
         assert slot_key({"title": "recipe:grid"}, color_matcher("purple")) == "grid"

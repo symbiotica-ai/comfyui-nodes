@@ -96,6 +96,24 @@ export function switchIsOn(value) {
     return !!value;
 }
 
+// KJNodes Set/Get: a GetNode's only widget holds the NAME of the constant, not
+// its value. The SetNode of that name is on the canvas though, and whatever
+// feeds IT is the value — so the walk hops the pair instead of reading the name
+// as if it were a path. Root graph first: a Set and its Get commonly sit in
+// different graphs, and the frontend now carries them across.
+function setNodeFor(name) {
+    const graphs = [app.graph, app.canvas?.graph]
+        .filter((g, i, all) => g && all.indexOf(g) === i);
+    for (const graph of graphs) {
+        for (const node of graph._nodes ?? []) {
+            if (String(node.type ?? "") !== "SetNode") continue;
+            const w = node.widgets?.find((x) => typeof x.value === "string");
+            if (w && w.value.trim() === name) return node;
+        }
+    }
+    return null;
+}
+
 // The string a node's output carries, resolved statically from the graph: a
 // switch node (on_true/on_false + a `switch` widget) follows its selected
 // branch; a literal/primitive yields its string widget; a lone-input passthrough
@@ -111,6 +129,17 @@ export function nodeOutputString(node, seen) {
         const sw = node.widgets?.find(
             (w) => w.name === "switch" || w.name === "boolean" || w.name === "on");
         return inputString(node, switchIsOn(sw?.value) ? "on_true" : "on_false", seen);
+    }
+    if (String(node.type ?? "") === "GetNode") {
+        const name = node.widgets?.find((w) => typeof w.value === "string")
+            ?.value?.trim();
+        const setter = name ? setNodeFor(name) : null;
+        if (!setter || seen.has(setter.id)) return "";
+        seen.add(setter.id);
+        const wired = (setter.inputs ?? []).find((i) => i.link != null);
+        // Nothing wired into the Set is nothing to read — and the constant's
+        // NAME is never the answer, so an unresolved Get says so with "".
+        return wired ? inputString(setter, wired.name, seen) : "";
     }
     const strW = node.widgets?.find(
         (w) => typeof w.value === "string" && w.value.trim());

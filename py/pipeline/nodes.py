@@ -2,7 +2,9 @@
 # ABOUTME: Focus, Prompts, Order Tracker. Thin wrappers over py/pipeline/*.
 from __future__ import annotations
 
+import copy
 import hashlib
+import json
 import os
 
 import numpy as np
@@ -516,6 +518,120 @@ class SymbioticaAssetFocus(io.ComfyNode):
                              [canvas_size(raw.get(i["assetName"], i))[1] for i in picked])
 
 
+# The slots an Asset Recipe can hold. ComfyUI has no dynamic outputs, so the
+# node declares a fixed set of wildcard ones and the canvas grows INTO them —
+# `web/js/asset_recipe.js` counts the `slot_*` outputs on the node definition
+# rather than carrying a number of its own, so the two cannot drift apart.
+SLOT_COUNT = 16
+
+
+def _slot_rows(slots) -> list:
+    """The slot table the canvas keeps, as a list of rows.
+
+    Unreadable JSON is NO slots rather than an error: the focus half of this
+    node names the asset and files the render, and a mangled table must not
+    take that down with it."""
+    try:
+        rows = json.loads(slots or "[]")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _slot_value(row: dict):
+    """One slot's value, in the type the widget it was taken from holds.
+
+    The canvas records the type at the moment the wire was made, so a seed
+    stays an INT even though JSON has only one kind of number — a float out
+    here is a `seed` the sampler refuses. A value that cannot be read at all
+    names its own slot: the alternative is a type error thrown by whichever
+    node the wire reaches, which says nothing about where the value came
+    from."""
+    value = row.get("value")
+    if value is None:
+        return None
+    kind = str(row.get("type") or "").upper()
+    name = str(row.get("name") or "slot")
+    try:
+        if kind == "INT":
+            return int(round(float(value)))
+        if kind == "FLOAT":
+            return float(value)
+        if kind == "BOOLEAN":
+            return bool(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"the {name!r} slot holds {value!r}, which is not "
+                         f"a {kind.lower()}")
+    return value if isinstance(value, str) else str(value)
+
+
+class SymbioticaAssetRecipe(SymbioticaAssetFocus):
+    """Asset Focus, plus the widget values that draw the asset.
+
+    The same selection, the same panel and the same outputs, with a growing
+    block of slots under them. Drag a widget's socket — a lora, a strength, a
+    seed — onto the empty slot at the foot of the output column and that value
+    moves here: the slot takes the widget's name, type and current value, the
+    widget on the far node goes link-driven, and a new empty slot opens below.
+    Everything that decides how this asset is drawn is then set in one place.
+    """
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        # BUILT from Asset Focus's schema rather than copied out of it: an
+        # output added there has to appear here too, in the same order, or the
+        # two nodes stop being the same node with slots on the end.
+        base = SymbioticaAssetFocus.define_schema()
+        return io.Schema(
+            node_id="SymbioticaAssetRecipe",
+            display_name="Symbiotica Asset Recipe",
+            category=base.category,
+            description="Asset Focus with the widget values that draw the "
+                        "asset. Everything the node chooses — month, event, "
+                        "category, asset, reference — plus a slot for every "
+                        "widget you drag onto it: the lora, its strength, the "
+                        "seed, the denoise. One node to set up one asset.",
+            inputs=[*copy.deepcopy(base.inputs),
+                    # APPENDED, and the canvas hides it: this is the slot
+                    # table itself, written by `web/js/asset_recipe.js` and
+                    # read here. The per-slot widgets do not serialise, so the
+                    # whole block rides in this one string and adding a slot
+                    # never shifts another widget's saved value.
+                    io.String.Input("slots", default="[]", optional=True,
+                                    tooltip="The slot table, as JSON. Set by "
+                                            "wiring widgets to this node.")],
+            outputs=[*copy.deepcopy(base.outputs),
+                     *[io.AnyType.Output(display_name=f"slot_{i}")
+                       for i in range(1, SLOT_COUNT + 1)]],
+            hidden=[io.Hidden.unique_id],
+            is_output_node=True,
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, slots="[]", **kwargs):
+        # The slot table is an input like any other: change a strength and the
+        # nodes it feeds have to run again.
+        return hashlib.sha256(
+            f"{super().fingerprint_inputs(**kwargs)}|{slots}".encode()
+        ).hexdigest()
+
+    @classmethod
+    def execute(cls, slots="[]", **kwargs) -> io.NodeOutput:
+        # `super()`, not the parent class by name: the focus half pushes its
+        # asset list to the canvas under `cls.hidden.unique_id`, and calling
+        # SymbioticaAssetFocus.execute directly would push it under the wrong
+        # class — where this node's panel never sees it.
+        focus = super().execute(**kwargs)
+        values = [_slot_value(row) for row in _slot_rows(slots)[:SLOT_COUNT]]
+        # Every declared output answers, wired or not: a slot nobody has
+        # filled is None, which is what an unconnected output means anyway.
+        values += [None] * (SLOT_COUNT - len(values))
+        return io.NodeOutput(*focus.result, *values,
+                             ui=getattr(focus, "ui", None))
+
+
 class SymbioticaPromptBlock(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -676,6 +792,7 @@ class SymbioticaOrderTracker(io.ComfyNode):
 PIPELINE_NODE_CLASSES = [
     SymbioticaStudioLibrary,
     SymbioticaAssetFocus,
+    SymbioticaAssetRecipe,
     SymbioticaPromptBlock,
     SymbioticaOrderTracker,
 ]

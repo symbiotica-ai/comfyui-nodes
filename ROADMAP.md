@@ -37,6 +37,27 @@ generation should not carry the cold-load penalty.
 Left open on 2026-09-11 after the recipes build; one line each, the decision
 still open. Move to an issue when one is picked up.
 
+- **Asset Recipe: adopting a widget does not work on the canvas** (2026-09-18).
+  Dragging a widget's socket onto the `+ widget` slot leaves the wire connected
+  but writes no row and grows no widget — three empty slots, all wired, on his
+  bakery graph. `onConnectionsChange` in `web/js/asset_recipe.js` is the handler;
+  unverified suspects are the new frontend not calling it for a drop onto an
+  output, `_symLoading` never clearing, and `describe()` returning null while
+  `refuse()` fails to drop the link. Unit tests pass, so the tests model
+  something the frontend does not do.
+- **Asset Recipe: the queue dies in `graphToPrompt`** (2026-09-18) —
+  `presetText.js` calling `.replace` on a null text widget, which blocks every
+  node, not just this one. Node 4055 saved
+  `["","","","All","All assets",null,"First reference","[]",""]`, which reads as
+  the `📁 Read folder` button serialising `null` on save and being skipped on
+  load, so `ref` takes the null and `slots` takes `"First reference"` — that
+  would explain both the crash and the slot table never parsing. Not proven:
+  read the live workflow JSON out of `/api/userdata/workflows/...` and look at
+  node 4055 before changing anything.
+- Asset Recipe's slot outputs are `*` on the Python side. The server accepts it
+  (`validate_node_input` returns true when either side is `*`); what the
+  FRONTEND does when a `*` output is dropped on a typed widget input has never
+  been watched.
 - The `auto` toggle on the Recipes node (save on edit, load/create on a name
   change) has unit tests only; nobody has watched it on a canvas.
 - Slot matching by colour (2026-09-17) has unit tests only; not yet watched on

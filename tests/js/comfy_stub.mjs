@@ -229,6 +229,33 @@ function makeNode(comfyClass, widgets) {
         // LiteGraph marks the canvas dirty, which schedules a repaint.
         setDirtyCanvas() { repaints.count++; },
         setSize() {}, computeSize: () => [200, 100],
+        // LiteGraph's own output API, for a node that grows its outputs.
+        // `removeOutput` repoints the links below the removed slot exactly as
+        // the real one does — that shift is the whole reason a slot in the
+        // middle can be taken out without every wire under it moving one place
+        // up on the Python side.
+        addOutput(name, type) {
+            const out = { name, type, links: [] };
+            this.outputs.push(out);
+            return out;
+        },
+        removeOutput(slot) {
+            for (const id of this.outputs[slot]?.links ?? []) {
+                delete app.graph.links[id];
+            }
+            this.outputs.splice(slot, 1);
+            for (const [i, out] of this.outputs.entries()) {
+                for (const id of out.links ?? []) {
+                    if (app.graph.links[id]) app.graph.links[id].origin_slot = i;
+                }
+            }
+        },
+        disconnectOutput(slot) {
+            for (const id of this.outputs[slot]?.links ?? []) {
+                delete app.graph.links[id];
+            }
+            if (this.outputs[slot]) this.outputs[slot].links = [];
+        },
         // LiteGraph's own signature: connect(outputSlot, targetNode, inputSlot).
         // Recorded rather than simulated — tests assert WHICH slot was picked.
         connect(slot, target, input) {
@@ -247,8 +274,11 @@ function makeNode(comfyClass, widgets) {
 // nothing without it.
 export function link(from, to, inputName, originSlot = 0) {
     const id = nextLink++;
+    // `target_slot` as well: a link is read from BOTH ends — the node that
+    // adopts a widget finds it through the input the wire lands on.
     app.graph.links[id] = { origin_id: from.id, target_id: to.id, id,
-                            origin_slot: originSlot };
+                            origin_slot: originSlot,
+                            target_slot: to.inputs.length };
     to.inputs.push({ name: inputName, link: id });
     const out = from.outputs[originSlot]
         ?? (from.outputs[originSlot] = { links: [] });
@@ -258,12 +288,17 @@ export function link(from, to, inputName, originSlot = 0) {
 
 // Build a node the way ComfyUI does: run every registered extension's
 // beforeRegisterNodeDef for this class, then invoke onNodeCreated.
-export async function create(comfyClass, widgets = {}) {
+export async function create(comfyClass, widgets = {}, nodeData = {}) {
     const proto = {};
     for (const ext of app.extensions) {
-        await ext.beforeRegisterNodeDef?.({ prototype: proto }, { name: comfyClass });
+        await ext.beforeRegisterNodeDef?.({ prototype: proto },
+                                          { name: comfyClass, ...nodeData });
     }
     const node = makeNode(comfyClass, widgets);
+    // ComfyUI builds a node's outputs from the node definition before any
+    // extension sees it, so one that grows or trims them starts from that
+    // list rather than from nothing.
+    for (const name of nodeData.output_name ?? []) node.addOutput(name, "*");
     node.onNodeCreated = proto.onNodeCreated;
     node.onConfigure = proto.onConfigure;
     // ComfyUI calls this on every wire change; without it a test that rewires

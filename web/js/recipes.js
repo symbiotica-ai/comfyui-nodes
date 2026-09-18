@@ -53,8 +53,8 @@ function toast(severity, summary, detail, life = 5000) {
 }
 
 const noSlotsToast = (color) => toast("warn", "No recipe slots on this canvas",
-    color ? `Paint the slot nodes ${color} on the template workflow, or title them recipe:<name>.`
-          : "Type a colour in match_color and paint the slot nodes with it, or title them recipe:<name>.");
+    color ? `Paint a node ${color} and it is a slot — under its own title, or under its type's name until you rename it.`
+          : "Type a colour in match_color, then paint the nodes a recipe should set.");
 
 const activeWorkflowPath = () => app.extensionManager?.workflow?.activeWorkflow?.path ?? null;
 
@@ -95,7 +95,9 @@ function nodeText(graph, node, slot, depth) {
         const widget = node.widgets?.find((w) => typeof w.value === "string");
         return widget ? String(widget.value) : null;
     }
-    if (type === "SymbioticaAssetFocus") {
+    // Asset Recipe is the same node with widget slots on the end, and it
+    // names a recipe the same way.
+    if (type === "SymbioticaAssetFocus" || type === "SymbioticaAssetRecipe") {
         const output = node.outputs?.[slot]?.name;
         // The dropdown holds the recipe label (`Appliance 1x2`); the plain
         // `category` output is that without its size, and "All" names nothing.
@@ -124,11 +126,28 @@ function nodeText(graph, node, slot, depth) {
         }
         return parts.join(delimiter);
     }
+    // KJNodes' Set/Get pair. A GetNode's only widget holds the NAME of the
+    // constant, never its value, so the value is one input back on the SetNode
+    // carrying the same name -- a walk the canvas can do without a run.
+    if (type === "GetNode" || type === "SetNode") {
+        const setter = type === "SetNode" ? node : findSetter(graph, node);
+        const first = setter?.inputs?.[0]?.name;
+        return first ? inputText(graph, setter, first, depth) ?? null : null;
+    }
     if (PASS_THROUGH.has(type)) {
         const first = node.inputs?.[0]?.name;
         return first ? inputText(graph, node, first, depth) ?? null : null;
     }
     return null;
+}
+
+// The SetNode a GetNode reads: the same constant name, which on both is the
+// first widget. An unnamed Get, or one whose Set is gone, matches nothing.
+function findSetter(graph, get) {
+    const name = String(get.widgets?.[0]?.value ?? "").trim();
+    if (!name) return null;
+    return (graph?.nodes ?? []).find((n) => String(n.type ?? "") === "SetNode"
+        && String(n.widgets?.[0]?.value ?? "").trim() === name) ?? null;
 }
 
 // The text arriving on one of this node's inputs: typed, or resolved live
@@ -138,12 +157,27 @@ export function resolveText(graph, node, inputName) {
     return value == null ? null : String(value).trim();
 }
 
-const liveGraph = () => app.canvas?.graph ?? app.graph;
+// Always the ROOT graph. `app.canvas.graph` is whatever the canvas is showing,
+// which inside a subgraph is that subgraph -- and reading slots from it would
+// shrink the table to the subgraph's nodes and delete every other recipe's
+// values on the next save.
+const liveGraph = () => {
+    const shown = app.canvas?.graph ?? app.graph;
+    return shown?.rootGraph ?? app.graph ?? shown ?? null;
+};
 const textValue = (node, name) => resolveText(liveGraph(), node, name);
 
 // What auto does when the name on the wire is `next` and the canvas was on
 // `prev` (changed = slot values moved since that recipe was last written):
 // save what you leave, then load the recipe you arrive at, or create it.
+// The first tick of a session has no memory of where the canvas is. What the
+// canvas holds is what he last pressed -- the workflow saved it -- so auto
+// takes that as the recipe's current state instead of writing the stored one
+// over it. Only a later switch to another recipe writes to the canvas.
+export function autoAdopt(last, next, columns) {
+    return last.name === null && !!next && columns.includes(next);
+}
+
 export function autoDecision(prev, next, columns) {
     const actions = [];
     if (prev.name && prev.changed) actions.push(`save:${prev.name}`);
@@ -207,12 +241,13 @@ export function colorMatcher(token) {
     });
 }
 
-// A node's own title, empty when it still carries its type's name: a painted
-// node with no title of its own is not a slot, because the key IS the title.
+// The name a painted node goes under: its title, which LiteGraph fills with
+// the type's name until the node is renamed. Painting is the whole of what
+// makes a slot -- a node that has not been retitled is still a slot, under
+// `KSampler`, and renaming it later renames the row.
 function ownTitle(node) {
-    const title = String(node?.title ?? "");
-    const base = node?.constructor?.title;
-    return base && title === String(base) ? "" : title;
+    const title = String(node?.title ?? "").trim();
+    return title || String(node?.constructor?.title ?? node?.type ?? "").trim();
 }
 
 // The recipe key a node carries: its title, without the `recipe:` prefix and
@@ -250,6 +285,18 @@ export function groupSwitches(widgets) {
 // for the same reason a subgraph's wired input is -- the wire is the value,
 // and recording the empty box it sits in would write that emptiness onto
 // every recipe.
+// The widgets a recipe may read or write: the node's own, without its buttons
+// and without any fed by a wire. The wire is the value; recording the empty
+// box it sits in would write that emptiness into every recipe, and writing
+// one back is a value the canvas throws away.
+export function settableWidgets(node) {
+    const wired = new Set();
+    for (const inp of node?.inputs ?? []) {
+        if (inp.widget && inp.link != null) wired.add(inp.widget.name ?? inp.name);
+    }
+    return (node?.widgets ?? []).filter((w) => w.type !== "button" && !wired.has(w.name));
+}
+
 export function widgetValues(node, widgets) {
     const wired = new Set();
     for (const inp of node?.inputs ?? []) {
@@ -408,7 +455,7 @@ function liveSlotValues(graph, color) {
             for (const w of groupSwitches(node.widgets)) groups[groupTitleOf(w)] = toggledOf(w);
             values[key] = groups;
         } else {
-            const widgets = (node.widgets ?? []).filter((w) => w.type !== "button");
+            const widgets = settableWidgets(node);
             if (widgets.length > 1) values[key] = widgetValues(node, widgets);
             else if (widgets.length) values[key] = widgets[0].value;
         }
@@ -425,7 +472,7 @@ export function liveSlots(graph, color) {
     for (const node of graph?.nodes ?? []) {
         const key = slotKey(node, matches);
         if (!key || key in out) continue;
-        const widgets = (node.widgets ?? []).filter((w) => w.type !== "button");
+        const widgets = settableWidgets(node);
         if (isToggleNode(node)) {
             out[key] = { key, kind: "toggle", default: node.mode === 0, widgets: widgets.length };
         } else if (node.isSubgraphNode?.()) {
@@ -451,9 +498,17 @@ export function liveSlots(graph, color) {
     return Object.keys(out).sort().map((key) => out[key]);
 }
 
-// The table again under a changed slot list, the edits in progress kept.
-export function retable(project, table, slots, nextSlots) {
-    return projectToTable(tableToProject(project, table, slots), nextSlots);
+// The table again under a changed slot list, the cell text kept exactly as
+// typed. Nothing is parsed here: a cell mid-edit that does not parse yet must
+// not stop a newly painted node from appearing as a row, which is what a
+// round trip through the project did -- it threw, and the canvas went unread.
+export function retable(table, nextSlots) {
+    const byKey = Object.fromEntries((table.rows ?? []).map((r) => [r.key, r]));
+    const rows = nextSlots.map((slot) => byKey[slot.key] ?? { key: slot.key, cells: {} });
+    for (const row of rows) {
+        for (const column of table.columns) if (row.cells[column] === undefined) row.cells[column] = "";
+    }
+    return { ...table, rows };
 }
 
 // Write captured values into one column. A recipe takes only what differs
@@ -498,12 +553,20 @@ export function applyValuesToNodes(nodes, values, color) {
         const key = slotKey(node, matches);
         if (!key || !(key in values)) continue;
         const value = values[key];
-        const widgets = (node.widgets ?? []).filter((w) => w.type !== "button");
+        const widgets = settableWidgets(node);
         if (isToggleNode(node)) {
             node.mode = value ? 0 : 4;
         } else if (value && typeof value === "object" && !Array.isArray(value)) {
             const switches = groupSwitches(widgets);
-            for (const [name, item] of Object.entries(value)) {
+            // rgthree's toggleRestriction turns the other groups OFF when one
+            // goes on, so the groups a recipe wants off are written before the
+            // ones it wants on. Written the other way round, the last key in
+            // the recipe decides what stays on, whatever was recorded.
+            const entries = Object.entries(value);
+            const ordered = switches.length
+                ? [...entries.filter(([, v]) => !v), ...entries.filter(([, v]) => v)]
+                : entries;
+            for (const [name, item] of ordered) {
                 const group = switches.find((w) => groupTitleOf(w) === name);
                 if (group) { group.toggle?.(!!item); continue; }
                 const widget = widgets.find((w) => w.name === name);
@@ -596,6 +659,11 @@ function recipePanel(node) {
     };
     // Which sections are open. A freshly opened project shows its headers only.
     const expanded = new Set();
+    // The recipe the canvas is on -- the category picked in Asset Focus, down
+    // the wire. Its section is highlighted and opened, and the one this opened
+    // before closes again, so the panel follows the pick without piling up.
+    let active = "";
+    let autoOpened = null;
     let busy = false;
 
     function status(text, subtle = true) {
@@ -647,7 +715,9 @@ function recipePanel(node) {
             state.table = projectToTable(project, slots);
             state.dirty = false;
             slotSig = null;
+            auto.last = { name: null, sig: null };
             expanded.clear();
+            active = ""; autoOpened = null;
             render();
         } catch (err) {
             toast("error", `Could not open "${name}"`, String(err?.message ?? err));
@@ -732,6 +802,7 @@ function recipePanel(node) {
             slotSig = null;
             expanded.clear();
             expanded.add(SHARED);
+            active = ""; autoOpened = null;
             resolvedFor = template;
             render();
             toast("success", `Started project "${name}"`, `Template: ${project.template}. Set the canvas, name a recipe, press Capture.`);
@@ -748,8 +819,7 @@ function recipePanel(node) {
             toast("error", "Fix the cell first", String(err?.message ?? err), 8000);
             return;
         }
-        const graph = app.canvas?.graph ?? app.graph;
-        const report = applyValuesToNodes(graph?.nodes ?? [], values, matchColor());
+        const report = applyValuesToNodes(liveGraph()?.nodes ?? [], values, matchColor());
         if (!report.applied.length) {
             noSlotsToast(matchColor());
             return;
@@ -773,6 +843,10 @@ function recipePanel(node) {
         const sig = slotSignature(values);
         const raw = textValue(node, "recipe");
         const next = raw ? recipeSlug(raw) : "";
+        if (autoAdopt(auto.last, next, state.table.columns)) {
+            auto.last = { name: next, sig };
+            return;
+        }
         const prev = { name: auto.last.name, changed: auto.last.sig !== null && auto.last.sig !== sig };
         const actions = autoDecision(prev, next, state.table.columns);
         if (!actions.length) return;
@@ -818,18 +892,38 @@ function recipePanel(node) {
     let slotSig = null;
     function syncSlots() {
         if (!state.table) return;
-        const live = liveSlots(liveGraph(), matchColor());
-        if (!live.length) return;
+        const graph = liveGraph();
+        // No nodes at all is a graph still loading, not a canvas with nothing
+        // painted on it. Nothing painted IS a real answer: the rows go.
+        if (!graph?.nodes?.length) return;
+        const live = liveSlots(graph, matchColor());
         const sig = JSON.stringify(live);
         if (sig === slotSig) return;
         slotSig = sig;
         if (sig === JSON.stringify(state.slots)) return;
-        try {
-            state.table = retable(state.project, state.table, state.slots, live);
-        } catch {
-            return;
-        }
+        state.table = retable(state.table, live);
         state.slots = live;
+        render();
+    }
+
+    // The name on the `recipe` wire, as a recipe key. "" when nothing is
+    // picked, or when the wire runs through a node the resolver cannot read.
+    function activeColumn() {
+        const raw = textValue(node, "recipe");
+        return raw ? recipeSlug(raw) : "";
+    }
+
+    function syncActive() {
+        if (!state.table) return;
+        const next = activeColumn();
+        if (next === active) return;
+        active = next;
+        if (autoOpened && autoOpened !== next) expanded.delete(autoOpened);
+        autoOpened = null;
+        if (next && state.table.columns.includes(next) && !expanded.has(next)) {
+            expanded.add(next);
+            autoOpened = next;
+        }
         render();
     }
 
@@ -838,6 +932,7 @@ function recipePanel(node) {
     node.onDrawForeground = function () {
         resolveProject();
         syncSlots();
+        syncActive();
         autoTick();
         return onDrawForeground?.apply(this, arguments);
     };
@@ -923,7 +1018,7 @@ function recipePanel(node) {
         node._symCapture = (column) => captureInto(column);
 
         function captureInto(column) {
-            const values = liveSlotValues(app.canvas?.graph ?? app.graph, matchColor());
+            const values = liveSlotValues(liveGraph(), matchColor());
             const found = Object.keys(values).length;
             if (!found) { noSlotsToast(matchColor()); return; }
             captureColumn(state.table, state.slots, column, values);
@@ -936,8 +1031,15 @@ function recipePanel(node) {
         columns.forEach((column, index) => {
             const isShared = column === SHARED;
             const open = expanded.has(column);
-            const box = el("div", `border:1px solid ${HUB.hairline};border-radius:${HUB.radius.md};margin:0 0 6px;`);
-            const head = el("div", "display:flex;align-items:center;gap:6px;padding:4px 6px;min-width:0;");
+            // The recipe the wire names is outlined and its header filled, so a
+            // pick made on another node is visible here without reading names.
+            const isActive = !isShared && column === active;
+            const box = el("div", `border:1px solid ${isActive ? HUB.selLine : HUB.hairline};`
+                + `border-radius:${HUB.radius.md};margin:0 0 6px;`
+                + (isActive ? `box-shadow:0 0 0 1px ${HUB.selLine};` : ""));
+            const head = el("div", "display:flex;align-items:center;gap:6px;padding:4px 6px;min-width:0;"
+                + (isActive ? `background:${HUB.selBg};color:${HUB.selInk};`
+                    + `border-radius:${HUB.radius.md} ${HUB.radius.md} 0 0;` : ""));
             const toggle = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;border:none;", open ? "▾" : "▸");
             toggle.title = open ? "Collapse" : "Expand";
             stopCanvas(toggle).addEventListener("click", (e) => {
@@ -1003,7 +1105,18 @@ function recipePanel(node) {
         });
 
         body.appendChild(statusLine);
-        status(state.dirty ? "Unsaved edits." : `${state.name}: ${columns.length - 1} recipes, ${rows.length} slots.`);
+        const activeNote = !active ? ""
+            : columns.includes(active) ? ` · on ${active}` : ` · ${active} has no recipe yet`;
+        // Why the table is empty, rather than an empty table: a colour that is
+        // not a colour, or a canvas with nothing painted, both look the same.
+        const color = matchColor();
+        const paint = !color ? "match_color is empty — type a colour, then paint the nodes a recipe should set."
+            : !colorMatcher(color) ? `match_color is "${color}", which is not a colour. Use a palette name or a hex.`
+            : !rows.length ? `Nothing on this canvas is painted ${color}. Paint a node and it becomes a row.`
+            : "";
+        if (paint) status(paint, false);
+        else status(state.dirty ? `Unsaved edits.${activeNote}`
+            : `${state.name}: ${columns.length - 1} recipes, ${rows.length} slots.${activeNote}`);
         if (!state.dirty && columns.length === 1) status("No recipes yet. Set the canvas, name a recipe, press Capture.");
         refit();
     }

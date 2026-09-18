@@ -231,7 +231,7 @@ test("recipe sections come sorted by name after shared, however they were captur
     assert.deepEqual(table.columns, ["shared", "aaa", "appliance1x1", "appliance1x2"]);
 });
 
-import { autoDecision, resolveText } from "../../web/js/recipes.js";
+import { autoAdopt, autoDecision, resolveText } from "../../web/js/recipes.js";
 
 // A live-graph stand-in: nodes by id, links by id as {origin_id, origin_slot}.
 function graphOf(nodes, links) {
@@ -266,11 +266,41 @@ test("join strings uses its delimiter and a typed value is read as is", () => {
     assert.equal(resolveText(graph, typed, "recipe"), "typed");
 });
 
+test("a recipe name arriving through KJNodes Set/Get is read off the Set's input", () => {
+    const focus = { id: 1, type: "SymbioticaAssetFocus", inputs: [], widgets: [{ name: "category", value: "Appliance 1x1" }],
+        outputs: [{ name: "asset_name" }, { name: "category" }, { name: "client_prompt" }, { name: "category_recipe" }] };
+    const set = { id: 2, type: "SetNode", widgets: [{ name: "Constant", value: "category_recipe" }],
+        inputs: [{ name: "STRING", link: 10 }], outputs: [{ name: "*" }] };
+    const get = { id: 3, type: "GetNode", widgets: [{ name: "Constant", value: "category_recipe" }],
+        inputs: [], outputs: [{ name: "*" }] };
+    const target = { id: 4, type: "SymbioticaRecipe", inputs: [{ name: "recipe", link: 11, widget: { name: "recipe" } }],
+        widgets: [{ name: "recipe", value: "" }] };
+    const nodes = [focus, set, get, target];
+    const graph = { ...graphOf(nodes, { 10: { origin_id: 1, origin_slot: 3 }, 11: { origin_id: 3, origin_slot: 0 } }), nodes };
+    assert.equal(resolveText(graph, target, "recipe"), "Appliance 1x1");
+    // A Get whose Set is gone, and an unnamed one, name nothing.
+    get.widgets[0].value = "gone";
+    assert.equal(resolveText(graph, target, "recipe"), null);
+    get.widgets[0].value = "";
+    assert.equal(resolveText(graph, target, "recipe"), null);
+});
+
 test("a node the resolver does not understand yields null, never a guess", () => {
     const llm = { id: 1, type: "SymbioticaClaude", inputs: [{ name: "prompt", link: null, widget: { name: "prompt" } }], widgets: [{ name: "prompt", value: "hi" }], outputs: [{ name: "text" }] };
     const target = { id: 2, type: "SymbioticaRecipe", inputs: [{ name: "recipe", link: 10, widget: { name: "recipe" } }], widgets: [{ name: "recipe", value: "" }] };
     const graph = graphOf([llm, target], { 10: { origin_id: 1, origin_slot: 0 } });
     assert.equal(resolveText(graph, target, "recipe"), null);
+});
+
+test("auto adopts the canvas it opens on instead of writing the recipe over it", () => {
+    const columns = ["shared", "counter1x1"];
+    // Nothing remembered yet: the canvas is what was saved with the workflow.
+    assert.equal(autoAdopt({ name: null, sig: null }, "counter1x1", columns), true);
+    // A name with no recipe is created from the canvas, not adopted.
+    assert.equal(autoAdopt({ name: null, sig: null }, "chair1x1", columns), false);
+    assert.equal(autoAdopt({ name: null, sig: null }, "", columns), false);
+    // Once auto knows where it is, a switch loads as before.
+    assert.equal(autoAdopt({ name: "counter1x1", sig: "x" }, "chair1x1", columns), false);
 });
 
 test("auto decides: save the recipe you leave, then load an existing one or create a new one", () => {
@@ -281,6 +311,21 @@ test("auto decides: save the recipe you leave, then load an existing one or crea
     assert.deepEqual(autoDecision({ name: "counter1x1", changed: false }, "counter1x1", columns), []);
     assert.deepEqual(autoDecision({ name: null, changed: false }, "counter1x1", columns), ["load:counter1x1"]);
     assert.deepEqual(autoDecision({ name: "counter1x1", changed: true }, "", columns), ["save:counter1x1"]);
+});
+
+test("a recipe writes rgthree's groups off-first, so a max-one node lands on what was recorded", () => {
+    const calls = [];
+    const row = (title, toggled) => ({
+        name: "RGTHREE_TOGGLE_AND_NAV", value: { toggled }, group: { title },
+        toggle(v) { calls.push([title, v]); this.value.toggled = v; },
+    });
+    const muter = { title: "Fast Groups Muter (rgthree)", color: "#323", bgcolor: "#535",
+        widgets: [row("render-engine-nano2", false), row("render-engine-qwen", true)] };
+    const report = applyValuesToNodes([muter], {
+        "Fast Groups Muter (rgthree)": { "render-engine-nano2": true, "render-engine-qwen": false },
+    }, "purple");
+    assert.deepEqual(report.applied, ["Fast Groups Muter (rgthree)"]);
+    assert.deepEqual(calls, [["render-engine-qwen", false], ["render-engine-nano2", true]]);
 });
 
 import { projectForWorkflow } from "../../web/js/recipes.js";
@@ -325,20 +370,28 @@ test("the canvas describes its own slots the way the saved template does, in key
         // Every widget, not the first: a recipe is the whole node.
         { key: "grid", kind: "dict", default: { columns: 2, rows: 1 }, widgets: 2 },
         { key: "pre_flip", kind: "toggle", default: false, widgets: 0 },
-        { key: "render", kind: "dict", default: { lora_name: "x.safetensors" }, widgets: 2 },
+        // `seed` arrives on a wire, so it is neither counted nor recorded.
+        { key: "render", kind: "dict", default: { lora_name: "x.safetensors" }, widgets: 1 },
     ]);
     assert.deepEqual(liveSlots({ nodes: [] }), []);
 });
 
 test("re-tabling on a slot change keeps unsaved cells, adds the new slot and drops the gone one", () => {
-    const r = project();
-    const table = projectToTable(r, slots);
+    const table = projectToTable(project(), slots);
     table.rows.find((row) => row.key === "strength").cells.appliance1x1 = "0.9";
     const renamed = slots.filter((s) => s.key !== "control_image")
         .concat([{ key: "controlnet", kind: "scalar", default: "floor.png", widgets: 1 }]);
-    const next = retable(r, table, slots, renamed);
+    const next = retable(table, renamed);
     assert.deepEqual(next.rows.map((row) => row.key), ["grid", "strength", "pre_flip", "render", "controlnet"]);
     assert.equal(next.rows.find((row) => row.key === "strength").cells.appliance1x1, "0.9");
+});
+
+test("a cell that does not parse still lets a newly painted node become a row", () => {
+    const table = projectToTable(project(), slots);
+    table.rows.find((row) => row.key === "render").cells.shared = "{not json";
+    const next = retable(table, slots.concat([{ key: "backdrop", kind: "scalar", default: "", widgets: 1 }]));
+    assert.ok(next.rows.some((row) => row.key === "backdrop"));
+    assert.equal(next.rows.find((row) => row.key === "render").cells.shared, "{not json");
 });
 
 import { colorMatcher, slotKey } from "../../web/js/recipes.js";
@@ -354,10 +407,15 @@ test("a painted node is a slot named by its title", () => {
     assert.equal(slotKey({ title: "llm-prompt" }, matches), null);
 });
 
-test("a painted node still carrying its type's name is not a slot", () => {
+test("painting is the whole of it: a node never retitled is a slot under its type's name", () => {
     const node = painted("Prompts");
     node.constructor = { title: "Prompts" };
-    assert.equal(slotKey(node, colorMatcher("purple")), null);
+    assert.equal(slotKey(node, colorMatcher("purple")), "Prompts");
+    // Nothing on the node at all but the paint still names it.
+    assert.equal(slotKey({ title: "", type: "KSampler", color: "#323", bgcolor: "#535" },
+        colorMatcher("purple")), "KSampler");
+    // Unpainted stays unpainted.
+    assert.equal(slotKey({ title: "KSampler" }, colorMatcher("purple")), null);
 });
 
 test("the recipe: prefix marks a slot whatever the colour, and is dropped from a painted one", () => {
@@ -429,7 +487,8 @@ test("a Prompts slot captures folder, file and text, and leaves the wired path o
                   { name: "text", value: "SYSTEM PROMPT" }],
     };
     assert.deepEqual(liveSlots({ nodes: [node] }, "purple"), [{
-        key: "LLM-prompt", kind: "dict", widgets: 4,
+        // Three: the wired `path` is not a widget a recipe may set.
+        key: "LLM-prompt", kind: "dict", widgets: 3,
         default: { folder: "llm-prompts", file: "llm-sp-chair.md", text: "SYSTEM PROMPT" },
     }]);
 });

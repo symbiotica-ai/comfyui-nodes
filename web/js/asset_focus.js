@@ -14,6 +14,10 @@ import { attachHoverZoom, el, emptyState, hideHoverZoom, imageFullUrl,
 import { wireOrderSpecs } from "./order_source.js";
 
 const NODE_CLASS = "SymbioticaAssetFocus";
+// Asset Recipe IS this node with widget slots on the end of its output
+// column, so the selection widgets, the panel and the run's push serve
+// both classes. `web/js/asset_recipe.js` adds only the slots.
+export const FOCUS_CLASSES = [NODE_CLASS, "SymbioticaAssetRecipe"];
 const MIN_NODE_W = 300;
 // The client's own reference art for an asset, at the size the cell strips
 // use, so every panel that lists these assets reads alike.
@@ -206,7 +210,7 @@ function hoistSelectionWidgets(node) {
 // `ref` is set by clicking a tile, and a second control for the same choice is
 // the same thing twice. The widget stays — it is how the file reaches Python
 // and a saved workflow — but it takes no room on the canvas.
-function hideWidget(w) {
+export function hideWidget(w) {
     if (!w) return;
     w.hidden = true;
     w.computeSize = () => [0, -4];
@@ -666,7 +670,7 @@ function focusPanel(node) {
 registerSymbioticaExtension(app, {
     name: "symbiotica.asset_focus",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== NODE_CLASS) return;
+        if (!FOCUS_CLASSES.includes(nodeData.name)) return;
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {

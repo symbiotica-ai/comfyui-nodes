@@ -108,9 +108,13 @@ and keeping the node RESIZABLE".
 ## A value that arrives on a wire
 
 He wires almost everything through KJNodes **Set/Get** nodes. A GetNode's only
-widget holds the NAME of the constant, not its value, so any canvas-side walk
-(`nodeOutputString`, `resolveText`) reads `$$controlnet` and points the panel at
-a folder called that. There is no way to resolve it without running the graph.
+widget holds the NAME of the constant, not its value, so a canvas-side walk that
+reads its widget gets `$$controlnet` and points the panel at a folder called
+that. **`nodeOutputString` now hops the pair** (2026-09-18): the SetNode of that
+name is on the canvas, so the walk finds it in the root graph and follows what is
+wired INTO it, and answers `""` — never the name — when there is no Set to
+follow. A value that only exists at RUN time (a prompt, a rendered path) still
+needs the run.
 
 The shape that works, in `prompts.js` and `control_image.js`:
 
@@ -129,6 +133,14 @@ rejects every node on his canvas with "a node rejected one or more input
 values". Return `True` for the empty case and let execution be where a bad
 value fails.
 
+**A button widget shifts every widget saved after it.** `📁 Read folder` sets
+`readBtn.serialize = false`, and the save wrote `null` for it anyway while the
+load skips it — so on reopening, every value after the button lands one widget to
+the LEFT (`ref` takes the `null`, the next widget takes `ref`'s string). A text
+widget holding `null` then breaks the whole queue: pysssss's `presetText` calls
+`.replace` on it inside `graphToPrompt`, and no node runs. Suspected, not yet
+proven — see ROADMAP's Asset Recipe threads.
+
 **A route the canvas fetches has to exist.** `/symbiotica/local-image` was
 deleted with the obsolete nodes in `0a4f14d` while two panels still called it,
 and every preview outside ComfyUI's `input/` 404'd for weeks with nothing in
@@ -139,10 +151,10 @@ the tests to catch it — the allowlist was tested, the handler was not.
 A painted slot node is captured whole, not by its first widget
 (`liveSlotValues`, `web/js/recipes.js`):
 
-- one widget → the value itself
-- more than one → a dict of every widget BY NAME, with any widget fed by a wire
-  left out (the wire is the value; recording the empty box writes that emptiness
-  into every recipe)
+- a widget fed by a wire is left out at EVERY widget count (the wire is the
+  value; recording the empty box writes that emptiness into every recipe)
+- one widget left → the value itself
+- more than one → a dict of every widget BY NAME
 - a subgraph → its promoted inputs, wired ones left out
 - rgthree's **Fast Group Bypasser** → one entry per GROUP TITLE. Every row
   widget is named `RGTHREE_TOGGLE_AND_NAV` and holds `{toggled}`, so by name
@@ -150,6 +162,30 @@ A painted slot node is captured whole, not by its first widget
   `.value` is inert and the group never moves.
 - a key in the project file with no slot on the canvas is not a row: it leaves
   the table on sight and the file on the next `save project`.
+
+## Asset Recipe — Asset Focus plus wired widget values
+
+`SymbioticaAssetRecipe` (py/pipeline/nodes.py) SUBCLASSES `SymbioticaAssetFocus`
+and builds its schema from the parent's, so an output added to Asset Focus lands
+on both in the same order. After the focus outputs come `slot_1..slot_16`,
+`io.AnyType` (`*`) — ComfyUI has no dynamic outputs, so the node declares a fixed
+set and the canvas grows INTO them. `execute` calls `super().execute(**kwargs)`
+(never the parent by name, or the focus panel's push goes out under the wrong
+class) and appends the slot values.
+
+The slots themselves live in `web/js/asset_recipe.js`:
+
+- the whole table is ONE hidden `slots` string input (JSON), written by the
+  canvas and read by Python; the per-slot widgets are `serialize = false`, so
+  adding a slot never shifts another widget's saved value
+- an output's NAME is its position (`slot_3` is the third row) and its LABEL is
+  what you read; only ever append, and renumber after any removal
+- `web/js/asset_focus.js` serves both classes through `FOCUS_CLASSES` — the
+  panel, the selection widgets and the `symbiotica.focus` push are shared
+
+**Dragging a widget onto the empty slot does not work on his canvas yet** (as of
+2026-09-18): the wires land, no row is written, no widget appears. Unit tests
+cover the handler; nothing has been verified on the Modal canvas.
 
 ## Repo ground rules
 
@@ -176,7 +212,10 @@ A painted slot node is captured whole, not by its first widget
   (`new project`, `capture recipe`). Node inputs are Comfy widgets, wirable,
   never DOM fields, and never the same thing twice. A recipe slot is a node
   painted the colour typed in the node's `match_color` input, its title the
-  slot name (`recipe:<key>` titles still work); adding an input to a node
+  slot name — a node never retitled goes under its type's name, so PAINTING is
+  the whole of what makes a slot (`recipe:<key>` titles still work). The slot
+  list is read from the ROOT graph, never from the subgraph the canvas is
+  showing. The node's contract is `docs/recipes-contract.md`; adding an input to a node
   shifts the widget values of every workflow already saved with it, so a new
   input lands on an old canvas holding the value of the widget that used to
   sit in its place.

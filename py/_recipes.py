@@ -25,9 +25,9 @@ import re
 import uuid
 
 try:
-    from ._modules import promoted_names
+    from ._modules import _pos, _size, promoted_names
 except ImportError:  # tests import py/ as top-level modules
-    from _modules import promoted_names
+    from _modules import _pos, _size, promoted_names
 
 PREFIX = "recipe:"
 TOGGLE = "?"
@@ -91,22 +91,34 @@ def color_matcher(token):
 
 # ------------------------------------------------------------------ slots --
 
-def slot_key(node: dict, matches=None) -> str | None:
+def slot_key(node: dict, matches=None, names=None) -> str | None:
     """The key a node carries: its title, without the `recipe:` prefix and
-    without a toggle's `?`. A painted node with no title of its own is not a
-    slot — the key IS the title."""
+    without a toggle's `?`. Painting is the whole of what makes a slot — a
+    node never retitled goes under its type's name, which is what the canvas
+    shows on it. `names` maps a subgraph id to that subgraph's name, so an
+    instance is named the way LiteGraph titles it."""
     title = node.get("title")
     title = title if isinstance(title, str) else ""
     if title.startswith(PREFIX):
         key = title[len(PREFIX):]
-    elif title.strip() and matches is not None and matches(node):
-        key = title
+    elif matches is not None and matches(node):
+        type_ = node.get("type")
+        key = title.strip() or (names or {}).get(type_) or (
+            type_ if isinstance(type_, str) else "")
     else:
         return None
     key = key.strip()
     if key.endswith(TOGGLE):
         key = key[:-len(TOGGLE)].strip()
     return key or None
+
+
+def subgraph_names(workflow: dict) -> dict:
+    """Every subgraph definition's id to its name — the title LiteGraph puts
+    on an instance that was never renamed."""
+    definitions = ((workflow.get("definitions") or {}).get("subgraphs") or [])
+    return {s.get("id"): s.get("name") for s in definitions
+            if s.get("id") and isinstance(s.get("name"), str)}
 
 
 def is_toggle(node: dict) -> bool:
@@ -119,14 +131,65 @@ def recipe_slots(workflow: dict, color=None) -> dict[str, list[dict]]:
     not slots: a recipe speaks to the graph's surface."""
     slots: dict[str, list[dict]] = {}
     matches = color_matcher(color)
+    names = subgraph_names(workflow)
     for node in workflow.get("nodes") or []:
-        key = slot_key(node, matches)
+        key = slot_key(node, matches, names)
         if key:
             slots.setdefault(key, []).append(node)
     return slots
 
 
 # ------------------------------------------------------------------ apply --
+
+# rgthree's Fast Groups Muter / Bypasser. Its rows are not widgets with names:
+# each one stands for a GROUP, and what it actually moves is the mode of every
+# node inside that group's frame. A recipe records one entry per group title,
+# so writing one means walking the workflow's groups, not the node's widgets.
+RGTHREE_GROUP_NODES = {
+    "Fast Groups Muter (rgthree)": 2,       # modeOff = NEVER
+    "Fast Groups Bypasser (rgthree)": 4,    # modeOff = BYPASS
+}
+
+
+def is_group_switch(node: dict) -> bool:
+    return node.get("type") in RGTHREE_GROUP_NODES
+
+
+def _in_group(node: dict, bounding) -> bool:
+    """rgthree decides membership by the node's CENTRE, not its corner, so a
+    node overhanging a frame's edge belongs where the canvas shows it."""
+    if not isinstance(bounding, (list, tuple)) or len(bounding) < 4:
+        return False
+    x, y = _pos(node)
+    w, h = _size(node)
+    cx, cy = x + w / 2, y + h / 2
+    bx, by, bw, bh = (float(v) for v in bounding[:4])
+    return bx <= cx < bx + bw and by <= cy < by + bh
+
+
+def _group_nodes(workflow: dict, title: str) -> list[dict]:
+    """Every root node sitting inside a group of this title."""
+    boundings = [g.get("bounding") for g in workflow.get("groups") or []
+                 if str(g.get("title", "")).strip() == title]
+    if not boundings:
+        return []
+    return [n for n in workflow.get("nodes") or []
+            if any(_in_group(n, b) for b in boundings)]
+
+
+def _set_groups(workflow: dict, node: dict, key: str, value: dict) -> None:
+    mode_off = RGTHREE_GROUP_NODES[node["type"]]
+    for title, on in value.items():
+        if not isinstance(on, bool):
+            raise RecipeError(f"{key} / {title}: a group is on or off, got {on!r}")
+        members = _group_nodes(workflow, title)
+        if not members:
+            raise RecipeError(f"{key}: the template has no group titled {title!r}")
+        for member in members:
+            if member is node:
+                continue
+            member["mode"] = MODE_ACTIVE if on else mode_off
+
 
 def _set_value(node: dict, key: str, value) -> None:
     if is_toggle(node):
@@ -168,7 +231,13 @@ def apply_recipe(workflow: dict, values: dict, color=None) -> dict:
         raise RecipeError(f"no recipe slot named {', '.join(unknown)} in the template")
     for key, value in values.items():
         for node in slots[key]:
-            _set_value(node, key, value)
+            if is_group_switch(node):
+                if not isinstance(value, dict):
+                    raise RecipeError(
+                        f"{key}: a group switch takes one true/false per group title, got {value!r}")
+                _set_groups(workflow, node, key, value)
+            else:
+                _set_value(node, key, value)
     return {
         "applied": sorted(values),
         "template": sorted(k for k in slots if k not in values),
@@ -287,6 +356,19 @@ def template_slots(workflow: dict, color=None) -> list[dict]:
         if is_toggle(node):
             out.append({"key": key, "kind": "toggle",
                         "default": node.get("mode", MODE_ACTIVE) == MODE_ACTIVE, "widgets": len(widgets)})
+        elif is_group_switch(node):
+            # What the template holds for a group is whether its nodes are
+            # live, not the muter's own serialised rows.
+            groups = {}
+            for group in workflow.get("groups") or []:
+                title = str(group.get("title", "")).strip()
+                if not title:
+                    continue
+                members = [n for n in workflow.get("nodes") or []
+                           if n is not node and _in_group(n, group.get("bounding"))]
+                if members:
+                    groups[title] = any(m.get("mode", MODE_ACTIVE) == MODE_ACTIVE for m in members)
+            out.append({"key": key, "kind": "dict", "default": groups, "widgets": len(widgets)})
         elif node.get("type") in subgraph_ids:
             names = promoted_names(node)
             # A promoted input fed by a link (a seed node, a resolution node)
