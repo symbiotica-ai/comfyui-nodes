@@ -197,6 +197,29 @@ function apply(node) {
     node.setDirtyCanvas?.(true, true);
 }
 
+// A slot taken off on demand: right-click its dot on the node and pick
+// "Remove slot". Unplugging a wire does the same for a slot that HAS one, and
+// a slot whose wire never became a row has nothing to unplug.
+function removeSlot(node, index) {
+    const at = index - slotStart(node);
+    if (at < 0) return;
+    const rows = readSlots(node);
+    if (at < rows.length) {
+        rows.splice(at, 1);
+        writeSlots(node, rows);
+    }
+    node._symSyncing = true;
+    try {
+        // litegraph's own removeOutput disconnects the slot first and repoints
+        // the wires of every slot below it, so the table and the output column
+        // come out of this still pointing at the same values.
+        node.removeOutput?.(index);
+    } finally {
+        node._symSyncing = false;
+    }
+    apply(node);
+}
+
 function refuse(node, index, detail) {
     node._symSyncing = true;
     try {
@@ -235,6 +258,26 @@ registerSymbioticaExtension(app, {
                 this._symLoading = false;
                 apply(this);
             });
+        };
+
+        // litegraph builds the slot's right-click menu itself and offers
+        // "Remove Slot" only for an output flagged `removable`; these are not,
+        // and flagging them would call removeOutput behind the table's back.
+        // `getExtraSlotMenuOptions` appends to that menu instead, so Disconnect
+        // Links and Rename Slot stay where they were.
+        const getExtraSlotMenuOptions = nodeType.prototype.getExtraSlotMenuOptions;
+        nodeType.prototype.getExtraSlotMenuOptions = function (slotInfo) {
+            const extra = getExtraSlotMenuOptions?.apply(this, arguments) ?? [];
+            const index = slotInfo?.slot;
+            if (!slotInfo?.output || typeof index !== "number") return extra;
+            const at = index - slotStart(this);
+            if (at < 0) return extra;
+            // The foot of the column is the one you drag onto, not a slot.
+            if (at >= readSlots(this).length
+                && !this.outputs?.[index]?.links?.length) return extra;
+            return [...extra, null,
+                    { content: "Remove slot", className: "danger",
+                      callback: () => removeSlot(this, index) }];
         };
 
         const onConnectionsChange = nodeType.prototype.onConnectionsChange;

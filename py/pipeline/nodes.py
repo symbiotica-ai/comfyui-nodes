@@ -17,6 +17,7 @@ from .order_loader import event_spec, load_order
 from .order_sheet import bucket_for, canvas_size, category_recipe
 from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import assets_by_category, save_paths
+from .prompt_store import read_file, stamp
 
 Order = io.Custom("SYMBIOTICA_ORDER")
 
@@ -684,6 +685,70 @@ class SymbioticaPromptBlock(io.ComfyNode):
         return io.NodeOutput(str(_one(text) or ""))
 
 
+# A file dropdown value the canvas uses to say "nothing to load": bracketed so
+# it can never collide with a real name, and never read as one here either.
+def _unpicked(name):
+    return not name or name.startswith("[")
+
+
+class SymbioticaPromptLoad(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaPromptLoad",
+            display_name="Prompt Load (Symbiotica)",
+            category="symbiotica/pipeline",
+            description="Load one prompt file. Point it at the same path the "
+                        "Prompts node edits and pick a file from the "
+                        "dropdown; the output is that file's text. It re-runs "
+                        "only when the file itself changes.",
+            inputs=[
+                io.String.Input("path", default="",
+                                tooltip="The folder holding the prompts — the "
+                                        "same path the Prompts node is given. "
+                                        "Type it, or wire a string."),
+                io.String.Input("file", default="",
+                                tooltip="Which file under that path. The "
+                                        "dropdown lists every prompt file it "
+                                        "holds, sub-folders included."),
+            ],
+            outputs=[
+                io.String.Output(display_name="text",
+                                 tooltip="The file's text."),
+            ],
+            hidden=[io.Hidden.unique_id],
+            # An output node, for the same reason the Prompts node is one: a
+            # path arriving through a Get node has no value the canvas can
+            # read, and queueing this node on its own is how the dropdown
+            # learns which folder to list.
+            is_output_node=True,
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, path="", file=""):
+        folder = str(_one(path) or "").strip()
+        name = str(_one(file) or "").strip()
+        return f"{folder}|{name}|{stamp(folder, name)}"
+
+    @classmethod
+    def execute(cls, path="", file="") -> io.NodeOutput:
+        folder = str(_one(path) or "").strip()
+        name = str(_one(file) or "").strip()
+        # Pushed BEFORE the read: the first queue of a node whose path comes
+        # in on a wire has nothing picked yet, and this push is the whole
+        # reason that queue was made.
+        _push("symbiotica.prompt_load", {
+            "node_id": str(getattr(getattr(cls, "hidden", None),
+                                   "unique_id", "")),
+            "path": folder,
+        })
+        if not folder or _unpicked(name):
+            return io.NodeOutput("")
+        # A picked file that has gone is loud. Silently loading nothing would
+        # send an empty prompt to a billed model.
+        return io.NodeOutput(read_file(folder, name))
+
+
 def _pick_folders(values):
     """The distinct folders a board slot reads, resolved and de-duped.
 
@@ -794,5 +859,6 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaAssetFocus,
     SymbioticaAssetRecipe,
     SymbioticaPromptBlock,
+    SymbioticaPromptLoad,
     SymbioticaOrderTracker,
 ]

@@ -260,3 +260,46 @@ test("unreadable slot JSON leaves the node usable", async () => {
     assert.deepEqual(labels(node), ["+ widget"]);
     assert.equal(slotWidgets(node).length, 0);
 });
+
+// What litegraph hands the hook when you right-click an output dot.
+const slotMenu = (node, index) =>
+    node.getExtraSlotMenuOptions?.call(
+        node, { output: node.outputs[index], slot: index }) ?? [];
+const entry = (menu, content) => menu.find((e) => e?.content === content);
+
+test("a slot is taken off by hand from its right-click menu", async () => {
+    const node = await recipeNode();
+    const one = await farNode("KSampler", { denoise: 0.8 }, SAMPLER_DEF);
+    const two = await farNode("KSampler", { seed: 42 }, SAMPLER_DEF);
+    wire(node, FIRST, one, "denoise");
+    const second = wire(node, FIRST + 1, two, "seed");
+
+    entry(slotMenu(node, FIRST), "Remove slot").callback();
+    for (let i = 0; i < 3; i++) await tick();
+
+    assert.deepEqual(slots(node).map((r) => r.name), ["seed"]);
+    assert.deepEqual(labels(node), ["seed", "+ widget"]);
+    assert.deepEqual(slotWidgets(node).map((w) => w.name), ["seed"]);
+    assert.equal(app.graph.links[second].origin_slot, FIRST);
+});
+
+test("the empty slot and the focus outputs offer no removal", async () => {
+    const node = await recipeNode();
+    assert.equal(entry(slotMenu(node, FIRST), "Remove slot"), undefined);
+    assert.equal(entry(slotMenu(node, 0), "Remove slot"), undefined);
+});
+
+test("a wired slot that never became a row is still removable", async () => {
+    // The state on the canvas when adoption failed: the wire landed, the table
+    // stayed empty, and there was no way back out of it.
+    const node = await recipeNode();
+    const far = await farNode("KSampler", { seed: 42 }, SAMPLER_DEF);
+    link(node, far, "seed", FIRST);
+    assert.equal(slots(node).length, 0);
+
+    entry(slotMenu(node, FIRST), "Remove slot").callback();
+    for (let i = 0; i < 3; i++) await tick();
+
+    assert.deepEqual(labels(node), ["+ widget"]);
+    assert.equal(node.outputs.length, FIRST + 1);
+});

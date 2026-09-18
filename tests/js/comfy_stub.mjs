@@ -92,7 +92,11 @@ globalThis.document = {
     body: element(),
 };
 globalThis.window = {
-    addEventListener() {},
+    // A real listener store and a real dispatch: panels talk to each other
+    // across the window (one Prompts node's save is every other node's stale
+    // view), and a no-op addEventListener made that traffic untestable.
+    ...listening(),
+    dispatchEvent(event) { fire(this, event?.type, event); return true; },
     devicePixelRatio: 1,
     // A window size, because anything that floats over the canvas is sized and
     // clamped against one.
@@ -304,6 +308,9 @@ export async function create(comfyClass, widgets = {}, nodeData = {}) {
     // ComfyUI calls this on every wire change; without it a test that rewires
     // is driving nothing and passes for the wrong reason.
     node.onConnectionsChange = proto.onConnectionsChange;
+    // The slot's own right-click menu, which is where a slot is taken off by
+    // hand — litegraph asks the node for it and appends what comes back.
+    node.getExtraSlotMenuOptions = proto.getExtraSlotMenuOptions;
     return node;
 }
 

@@ -6,6 +6,10 @@ import { registerSymbioticaExtension } from "./register.js";
 import { nodeOutputString, resolveProjectPath } from "./order_source.js";
 
 const NODE = "SymbioticaPromptBlock";
+// Prompt Load lives in this file, not beside it: the platform syncs
+// CHANGES to a pack file into a running sandbox but never ADDS a new one,
+// so a node whose panel ships as its own .js comes up as raw widgets.
+const LOAD_NODE = "SymbioticaPromptLoad";
 
 // One node's save is every other node's stale view: two Prompts nodes on the
 // same file must agree after either saves. Saves are announced on the window
@@ -466,9 +470,120 @@ function setupPrompts(node) {
     };
 }
 
+// --- Prompt Load ------------------------------------------------------------
+// The same folder, read-only: one dropdown of every prompt file under the path,
+// flat, because there is no second dropdown here to split the sub-folder out.
+function setupPromptLoad(node) {
+    const state = { path: "", files: null, error: "", everLoaded: false };
+    const repaint = () => node.setDirtyCanvas?.(true, true);
+
+    const fileW = comboify(node, "file", () => {
+        const held = valueText(fileW);
+        if (!state.path) return [isPlaceholder(held) ? NO_PATH : held];
+        if (state.files === null) {
+            return [state.error ? `[${state.error}]` : LOADING];
+        }
+        if (!state.files.length) return isPlaceholder(held) ? [NO_FILES] : [held];
+        // A held name gone from disk stays offered rather than silently
+        // re-pointing the node at another prompt.
+        return isPlaceholder(held) || state.files.includes(held)
+            ? state.files : [...state.files, held];
+    });
+    if (!fileW) return;
+
+    async function refresh() {
+        const path = pathOf(node);
+        const changed = path !== state.path;
+        state.path = path;
+        if (!path) {
+            state.files = null;
+            state.error = "";
+            repaint();
+            return;
+        }
+        try {
+            const { files } = await getJson(
+                `/symbiotica/prompts-list?folder=${encodeURIComponent(path)}`
+                + (changed ? "&sync=1" : ""));
+            state.files = files ?? [];
+            state.error = "";
+        } catch (err) {
+            state.files = null;
+            state.error = String(err.message || err);
+            repaint();
+            return;
+        }
+        if (changed || isPlaceholder(valueText(fileW))) {
+            const held = valueText(fileW);
+            // A restored workflow keeps a name the listing does not hold: the
+            // file may be gone for a moment, and re-pointing the node at
+            // another prompt would quietly load the wrong text on the next
+            // queue. A path the user has just changed does not.
+            const keep = !state.everLoaded && !isPlaceholder(held);
+            if (!keep && (isPlaceholder(held) || !state.files.includes(held))) {
+                fileW.value = state.files[0] ?? "";
+            }
+        }
+        state.everLoaded = true;
+        repaint();
+    }
+
+    let queued = false;
+    node._symRefreshPromptLoad = () => {
+        if (queued) return;
+        queued = true;
+        queueMicrotask(() => { queued = false; refresh(); });
+    };
+
+    const pathW = widgetOf(node, "path");
+    if (pathW) {
+        const pathCb = pathW.callback;
+        pathW.callback = function () {
+            const out = pathCb?.apply(this, arguments);
+            node._symRefreshPromptLoad();
+            return out;
+        };
+    }
+
+    // A Prompts panel wrote a file: nobody should have to reload to load the
+    // prompt they just saved.
+    const onSaved = () => node._symRefreshPromptLoad();
+    window.addEventListener(SAVED_EVT, onSaved);
+    const prevRemoved = node.onRemoved;
+    node.onRemoved = function () {
+        window.removeEventListener(SAVED_EVT, onSaved);
+        prevRemoved?.apply(this, arguments);
+    };
+}
+
+function installPromptLoad(nodeType) {
+    const orig = nodeType.prototype.onNodeCreated;
+    nodeType.prototype.onNodeCreated = function () {
+        orig?.apply(this, arguments);
+        try {
+            setupPromptLoad(this);
+            this._symRefreshPromptLoad?.();
+        } catch (err) {
+            console.error("[Symbiotica] Prompt Load setup failed", err);
+        }
+    };
+    const origCfg = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function () {
+        origCfg?.apply(this, arguments);
+        this._symRefreshPromptLoad?.();
+    };
+    const origConn = nodeType.prototype.onConnectionsChange;
+    nodeType.prototype.onConnectionsChange = function () {
+        origConn?.apply(this, arguments);
+        // A newly wired path is a different folder.
+        this._symRefreshPromptLoad?.();
+    };
+}
+
 registerSymbioticaExtension(app, {
     name: "symbiotica.prompts",
     async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData?.name === LOAD_NODE) { installPromptLoad(nodeType); return; }
         if (nodeData.name !== NODE) return;
         const orig = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -506,4 +621,18 @@ api.addEventListener("symbiotica.prompts", (event) => {
     node.properties = node.properties ?? {};
     node.properties[RAN_PATH] = path;
     node._symRefreshPrompts?.();
+});
+
+// The same for Prompt Load: one queue and the dropdown knows the folder.
+api.addEventListener("symbiotica.prompt_load", (event) => {
+    const detail = event?.detail ?? {};
+    if (detail.node_id == null) return;
+    const node = app.graph?.getNodeById?.(Number(detail.node_id))
+        ?? app.graph?.getNodeById?.(detail.node_id);
+    if (!node) return;
+    const path = typeof detail.path === "string" ? detail.path.trim() : "";
+    if (!path || ranPath(node) === path) return;
+    node.properties = node.properties ?? {};
+    node.properties[RAN_PATH] = path;
+    node._symRefreshPromptLoad?.();
 });

@@ -114,6 +114,21 @@ def read_file(folder, name):
         raise PromptPathError(f"cannot read {name!r}: {exc}") from exc
 
 
+def stamp(folder, name):
+    """A value that changes when the named file's contents change.
+
+    The loader node's cache key. Nothing picked, a name that does not resolve
+    and a file not there all stamp the same — "" — so a node waiting for a
+    path does not re-run every queue and re-bill what hangs off it. A file
+    that later appears stamps differently, which is a change and a re-run.
+    """
+    try:
+        st = os.stat(resolve_file(folder, name))
+    except (PromptPathError, OSError):
+        return ""
+    return f"{st.st_mtime_ns}:{st.st_size}"
+
+
 def write_file(folder, name, text):
     """Save one file, keeping a single .bak of what it replaced.
 

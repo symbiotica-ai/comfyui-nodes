@@ -12,11 +12,21 @@ const TREE = {
             "_rules/03-light.md", "_rules/old/00-v1.md"],
 };
 
+// A folder that remembers what was done to it. A save, a rename or a new file
+// is announced on the window, and every panel — including the one that acted —
+// re-lists; a router answering from a frozen tree would hand back the names it
+// had just been told to change.
 function router(seen, tree = TREE) {
+    let state = { folders: [...tree.folders], files: [...tree.files] };
+    const add = (key, name) => {
+        if (!state[key].includes(name)) {
+            state = { ...state, [key]: [...state[key], name].sort() };
+        }
+    };
     return (route, _n, init) => {
         seen.push({ route, init });
         if (route.startsWith("/symbiotica/prompts-list")) {
-            return { ok: true, status: 200, body: { ok: true, ...tree } };
+            return { ok: true, status: 200, body: { ok: true, ...state } };
         }
         if (route.startsWith("/symbiotica/prompts-read")) {
             const name = new URLSearchParams(route.split("?")[1]).get("name");
@@ -24,13 +34,21 @@ function router(seen, tree = TREE) {
                      body: { ok: true, text: `TEXT OF ${name}` } };
         }
         if (route.startsWith("/symbiotica/prompts-write")) {
+            add("files", JSON.parse(init.body).name);
             return { ok: true, status: 200, body: { ok: true, chars: 7 } };
         }
         if (route.startsWith("/symbiotica/prompts-rename")) {
+            const { from, to } = JSON.parse(init.body);
+            const move = (rel) => (rel === from ? to
+                : rel.startsWith(`${from}/`) ? to + rel.slice(from.length) : rel);
+            state = { folders: state.folders.map(move).sort(),
+                      files: state.files.map(move).sort() };
             return { ok: true, status: 200, body: { ok: true } };
         }
         if (route.startsWith("/symbiotica/prompts-mkdir")) {
-            return { ok: true, status: 200, body: { ok: true, name: "x" } };
+            const { name } = JSON.parse(init.body);
+            add("folders", name);
+            return { ok: true, status: 200, body: { ok: true, name } };
         }
         return { ok: false, status: 404, body: { error: "no route" } };
     };
@@ -220,7 +238,8 @@ test("rename folder renames the picked folder and everything under it", async ()
     assert.deepEqual(values(node, "folder"),
                      ["/", "_image", "rules", "rules/old"]);
     assert.deepEqual(values(node, "file"), ["01-refs.md", "03-light.md"]);
-    assert.equal(widget(node, "text").value, "TEXT OF _rules/01-refs.md");
+    // The same file, under its new name — the rename does not empty the editor.
+    assert.equal(widget(node, "text").value, "TEXT OF rules/01-refs.md");
 });
 
 test("the path itself cannot be renamed, and a same name is a no-op", async () => {
