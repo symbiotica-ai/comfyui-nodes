@@ -175,6 +175,24 @@ function setupControlImage(node) {
     const shell = sidebarShell(node, {
         sideProp: SIDE_PROP, shutProp: SIDE_SHUT_PROP,
         repaint: () => repaint(),
+        // Above both panes, so it is still there with the tree folded away —
+        // which is how this node sits once an image is picked. Each result
+        // carries its own thumbnail: a list of names is not how you tell two
+        // renders of the same asset apart.
+        search: {
+            placeholder: "Search images…",
+            list: () => state.files ?? [],
+            lead: (rel) => {
+                const t = el("img", `flex:none;width:${THUMB_PX}px;`
+                    + `height:${THUMB_PX}px;object-fit:contain;border-radius:2px;`
+                    + `background:${HUB.mat};`);
+                t.loading = "lazy";
+                t.alt = baseOf(rel);
+                if (state.library) t.src = thumbFor(rel);
+                return t;
+            },
+            onPick: (rel) => { pick(rel); },
+        },
         headButtons: [
             iconButton("newFolder", "New folder", () => { void newFolder(); }),
             iconButton("refresh", "Re-read the folder",
@@ -347,6 +365,8 @@ function setupControlImage(node) {
         shell.sideTitle.title = state.path || "";
         // Nothing is built for a tree nobody can see; reopening rebuilds it.
         tree.replaceChildren(...(closed ? [] : rows()));
+        // A listing that changed under an open result list re-matches against it.
+        shell.search?.refresh();
         showImage();
         syncPanelWidth();
     }

@@ -224,6 +224,13 @@ function setupPrompts(node) {
     const shell = sidebarShell(node, {
         sideProp: SIDE_PROP, shutProp: SIDE_SHUT_PROP,
         repaint: () => repaint(),
+        // Above both panes, so it is still there with the tree folded away —
+        // which is how this node sits once a prompt is open.
+        search: {
+            placeholder: "Search prompts…",
+            list: () => state.files ?? [],
+            onPick: (rel) => { void openFile(rel); },
+        },
         headButtons: [
             iconButton("newFile", "New file", () => { void newFile(); }),
             iconButton("newFolder", "New folder", () => { void newFolder(); }),
@@ -350,6 +357,8 @@ function setupPrompts(node) {
         shell.sideTitle.title = state.path || "";
         // Nothing is built for a tree nobody can see; reopening rebuilds it.
         tree.replaceChildren(...(closed ? [] : rows()));
+        // A listing that changed under an open result list re-matches against it.
+        shell.search?.refresh();
         const open = fileRel();
         crumb.textContent = open || "";
         crumb.title = open ? `${state.path}/${open}` : "";

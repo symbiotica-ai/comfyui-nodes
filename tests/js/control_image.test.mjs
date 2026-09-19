@@ -81,7 +81,6 @@ const posted = (seen, route) =>
 
 // --- reaching into the panel -------------------------------------------------
 const panel = (node) => widget(node, "images_panel").element;
-const treeEl = (node) => panel(node).children[0].children[1];
 function descendants(root, out = []) {
     for (const child of root.children ?? []) {
         out.push(child);
@@ -89,6 +88,11 @@ function descendants(root, out = []) {
     }
     return out;
 }
+// The boxes the shell builds, by what they ARE: it nests, so counting children
+// from the top breaks the moment a box is added above them.
+const part = (node, name) =>
+    descendants(panel(node)).find((e) => e._symPart === name);
+const treeEl = (node) => part(node, "tree");
 const rows = (node) => descendants(panel(node)).filter((e) => e._sym);
 const tree = (node) => rows(node).map((r) => r._sym.rel);
 const rowFor = (node, rel) => rows(node).find((r) => r._sym.rel === rel);
@@ -97,6 +101,20 @@ const button = (node, title) =>
 const rowAction = (node, rel, title) =>
     descendants(rowFor(node, rel)).find((e) => e.title === title);
 const preview = (node) => descendants(panel(node)).find((e) => e.alt === "preview");
+// The search field above the two panes, and the rows it lists. A result row
+// carries the image it stands for on `_symHit`.
+const searchBox = (node) => descendants(panel(node))
+    .find((e) => e.placeholder === "Search images…");
+const hits = (node) =>
+    descendants(panel(node)).filter((e) => e._symHit).map((e) => e._symHit);
+const hitFor = (node, rel) =>
+    descendants(panel(node)).find((e) => e._symHit === rel);
+const look = async (node, query) => {
+    const box = searchBox(node);
+    box.value = query;
+    fire(box, "input", {});
+    await settle();
+};
 const click = async (element) => {
     fire(element, "click", { stopPropagation() {} });
     await settle();
@@ -358,10 +376,10 @@ test("the tree folds away to a rail that can reopen it", async () => {
     const node = await imageNode([]);
     await click(button(node, "Hide the tree"));
     assert.equal(node.properties.symbiotica_images_shut, true);
-    assert.equal(panel(node).children[0].style.width, "22px");
+    assert.equal(part(node, "side").style.width, "22px");
     assert.deepEqual(rows(node), []);
     await click(button(node, "Show the tree"));
-    assert.equal(panel(node).children[0].style.width, "210px");
+    assert.equal(part(node, "side").style.width, "210px");
     assert.ok(rows(node).length > 0);
 });
 
@@ -424,4 +442,63 @@ test("a typed path still beats what the last run received", async () => {
     await settle();
     const listed = seen.filter((c) => c.route.includes("control-images?")).pop();
     assert.match(listed.route, /path=%2Fother%2Flib/);
+});
+
+
+// --- the search field --------------------------------------------------------
+// "let's add search field to Prompts and Control Image nodes so i can type the
+// name of the image" (2026-09-19): the tree answers what is in a folder, not
+// which sub-folder a half-remembered name lives in.
+test("typing a name lists every image that holds it, wherever it sits", async () => {
+    const node = await imageNode([]);
+    await look(node, "box");
+    assert.deepEqual(hits(node), ["general/1x1/1x1-box.png",
+                                  "general/1x2/1x2-box-dots.png"]);
+    // A name only the FOLDER holds still answers.
+    await look(node, "project");
+    assert.deepEqual(hits(node), ["project-specific/chair.png"]);
+    await look(node, "zzz");
+    assert.deepEqual(hits(node), []);
+});
+
+test("a result carries its own thumbnail", async () => {
+    // A column of file names is not how you tell two renders of the same asset
+    // apart — the tree rows earned their thumbnails for the same reason.
+    const node = await imageNode([]);
+    await look(node, "floor");
+    const thumb = hitFor(node, "general/1x1/1x1-floor.png").children[0];
+    assert.equal(thumb.alt, "1x1-floor.png");
+    assert.match(thumb.src,
+                 new RegExp(encodeURIComponent(`${LIB}/general/1x1/1x1-floor.png`)));
+});
+
+test("picking a result picks that image and empties the box", async () => {
+    const node = await imageNode([]);
+    await look(node, "chair");
+    await click(hitFor(node, "project-specific/chair.png"));
+    assert.equal(widget(node, "image").value, "project-specific/chair.png");
+    assert.match(preview(node).src,
+                 new RegExp(encodeURIComponent(`${LIB}/project-specific/chair.png`)));
+    assert.equal(searchBox(node).value, "");
+    assert.deepEqual(hits(node), []);
+});
+
+test("the search survives the fold that takes the tree away", async () => {
+    // "i want the search field to be visible when the sidebar is collapsed":
+    // it sits ABOVE both panes, so folding the tree cannot reach it.
+    const node = await imageNode([]);
+    await click(button(node, "Hide the tree"));
+    assert.deepEqual(rows(node), []);
+    assert.ok(searchBox(node), "the search field went with the tree");
+    await look(node, "chair");
+    await click(hitFor(node, "project-specific/chair.png"));
+    assert.equal(widget(node, "image").value, "project-specific/chair.png");
+});
+
+test("an image renamed under an open list leaves it by its new name", async () => {
+    const node = await imageNode([]);
+    await look(node, "floor");
+    answer({ text: "1x1-floorboards.png" });
+    await click(rowAction(node, "general/1x1/1x1-floor.png", "Rename"));
+    assert.deepEqual(hits(node), ["general/1x1/1x1-floorboards.png"]);
 });

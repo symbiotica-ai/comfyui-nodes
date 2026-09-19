@@ -339,6 +339,8 @@ export const ICON = {
     collapse: "M9.8 3.6L5.4 8l4.4 4.4",
     expand: "M6.2 3.6L10.6 8l-4.4 4.4",
     upload: "M8 10.6V2.4 M4.8 5.6L8 2.4l3.2 3.2 M2.6 10.2v3.4h10.8v-3.4",
+    search: "M7.2 2.6a4.6 4.6 0 1 0 0 9.2 4.6 4.6 0 0 0 0-9.2z M10.6 10.6l2.8 2.8",
+    clear: "M4.2 4.2l7.6 7.6 M11.8 4.2l-7.6 7.6",
 };
 
 export const svgIcon = (d, px) =>
@@ -431,6 +433,155 @@ export function walkTree({ folders = [], files = [], open }, make) {
     return out;
 }
 
+// --- searching the whole tree ------------------------------------------------
+// The tree answers "what is in this folder". A name you half-remember is a
+// different question, and the fold that makes these nodes usable once a file is
+// open takes the tree away with it. So the search sits ABOVE both panes, where
+// the fold cannot reach it, and answers in a list of its own rather than by
+// narrowing rows nobody can see.
+const HIT_MAX = 40;
+const MENU_MAX_PX = 220;
+
+/**
+ * Every file whose name or folder holds `query`, best first: the name STARTS
+ * with it, then the name contains it, then only the folder does. Alphabetical
+ * within a rank, and capped — a query of one letter must not draw the library.
+ */
+export function searchTree(files, query) {
+    const q = String(query || "").trim().toLowerCase();
+    if (!q) return [];
+    const hits = [];
+    for (const rel of files ?? []) {
+        const at = baseOf(rel).toLowerCase().indexOf(q);
+        const rank = at === 0 ? 0
+            : at > 0 ? 1
+            : rel.toLowerCase().includes(q) ? 2 : -1;
+        if (rank >= 0) hits.push({ rel, rank });
+    }
+    hits.sort((a, b) => a.rank - b.rank
+        || a.rel.localeCompare(b.rel, undefined, { sensitivity: "base" }));
+    return hits.slice(0, HIT_MAX).map((h) => h.rel);
+}
+
+/**
+ * The search box and the list of matches under it.
+ *
+ * `list()` is read at every keystroke, so a rename or a re-read lands in the
+ * results without the field knowing anything happened; `lead(rel)` is the
+ * caller's own leading element per row (a thumbnail); `onPick(rel)` is handed
+ * the file and does whatever opening one means for that node.
+ */
+export function searchField({ placeholder = "Search…", list, lead, onPick }) {
+    const row = el("div", "position:relative;display:flex;align-items:center;"
+        + `gap:5px;flex:none;padding:3px 6px;background:${HUB.surface2};`
+        + `border-bottom:1px solid ${HUB.hairline};`);
+    const glass = el("span", `flex:none;display:flex;color:${HUB.inkTertiary};`);
+    glass.innerHTML = svgIcon(ICON.search, 12);
+    const input = el("input", "flex:1;min-width:0;padding:2px 0;"
+        + "background:transparent;border:0;outline:none;"
+        + `color:var(--input-text, ${HUB.ink});font:11px ${HUB.font};`);
+    input.className = "sym-input";
+    input.type = "text";
+    input.placeholder = placeholder;
+    const wipe = iconButton("clear", "Clear the search", () => {
+        input.value = "";
+        match();
+        input.focus?.();
+    }, { px: 11 });
+    wipe.style.display = "none";
+    // The list floats over the panes rather than pushing them down: a panel
+    // that reflows while you type moves the thing you are aiming at.
+    const menu = el("div", "position:absolute;left:6px;right:6px;top:100%;"
+        + `z-index:5;display:none;max-height:${MENU_MAX_PX}px;overflow:auto;`
+        + `background:${HUB.surface2};border:1px solid ${HUB.hairlineStrong};`
+        + `border-radius:${HUB.radius.sm};box-shadow:0 8px 20px rgba(0,0,0,.45);`);
+    menu.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
+    row._symPart = "search";
+    menu._symPart = "hits";
+    row.append(glass, input, wipe, menu);
+
+    let hits = [];
+    let at = 0;
+
+    function close() {
+        menu.style.display = "none";
+        menu.replaceChildren();
+        hits = [];
+        at = 0;
+    }
+
+    function take(rel) {
+        input.value = "";
+        wipe.style.display = "none";
+        close();
+        onPick?.(rel);
+    }
+
+    function hitRow(rel, i) {
+        const line = el("div", "display:flex;align-items:center;gap:6px;"
+            + "padding:3px 6px;cursor:pointer;"
+            + (i === at ? `background:${HUB.rowHover};` : ""));
+        line.className = "sym-row";
+        // What a row IS, for the tests that click one.
+        line._symHit = rel;
+        line.title = rel;
+        const head = lead?.(rel);
+        if (head) line.appendChild(head);
+        // The name reads literally, as it does in the tree: Inter turns `1x1`
+        // into `1×1`, which is not what you typed to find it.
+        line.append(
+            el("div", `flex:1;min-width:0;${ONE_LINE}color:${HUB.ink};`
+                + "font-variant-ligatures:none;font-feature-settings:'calt' 0;",
+                baseOf(rel)),
+            el("div", `flex:none;max-width:45%;${ONE_LINE}`
+                + `color:${HUB.inkTertiary};font:10px ${HUB.font};`, dirOf(rel)));
+        line.addEventListener("pointerdown", (e) => e.stopPropagation());
+        line.addEventListener("click", (e) => { e.stopPropagation(); take(rel); });
+        return line;
+    }
+
+    function draw() {
+        if (!input.value.trim()) { close(); return; }
+        menu.replaceChildren(...(hits.length
+            ? hits.map(hitRow) : [emptyState("no match")]));
+        menu.style.display = "";
+    }
+
+    // `keep` holds the highlight on the row it was on — a re-read under an
+    // open list must not move the target out from under the next Enter.
+    function match({ keep = false } = {}) {
+        const held = keep ? hits[at] : null;
+        wipe.style.display = input.value ? "flex" : "none";
+        hits = searchTree(list?.() ?? [], input.value);
+        at = Math.max(0, hits.indexOf(held));
+        draw();
+    }
+
+    input.addEventListener("pointerdown", (e) => e.stopPropagation());
+    input.addEventListener("input", () => match());
+    // A DOM widget sits on the LiteGraph canvas: without this, typing moves the
+    // graph and the arrows that walk this list pan it instead.
+    input.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        const key = String(e.key ?? "");
+        if (key === "Escape") {
+            input.value = "";
+            match();
+        } else if (key === "ArrowDown" || key === "ArrowUp") {
+            if (!hits.length) return;
+            e.preventDefault?.();
+            at = Math.min(hits.length - 1,
+                          Math.max(0, at + (key === "ArrowDown" ? 1 : -1)));
+            draw();
+        } else if (key === "Enter" && hits[at]) {
+            e.preventDefault?.();
+            take(hits[at]);
+        }
+    });
+
+    return { row, input, close, refresh: () => { if (hits.length) match({ keep: true }); } };
+}
+
 const SIDE_MIN = 110;
 // Shut, the sidebar keeps a rail wide enough for the one button that reopens
 // it: a toggle you can only undo from a menu is a one-way door.
@@ -450,11 +601,13 @@ const SIDE_RAIL = 22;
  * values of every workflow already holding the node.
  */
 export function sidebarShell(node, { headButtons = [], sideProp, shutProp,
-                                     sideDefault = 210, repaint }) {
+                                     sideDefault = 210, repaint, search }) {
     node.properties = node.properties ?? {};
     injectHubStyles();
+    // A column, not a row: the search bar spans the whole panel above the two
+    // panes, which is what keeps it on screen when the tree is folded away.
     const container = el("div", "box-sizing:border-box;width:100%;height:100%;"
-        + "display:flex;align-items:stretch;overflow:hidden;"
+        + "display:flex;flex-direction:column;overflow:hidden;"
         + `font:11px ${HUB.font};color:var(--input-text, ${HUB.ink});`
         + `background:${HUB.surface1};border-radius:${HUB.radius.sm};`);
     // Over a scrolling panel the wheel scrolls the panel; the canvas must not
@@ -513,7 +666,16 @@ export function sidebarShell(node, { headButtons = [], sideProp, shutProp,
 
     const main = el("div", "flex:1;min-width:0;display:flex;"
         + "flex-direction:column;overflow:hidden;");
-    container.append(side, grip, main);
+    const body = el("div", "flex:1;min-height:0;display:flex;"
+        + "align-items:stretch;overflow:hidden;");
+    body.append(side, grip, main);
+    // What each box IS, for the tests that measure one — the shell is nested
+    // now, and counting children from the top breaks on the next box added.
+    side._symPart = "side";
+    tree._symPart = "tree";
+    main._symPart = "main";
+    const finder = search ? searchField(search) : null;
+    container.append(...(finder ? [finder.row] : []), body);
 
     function sideWidth() {
         if (shut()) return SIDE_RAIL;
@@ -539,5 +701,6 @@ export function sidebarShell(node, { headButtons = [], sideProp, shutProp,
         return closed;
     }
 
-    return { container, side, sideTitle, sideHead, tree, grip, main, layout };
+    return { container, side, sideTitle, sideHead, tree, grip, main, layout,
+             search: finder };
 }

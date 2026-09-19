@@ -85,9 +85,26 @@ const tree = (node) => rows(node).map((r) => r._sym.rel);
 const rowFor = (node, rel) => rows(node).find((r) => r._sym.rel === rel);
 const button = (node, title) =>
     descendants(panel(node)).find((e) => e.title === title);
-const editor = (node) => descendants(panel(node)).find((e) => e.placeholder);
+// By its own placeholder, not by "has one": the search field above the panes
+// has one too, and it comes first in the DOM.
+const editor = (node) => descendants(panel(node))
+    .find((e) => e.placeholder === "Pick a file in the tree.");
 const rowAction = (node, rel, title) =>
     descendants(rowFor(node, rel)).find((e) => e.title === title);
+// The search field above the two panes, and the rows it lists. A result row
+// carries the file it stands for on `_symHit`.
+const searchBox = (node) => descendants(panel(node))
+    .find((e) => e.placeholder === "Search prompts…");
+const hits = (node) =>
+    descendants(panel(node)).filter((e) => e._symHit).map((e) => e._symHit);
+const hitFor = (node, rel) =>
+    descendants(panel(node)).find((e) => e._symHit === rel);
+const look = async (node, query, key = null) => {
+    const box = searchBox(node);
+    if (key) fire(box, "keydown", { key, stopPropagation() {}, preventDefault() {} });
+    else { box.value = query; fire(box, "input", {}); }
+    await settle();
+};
 const click = async (element) => {
     fire(element, "click", { stopPropagation() {} });
     await settle();
@@ -391,7 +408,8 @@ test("a same name is a no-op", async () => {
 
 test("the tree folds away to a rail that can reopen it", async () => {
     const node = await promptsNode([]);
-    const side = () => descendants(panel(node)).find((e) => e === panel(node).children[0]);
+    const side = () => descendants(panel(node))
+        .find((e) => e._symPart === "side");
     await click(button(node, "Hide the tree"));
     assert.equal(node.properties.symbiotica_prompts_shut, true);
     assert.equal(side().style.width, "22px");
@@ -540,4 +558,85 @@ test("arriving at a path refreshes the mount, and re-listing the same one does n
     node._symRefreshPrompts();
     await settle();
     assert.match(listings()[2].route, /sync=1/);
+});
+
+
+// --- the search field --------------------------------------------------------
+// "let's add search field to Prompts and Control Image nodes so i can type the
+// name of the prompt" (2026-09-19): the tree answers what is in a folder, not
+// where a half-remembered name lives.
+test("typing a name lists every file that holds it, wherever it sits", async () => {
+    const node = await promptsNode([]);
+    await look(node, "01");
+    // Both, from two different folders, without either being open in the tree.
+    assert.deepEqual(hits(node), ["_image/01-model.md", "_rules/01-refs.md"]);
+    // A name that only the FOLDER holds still answers.
+    await look(node, "old");
+    assert.deepEqual(hits(node), ["_rules/old/00-v1.md"]);
+    await look(node, "zzz");
+    assert.deepEqual(hits(node), []);
+});
+
+test("a name that starts a file beats one that only appears in it", async () => {
+    const node = await promptsNode([], {}, {
+        folders: ["a"],
+        files: ["a/old-chair.md", "chair.md", "a/chair-back.md"],
+    });
+    await look(node, "chair");
+    assert.deepEqual(hits(node),
+                     ["a/chair-back.md", "chair.md", "a/old-chair.md"]);
+});
+
+test("picking a result opens that file and empties the box", async () => {
+    const node = await promptsNode([]);
+    await look(node, "light");
+    await click(hitFor(node, "_rules/03-light.md"));
+    assert.equal(widget(node, "folder").value, "_rules");
+    assert.equal(widget(node, "file").value, "03-light.md");
+    assert.equal(editor(node).value, "TEXT OF _rules/03-light.md");
+    // The list goes with the pick: a result list still up over the file it
+    // just opened is a list you have to dismiss before you can read anything.
+    assert.equal(searchBox(node).value, "");
+    assert.deepEqual(hits(node), []);
+});
+
+test("enter opens the highlighted result, arrows move the highlight", async () => {
+    const node = await promptsNode([]);
+    await look(node, "01");
+    await look(node, "", "ArrowDown");
+    await look(node, "", "Enter");
+    assert.equal(widget(node, "file").value, "01-refs.md");
+    assert.equal(widget(node, "folder").value, "_rules");
+});
+
+test("escape drops the list without opening anything", async () => {
+    const node = await promptsNode([]);
+    const before = widget(node, "file").value;
+    await look(node, "light");
+    await look(node, "", "Escape");
+    assert.deepEqual(hits(node), []);
+    assert.equal(searchBox(node).value, "");
+    assert.equal(widget(node, "file").value, before);
+});
+
+test("the search survives the fold that takes the tree away", async () => {
+    // "i want the search field to be visible when the sidebar is collapsed":
+    // it sits ABOVE both panes, so folding the tree cannot reach it.
+    const node = await promptsNode([]);
+    await click(button(node, "Hide the tree"));
+    assert.deepEqual(rows(node), []);
+    assert.ok(searchBox(node), "the search field went with the tree");
+    await look(node, "light");
+    await click(hitFor(node, "_rules/03-light.md"));
+    assert.equal(widget(node, "file").value, "03-light.md");
+    assert.equal(editor(node).value, "TEXT OF _rules/03-light.md");
+});
+
+test("a file renamed under an open list leaves it by its new name", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    await look(node, "light");
+    answer({ text: "07-lighting.md" });
+    await click(rowAction(node, "_rules/03-light.md", "Rename"));
+    assert.deepEqual(hits(node), ["_rules/07-lighting.md"]);
 });
