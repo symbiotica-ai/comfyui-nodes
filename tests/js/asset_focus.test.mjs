@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, emit, fire, link, reset, tick } from "./comfy_stub.mjs";
+import { app, configure, create, emit, fire, link, reset, serializeWidgets,
+         tick } from "./comfy_stub.mjs";
 import "../../web/js/asset_focus.js";
 
 const ASSETS = [
@@ -829,4 +830,42 @@ test("choosing a tiles label narrows to that canvas, and All groups by it", asyn
     w.callback("Appliance 1x2");
     for (let i = 0; i < 5; i++) await tick();
     assert.deepEqual(names(node), ["Tall Oven · 128x256"]);
+});
+
+test("a saved node reopens with every value on the widget that held it", async () => {
+    // What the canvas does on save and on open, in that order. ComfyUI writes
+    // one entry per widget — a button's is null — and reads them back onto the
+    // widgets that are NOT flagged `serialize = false`, so one flagged widget
+    // in the middle of the list hands every widget after it the value saved one
+    // slot along. `ref` came back null and the Asset Recipe's `slots` came back
+    // holding ref's string, which emptied the whole table.
+    const widgets = { project_path: "/projects/bakery", month: "October",
+                      feature: "", category: "", asset: "", ref: "ref-a.png" };
+    const node = await focusNode(widgets);
+
+    const saved = serializeWidgets(node);
+    const again = await focusNode({ ...widgets, project_path: "", month: "",
+                                    ref: "" });
+    configure(again, { widgets_values: saved });
+
+    for (const name of ["project_path", "month", "ref"]) {
+        assert.equal(widgetOf(again, name)?.value, widgetOf(node, name)?.value,
+                     `${name} came back holding another widget's value`);
+    }
+});
+
+test("no widget before the last carries the flag that shifts the rest", async () => {
+    // The general rule behind the test above: `serialize = false` is honoured
+    // when the values are read back and ignored when they are written, so it is
+    // only ever safe on the widgets at the very END of the list.
+    const node = await focusNode();
+    const flagged = node.widgets
+        .map((w, i) => [w.name, i])
+        .filter(([, i]) => node.widgets[i].serialize === false);
+    for (const [name, i] of flagged) {
+        const after = node.widgets.slice(i + 1)
+            .filter((w) => w.serialize !== false).map((w) => w.name);
+        assert.deepEqual(after, [],
+                         `${name} is flagged and ${after.join(", ")} follow it`);
+    }
 });

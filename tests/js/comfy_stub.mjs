@@ -217,7 +217,17 @@ function makeNode(comfyClass, widgets) {
             name, value, type: "text", callback: null,
         })),
         addWidget(type, name, value, callback, options) {
-            const w = { type, name, value, callback, options };
+            // ComfyUI remembers a node's widget values BY NAME: adding a widget
+            // under a name this node has already carried hands back one holding
+            // what that name held before and drops the value passed here.
+            // Anything that re-creates a widget has to write the value after —
+            // the Asset Recipe's slots came back empty on every reopen until
+            // they did (frontend 1.48.7 and 1.52.7 both).
+            this._widgetMemo ??= new Map();
+            const seen = this._widgetMemo.get(name);
+            const w = { type, name, value: seen ? seen.value : value, callback,
+                        options };
+            this._widgetMemo.set(name, w);
             this.widgets.push(w);
             return w;
         },
@@ -332,6 +342,15 @@ export async function create(comfyClass, widgets = {}, nodeData = {}) {
 // declared default. And the counter only advances for widgets that serialize,
 // so one that opts out shifts nothing — while one that does NOT opt out takes a
 // position, and every later widget reads the value saved one slot along.
+// What ComfyUI writes into `widgets_values`: one entry per widget, in order,
+// INCLUDING the ones flagged `serialize = false` — which `configure` above then
+// skips. That asymmetry is the whole reason a flagged widget in the middle of
+// the list shifts every value after it.
+export function serializeWidgets(node) {
+    return (node.widgets ?? []).map(
+        (w) => (w.value === undefined ? null : w.value));
+}
+
 export function configure(node, info) {
     const values = info?.widgets_values;
     if (Array.isArray(values)) {

@@ -167,9 +167,15 @@ function rebuildWidgets(node) {
                 writeSlots(node, rows);
             }, options);
         if (!widget) return;
-        // The whole block rides in the `slots` string. A slot widget that
-        // serialised would take a position in widgets_values and hand every
-        // widget after it the value saved one slot along.
+        // `addWidget` does not take the value for a name this node has already
+        // carried — it hands back a widget holding what that name held before,
+        // which on a reopened workflow is nothing. The row is the value, so
+        // write it after.
+        widget.value = row.value;
+        // The whole block rides in the `slots` string. These widgets sit at the
+        // END of the list, after every widget the node declares, so the entries
+        // they add to widgets_values fall off the end rather than shifting a
+        // declared widget's value (see order_source.js's Read folder button).
         widget._symSlot = true;
         widget.serialize = false;
     });

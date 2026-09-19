@@ -303,3 +303,21 @@ test("a wired slot that never became a row is still removable", async () => {
     assert.deepEqual(labels(node), ["+ widget"]);
     assert.equal(node.outputs.length, FIRST + 1);
 });
+
+test("a reopened node shows the value each slot holds", async () => {
+    // ComfyUI remembers widget values by name: re-adding a widget under a name
+    // this node has carried hands back what it held before and drops the value
+    // passed. The table is the value, so a rebuild has to write it — his bakery
+    // node came back with an empty lora slot on every reopen.
+    const row = (value) => JSON.stringify(
+        [{ name: "steps", type: "INT", value, config: { min: 1, max: 100 } }]);
+    const node = await recipeNode({ slots: row(20) });
+    assert.equal(slotWidgets(node)[0].value, 20);
+
+    // The same node reopened on a recipe that sets it to 30.
+    node.widgets.find((w) => w.name === "slots").value = row(30);
+    node.onConfigure?.call(node, {});
+    for (let i = 0; i < 3; i++) await tick();
+
+    assert.equal(slotWidgets(node)[0].value, 30);
+});

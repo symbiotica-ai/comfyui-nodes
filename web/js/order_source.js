@@ -317,7 +317,12 @@ export function wireOrderSpecs(node) {
             node.setDirtyCanvas?.(true, true);
         }
     });
-    readBtn.serialize = false;
+    // NOT `readBtn.serialize = false`. Saving writes one entry per widget, a
+    // button included (null); loading pairs those entries against the widgets
+    // that do NOT carry the flag. Setting it on a button that sits in the
+    // MIDDLE of the list hands every widget after it the value saved one slot
+    // along — `ref` took the button's null, `slots` took ref's string, and the
+    // Asset Recipe's whole table came back null.
     // Re-parse whenever project OR month changes (chains onto wireMonthPicker's
     // own project_path hook — both fire). `feature` too, so a downstream panel
     // re-renders for the newly picked event.

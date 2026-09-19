@@ -37,23 +37,13 @@ generation should not carry the cold-load penalty.
 Left open on 2026-09-11 after the recipes build; one line each, the decision
 still open. Move to an issue when one is picked up.
 
-- **Asset Recipe: adopting a widget does not work on the canvas** (2026-09-18).
-  Dragging a widget's socket onto the `+ widget` slot leaves the wire connected
-  but writes no row and grows no widget — three empty slots, all wired, on his
-  bakery graph. `onConnectionsChange` in `web/js/asset_recipe.js` is the handler;
-  unverified suspects are the new frontend not calling it for a drop onto an
-  output, `_symLoading` never clearing, and `describe()` returning null while
-  `refuse()` fails to drop the link. Unit tests pass, so the tests model
-  something the frontend does not do.
-- **Asset Recipe: the queue dies in `graphToPrompt`** (2026-09-18) —
-  `presetText.js` calling `.replace` on a null text widget, which blocks every
-  node, not just this one. Node 4055 saved
-  `["","","","All","All assets",null,"First reference","[]",""]`, which reads as
-  the `📁 Read folder` button serialising `null` on save and being skipped on
-  load, so `ref` takes the null and `slots` takes `"First reference"` — that
-  would explain both the crash and the slot table never parsing. Not proven:
-  read the live workflow JSON out of `/api/userdata/workflows/...` and look at
-  node 4055 before changing anything.
+- Both Asset Recipe threads from 2026-09-18 — adoption writing no row, and the
+  queue dying in `graphToPrompt` on a null text widget — were the one cause:
+  `readBtn.serialize = false` shifted every saved value one widget left, so
+  `slots` loaded as `null`. Fixed and verified on frontend 1.48.7 with his own
+  `dev-node-asset-recipes-base.json`; the slot widgets also needed their value
+  written after `addWidget` (see CLAUDE.md). A workflow he saved while it was
+  broken keeps whatever `ref` lost.
 - Asset Recipe's slot outputs are `*` on the Python side. The server accepts it
   (`validate_node_input` returns true when either side is `*`); what the
   FRONTEND does when a `*` output is dropped on a typed widget input has never
