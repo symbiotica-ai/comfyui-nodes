@@ -52,9 +52,9 @@ def test_the_display_name_tells_it_apart_from_comfyuis_own_claude_node(node_modu
         "Claude (Symbiotica)")
 
 
-def test_the_node_sits_with_the_packs_other_text_work(node_module):
+def test_the_node_sits_in_the_packs_one_folder(node_module):
     schema = node_module.SymbioticaClaude.define_schema()
-    assert schema.category == "symbiotica/text"
+    assert schema.category == "Symbiotica"
     assert schema.node_id == "SymbioticaClaude"
 
 

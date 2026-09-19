@@ -57,7 +57,7 @@ class LoadTextFile:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("text",)
     FUNCTION = "execute"
-    CATEGORY = "Symbiotica/Text"
+    CATEGORY = "Symbiotica"
     DESCRIPTION = ("Load a prompt or other text from a file. Re-runs only "
                    "when the file changes.")
 

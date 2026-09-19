@@ -39,7 +39,7 @@ def _vol(tmp_path):
 def test_schema_outputs_and_input(NodeCls):
     schema = NodeCls.define_schema()
     assert schema.node_id == "SymbioticaStudioLibrary"
-    assert schema.category == "symbiotica/pipeline"
+    assert schema.category == "Symbiotica"
     assert [o.display_name for o in schema.outputs] == ["path", "is_dir"]
     assert len(schema.inputs) == 1
     assert schema.inputs[0].id == "selection"

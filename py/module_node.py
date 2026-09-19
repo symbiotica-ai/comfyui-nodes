@@ -36,7 +36,7 @@ class SymbioticaModule:
 
     RETURN_TYPES = ()
     FUNCTION = "execute"
-    CATEGORY = "Symbiotica/Modules"
+    CATEGORY = "Symbiotica"
     DESCRIPTION = ("Linked subgraph modules: publish a subgraph once, and every "
                    "workflow that uses it picks up the change.")
 

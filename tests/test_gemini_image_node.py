@@ -67,9 +67,9 @@ def by_id(node_module):
     return schema, inputs
 
 
-def test_the_node_sits_with_the_packs_other_image_work(node_module):
+def test_the_node_sits_in_the_packs_one_folder(node_module):
     schema, _ = by_id(node_module)
-    assert schema.category == "symbiotica/image"
+    assert schema.category == "Symbiotica"
     assert schema.node_id == "SymbioticaGeminiImage"
 
 

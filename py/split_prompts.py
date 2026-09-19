@@ -27,7 +27,7 @@ class SplitPrompts:
     RETURN_NAMES = ("prompts",)
     OUTPUT_IS_LIST = (True,)
     FUNCTION = "execute"
-    CATEGORY = "Symbiotica/Text"
+    CATEGORY = "Symbiotica"
     DESCRIPTION = ("Split a block of empty-line-separated paragraphs into a "
                    "list of prompts, one per paragraph.")
 

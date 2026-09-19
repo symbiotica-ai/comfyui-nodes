@@ -97,3 +97,21 @@ def test_the_whole_pack_registers(pack):
     """A module that raises on import drops its nodes with only a console
     traceback, so a release can lose nodes without failing a single test."""
     assert len(pack.NODE_CLASS_MAPPINGS) >= 12
+
+
+def test_every_node_is_in_the_one_folder(pack):
+    """One folder, and nothing beside it.
+
+    ComfyUI's node menu is case-sensitive, so `Symbiotica/Images` and
+    `symbiotica/pipeline` drew two trees; a node that arrived from another pack
+    drew a third. Sub-folders are out too — "we need one single folder of
+    course, containing all the symbiotica nodes".
+    """
+    stray = {}
+    for name, cls in sorted(pack.NODE_CLASS_MAPPINGS.items()):
+        category = getattr(cls, "CATEGORY", None)
+        if category is None and hasattr(cls, "GET_SCHEMA"):
+            category = getattr(cls.GET_SCHEMA(), "category", None)
+        if category != "Symbiotica":
+            stray[name] = category
+    assert stray == {}, f"outside the one folder: {stray}"

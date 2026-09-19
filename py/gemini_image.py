@@ -60,7 +60,7 @@ class SymbioticaGeminiImage(io.ComfyNode):
         return io.Schema(
             node_id="SymbioticaGeminiImage",
             display_name="Gemini Image (Symbiotica)",
-            category="symbiotica/image",
+            category="Symbiotica",
             description="Generate or edit images with Gemini, billed to the "
                         "studio's own key through Cloudflare AI Gateway rather "
                         "than to a ComfyUI account.",

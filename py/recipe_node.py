@@ -37,7 +37,7 @@ class SymbioticaRecipe:
 
     RETURN_TYPES = ()
     FUNCTION = "execute"
-    CATEGORY = "Symbiotica/Recipes"
+    CATEGORY = "Symbiotica"
     DESCRIPTION = ("Workflow recipes: a project holds one template workflow, shared "
                    "values and one recipe per asset type; Generate writes one "
                    "workflow per recipe.")

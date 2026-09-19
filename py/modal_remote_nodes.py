@@ -90,9 +90,12 @@ def build_node_class(base, spec, http=requests):
     class RemoteNode(io.ComfyNode):
         @classmethod
         def define_schema(cls) -> io.Schema:
+            # The pack's own folder, never `spec.category`: a remote node is
+            # a Symbiotica node too, and a provider naming its own category
+            # would put a second folder back in the menu.
             return io.Schema(
                 node_id=spec.node_id, display_name=spec.display_name,
-                category=spec.category, description=spec.description,
+                category=rnp_protocol.CATEGORY, description=spec.description,
                 inputs=inputs, outputs=outputs, hidden=[io.Hidden.unique_id])
 
         @classmethod

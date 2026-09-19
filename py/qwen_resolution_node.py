@@ -28,7 +28,7 @@ class NSQwenResolution:
     OUTPUT_NODE (`bool`):
         True - this node outputs a preview image.
     CATEGORY (`str`):
-        UI category: "ControlAltAI Nodes/Qwen".
+        UI category: "Symbiotica", with the rest of the pack.
 
     get_dimensions(resolution) -> tuple:
         Returns the width, height, resolution string, and preview image for the selected resolution.
@@ -63,7 +63,7 @@ class NSQwenResolution:
     RETURN_TYPES = ("INT", "INT", "STRING", "IMAGE")
     RETURN_NAMES = ("width", "height", "resolution", "preview")
     FUNCTION = "get_dimensions"
-    CATEGORY = "neuralsins/Utils"
+    CATEGORY = "Symbiotica"
     OUTPUT_NODE = True
 
     def create_preview_image(self, width, height, resolution):
@@ -165,5 +165,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "NSQwenResolution": "NS Qwen Resolution",
+    "NSQwenResolution": "Qwen Resolution (Symbiotica)",
 }

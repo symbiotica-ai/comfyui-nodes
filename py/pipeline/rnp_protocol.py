@@ -16,7 +16,7 @@ POLL_INTERVAL_S = 2.0
 SOFT_TIMEOUT_S = 1500.0
 HARD_TIMEOUT_S = 1800.0
 NODE_ID_PREFIX = "SymbioticaModalRnp_"
-CATEGORY = "symbiotica/modal"
+CATEGORY = "Symbiotica"
 
 HEADER_PROTOCOL_VERSION = "X-RNP-Protocol-Version"
 HEADER_CLIENT_VERSION = "X-RNP-Client-Version"

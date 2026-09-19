@@ -40,7 +40,7 @@ def test_node_registers_with_the_recipe_combo(node_module):
     assert "SymbioticaModalRender" in node_module.NODE_CLASS_MAPPINGS
     schema = node_module.SymbioticaModalRender.GET_SCHEMA()
     assert schema.node_id == "SymbioticaModalRender"
-    assert schema.category == "symbiotica/modal"
+    assert schema.category == "Symbiotica"
     by_id = {i.id: i for i in schema.inputs}
     assert "qwen-image" in by_id["recipe"].options
     assert by_id["seed"].control_after_generate is True

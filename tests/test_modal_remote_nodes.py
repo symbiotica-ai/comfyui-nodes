@@ -50,7 +50,7 @@ def test_discover_builds_one_node_per_descriptor(module):
     cls = classes["SymbioticaModalRnp_qwen_image"]
     assert names["SymbioticaModalRnp_qwen_image"] == "Qwen Image (Modal RNP)"
     schema = cls.GET_SCHEMA()
-    assert schema.category == "symbiotica/modal"
+    assert schema.category == "Symbiotica"
     by_id = {i.id: i for i in schema.inputs}
     assert by_id["prompt"].multiline is True
     assert by_id["seed"].control_after_generate is True

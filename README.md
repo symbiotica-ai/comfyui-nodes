@@ -66,7 +66,7 @@ pip install -r symbiotica/requirements.txt
 - `Split Prompts` — one text block split into separate prompt strings
 
 ### Modules (linked subgraphs and groups)
-- `Module` (Symbiotica/Modules) — a subgraph or a group, edited once, updated
+- `Module` (Symbiotica) — a subgraph or a group, edited once, updated
   in every workflow that uses it. The node lists every group and subgraph in
   the graph you are looking at, one row each: title, a `folder/name` path,
   the revision, and **Publish**. Press Publish and that row becomes a module,
@@ -104,7 +104,7 @@ pip install -r symbiotica/requirements.txt
   stays the plain sheet name.
 
 ### Control images
-- `Control Image` (Symbiotica/Images) — Load Image scoped to a shared library,
+- `Control Image` (Symbiotica) — Load Image scoped to a shared library,
   named by two widgets. `root` is the directory it sits in: empty means
   ComfyUI's own input directory, and the shared library is
   `/studio-assets/_platform/resources`, which the canvas editor and the
@@ -120,7 +120,7 @@ pip install -r symbiotica/requirements.txt
   paint it the recipe match colour, and a recipe stores the relative path.
 
 ### Recipes (one template, one workflow per recipe)
-- `Recipes` (Symbiotica/Recipes) — a **project** is one template workflow,
+- `Recipes` (Symbiotica) — a **project** is one template workflow,
   a block of **shared** values and one **recipe** per asset type; Generate
   writes one workflow per recipe. The project is the one whose template is
   the open workflow, so on a base workflow the node opens its project by

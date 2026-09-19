@@ -186,7 +186,7 @@ class SymbioticaStudioLibrary(io.ComfyNode):
         return io.Schema(
             node_id="SymbioticaStudioLibrary",
             display_name="Symbiotica Studio Library",
-            category="symbiotica/pipeline",
+            category="Symbiotica",
             description="Pick a file or folder from the studio asset library; "
                         "outputs its absolute sandbox path (and whether it is a "
                         "folder). Open the browser, click one entry.",
@@ -267,7 +267,7 @@ class SymbioticaAssetFocus(io.ComfyNode):
         return io.Schema(
             node_id="SymbioticaAssetFocus",
             display_name="Symbiotica Asset Focus",
-            category="symbiotica/pipeline",
+            category="Symbiotica",
             description="One asset out of the order, chosen on the node, with "
                         "its whole record on separate outputs: name, category, "
                         "client prompt, save path, its canvas, and the client "
@@ -639,7 +639,7 @@ class SymbioticaPromptBlock(io.ComfyNode):
         return io.Schema(
             node_id="SymbioticaPromptBlock",
             display_name="Prompts (Symbiotica)",
-            category="symbiotica/pipeline",
+            category="Symbiotica",
             description="A text file on the canvas. Point it at a path, "
                         "pick a folder under it and a file in that folder, "
                         "read and edit it here, save it back. The output is "
@@ -697,7 +697,7 @@ class SymbioticaPromptLoad(io.ComfyNode):
         return io.Schema(
             node_id="SymbioticaPromptLoad",
             display_name="Prompt Load (Symbiotica)",
-            category="symbiotica/pipeline",
+            category="Symbiotica",
             description="Load one prompt file. Point it at the same path the "
                         "Prompts node edits and pick a file from the "
                         "dropdown; the output is that file's text. It re-runs "
@@ -776,7 +776,7 @@ class SymbioticaOrderTracker(io.ComfyNode):
         return io.Schema(
             node_id="SymbioticaOrderTracker",
             display_name="Symbiotica Order Tracker",
-            category="symbiotica/pipeline",
+            category="Symbiotica",
             description="The order as a board: one slot per asset it asks "
                         "for, filled with the approved render or empty. It is "
                         "a picker pointed at every asset at once — the "

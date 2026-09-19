@@ -44,7 +44,7 @@ class SymbioticaModalRender(io.ComfyNode):
         return io.Schema(
             node_id="SymbioticaModalRender",
             display_name="Modal Render (Symbiotica)",
-            category="symbiotica/modal",
+            category="Symbiotica",
             description="Runs one of the pack's pinned recipes on the "
                         "Symbiotica Modal render engine and returns the "
                         "image. Set the endpoint and proxy token pair in "

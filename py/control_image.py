@@ -60,7 +60,7 @@ class SymbioticaControlImage:
 
     RETURN_TYPES = ("IMAGE", "MASK")
     FUNCTION = "load"
-    CATEGORY = "Symbiotica/Images"
+    CATEGORY = "Symbiotica"
     DESCRIPTION = ("One image from a folder the node points at, loaded like "
                    "Load Image. The folder is a widget; the pick is a "
                    "dropdown of everything under it.")

@@ -72,7 +72,7 @@ class SymbioticaClaude(io.ComfyNode):
         return io.Schema(
             node_id="SymbioticaClaude",
             display_name="Claude (Symbiotica)",
-            category="symbiotica/text",
+            category="Symbiotica",
             description="Answer a prompt with Claude, billed to the studio's "
                         "own key through Cloudflare AI Gateway rather than to "
                         "a ComfyUI account.",

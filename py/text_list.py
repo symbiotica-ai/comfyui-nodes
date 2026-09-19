@@ -62,7 +62,7 @@ class LoadTextList:
     RETURN_NAMES = ("prompts", "names", "count")
     OUTPUT_IS_LIST = (True, True, False)
     FUNCTION = "execute"
-    CATEGORY = "Symbiotica/Text"
+    CATEGORY = "Symbiotica"
     DESCRIPTION = ("Load blank-line-separated blocks from a text file as a "
                    "list. Re-runs only when the file or index changes.")
 
