@@ -2,64 +2,76 @@
 
 ## How to answer him
 
-**Lead with the action he has to take, in bold, on the first line.** He is at
-the canvas waiting to see the change, and digging for "do I reload or restart?"
-is the whole cost of a long answer. One of:
+**Lead with the action he has to take, in bold, on the first line**, and let
+that line be the whole message unless it carries something he cannot read off
+the canvas (a new widget's name, a value he has to type):
 
 - **Hard-reload.** — `web/js` only
 - **Restart Comfy.** — anything under `py/`, and a new node needs it to
   register at all
-- **Nothing to do.** — tests, docs, a commit, a release he has not pulled yet
+- **Nothing to do.** — tests, docs, a commit
 
-Two words. Not "open Manager once, then Manager's Restart": he called that
-token-wasting, and he was right. Before either line, run `./push.sh` — it puts
-the working tree on the Modal Volume his editor mounts (see Repo ground
-rules); the registry release is for when he asks for one.
+Run `./push.sh` before that line. Never restart his ComfyUI yourself — ask with
+the AskUserQuestion button, every time, however urgent it feels.
 
-**The action line is usually the WHOLE message.** Default to one line. Add a
-second only when it carries information he cannot get from the canvas — a new
-widget's name, a value he has to type, a file he has to open. Never a summary of
-what changed, what you verified, what failed before, or what you learned: he
-reads the message to find out whether to reload, and everything else is in his
-way. "it's really fucking annoying" is the standing feedback on this.
+No summary of what changed, no "why this fixes your case" after the artifact,
+no post-mortem of what failed before, no rationale paragraph at the end. Answer
+the question he asked and stop: "is the model downloaded?" is answered by yes
+and a size. A side observation is one line, once, or not at all.
 
 **His feedback is a patch instruction, not a brief for a new version.** Take the
 last thing he accepted, change the part he named, leave every other line alone.
 A rewrite drops requirements he gave earlier and is not repeating now. If the
 fix really needs restructuring, say so in one line and ask first.
 
-**Never close a delivery with a rationale.** No "why it fixes your case", no
-"this works because" after handing over a prompt, a patch or a file. He has
-asked for this repeatedly: the claim is a prediction he has not tested, and it
-reads as selling him something that often does not work. Hand over the artifact
-and stop. A genuinely load-bearing reason goes in one clause BEFORE the
-artifact, never as a closing paragraph.
+**Never launch Chrome.** Not headless, not through a script. Browser automation
+lives in the Browser pane: `preview_start {url: ...}`, then `javascript_tool`
+against `window.app` and `computer` for screenshots.
 
-**No post-mortems.** Never explain what you got wrong, why the last attempt
-failed, or what you learned. He does not care and has said so. Fix it, say the
-action line, stop. This includes the honest-sounding version ("what I got wrong
-was…") — it is still a paragraph he has to read to find out whether he can
-reload.
+## Verify before you say reload
 
-**Answer the question he asked, and stop.** "Is the model downloaded?" is
-answered by yes and a size. Do not carry a finding from an earlier step into
-every later message, and never offer to act on something he has not mentioned —
-noticing a big file is not an invitation to propose deleting it. A side
-observation goes in one line, once, or not at all.
+Unit tests are not verification here, and shipping on them has cost him days.
+Two places to run the thing, both reachable from this machine.
 
-Never restart his ComfyUI yourself without asking first — the AskUserQuestion
-button, every time, however urgent it feels.
+**Local ComfyUI** — `~/ComfyUI-Installs/ComfyUI (1)/ComfyUI`, this repo
+symlinked in as `custom_nodes/symbiotica`, with the packs his canvas uses
+(KJNodes, rgthree, easy-use, layerstyle, controlnet_aux, was-ns,
+custom-scripts, ComfyLiterals). Start it with that install's own
+`.venv/bin/python main.py`, open `http://127.0.0.1:8188` in the Browser pane,
+and click the node: the panel renders, the handler fires, the queue runs, the
+widget values survive a save and reopen. It runs ComfyUI 0.36.0 / frontend
+1.52.7 against his 0.33.1 / 1.48.7. For anything the frontend decides, run a
+second copy on HIS version instead of guessing, from the same install and
+without touching the one he has open:
 
-**Never launch Chrome.** Not headless, not through a script, not through the
-old `.cs/local/browser` harness. He has disabled browser automation outside the
-Browser pane on purpose, and going around it with a node script is not a
-loophole. Verify in the pane: `preview_start {url: "http://127.0.0.1:8000"}`,
-then `javascript_tool` against `window.app` and `computer` for screenshots.
+    .venv/bin/python main.py --port 8189 --cpu --disable-auto-launch \
+      --front-end-version Comfy-Org/ComfyUI_frontend@1.48.7 \
+      --user-directory <tmp> --output-directory <tmp>
 
-He works on the **Modal editor** (the Symbiotica platform's ComfyUI sandbox),
-not a local install — "there is no local comfy, we work on modal". Nothing
-here can be verified against his canvas from this machine; say what was
-tested (unit tests) and what was not.
+Drive either one headless with playwright (`python3 -m playwright`, chromium is
+already installed) — `page.evaluate` against `window.app` reads the graph, and
+`page.mouse` does a real drag onto a slot. His own workflows come down with
+`./verify.sh api "/api/userdata/workflows%2F<name>.json"`, so a bug on his
+canvas can be reproduced here with his file rather than a made-up one.
+
+**His live editor** — `./verify.sh`, which reads the sandbox host and its
+canvas key from his Modal token (`~/.modal.toml`, app `symbiotica-comfy`,
+environment `dev`). No cURL to paste, and it queues nothing:
+
+- `./verify.sh` — every `web/js` file, served against the tree: `ok`, `STALE`
+  (the push has not landed in the sandbox) or `MISSING` (the sandbox never got
+  the file), then the nodes that failed to register
+- `./verify.sh node <Class>` — the schema the editor actually reports
+- `./verify.sh js <file>` — one file, with the first line that differs
+
+`MISSING` is the Volume sync, not the push: it updates files a running sandbox
+already has and never creates a new one, so a new node's canvas code goes
+INSIDE an existing `web/js` file. The gateway also 404s a file it does hold now
+and then, so the check asks twice before it says MISSING — confirm one with
+`./verify.sh js <file>` before acting on it.
+
+When something could not be run, say what was tested and what was not, and do
+not use the word "fixed".
 
 ## MANDATORY: load the ComfyUI skill for your task before writing code
 
@@ -77,8 +89,8 @@ tool — do not work from memory:
 | `pyproject.toml`, `__init__.py`, registry publishing | `comfyui-node-packaging` |
 | Building or editing workflow JSON | `comfyui-workflow-builder`, `comfyui-api` |
 
-One skill load per area per session is enough. Repo-specific patterns
-(existing panels in `web/js/order_pipeline.js`, the v3 schemas in
+One skill load per area per session is enough. Repo-specific patterns (the
+panels in `web/js/asset_focus.js` and `web/js/recipes.js`, the v3 schemas in
 `py/pipeline/nodes.py`) take precedence over skill examples when they
 conflict — the repo has already solved ComfyUI's traps its own way.
 
@@ -91,8 +103,8 @@ becomes a floor the user cannot drag past — answer it with the content and the
 node will not shrink below its content; answer it with "the space below me"
 and the node can never shrink at all. Both shipped here, and both cost days.
 
-The shape that works, in every panel in this pack (`pick.js`,
-`asset_focus.js`, `order_pipeline.js`):
+The shape that works, in every panel in this pack (`asset_focus.js`,
+`recipes.js`, `order_source.js`):
 
 - no `computeSize` on the DOM widget
 - `getMinHeight: () => <small constant>` — never reads `node.size`,
@@ -133,13 +145,21 @@ rejects every node on his canvas with "a node rejected one or more input
 values". Return `True` for the empty case and let execution be where a bad
 value fails.
 
-**A button widget shifts every widget saved after it.** `📁 Read folder` sets
-`readBtn.serialize = false`, and the save wrote `null` for it anyway while the
-load skips it — so on reopening, every value after the button lands one widget to
-the LEFT (`ref` takes the `null`, the next widget takes `ref`'s string). A text
-widget holding `null` then breaks the whole queue: pysssss's `presetText` calls
-`.replace` on it inside `graphToPrompt`, and no node runs. Suspected, not yet
-proven — see ROADMAP's Asset Recipe threads.
+**`serialize = false` on a widget shifts every value after it.** Proven on
+1.48.7 and 1.52.7 (2026-09-18): saving writes ONE ENTRY PER WIDGET, a button's
+being `null`, and loading pairs those entries against the widgets that do NOT
+carry the flag. `📁 Read folder` carried it in the middle of the list, so every
+reopen moved `ref` onto the button's `null` and `slots` onto ref's string — the
+Asset Recipe's table came back empty because `slots` was `null`. The flag is
+only safe on the widgets at the very END of the list (the Asset Recipe's own
+slot widgets, Studio Library's summary). `{ serialize: false }` passed in a
+widget's OPTIONS is a different thing and harmless: neither side honours it.
+
+**A widget re-created under a name the node has carried keeps the OLD value.**
+ComfyUI remembers widget values by name, so `addWidget(kind, name, value, …)`
+hands back a widget holding what that name held before and drops the value
+passed. Anything that rebuilds widgets (`rebuildWidgets` in `asset_recipe.js`)
+must write `widget.value` after adding it.
 
 **A route the canvas fetches has to exist.** `/symbiotica/local-image` was
 deleted with the obsolete nodes in `0a4f14d` while two panels still called it,
@@ -183,9 +203,11 @@ The slots themselves live in `web/js/asset_recipe.js`:
 - `web/js/asset_focus.js` serves both classes through `FOCUS_CLASSES` — the
   panel, the selection widgets and the `symbiotica.focus` push are shared
 
-**Dragging a widget onto the empty slot does not work on his canvas yet** (as of
-2026-09-18): the wires land, no row is written, no widget appears. Unit tests
-cover the handler; nothing has been verified on the Modal canvas.
+Dragging a widget onto the empty slot writes the row, grows the next slot and
+adds the widget — verified with a real mouse drag on frontend 1.48.7 on
+2026-09-18. It looked broken because the `slots` string was arriving as `null`
+(the shift above), which left `readSlots` empty and made every wire land on a
+slot the table did not know about.
 
 ## Repo ground rules
 
