@@ -2,6 +2,7 @@
 # ABOUTME: listing, reading, saving and sub-folder creation, confined to the folder.
 import json
 import os
+import shutil
 
 from .prompt_book import list_recipes, prompts_dir, read_recipe, recipes_dir
 
@@ -162,6 +163,32 @@ def make_folder(folder, name):
         raise PromptPathError(f"no folder name")
     os.makedirs(path, exist_ok=True)
     return {"name": clean}
+
+
+def remove(folder, name):
+    """Delete one file or one sub-folder inside the prompt folder.
+
+    A folder goes with everything in it — the panel says how many files that
+    is before it asks. A file's `.bak`, the copy the last save left beside it,
+    is NOT removed: it is the only way back from a delete nobody meant, and it
+    is never listed, so it cannot be mistaken for a prompt that is still there.
+    """
+    root = _root(folder)
+    rel = str(name or "").strip().replace("\\", "/").strip("/")
+    path = _inside(root, rel, "target")
+    if path == root:
+        raise PromptPathError("the path itself cannot be deleted")
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+        return {"name": rel, "kind": "folder"}
+    if not os.path.isfile(path):
+        raise PromptPathError(f"nothing called {rel!r}")
+    # Checked like a read is: this route deletes prompts, and a name ending in
+    # anything else is a mistake worth refusing rather than acting on.
+    if not is_prompt_name(rel):
+        raise PromptPathError(f"not a prompt file: {name!r}")
+    os.remove(path)
+    return {"name": rel, "kind": "file"}
 
 
 def rename(folder, src, dst):

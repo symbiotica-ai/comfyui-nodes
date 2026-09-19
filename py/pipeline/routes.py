@@ -13,7 +13,7 @@ from server import PromptServer
 from . import studio_library as studio_library_mod
 from .paths import parse_roots, resolve_within
 from .prompt_store import (PromptPathError, list_files, list_folders,
-                           make_folder, read_file, rename, write_file)
+                           make_folder, read_file, remove, rename, write_file)
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
@@ -189,40 +189,146 @@ async def local_image(request):
                             headers={"Cache-Control": "private, max-age=60"})
 
 
+def _image_library(*names):
+    """Members of the control-image library module.
+
+    The pack is imported as `<pack>.py.pipeline.routes` inside ComfyUI and as a
+    top-level `pipeline` under the test harness, where `..` is above the root
+    package. Same module either way — `py/` is on the path there.
+    """
+    try:
+        from .. import _control_image as mod
+    except ImportError:
+        import _control_image as mod
+    return [getattr(mod, name) for name in names]
+
+
 @PromptServer.instance.routes.get("/symbiotica/control-images")
 async def control_images(request):
     """Every image under the folder a Control Image node points at, relative to
     it, sub-folders included — what the node's dropdown offers.
 
     The folder is a widget, so the listing cannot be built when the node class
-    is registered; the canvas asks here whenever the path changes. A folder
-    outside ComfyUI's own directories has to be one this process is already
-    entitled to see — `declared_roots` carries the studio-assets mount and
-    whatever the operator declared — so asking to browse a folder is never what
-    grants access to it. Browsing also registers it, because the preview of
-    each file goes back through `local-image`.
+    is registered; the canvas asks here whenever the path changes.
+
+    The path IS the answer: whatever the user typed into the node, or wired
+    into it, is the folder that gets browsed — the same folder `load` would
+    read from on a queue, and the same rule the Prompts node has always had.
+    It registers on the way through, because the preview of each file goes
+    back through `local-image`, so a browse grants exactly what queueing the
+    node once already granted. Declaring the folder first was a step with
+    nothing behind it: "this is an image browser mate".
+
+    What still holds is CONTAINMENT — every name a request can send is
+    resolved inside the folder it named, so nothing here reaches a file the
+    node was not pointed at.
     """
-    try:
-        from .._control_image import library_dir, list_control_images
-    except ImportError:
-        # The pack is imported as `<pack>.py.pipeline.routes` inside ComfyUI and
-        # as a top-level `pipeline` under the test harness, where `..` is above
-        # the root package. Same module either way — `py/` is on the path there.
-        from _control_image import library_dir, list_control_images
+    library_dir, list_control_images, list_control_folders = (
+        _image_library("library_dir", "list_control_images",
+                       "list_control_folders"))
 
     raw = request.query.get("path", "")
     try:
         library = library_dir(raw)
     except ValueError as exc:
         return web.json_response({"error": str(exc)}, status=400)
-    if not register_root_within(library):
-        return web.json_response(
-            {"error": f"{library} is outside every allowed root"}, status=403)
+    register_root(library)
     return web.json_response({
         "ok": True,
         "library": library,
+        "folders": list_control_folders(raw),
         "images": list_control_images(raw),
     })
+
+
+def _image_folder(request_path):
+    """The library a request names: the absolute path the node was pointed at.
+
+    Every write below is confined to it — `inside_library` resolves each name
+    against this folder and refuses anything that climbs out — so what a
+    request can touch is decided by containment, not by an allowlist of
+    folders declared somewhere else.
+    """
+    library_dir = _image_library("library_dir")[0]
+    library = library_dir(request_path)
+    register_root(library)
+    return library
+
+
+async def _image_op(request, run):
+    """The shape every write to an image library shares: read the body, check
+    the library, do the thing, and turn a refusal into the reason for it."""
+    body = await _json_body(request)
+    try:
+        _image_folder(body.get("path"))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    try:
+        return web.json_response({"ok": True, **run(body)})
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except OSError as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+
+
+@PromptServer.instance.routes.post("/symbiotica/control-images-mkdir")
+async def control_images_mkdir(request):
+    """Create a sub-folder in the image library."""
+    make_folder = _image_library("make_folder")[0]
+    return await _image_op(request, lambda b: make_folder(
+        b.get("path"), str(b.get("name") or "")))
+
+
+@PromptServer.instance.routes.post("/symbiotica/control-images-rename")
+async def control_images_rename(request):
+    """Rename an image, or a sub-folder and everything under it."""
+    rename = _image_library("rename")[0]
+    return await _image_op(request, lambda b: rename(
+        b.get("path"), str(b.get("from") or ""), str(b.get("to") or "")))
+
+
+@PromptServer.instance.routes.post("/symbiotica/control-images-delete")
+async def control_images_delete(request):
+    """Delete an image, or a sub-folder and everything in it. The panel asks
+    first, naming what goes."""
+    remove = _image_library("remove")[0]
+    return await _image_op(request, lambda b: remove(
+        b.get("path"), str(b.get("name") or "")))
+
+
+@PromptServer.instance.routes.post("/symbiotica/control-images-upload")
+async def control_images_upload(request):
+    """Files dropped onto the tree, written into the folder they landed on.
+
+    Multipart, one part per file, because that is what a browser hands over
+    from a drop. Nothing is overwritten — a name already taken gets `-2`.
+    """
+    save_upload = _image_library("save_upload")[0]
+    try:
+        data = await request.post()
+    except Exception as exc:
+        return web.json_response({"error": f"unreadable upload: {exc}"},
+                                 status=400)
+    try:
+        _image_folder(data.get("path"))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    saved, refused = [], []
+    for field in data.getall("files", []):
+        name = getattr(field, "filename", "") or ""
+        try:
+            body = field.file.read()
+        except Exception as exc:
+            refused.append(f"{name}: {exc}")
+            continue
+        try:
+            saved.append(save_upload(data.get("path"), data.get("folder", ""),
+                                     name, body)["name"])
+        except (ValueError, OSError) as exc:
+            refused.append(str(exc))
+    # A partial drop is not a failure: a folder of PNGs with a stray .txt in it
+    # should land the PNGs and say what it left.
+    return web.json_response({"ok": True, "saved": saved, "refused": refused})
 
 
 @PromptServer.instance.routes.get("/symbiotica/list-orders")
@@ -487,6 +593,22 @@ async def prompts_rename(request):
         return web.json_response({"error": f"cannot rename: {exc}"},
                                  status=500)
     return web.json_response({"ok": True, **moved})
+
+
+@PromptServer.instance.routes.post("/symbiotica/prompts-delete")
+async def prompts_delete(request):
+    """Delete a file, or a sub-folder and everything in it. The panel asks
+    first, naming what goes."""
+    body = await _json_body(request)
+    folder = _prompt_folder(body.get("folder"))
+    try:
+        gone = remove(folder, str(body.get("name") or ""))
+    except PromptPathError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except OSError as exc:
+        return web.json_response({"error": f"cannot delete: {exc}"},
+                                 status=500)
+    return web.json_response({"ok": True, **gone})
 
 
 @PromptServer.instance.routes.post("/symbiotica/tracker-reject")

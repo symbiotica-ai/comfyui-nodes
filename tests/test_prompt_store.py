@@ -5,7 +5,7 @@ import os
 import pytest
 
 from pipeline.prompt_store import (PromptPathError, list_files, list_folders,
-                                   make_folder, read_file, rename,
+                                   make_folder, read_file, remove, rename,
                                    resolve_file, write_file)
 
 
@@ -187,6 +187,59 @@ def test_a_rename_stays_inside_and_keeps_a_prompt_extension(tmp_path):
     with pytest.raises(PromptPathError):
         rename(p, "", "B")
     assert list_files(p) == ["A.md"]
+
+
+# --- deleting -----------------------------------------------------------------
+
+def test_a_file_is_deleted(tmp_path):
+    p = _folder(tmp_path, **{"_rules__01-a.md": "A", "_rules__02-b.md": "B"})
+    assert remove(p, "_rules/01-a.md") == {"name": "_rules/01-a.md",
+                                           "kind": "file"}
+    assert list_files(p) == ["_rules/02-b.md"]
+
+
+def test_a_folder_is_deleted_with_everything_in_it(tmp_path):
+    p = _folder(tmp_path, **{"_rules__01-a.md": "A", "_rules__old__x.md": "X",
+                             "Chair.md": "C"})
+    assert remove(p, "_rules") == {"name": "_rules", "kind": "folder"}
+    assert list_folders(p) == []
+    assert list_files(p) == ["Chair.md"]
+
+
+def test_deleting_a_file_leaves_the_backup_of_its_last_save(tmp_path):
+    # The only way back from a delete nobody meant.
+    p = _folder(tmp_path, **{"A.md": "FIRST"})
+    write_file(p, "A.md", "SECOND")
+    remove(p, "A.md")
+    assert list_files(p) == []
+    assert (tmp_path / "prompts" / "A.md.bak").read_text() == "FIRST"
+
+
+def test_a_delete_stays_inside_the_folder(tmp_path):
+    p = _folder(tmp_path, **{"A.md": "A"})
+    outside = tmp_path / "secret.md"
+    outside.write_text("S")
+    for name in ["../secret.md", "", "/", "."]:
+        with pytest.raises(PromptPathError):
+            remove(p, name)
+    assert outside.exists()
+    assert os.path.isdir(p)
+    assert list_files(p) == ["A.md"]
+
+
+def test_deleting_what_is_not_there_is_loud(tmp_path):
+    # Silently succeeding would leave the row on screen with nothing behind it.
+    p = _folder(tmp_path, **{"A.md": "A"})
+    with pytest.raises(PromptPathError):
+        remove(p, "missing.md")
+
+
+def test_a_non_prompt_file_is_not_deleted(tmp_path):
+    p = _folder(tmp_path, **{"A.md": "A"})
+    (tmp_path / "prompts" / "notes.json").write_text("{}")
+    with pytest.raises(PromptPathError):
+        remove(p, "notes.json")
+    assert (tmp_path / "prompts" / "notes.json").exists()
 
 
 # --- recipes ------------------------------------------------------------------

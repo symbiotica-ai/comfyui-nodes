@@ -6,8 +6,9 @@
 // Browser renders them inside a node instead of an overlay, which is a layout
 // difference, not a visual one — so the parts live here rather than being drawn
 // twice with drifting styles.
+import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
-import { HUB, ghostButtonCss } from "./hub_theme.js";
+import { HUB, ghostButtonCss, injectHubStyles } from "./hub_theme.js";
 
 // --- image URLs --------------------------------------------------------------
 // Keep the /api/ prefix: ComfyUI mirrors custom routes under /api/ locally AND
@@ -176,7 +177,7 @@ const ZOOM_EDGE = 8;         // and between the frame and the window edge
 
 // Alpha is a thing being judged here: a background-removed render shown on
 // solid black reads as approved when it is not. The frame checkers behind it.
-const CHECKER = "linear-gradient(45deg,#2a2a2a 25%,transparent 25%),"
+export const CHECKER = "linear-gradient(45deg,#2a2a2a 25%,transparent 25%),"
     + "linear-gradient(-45deg,#2a2a2a 25%,transparent 25%),"
     + "linear-gradient(45deg,transparent 75%,#2a2a2a 75%),"
     + "linear-gradient(-45deg,transparent 75%,#2a2a2a 75%)";
@@ -321,4 +322,222 @@ export function folderRow({ name, checked, onToggle, onOpen }) {
     label.addEventListener("click", onOpen);
     row.append(box, label);
     return row;
+}
+
+// --- the drawn icon family ---------------------------------------------------
+// One family for every browser in the pack. An emoji and a text glyph never
+// agree on size or weight — 📄📁 beside a ⟳ read as two different kinds of
+// control — and only a stroked path can take the panel's own colour.
+export const ICON = {
+    newFile: "M4.3 1.9h4.8L12 4.8v9.3H4.3z M9.1 1.9v2.9H12 M8.2 8.3v3.7"
+             + " M6.3 10.1h3.7",
+    newFolder: "M2.2 13.2V3.8h4.1l1.2 1.5h6.3v7.9z M8 7.6v3.4 M6.3 8.7h3.4",
+    refresh: "M13.3 8A5.3 5.3 0 1 1 11.6 4.1 M13.5 1.9v3h-3",
+    rename: "M12 2.1a1.3 1.3 0 0 1 1.9 1.9l-7.5 7.5-2.6.7.7-2.6z",
+    remove: "M3.4 4.5h9.2 M6.4 4.5V3.1h3.2v1.4 M4.8 4.5l.6 8.4h5.2l.6-8.4"
+            + " M6.9 6.8v3.8 M9.1 6.8v3.8",
+    collapse: "M9.8 3.6L5.4 8l4.4 4.4",
+    expand: "M6.2 3.6L10.6 8l-4.4 4.4",
+    upload: "M8 10.6V2.4 M4.8 5.6L8 2.4l3.2 3.2 M2.6 10.2v3.4h10.8v-3.4",
+};
+
+export const svgIcon = (d, px) =>
+    `<svg width="${px}" height="${px}" viewBox="0 0 16 16" fill="none"`
+    + ` stroke="currentColor" stroke-width="1.2" stroke-linecap="round"`
+    + ` stroke-linejoin="round" style="display:block;pointer-events:none">`
+    + `<path d="${d}"/></svg>`;
+
+/** A bare icon button. It swallows its own pointerdown — one that reaches the
+ * canvas drags the node out from under the click. */
+export function iconButton(name, title, onClick, { px = 14, hover = "" } = {}) {
+    const b = el("button",
+        "flex:none;display:flex;align-items:center;padding:2px 3px;"
+        + "background:transparent;border:0;border-radius:4px;cursor:pointer;"
+        + `color:${HUB.inkSubtle};`);
+    b.className = "sym-btn";
+    b.title = title;
+    b.innerHTML = svgIcon(ICON[name], px);
+    if (hover) {
+        b.addEventListener("pointerenter", () => { b.style.color = hover; });
+        b.addEventListener("pointerleave", () => { b.style.color = HUB.inkSubtle; });
+    }
+    b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+    return b;
+}
+
+// --- a file tree inside a node -----------------------------------------------
+export const ONE_LINE = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+const INDENT_PX = 10;
+
+/**
+ * One row of a tree: [lead] name [actions]. `lead` is the caller's own leading
+ * element — a chevron for a folder, a thumbnail for an image. `actions` appear
+ * only while the pointer is on the row: an action on every row at once is a
+ * column of clutter. Hidden with `visibility`, not opacity — an invisible
+ * button you can still click is worse than none.
+ */
+export function treeRow({ kind, rel, depth, tone = "", lead, label,
+                          labelColour, actions = [], onClick, height = "" }) {
+    const row = el("div", "display:flex;align-items:center;gap:3px;"
+        + `padding:2px 4px 2px ${4 + depth * INDENT_PX}px;cursor:pointer;`
+        + (height ? `min-height:${height};` : "")
+        + (tone ? `background:${tone};` : ""));
+    row.className = "sym-row";
+    // What a row IS, for the tests that click one.
+    row._sym = { kind, rel };
+    row.addEventListener("pointerdown", (e) => e.stopPropagation());
+    if (lead) row.appendChild(lead);
+    // A file name reads literally: Inter's contextual alternates turn `1x1`
+    // into `1×1`, which is not what the folder is called or what you type to
+    // rename it.
+    const name = el("div", `flex:1;min-width:0;${ONE_LINE}color:${labelColour};`
+        + "font-variant-ligatures:none;font-feature-settings:'calt' 0;",
+        label);
+    name.title = label;
+    row.appendChild(name);
+    for (const a of actions) a.style.visibility = "hidden";
+    const show = (how) => { for (const a of actions) a.style.visibility = how; };
+    if (actions.length) {
+        row.addEventListener("pointerenter", () => show("visible"));
+        row.addEventListener("pointerleave", () => show("hidden"));
+        for (const a of actions) row.appendChild(a);
+    }
+    if (onClick) row.addEventListener("click", onClick);
+    return row;
+}
+
+const dirOf = (rel) => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+const baseOf = (rel) => rel.slice(rel.lastIndexOf("/") + 1);
+
+/**
+ * Every visible row, top to bottom: sub-folders before files at each level,
+ * an open folder's contents under it. `make(kind, rel, depth)` builds each one.
+ */
+export function walkTree({ folders = [], files = [], open }, make) {
+    const byName = (a, b) =>
+        baseOf(a).localeCompare(baseOf(b), undefined, { sensitivity: "base" });
+    const out = [];
+    const walk = (parent, depth) => {
+        for (const rel of folders.filter((f) => dirOf(f) === parent).sort(byName)) {
+            out.push(make("folder", rel, depth));
+            if (open.has(rel)) walk(rel, depth + 1);
+        }
+        for (const rel of files.filter((f) => dirOf(f) === parent).sort(byName)) {
+            out.push(make("file", rel, depth));
+        }
+    };
+    walk("", 0);
+    return out;
+}
+
+const SIDE_MIN = 110;
+// Shut, the sidebar keeps a rail wide enough for the one button that reopens
+// it: a toggle you can only undo from a menu is a one-way door.
+const SIDE_RAIL = 22;
+
+/**
+ * The two-pane panel this pack's file browsers share: a tree on the left under
+ * a header of icons, a divider you can drag, a pane of the caller's own on the
+ * right, and a toggle at the foot of the tree that folds it to a rail.
+ *
+ * The caller appends its own head and body to `main`, fills `tree` on every
+ * render, and calls `layout()` first — it answers `true` while the tree is
+ * shut, which is a tree there is no point building.
+ *
+ * `sideProp`/`shutProp` are node properties, not widgets: the width and the
+ * fold are view preferences, and a widget for either would shift the saved
+ * values of every workflow already holding the node.
+ */
+export function sidebarShell(node, { headButtons = [], sideProp, shutProp,
+                                     sideDefault = 210, repaint }) {
+    node.properties = node.properties ?? {};
+    injectHubStyles();
+    const container = el("div", "box-sizing:border-box;width:100%;height:100%;"
+        + "display:flex;align-items:stretch;overflow:hidden;"
+        + `font:11px ${HUB.font};color:var(--input-text, ${HUB.ink});`
+        + `background:${HUB.surface1};border-radius:${HUB.radius.sm};`);
+    // Over a scrolling panel the wheel scrolls the panel; the canvas must not
+    // zoom out from under it.
+    container.addEventListener("wheel", (e) => e.stopPropagation(),
+                               { passive: true });
+
+    const side = el("div", "display:flex;flex-direction:column;min-width:0;"
+        + `flex:none;overflow:hidden;background:${HUB.surface2};`
+        + `border-right:1px solid ${HUB.hairline};`);
+    const sideTitle = el("div", `flex:1;min-width:0;${ONE_LINE}`
+        + `color:${HUB.inkSubtle};font-size:10px;letter-spacing:.06em;`
+        + "text-transform:uppercase;");
+    const sideHead = el("div", "display:flex;align-items:center;gap:1px;"
+        + `padding:3px 4px;flex:none;background:${HUB.surface2};`
+        + `border-bottom:1px solid ${HUB.hairline};`);
+    sideHead.append(sideTitle, ...headButtons);
+    const tree = el("div", "flex:1;min-height:0;overflow:auto;padding:2px 0;");
+
+    const shut = () => !!node.properties?.[shutProp];
+    const toggle = iconButton("collapse", "Hide the tree", () => {
+        node.properties[shutProp] = !shut();
+        repaint?.();
+    }, { px: 12 });
+    // `margin-top:auto` holds it at the bottom in BOTH states: with the tree
+    // hidden there is nothing above it to push it down, and a button that
+    // jumps to the top of the rail is one you have to hunt for to undo.
+    const foot = el("div", "display:flex;align-items:center;flex:none;"
+        + "margin-top:auto;"
+        + `padding:2px 3px;border-top:1px solid ${HUB.hairline};`);
+    foot.appendChild(toggle);
+    side.append(sideHead, tree, foot);
+
+    // The divider: drag it and the sidebar follows. The canvas can be zoomed,
+    // so screen pixels are divided by its scale before they become node pixels.
+    const grip = el("div", "flex:none;width:5px;margin:0 -2px;cursor:col-resize;"
+        + "background:transparent;z-index:1;");
+    grip.title = "Drag to resize";
+    grip.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        e.preventDefault?.();
+        const startX = e.clientX ?? 0;
+        const startW = sideWidth();
+        const scale = app.canvas?.ds?.scale || 1;
+        const onMove = (ev) => {
+            node.properties[sideProp] = startW + ((ev.clientX ?? 0) - startX) / scale;
+            repaint?.();
+        };
+        const onUp = () => {
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+    });
+
+    const main = el("div", "flex:1;min-width:0;display:flex;"
+        + "flex-direction:column;overflow:hidden;");
+    container.append(side, grip, main);
+
+    function sideWidth() {
+        if (shut()) return SIDE_RAIL;
+        const held = Number(node.properties?.[sideProp]);
+        const want = Number.isFinite(held) && held > 0 ? held : sideDefault;
+        // Never wider than the node can show, and never so narrow it stops
+        // being a tree.
+        const room = Math.max(node.size[0] - PANEL_INSET, SIDE_MIN * 2);
+        return Math.round(Math.max(SIDE_MIN, Math.min(want, room * 0.6)));
+    }
+
+    function layout() {
+        const closed = shut();
+        side.style.width = `${sideWidth()}px`;
+        // Shut, the column is the toggle and nothing else — and the divider
+        // goes with the tree, because there is no longer a width to drag.
+        sideHead.style.display = closed ? "none" : "flex";
+        tree.style.display = closed ? "none" : "";
+        grip.style.display = closed ? "none" : "";
+        foot.style.justifyContent = closed ? "center" : "flex-end";
+        toggle.innerHTML = svgIcon(ICON[closed ? "expand" : "collapse"], 12);
+        toggle.title = closed ? "Show the tree" : "Hide the tree";
+        return closed;
+    }
+
+    return { container, side, sideTitle, sideHead, tree, grip, main, layout };
 }

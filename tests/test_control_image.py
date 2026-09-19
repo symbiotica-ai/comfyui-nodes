@@ -4,8 +4,10 @@ import os
 
 import pytest
 
-from _control_image import (control_image_path, file_fingerprint, library_dir,
-                            list_control_images)
+from _control_image import (control_image_path, file_fingerprint,
+                            free_name, is_image_name, library_dir,
+                            list_control_folders, list_control_images,
+                            make_folder, remove, rename, save_upload)
 
 
 def touch(root, rel, data=b"x"):
@@ -172,3 +174,121 @@ class TestTheRunHandsBackThePath:
         assert node.VALIDATE_INPUTS("general/1x1/1x1-box.png", library) is True
         assert "no image" in node.VALIDATE_INPUTS("gone.png", library)
         assert "absolute" in node.VALIDATE_INPUTS("a.png", "controlnet-images")
+
+
+# --- the tree, and what edits it ----------------------------------------------
+
+def test_every_subfolder_is_listed_including_an_empty_one(library):
+    # The tree draws these; a folder just made is exactly the one about to be
+    # filled, so it has to appear before anything is in it.
+    os.makedirs(os.path.join(library, "general/3x3"))
+    assert list_control_folders(library) == [
+        "general", "general/1x1", "general/1x2", "general/3x3",
+        "project-specific", "project-specific/chair"]
+
+
+def test_nothing_lists_folders_for_a_path_that_is_not_there(tmp_path):
+    assert list_control_folders(str(tmp_path / "gone")) == []
+    assert list_control_folders("") == []
+
+
+def test_a_subfolder_is_created_and_cannot_climb_out(library, tmp_path):
+    assert make_folder(library, "general/3x3") == {"name": "general/3x3"}
+    assert os.path.isdir(os.path.join(library, "general", "3x3"))
+    for name in ["../escape", "", "/", "."]:
+        with pytest.raises(ValueError):
+            make_folder(library, name)
+    assert not os.path.exists(str(tmp_path / "escape"))
+
+
+def test_an_image_is_renamed_and_keeps_an_image_name(library):
+    assert rename(library, "general/1x1/1x1-box.png",
+                  "general/1x1/box.png") == {
+        "from": "general/1x1/1x1-box.png", "to": "general/1x1/box.png"}
+    assert "general/1x1/box.png" in list_control_images(library)
+    with pytest.raises(ValueError):
+        rename(library, "general/1x1/box.png", "general/1x1/box.txt")
+    with pytest.raises(ValueError):
+        rename(library, "general/1x1/box.png", "general/1x1/1x1-floor.png")
+    with pytest.raises(ValueError):
+        rename(library, "general/1x1/missing.png", "general/1x1/x.png")
+
+
+def test_a_folder_is_renamed_with_everything_under_it(library):
+    rename(library, "general", "shared")
+    assert list_control_images(library) == [
+        "project-specific/chair/Loveletter Lounge Chair.png",
+        "shared/1x1/1x1-box.png", "shared/1x1/1x1-floor.png",
+        "shared/1x2/1x2-box-dots.png"]
+    assert "general" not in list_control_folders(library)
+
+
+def test_an_image_and_a_whole_folder_are_deleted(library):
+    assert remove(library, "general/1x1/1x1-box.png") == {
+        "name": "general/1x1/1x1-box.png", "kind": "file"}
+    assert "general/1x1/1x1-box.png" not in list_control_images(library)
+    assert remove(library, "general") == {"name": "general", "kind": "folder"}
+    assert list_control_images(library) == [
+        "project-specific/chair/Loveletter Lounge Chair.png"]
+
+
+def test_a_delete_stays_inside_the_library(library, tmp_path):
+    outside = tmp_path / "secret.png"
+    outside.write_bytes(b"x")
+    for name in ["../secret.png", "", "/", "."]:
+        with pytest.raises(ValueError):
+            remove(library, name)
+    assert outside.exists()
+    with pytest.raises(ValueError):
+        remove(library, "general/1x1/missing.png")
+
+
+def test_a_symlink_is_unlinked_not_followed(library, tmp_path):
+    # A library is a mount, and a link in it points at somebody else's disk.
+    theirs = tmp_path / "theirs"
+    theirs.mkdir()
+    (theirs / "keep.png").write_bytes(b"x")
+    os.symlink(str(theirs), os.path.join(library, "linked"))
+    assert remove(library, "linked") == {"name": "linked", "kind": "link"}
+    assert (theirs / "keep.png").exists()
+
+
+def test_a_dropped_file_never_overwrites_what_is_there(library):
+    assert save_upload(library, "general/1x1", "1x1-box.png", b"NEW") == {
+        "name": "general/1x1/1x1-box-2.png"}
+    assert save_upload(library, "general/1x1", "1x1-box.png", b"NEW") == {
+        "name": "general/1x1/1x1-box-3.png"}
+    with open(os.path.join(library, "general/1x1/1x1-box.png"), "rb") as fh:
+        assert fh.read() == b"x"
+
+
+def test_a_drop_lands_in_the_folder_it_was_dropped_on(library):
+    assert save_upload(library, "", "wall.png", b"W") == {"name": "wall.png"}
+    assert save_upload(library, "project-specific", "wall.png", b"W") == {
+        "name": "project-specific/wall.png"}
+    assert "project-specific/wall.png" in list_control_images(library)
+
+
+def test_a_drop_of_something_that_is_not_an_image_is_refused(library):
+    for name in ["notes.txt", "", ".hidden.png"]:
+        with pytest.raises(ValueError):
+            save_upload(library, "", name, b"x")
+    assert not os.path.exists(os.path.join(library, "notes.txt"))
+
+
+def test_a_drop_keeps_only_the_basename(library, tmp_path):
+    # A browser hands over whatever the OS called it; a path in that name must
+    # not decide where the file lands, which is what defuses a traversal.
+    assert save_upload(library, "general", "/etc/evil.png", b"x") == {
+        "name": "general/evil.png"}
+    assert save_upload(library, "", "../escape.png", b"x") == {
+        "name": "escape.png"}
+    assert not os.path.exists(str(tmp_path / "escape.png"))
+
+
+def test_what_counts_as_an_image_name():
+    assert is_image_name("a.png") and is_image_name("A.JPEG")
+    assert not is_image_name(".hidden.png")
+    assert not is_image_name("a.txt")
+    assert not is_image_name("")
+    assert free_name.__doc__

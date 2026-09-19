@@ -1,9 +1,9 @@
-// ABOUTME: The Prompts node — the folder dropdown lists the path's sub-folders,
-// ABOUTME: the file dropdown the folder's files, and the buttons hit the routes.
+// ABOUTME: The Prompts node — a tree of the folder the path names, an editor for
+// ABOUTME: the file clicked in it, and the actions in the two headers.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, emit, link, reset, setResponder, tick } from "./comfy_stub.mjs";
+import { app, create, emit, fire, link, reset, setResponder, tick } from "./comfy_stub.mjs";
 import "../../web/js/prompts.js";
 
 const TREE = {
@@ -45,6 +45,13 @@ function router(seen, tree = TREE) {
                       files: state.files.map(move).sort() };
             return { ok: true, status: 200, body: { ok: true } };
         }
+        if (route.startsWith("/symbiotica/prompts-delete")) {
+            const { name } = JSON.parse(init.body);
+            const under = (rel) => rel === name || rel.startsWith(`${name}/`);
+            state = { folders: state.folders.filter((f) => !under(f)),
+                      files: state.files.filter((f) => !under(f)) };
+            return { ok: true, status: 200, body: { ok: true, name } };
+        }
         if (route.startsWith("/symbiotica/prompts-mkdir")) {
             const { name } = JSON.parse(init.body);
             add("folders", name);
@@ -56,10 +63,41 @@ function router(seen, tree = TREE) {
 
 const settle = async () => { for (let i = 0; i < 20; i++) await tick(); };
 const widget = (node, name) => node.widgets.find((w) => w.name === name);
-const values = (node, name) => widget(node, name).options.values();
 const posted = (seen, route) =>
     seen.filter((c) => c.route.startsWith(`/symbiotica/${route}`))
         .map((c) => JSON.parse(c.init.body));
+
+// --- reaching into the panel -------------------------------------------------
+// The panel is one DOM widget, so everything a click can land on is inside its
+// element. A row carries what it IS on `_sym`; every button carries a title.
+const panel = (node) => widget(node, "prompts_panel").element;
+function descendants(root, out = []) {
+    for (const child of root.children ?? []) {
+        out.push(child);
+        descendants(child, out);
+    }
+    return out;
+}
+const rows = (node) => descendants(panel(node)).filter((e) => e._sym);
+// Top to bottom, which is the tree's own order: folders before files, each
+// open folder's contents under it.
+const tree = (node) => rows(node).map((r) => r._sym.rel);
+const rowFor = (node, rel) => rows(node).find((r) => r._sym.rel === rel);
+const button = (node, title) =>
+    descendants(panel(node)).find((e) => e.title === title);
+const editor = (node) => descendants(panel(node)).find((e) => e.placeholder);
+const rowAction = (node, rel, title) =>
+    descendants(rowFor(node, rel)).find((e) => e.title === title);
+const click = async (element) => {
+    fire(element, "click", { stopPropagation() {} });
+    await settle();
+};
+const type = async (node, body) => {
+    const area = editor(node);
+    area.value = body;
+    fire(area, "input", {});
+    await settle();
+};
 
 async function promptsNode(seen, widgets = {}, tree = TREE) {
     reset();
@@ -84,173 +122,303 @@ function answer({ text = null, confirm = true } = {}) {
     };
 }
 
-async function pick(node, name, value) {
-    const w = widget(node, name);
-    w.value = value;
-    await w.callback.call(w, value);
-    await settle();
-}
-
-test("each button sits under the field it acts on, the text last", async () => {
+test("the node is a path, a tree and an editor — nothing else on screen", async () => {
+    // "this is pretty idiotic to have hege buttons the intire width of the
+    // node": every action is an icon in one of the two headers now.
     const node = await promptsNode([]);
     assert.deepEqual(node.widgets.map((w) => w.name),
-                     ["path",
-                      "folder", "new folder", "rename folder",
-                      "file", "new file", "rename file", "save file",
-                      "text"]);
-    assert.equal(widget(node, "folder").type, "combo");
-    assert.equal(widget(node, "file").type, "combo");
+                     ["path", "folder", "file", "text", "prompts_panel"]);
+    // The three the tree and the editor drive stay on the node — Python reads
+    // them and a saved workflow restores them — but they take no room.
+    assert.equal(widget(node, "path").hidden, undefined);
+    for (const name of ["folder", "file", "text"]) {
+        assert.equal(widget(node, name).hidden, true, `${name} is still drawn`);
+    }
+    for (const title of ["New file", "New folder", "Re-read the folder"]) {
+        assert.ok(button(node, title), `no ${title} button`);
+    }
 });
 
-test("the folder dropdown is the path's sub-folders, read from disk", async () => {
-    // "me having to guess-type folder names": the list is what is there.
+test("the panel does not pin the node's height", async () => {
+    // A `computeSize` on a DOM widget becomes a floor the corner cannot drag
+    // past. This one has cost days, twice.
+    const node = await promptsNode([]);
+    const w = widget(node, "prompts_panel");
+    assert.equal(w.computeSize, undefined);
+    assert.equal(w.options.getMinHeight(), 60);
+});
+
+test("the tree is the folder on disk: sub-folders first, then files", async () => {
+    // "me having to guess-type folder names" — the tree is what is there.
     const seen = [];
     const node = await promptsNode(seen);
     const listed = seen.find((c) => c.route.startsWith("/symbiotica/prompts-list"));
     assert.match(listed.route, /folder=%2Fp%2Fbakery%2Fprompts/);
-    assert.deepEqual(values(node, "folder"),
-                     ["/", "_image", "_rules", "_rules/old"]);
+    // `_rules` is open because the file on screen is in it.
+    assert.deepEqual(tree(node),
+                     ["_image", "_rules", "_rules/old",
+                      "_rules/01-refs.md", "_rules/03-light.md", "Chair.md"]);
+    assert.equal(widget(node, "text").value, "TEXT OF _rules/01-refs.md");
+    assert.equal(editor(node).value, "TEXT OF _rules/01-refs.md");
 });
 
-test("the file dropdown is the files in the picked folder only", async () => {
+test("clicking a folder opens it, clicking it again closes it", async () => {
     const node = await promptsNode([]);
-    assert.deepEqual(values(node, "file"), ["01-refs.md", "03-light.md"]);
+    await click(rowFor(node, "_image"));
+    assert.deepEqual(tree(node),
+                     ["_image", "_image/01-model.md", "_rules", "_rules/old",
+                      "_rules/01-refs.md", "_rules/03-light.md", "Chair.md"]);
+    await click(rowFor(node, "_image"));
+    assert.ok(!tree(node).includes("_image/01-model.md"));
+    // Opening a folder does not move the file being edited.
     assert.equal(widget(node, "text").value, "TEXT OF _rules/01-refs.md");
 });
 
-test("the root is a folder too", async () => {
-    const node = await promptsNode([], { folder: "/", file: "Chair.md" });
-    assert.deepEqual(values(node, "file"), ["Chair.md"]);
-    assert.equal(widget(node, "text").value, "TEXT OF Chair.md");
+test("clicking a file opens it in the editor", async () => {
+    const node = await promptsNode([]);
+    await click(rowFor(node, "_rules/03-light.md"));
+    assert.equal(widget(node, "text").value, "TEXT OF _rules/03-light.md");
+    assert.equal(editor(node).value, "TEXT OF _rules/03-light.md");
+    // What Python reads and what the workflow saves, both still set.
+    assert.equal(widget(node, "folder").value, "_rules");
+    assert.equal(widget(node, "file").value, "03-light.md");
 });
 
-test("picking a folder shows its first file", async () => {
+test("a file in a closed folder is one click away", async () => {
     const node = await promptsNode([]);
-    await pick(node, "folder", "_image");
-    assert.equal(widget(node, "file").value, "01-model.md");
-    assert.equal(widget(node, "text").value, "TEXT OF _image/01-model.md");
-    await pick(node, "folder", "_rules/old");
-    assert.deepEqual(values(node, "file"), ["00-v1.md"]);
+    await click(rowFor(node, "_rules/old"));
+    await click(rowFor(node, "_rules/old/00-v1.md"));
+    assert.equal(widget(node, "folder").value, "_rules/old");
+    assert.equal(widget(node, "file").value, "00-v1.md");
     assert.equal(widget(node, "text").value, "TEXT OF _rules/old/00-v1.md");
 });
 
-test("an empty folder says so", async () => {
-    const node = await promptsNode([], { folder: "_flip", file: "" },
-                                   { folders: ["_flip"], files: [] });
-    assert.deepEqual(values(node, "file"), ["[no files in folder]"]);
+test("the root's own files sit at the top level", async () => {
+    const node = await promptsNode([], { folder: "/", file: "Chair.md" });
+    assert.equal(widget(node, "text").value, "TEXT OF Chair.md");
+    assert.ok(tree(node).includes("Chair.md"));
 });
 
-test("with no path both dropdowns say so and nothing is fetched", async () => {
+test("with no path the tree says so and nothing is fetched", async () => {
     const seen = [];
     const node = await promptsNode(seen, { path: "", folder: "", file: "" });
     assert.equal(seen.length, 0);
-    assert.deepEqual(values(node, "folder"), ["[set path]"]);
-    assert.deepEqual(values(node, "file"), ["[set path]"]);
+    assert.deepEqual(rows(node), []);
+    assert.match(descendants(panel(node)).map((e) => e.textContent).join(" "),
+                 /Set the path/);
 });
 
-test("a picked folder and file gone from disk stay offered", async () => {
-    // Dropping to the root would silently re-point the node.
+test("a picked file gone from disk keeps its name and empties the editor", async () => {
+    // Loading another file would silently re-point the node.
     const node = await promptsNode([], { folder: "_gone", file: "x.md" });
-    assert.equal(widget(node, "folder").value, "_gone");
-    assert.ok(values(node, "folder").includes("_gone"));
-    assert.deepEqual(values(node, "file"), ["x.md"]);
+    assert.equal(widget(node, "file").value, "x.md");
     assert.equal(widget(node, "text").value, "");
-});
-
-test("picking another file loads it", async () => {
-    const node = await promptsNode([]);
-    await pick(node, "file", "03-light.md");
-    assert.equal(widget(node, "text").value, "TEXT OF _rules/03-light.md");
 });
 
 test("an unsaved edit is not thrown away without asking", async () => {
     const node = await promptsNode([]);
     answer({ confirm: false });
-    widget(node, "text").value = "MY EDIT";
-    await pick(node, "file", "03-light.md");
+    await type(node, "MY EDIT");
+    await click(rowFor(node, "_rules/03-light.md"));
     assert.equal(widget(node, "text").value, "MY EDIT");
     assert.equal(widget(node, "file").value, "01-refs.md");
-    await pick(node, "folder", "_image");
-    assert.equal(widget(node, "text").value, "MY EDIT");
-    assert.equal(widget(node, "folder").value, "_rules");
 });
 
-test("save file posts the text to the folder and file on screen", async () => {
+test("save posts the text to the file on screen", async () => {
     const seen = [];
     const node = await promptsNode(seen);
     answer();
-    widget(node, "text").value = "NEW TEXT";
-    await widget(node, "save file").callback();
-    await settle();
+    await type(node, "NEW TEXT");
+    await click(button(node, "Save this file (⌘S)"));
     assert.deepEqual(posted(seen, "prompts-write"),
                      [{ folder: "/p/bakery/prompts", name: "_rules/01-refs.md",
                         text: "NEW TEXT" }]);
 });
 
-test("new file is created in the picked folder and selected", async () => {
+test("⌘S in the editor saves, without reaching the canvas", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    answer();
+    await type(node, "SAVED BY KEY");
+    let reachedCanvas = true;
+    fire(editor(node), "keydown", {
+        key: "s", metaKey: true,
+        stopPropagation() { reachedCanvas = false; },
+        preventDefault() {},
+    });
+    await settle();
+    assert.equal(reachedCanvas, false);
+    assert.deepEqual(posted(seen, "prompts-write"),
+                     [{ folder: "/p/bakery/prompts", name: "_rules/01-refs.md",
+                        text: "SAVED BY KEY" }]);
+});
+
+test("new file lands in the folder last clicked, and opens", async () => {
     const seen = [];
     const node = await promptsNode(seen);
     answer({ text: "09-new" });
-    await widget(node, "new file").callback();
-    await settle();
+    await click(rowFor(node, "_image"));
+    await click(button(node, "New file"));
+    assert.deepEqual(posted(seen, "prompts-write"),
+                     [{ folder: "/p/bakery/prompts", name: "_image/09-new.md",
+                        text: "" }]);
+    assert.equal(widget(node, "folder").value, "_image");
+    assert.equal(widget(node, "file").value, "09-new.md");
+    assert.ok(tree(node).includes("_image/09-new.md"));
+});
+
+test("with no folder clicked, a new file joins the one being edited", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    answer({ text: "09-new" });
+    await click(button(node, "New file"));
     assert.deepEqual(posted(seen, "prompts-write"),
                      [{ folder: "/p/bakery/prompts", name: "_rules/09-new.md",
                         text: "" }]);
-    assert.equal(widget(node, "file").value, "09-new.md");
-    assert.ok(values(node, "file").includes("09-new.md"));
 });
 
-test("new folder is created inside the picked folder and picked", async () => {
+test("new folder lands inside the folder last clicked and opens it", async () => {
     const seen = [];
     const node = await promptsNode(seen);
     answer({ text: "drafts" });
-    await widget(node, "new folder").callback();
-    await settle();
+    await click(button(node, "New folder"));
     assert.deepEqual(posted(seen, "prompts-mkdir"),
                      [{ folder: "/p/bakery/prompts", name: "_rules/drafts" }]);
-    assert.equal(widget(node, "folder").value, "_rules/drafts");
-    assert.ok(values(node, "folder").includes("_rules/drafts"));
-    assert.deepEqual(values(node, "file"), ["[no files in folder]"]);
+    assert.ok(tree(node).includes("_rules/drafts"));
+    // Making somewhere to put the next file does not close the one open.
+    assert.equal(widget(node, "file").value, "01-refs.md");
+    assert.equal(widget(node, "text").value, "TEXT OF _rules/01-refs.md");
 });
 
-test("rename file renames the picked file in its folder and keeps it picked", async () => {
+test("rename on a file row renames it and keeps it open", async () => {
     const seen = [];
     const node = await promptsNode(seen);
     answer({ text: "01-references" });
-    await widget(node, "rename file").callback();
-    await settle();
+    await click(descendants(rowFor(node, "_rules/01-refs.md"))
+                    .find((e) => e.title === "Rename"));
     assert.deepEqual(posted(seen, "prompts-rename"),
                      [{ folder: "/p/bakery/prompts", from: "_rules/01-refs.md",
                         to: "_rules/01-references.md" }]);
     assert.equal(widget(node, "file").value, "01-references.md");
-    assert.deepEqual(values(node, "file"), ["01-references.md", "03-light.md"]);
+    assert.ok(tree(node).includes("_rules/01-references.md"));
 });
 
-test("rename folder renames the picked folder and everything under it", async () => {
+test("rename on a folder row moves everything under it", async () => {
     const seen = [];
     const node = await promptsNode(seen);
     answer({ text: "rules" });
-    await widget(node, "rename folder").callback();
-    await settle();
+    await click(descendants(rowFor(node, "_rules"))
+                    .find((e) => e.title === "Rename"));
     assert.deepEqual(posted(seen, "prompts-rename"),
                      [{ folder: "/p/bakery/prompts", from: "_rules", to: "rules" }]);
-    assert.equal(widget(node, "folder").value, "rules");
-    assert.deepEqual(values(node, "folder"),
-                     ["/", "_image", "rules", "rules/old"]);
-    assert.deepEqual(values(node, "file"), ["01-refs.md", "03-light.md"]);
+    assert.deepEqual(tree(node),
+                     ["_image", "rules", "rules/old",
+                      "rules/01-refs.md", "rules/03-light.md", "Chair.md"]);
     // The same file, under its new name — the rename does not empty the editor.
+    assert.equal(widget(node, "folder").value, "rules");
     assert.equal(widget(node, "text").value, "TEXT OF rules/01-refs.md");
 });
 
-test("the path itself cannot be renamed, and a same name is a no-op", async () => {
+test("delete asks first, and a no leaves the file where it was", async () => {
     const seen = [];
-    const node = await promptsNode(seen, { folder: "/", file: "Chair.md" });
-    answer({ text: "x" });
-    await widget(node, "rename folder").callback();
-    answer({ text: "Chair" });
-    await widget(node, "rename file").callback();
-    await settle();
+    const node = await promptsNode(seen);
+    answer({ confirm: false });
+    await click(rowAction(node, "_rules/03-light.md", "Delete"));
+    assert.deepEqual(posted(seen, "prompts-delete"), []);
+    assert.ok(tree(node).includes("_rules/03-light.md"));
+});
+
+test("deleting a file takes it out of the tree", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    answer();
+    await click(rowAction(node, "_rules/03-light.md", "Delete"));
+    assert.deepEqual(posted(seen, "prompts-delete"),
+                     [{ folder: "/p/bakery/prompts", name: "_rules/03-light.md" }]);
+    assert.ok(!tree(node).includes("_rules/03-light.md"));
+    // The file being edited was not the one deleted, so it stays open.
+    assert.equal(widget(node, "file").value, "01-refs.md");
+    assert.equal(widget(node, "text").value, "TEXT OF _rules/01-refs.md");
+});
+
+test("deleting the open file moves the editor on to what is left", async () => {
+    const node = await promptsNode([]);
+    answer();
+    await click(rowAction(node, "_rules/01-refs.md", "Delete"));
+    assert.ok(!tree(node).includes("_rules/01-refs.md"));
+    assert.equal(widget(node, "file").value, "03-light.md");
+    assert.equal(widget(node, "text").value, "TEXT OF _rules/03-light.md");
+});
+
+test("deleting a folder takes everything under it", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    answer();
+    await click(rowAction(node, "_rules", "Delete"));
+    assert.deepEqual(posted(seen, "prompts-delete"),
+                     [{ folder: "/p/bakery/prompts", name: "_rules" }]);
+    assert.deepEqual(tree(node), ["_image", "Chair.md"]);
+    // What the editor was showing went with it; nothing under a dead folder
+    // stays named on the node.
+    assert.equal(widget(node, "file").value, "Chair.md");
+});
+
+test("the folder's confirmation says how many prompts go with it", async () => {
+    // A folder row says nothing about what is folded up inside it.
+    const node = await promptsNode([]);
+    const asked = [];
+    app.extensionManager = {
+        dialog: { confirm: async ({ message }) => { asked.push(message); return false; },
+                  prompt: async () => null },
+        toast: { add() {} },
+    };
+    await click(rowAction(node, "_rules", "Delete"));
+    assert.match(asked[0], /folder _rules and the 3 prompts in it/);
+    assert.match(asked[0], /cannot be undone/);
+});
+
+test("a same name is a no-op", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    answer({ text: "01-refs" });
+    await click(descendants(rowFor(node, "_rules/01-refs.md"))
+                    .find((e) => e.title === "Rename"));
+    answer({ text: "_rules" });
+    await click(descendants(rowFor(node, "_rules"))
+                    .find((e) => e.title === "Rename"));
     assert.deepEqual(posted(seen, "prompts-rename"), []);
+});
+
+test("the tree folds away to a rail that can reopen it", async () => {
+    const node = await promptsNode([]);
+    const side = () => descendants(panel(node)).find((e) => e === panel(node).children[0]);
+    await click(button(node, "Hide the tree"));
+    assert.equal(node.properties.symbiotica_prompts_shut, true);
+    assert.equal(side().style.width, "22px");
+    // The rows go, the one button that brings them back does not.
+    assert.deepEqual(rows(node).length, 0);
+    const back = button(node, "Show the tree");
+    assert.ok(back, "no way back once it is shut");
+    await click(back);
+    assert.equal(node.properties.symbiotica_prompts_shut, false);
+    assert.equal(side().style.width, "210px");
+    assert.ok(rows(node).length > 0);
+});
+
+test("the divider sets the sidebar's width, and it rides on the node", async () => {
+    const node = await promptsNode([]);
+    const grip = button(node, "Drag to resize");
+    fire(grip, "pointerdown",
+         { clientX: 200, stopPropagation() {}, preventDefault() {} });
+    fire(globalThis.window, "pointermove", { clientX: 260 });
+    fire(globalThis.window, "pointerup", {});
+    assert.equal(node.properties.symbiotica_prompts_sidebar, 270);
+    // A second drag starts from where the first left off, not from the default.
+    fire(grip, "pointerdown",
+         { clientX: 0, stopPropagation() {}, preventDefault() {} });
+    fire(globalThis.window, "pointermove", { clientX: -60 });
+    fire(globalThis.window, "pointerup", {});
+    assert.equal(node.properties.symbiotica_prompts_sidebar, 210);
 });
 
 test("retyping the path re-lists it", async () => {
@@ -282,6 +450,7 @@ test("a restored edit that never reached disk is kept", async () => {
     await node.onConfigure?.call(node, {});
     await settle();
     assert.equal(widget(node, "text").value, "EDITED, UNSAVED");
+    assert.equal(editor(node).value, "EDITED, UNSAVED");
 });
 
 test("a String node wired into path names the path", async () => {
@@ -311,14 +480,16 @@ test("a run hands back a path the canvas cannot read, and the tree fills in", as
     const node = await create("SymbioticaPromptBlock",
                               { path: "", folder: "/", file: "Chair.md", text: "" });
     node.inputs = [];
-    // A Get node: its only widget holds the NAME of the constant, so the
-    // static walk reads "platform_path" as if it were a folder.
+    // A Get node with no Set of that name on the canvas: there is nothing for
+    // the walk to follow, and the constant's NAME is never the answer.
     const getter = await create("GetNode", { Constant: "platform_path" });
+    getter.type = "GetNode";
     getter.outputs = [{ name: "STRING", links: [] }];
     link(getter, node, "path");
     app.graph._nodes = [getter, node];
     await node.onNodeCreated?.call(node);
     await settle();
+    assert.deepEqual(rows(node), []);
 
     emit("symbiotica.prompts",
          { node_id: node.id, path: "/studio-assets/_platform/resources" });
@@ -327,8 +498,7 @@ test("a run hands back a path the canvas cannot read, and the tree fills in", as
     const listed = seen.filter((c) => c.route.includes("prompts-list")).pop();
     assert.match(listed.route,
                  /folder=%2Fstudio-assets%2F_platform%2Fresources/);
-    assert.deepEqual(values(node, "folder"),
-                     ["/", "_image", "_rules", "_rules/old"]);
+    assert.deepEqual(tree(node), ["_image", "_rules", "Chair.md"]);
 });
 
 test("the run path is saved with the workflow, so a reload still knows it", async () => {
