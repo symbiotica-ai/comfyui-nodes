@@ -32,6 +32,47 @@ instead of at first queue — the GPU is paid for whether it renders or not, so
 warm it while the user is still picking assets and writing prompts. First
 generation should not carry the cold-load penalty.
 
+## Pack and distribution — open threads (no issue filed yet)
+
+Left open on 2026-09-19. One line each, the decision still open.
+
+- Every release since `2026.8.30` (19 Aug) is `NodeVersionStatusFlagged` on the
+  Comfy registry — 21 of them, `2026.9.1` through `2026.9.21`. The node and the
+  publisher are Active; `api.comfy.org/nodes/symbiotica/versions` gives no
+  reason. So the registry's latest installable version is three weeks behind
+  the tree, and nothing published since August can be installed by anyone.
+  Unchased: what changed at `2026.9.1`, and what the publisher dashboard says.
+- ComfyUI Manager on Modal shows the pack as **Install**, never "Try update":
+  it is volume-mounted at `custom_nodes/symbiotica`, and `push.sh` uploads no
+  git remote and no Manager tracking record, so Manager has nothing to manage.
+  Pressing Install there would drop `2026.8.30` beside the mounted copy — two
+  copies of every `web/js` file, the failure `web/js/register.js` exists for.
+  Open: live with the Volume lane, or move Modal to a registry install and drop
+  `push.sh`.
+- Ten display names are still off the `Node Name (Symbiotica)` pattern:
+  `Symbiotica Asset Focus`, `Symbiotica Asset Recipe`, `Symbiotica Order
+  Tracker`, `Symbiotica Studio Library`, `Control Image`, `Module`, `Recipes`,
+  `Split Prompts`, `Load Text File`, `Load Text List`. Offered and not taken;
+  a node already on a canvas keeps the title it was saved with either way.
+- `chore/internal-pack-cleanup` holds four commits that are not on main — the
+  category-tree lock, the 82-node cull, the module-merge docs. Left alone when
+  the branches were collapsed to `main` on 2026-09-19; merge or delete.
+
+## The two file browsers — open threads (no issue filed yet)
+
+- Prompts and Control Image were driven on the LOCAL install, on frontend
+  1.48.7 as well as 1.52.7, against real files. Neither has been watched on the
+  Modal canvas since the restart that picked them up.
+- The Control Image upload route takes whatever the browser hands it — no size
+  cap, and the whole part is read into memory before it is written. Fine for a
+  mask, never tried with a folder of 4K plates.
+- The thumbnail cost was measured server-side only (6 ms, 4 KB per row at
+  px=36, `Cache-Control` 600 s). Nobody has measured the canvas frame rate
+  while panning a graph with an expanded tree on screen.
+- `pick-thumb` is asked for `THUMB_PX * 2`; on a 3x display the rows are
+  softer than they could be. Untouched deliberately — one more request size to
+  cache per image.
+
 ## Recipes and Asset Focus — open threads (no issue filed yet)
 
 Left open on 2026-09-11 after the recipes build; one line each, the decision

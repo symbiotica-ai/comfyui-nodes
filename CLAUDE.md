@@ -104,7 +104,7 @@ node will not shrink below its content; answer it with "the space below me"
 and the node can never shrink at all. Both shipped here, and both cost days.
 
 The shape that works, in every panel in this pack (`asset_focus.js`,
-`recipes.js`, `order_source.js`):
+`recipes.js`, `order_source.js`, and the two file browsers below):
 
 - no `computeSize` on the DOM widget
 - `getMinHeight: () => <small constant>` — never reads `node.size`,
@@ -116,6 +116,42 @@ The shape that works, in every panel in this pack (`asset_focus.js`,
 Full mechanism, the layout functions and a checklist:
 `.claude/skills/comfyui-node-frontend/api-reference.md` → "Sizing a DOM widget,
 and keeping the node RESIZABLE".
+
+## The two file browsers — Prompts and Control Image
+
+Both nodes are one DOM-widget panel: a tree of the folder on the left, a pane
+on the right, the actions as icons. **The chrome is shared and lives in
+`web/js/browser_chrome.js`** — `sidebarShell` (the two panes, the draggable
+divider, the fold-to-a-rail toggle), `treeRow`, `walkTree`, `iconButton` and
+the drawn `ICON` set. Change it there and both nodes follow; a second copy in
+one node is how they drift. The width and the fold ride on `node.properties`,
+never on widgets, which would shift the saved values of every workflow already
+holding the node.
+
+- The widgets the tree drives stay on the node and are `hideWidget`-ed:
+  `folder`, `file` and `text` on Prompts, `image` on Control Image. They are
+  what Python reads and what a saved workflow restores — removing one shifts
+  every value after it. Prompts' `text` is a DOM widget, so its element is
+  hidden too (`hideTextWidget`).
+- Prompts edits in its own `<textarea>`; ⌘S saves. Control Image draws a
+  thumbnail per row from `pick-thumb` (6 ms and 4 KB each, `Cache-Control`
+  600 s, `loading="lazy"`, and rows exist only for folders you expanded) and
+  the pick full size from `local-image`.
+- A name is drawn with `font-feature-settings:'calt' 0` — Inter renders `1x1`
+  as `1×1`, which is not what the folder is called.
+- Files dragged from the desktop onto the tree upload into the folder they
+  land on. Nothing is overwritten: a name already taken becomes `-2`.
+
+**The path the node is given IS the folder it browses.** `control-images` and
+its mkdir/rename/delete/upload routes used to refuse a folder outside
+`declared_roots`, so a project folder had to be declared in Settings first —
+"the node should browse the files from the path i input regardless of whether i
+am on modal, local, etc" (2026-09-19). The routes now register whatever they
+are handed, which is exactly what queueing the node already did. What decides
+what a request can touch is CONTAINMENT: `inside_library` resolves every name
+against the folder it named and refuses anything that climbs out, and
+`tests/test_routes_control_images.py` is where that is held. The Prompts
+routes never had the allowlist. Do not put it back.
 
 ## A value that arrives on a wire
 
@@ -218,6 +254,12 @@ slot the table did not know about.
   `web/js/recipes.js` and `py/_recipes.py`) — change both in one commit.
 - Versioning is calendar-based (`2026.M.N` in `pyproject.toml`); bump happens
   at release time, not per PR.
+- **Every node declares `Symbiotica` as its category — one folder, no
+  sub-folders.** The menu is case-sensitive, so `Symbiotica/Images` beside
+  `symbiotica/pipeline` drew two, and a node adopted from another pack drew a
+  third. A remote RNP node takes it from `rnp_protocol.CATEGORY` rather than
+  the descriptor's. `test_every_node_is_in_the_one_folder` holds it. Display
+  names are moving to `Node Name (Symbiotica)`; ten are still on older shapes.
 - Deploys: the pack is registry-managed on desktop installs and volume-mounted
   on Modal at `symbiotica-comfy-custom-nodes:symbiotica/`. `./push.sh` uploads
   `py/` and `web/` there and removes remote files the tree no longer has; the
