@@ -181,7 +181,13 @@ KJNodes pairs, and it is in 1.48.7 as well as 1.52.7.
 - Every hub ends in exactly one empty `+` slot, re-asserted on draw because the
   frontend's own "Remove Slot" fires no event the node can hear.
 - **The Set side and the Get side are in sync at all times.** Every way the Set
-  side can change carries: a slot renamed renames it on every Get, a name added
+  side can change carries: **retitling the node FEEDING a slot renames the slot**
+  (the slot was named after it, and a slot's `name` holding what the wire called
+  it while `label` holds what it is called is the record that he took the name
+  over by hand — those two are among the eleven fields a slot saves, where
+  anything else hung on the slot is dropped on the next reopen; a slot carrying
+  the `_2` a clash gave it is already following, and is left alone), a slot
+  renamed renames it on every Get, a name added
   to a group arrives on every Get following it, a Set Hub RETITLED carries its
   followers (the group is remembered by the Set Hub's ID as well as its title,
   and the title is healed on the way past), a name that leaves the canvas takes

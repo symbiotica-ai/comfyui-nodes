@@ -540,6 +540,8 @@ function adoptInput(node, index, linkInfo) {
             publishedNames(graphScope(node.graph, app.graph)).map((e) => e.name));
         const from = node.graph?.getNodeById?.(linkInfo?.origin_id);
         const name = uniqueName(taken, nameFromWire(origin, type, from));
+        // Both halves: a slot whose `name` and `label` agree is one the WIRE
+        // named, and it goes on following the node feeding it.
         slot.name = name;
         slot.label = name;
     }
@@ -767,7 +769,7 @@ export function addNameRow(node, index) {
 // A name typed into one of those fields. Same rules as the menu's rename: a
 // clash is resolved rather than allowed, and every Get pulling the old name
 // follows it over.
-function renameTo(node, index, value) {
+function renameTo(node, index, value, fromWire = false) {
     const slot = namedSlots(node)[index];
     if (!slot) return;
     const was = slotName(slot);
@@ -779,10 +781,39 @@ function renameTo(node, index, value) {
     const taken = new Set(publishedNames(graphScope(node.graph, app.graph))
         .map((e) => e.name).filter((n) => n !== was));
     const name = uniqueName(taken, wanted);
-    slot.name = name;
     slot.label = name;
+    // `name` keeps what the WIRE called the slot and `label` what it is called.
+    // The two of them differing is the whole record that he took the name over
+    // by hand -- and they are two of the eleven fields a slot saves, where
+    // anything else hung on the slot would be dropped on the next reopen.
+    if (fromWire) slot.name = name;
     repointGetters(was, name);
     node.setDirtyCanvas?.(true, true);
+}
+
+// A slot named after the node feeding it follows that node's name. He names
+// the source -- `cats`, `water` -- and the slot IS that name, so retitling the
+// source and leaving the slot behind would have the canvas saying two
+// different things about one value. A slot he renamed himself is his and is
+// left alone, and the Gets follow either way.
+export function followWireNames(node) {
+    for (const slot of [...(node.inputs ?? [])]) {
+        const was = slotName(slot);
+        if (slot.link == null || !was || was === GROW) continue;
+        if (slot.name !== slot.label) continue;
+        const link = getLink(node.graph, slot.link);
+        if (!link) continue;
+        const origin = originSlot(node.graph, link);
+        const from = node.graph?.getNodeById?.(link.origin_id);
+        const wanted = nameFromWire(origin,
+            String(origin?.type ?? slot.type ?? ANY), from);
+        // Only a real change of the source's name moves the slot. A slot
+        // carrying the suffix a clash gave it -- STRING_3 off a wire that says
+        // STRING -- is already following: recomputing it every draw would
+        // shuffle names around the node as other names come and go.
+        if (!wanted || was === wanted || was.replace(/_\d+$/, "") === wanted) continue;
+        renameTo(node, namedSlots(node).indexOf(slot), wanted, true);
+    }
 }
 
 // Renaming a constant on the Set side has to carry every Get that pulls it, or
@@ -829,8 +860,10 @@ function renameSlot(node, kind, index) {
         const taken = new Set(publishedNames(graphScope(node.graph, app.graph))
             .map((e) => e.name).filter((n) => n !== was));
         const name = uniqueName(taken, wanted);
-        slot.name = name;
         slot.label = name;
+        // An input's `name` is left holding what the wire called it: a name he
+        // typed is his, and stops following the node feeding the slot.
+        if (kind !== "in") slot.name = name;
         if (kind === "in") repointGetters(was, name);
         node.setDirtyCanvas?.(true, true);
     });
@@ -900,6 +933,7 @@ function assertTailOnDraw(node, kind) {
         if (!app.configuringGraph) {
             ensureTail(this, kind);
             if (kind === "in") {
+                followWireNames(this);
                 syncNameWidgets(this);
             } else {
                 syncGroup(this);

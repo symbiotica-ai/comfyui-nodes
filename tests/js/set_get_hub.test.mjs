@@ -126,6 +126,46 @@ test("the hub always ends in exactly one empty slot", () => {
     assert.equal(node.inputs.length, 2);
 });
 
+test("a slot named by the wire follows the node feeding it", async () => {
+    const { followWireNames } = await import("../../web/js/find_node.js");
+    const source = { id: 2, title: "water", outputs: [{ name: "STRING", type: "STRING" }] };
+    const graph = {
+        links: { 5: { id: 5, origin_id: 2, origin_slot: 0 } },
+        getNodeById: (id) => (id === 2 ? source : null),
+        nodes: [],
+    };
+    // `name` and `label` agreeing is what says the WIRE named this slot.
+    const auto = { name: "water", label: "water", type: "STRING", link: 5 };
+    // A name he typed: `name` still holds what the wire called it.
+    const mine = { name: "water", label: "asset_name", type: "STRING", link: 5 };
+    const node = slotHolder([auto, mine, { name: "+", type: "*", link: null }]);
+    node.graph = graph;
+    graph.nodes.push(node);
+
+    source.title = "earth";
+    followWireNames(node);
+    assert.equal(auto.label, "earth");
+    assert.equal(auto.name, "earth");   // still the wire's, so it keeps following
+    // His name is his: retitling the source does not take it away.
+    assert.equal(mine.label, "asset_name");
+
+    // The suffix a clash gave a slot is not a difference: STRING_3 off a wire
+    // that says STRING is already following it, and recomputing that every
+    // draw would shuffle names around the node as other names come and go.
+    const clashed = { name: "earth_3", label: "earth_3", type: "STRING", link: 5 };
+    node.inputs.unshift(clashed);
+    followWireNames(node);
+    assert.equal(clashed.label, "earth_3");
+    node.inputs.shift();
+
+    // An output that says what it carries names the slot, and a retitle of the
+    // node behind it changes nothing -- there is nothing better to be called.
+    source.outputs[0].name = "asset_name";
+    source.title = "somewhere else";
+    followWireNames(node);
+    assert.equal(auto.label, "asset_name");
+});
+
 test("a wire taken off a slot takes the slot with it", async () => {
     const { dropWhenUnwired } = await import("../../web/js/find_node.js");
     const node = slotHolder([
