@@ -290,6 +290,9 @@ const NONE = "(nothing published on this canvas)";
 // rides on `properties`, which serialises with the workflow and survives the
 // node being retitled by hand.
 const GROUP_PROP = "symbiotica_group";
+// The Set Hub the group came from. A title is what you read, but it is also
+// what he retitles: the id is what carries a following Get across a rename.
+const GROUP_ID_PROP = "symbiotica_group_id";
 // How a group reads in the picker, beside the plain names.
 const groupLabel = (group) => `${group.title}  ·  ${group.names.length} `
     + `name${group.names.length === 1 ? "" : "s"}`;
@@ -406,11 +409,28 @@ export function publishedGroups(graphs) {
 
 // The group a Get Hub is following, and what it holds now. Null when the node
 // follows none, or when the Set Hub it named is gone -- the slots it already
-// has stay either way; `markDeadNames` is what says the names behind them went.
+// has stay either way; `dropDeadNames` is what takes the ones behind them.
+//
+// The Set Hub's ID answers before its title, so retitling a group carries
+// every Get following it -- the same rule as renaming a slot. The title is
+// healed on the way past, here and on the node, so the canvas never reads one
+// name while the node holds another.
 export function groupOf(node, graphs) {
-    const title = String(node?.properties?.[GROUP_PROP] ?? "").trim();
-    if (!title) return null;
-    return publishedGroups(graphs).find((g) => g.title === title) ?? null;
+    const props = node?.properties ?? {};
+    const title = String(props[GROUP_PROP] ?? "").trim();
+    const id = props[GROUP_ID_PROP];
+    if (!title && id == null) return null;
+    const groups = publishedGroups(graphs);
+    const byId = id == null ? null
+        : groups.find((g) => String(g.node?.id) === String(id));
+    const group = byId ?? groups.find((g) => g.title === title) ?? null;
+    if (!group) return null;
+    if (group.title !== title) {
+        if (String(node.title ?? "").trim() === title) node.title = group.title;
+        props[GROUP_PROP] = group.title;
+    }
+    if (group.node?.id != null) props[GROUP_ID_PROP] = group.node.id;
+    return group;
 }
 
 // The slot a name is fed through: `{graph, node, index}`, on a hub or on a
@@ -644,6 +664,7 @@ export function loadGroup(node, group) {
     node.properties ??= {};
     const was = String(node.properties[GROUP_PROP] ?? "").trim();
     node.properties[GROUP_PROP] = group.title;
+    node.properties[GROUP_ID_PROP] = group.node?.id ?? null;
     for (let i = (node.outputs?.length ?? 0) - 1; i >= 0; i -= 1) {
         if (slotName(node.outputs[i]) === GROW) continue;
         node.disconnectOutput?.(i);
@@ -882,7 +903,7 @@ function assertTailOnDraw(node, kind) {
                 syncNameWidgets(this);
             } else {
                 syncGroup(this);
-                markDeadNames(this);
+                dropDeadNames(this);
             }
         }
         return onDrawForeground?.apply(this, arguments);
@@ -890,24 +911,38 @@ function assertTailOnDraw(node, kind) {
 }
 
 // A Get slot whose name nothing publishes any more -- the Set it read was
-// deleted, or renamed while this node was not looking. It resolves to nothing
-// and the run fails on a missing input, so the dot goes red rather than the
-// node looking fine until you queue it. The colour rides on the slot, never on
-// its label: the label IS the name.
-function markDeadNames(node) {
+// deleted, or the wire behind it was taken off. There is no value left for it
+// to carry, so the slot goes, and the wire off it with it: that wire resolved
+// to nothing already, and the run would have failed on a missing input.
+//
+// Two questions, and only one of them removes anything. A name nothing on the
+// CANVAS publishes is gone: drop it. A name published somewhere this node's
+// lookup cannot reach -- another subgraph -- still exists, so that slot is
+// marked red and left alone. Deleting a slot over a lookup's blind spot would
+// take his wiring with it.
+export function dropDeadNames(node) {
     const scope = graphScope(node.graph, app.graph);
-    for (const slot of node.outputs ?? []) {
+    const everywhere = everyGraph(app.graph);
+    for (let i = (node.outputs?.length ?? 0) - 1; i >= 0; i -= 1) {
+        const slot = node.outputs[i];
         const name = slotName(slot);
         if (!name || name === GROW) continue;
-        const dead = !findSource(scope, name);
-        if (dead) {
-            slot.color_on = DEAD;
-            slot.color_off = DEAD;
-        } else if (slot.color_on === DEAD) {
-            delete slot.color_on;
-            delete slot.color_off;
+        if (findSource(scope, name)) {
+            if (slot.color_on === DEAD) {
+                delete slot.color_on;
+                delete slot.color_off;
+            }
+            continue;
         }
+        if (!findSource(everywhere, name)) {
+            node.disconnectOutput?.(i);
+            node.removeOutput(i);
+            continue;
+        }
+        slot.color_on = DEAD;
+        slot.color_off = DEAD;
     }
+    ensureTail(node, "out");
 }
 
 registerSymbioticaExtension(app, {
@@ -1096,6 +1131,7 @@ registerSymbioticaExtension(app, {
                         content: `Stop following "${group}"`,
                         callback: () => {
                             delete this.properties[GROUP_PROP];
+                            delete this.properties[GROUP_ID_PROP];
                             toast("info", "Get Hub",
                                   `The slots stay; "${group}" no longer adds to them.`);
                             this.setDirtyCanvas(true, true);
@@ -1109,7 +1145,10 @@ registerSymbioticaExtension(app, {
                         // kept following would put every removed slot back on
                         // the next draw, and the menu row would read as broken.
                         const followed = group && this.properties[GROUP_PROP];
-                        if (followed) delete this.properties[GROUP_PROP];
+                        if (followed) {
+                            delete this.properties[GROUP_PROP];
+                            delete this.properties[GROUP_ID_PROP];
+                        }
                         const n = dropUnusedSlots(this, "out");
                         toast("info", "Get Hub",
                               (n ? `${n} slot${n === 1 ? "" : "s"} removed.`

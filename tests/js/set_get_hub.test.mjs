@@ -285,6 +285,39 @@ test("picking a second group replaces the first, it does not add to it",
                      ["incompetent", "claude", "+"]);
 });
 
+test("retitling a Set Hub carries every Get following it", async () => {
+    const { loadGroup, syncGroup, groupOf, publishedGroups } =
+        await import("../../web/js/find_node.js");
+    const hub = setHub([["model", "MODEL", 1]]);
+    hub.id = 7;
+    hub.title = "settings-01";
+    const graph = { nodes: [hub] };
+    const get = slotHolder([], []);
+    get.type = "SymbioticaGetHub";
+    get.graph = graph;
+    get.disconnectOutput = () => {};
+    graph.nodes.push(get);
+
+    loadGroup(get, publishedGroups([graph])[0]);
+    assert.equal(get.title, "settings-01");
+
+    // He retitles the group. The id is what carries the follower over, and the
+    // title is healed on the node and in what it remembers.
+    hub.title = "models";
+    const group = groupOf(get, [graph]);
+    assert.equal(group.title, "models");
+    assert.equal(get.title, "models");
+    assert.equal(get.properties.symbiotica_group, "models");
+    assert.equal(syncGroup(get), false);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name), ["model", "+"]);
+
+    // A title he typed himself is his, and a retitle of the group leaves it.
+    get.title = "mine";
+    hub.title = "checkpoints";
+    assert.equal(groupOf(get, [graph]).title, "checkpoints");
+    assert.equal(get.title, "mine");
+});
+
 test("a Get Hub follows no group until it is told to", async () => {
     const { groupOf, syncGroup } = await import("../../web/js/find_node.js");
     const get = slotHolder([], []);
@@ -296,6 +329,40 @@ test("a Get Hub follows no group until it is told to", async () => {
     get.outputs = [{ name: "project", label: "project", links: [] }];
     assert.equal(syncGroup(get), false);
     assert.deepEqual(get.outputs.map((s) => s.label), ["project"]);
+});
+
+test("a Get slot whose name is gone from the canvas goes with it", async () => {
+    const { dropDeadNames } = await import("../../web/js/find_node.js");
+    const { app } = await import("./comfy_stub.mjs");
+    const hub = setHub([["category", "STRING", 1]]);
+    app.graph._nodes = [hub];
+    const get = slotHolder([], [
+        { name: "category", label: "category", type: "STRING", links: [],
+          color_on: "#f2777a", color_off: "#f2777a" },
+        { name: "gone", label: "gone", type: "STRING", links: [7] },
+    ]);
+    get.graph = app.graph;
+    get.disconnectOutput = () => {};
+
+    dropDeadNames(get);
+    // The wire on "gone" is no argument for keeping it: it resolved to nothing
+    // already, and the run would have failed on a missing input.
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name), ["category", "+"]);
+    // A name that is published again loses the red it was given.
+    assert.equal(get.outputs[0].color_on, undefined);
+
+    // A name published where this node's lookup cannot reach -- another
+    // subgraph -- still exists. That slot is marked, never removed: deleting
+    // over a blind spot would take his wiring with it.
+    const inner = { nodes: [setHub([["elsewhere", "STRING", 2]])] };
+    app.graph._nodes = [hub, { type: "Subgraph", subgraph: inner }];
+    get.outputs.splice(1, 0,
+        { name: "elsewhere", label: "elsewhere", type: "STRING", links: [] });
+    dropDeadNames(get);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["category", "elsewhere", "+"]);
+    assert.equal(get.outputs[1].color_on, "#f2777a");
+    app.graph._nodes = [];
 });
 
 test("a name row reads its slot rather than holding a value", async () => {
