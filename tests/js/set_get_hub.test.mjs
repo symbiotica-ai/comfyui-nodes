@@ -169,6 +169,69 @@ test("a slot is named for what the wire carries, not for its type", async () => 
     assert.equal(nameFromWire({ name: "STRING" }, "STRING", null), "STRING");
 });
 
+test("a Set Hub is a group, named by its title", async () => {
+    const { publishedGroups } = await import("../../web/js/find_node.js");
+    const paths = setHub([["project", "STRING", 1], ["controlnet", "STRING", 2]]);
+    paths.title = "paths";
+    const models = setHub([["model", "MODEL", 3]]);
+    models.title = "models";
+    // A hub holding nothing yet is not a group: there is nothing to take.
+    const empty = { type: SET_HUB, title: "empty", inputs: [{ name: "+", type: "*" }] };
+    const groups = publishedGroups([{ nodes: [paths, models, empty] }]);
+    assert.deepEqual(groups.map((g) => g.title), ["paths", "models"]);
+    assert.deepEqual(groups[0].names.map((e) => `${e.name}:${e.type}`),
+                     ["project:STRING", "controlnet:STRING"]);
+    // An untitled hub still answers, under the name every one is born with.
+    delete paths.title;
+    assert.equal(publishedGroups([{ nodes: [paths] }])[0].title, "Set Hub");
+});
+
+test("a Get Hub following a group grows with it", async () => {
+    const { loadGroup, syncGroup, publishedGroups } =
+        await import("../../web/js/find_node.js");
+    const hub = setHub([["project", "STRING", 1], ["controlnet", "STRING", 2]]);
+    hub.title = "paths";
+    const graph = { nodes: [hub] };
+    const get = slotHolder([], []);
+    get.type = "SymbioticaGetHub";
+    get.graph = graph;
+    graph.nodes.push(get);
+
+    loadGroup(get, publishedGroups([graph])[0]);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["project", "controlnet", "+"]);
+    // The title says which group, while it is still the name it was born with.
+    assert.equal(get.title, "paths");
+    // A name added to the Set Hub arrives here, at the END: a wire holds on to
+    // a slot's index, so nothing already on the node may be pushed down.
+    hub.inputs.splice(2, 0, { name: "output", label: "output", type: "STRING", link: 3 });
+    assert.equal(syncGroup(get), true);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["project", "controlnet", "output", "+"]);
+    // Asserted on every draw, so it has to be a no-op once it holds.
+    assert.equal(syncGroup(get), false);
+    // A name that leaves the group leaves the Get -- unless a wire is on it,
+    // which is never taken away silently.
+    get.outputs[0].links = [9];
+    hub.inputs.splice(0, 2);
+    assert.equal(syncGroup(get), true);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["project", "output", "+"]);
+});
+
+test("a Get Hub follows no group until it is told to", async () => {
+    const { groupOf, syncGroup } = await import("../../web/js/find_node.js");
+    const get = slotHolder([], []);
+    get.graph = { nodes: [] };
+    assert.equal(groupOf(get, [get.graph]), null);
+    assert.equal(syncGroup(get), false);
+    // A group whose Set Hub is gone adds nothing and takes nothing away.
+    get.properties = { symbiotica_group: "paths" };
+    get.outputs = [{ name: "project", label: "project", links: [] }];
+    assert.equal(syncGroup(get), false);
+    assert.deepEqual(get.outputs.map((s) => s.label), ["project"]);
+});
+
 test("a name row reads its slot rather than holding a value", async () => {
     const { addNameRow, namedSlots } = await import("../../web/js/find_node.js");
     const node = widgetHolder([

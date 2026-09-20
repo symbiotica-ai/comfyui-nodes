@@ -283,8 +283,16 @@ const GROW = "+";
 const ANY = "*";
 // What the Get Hub's picker reads when nothing is picked, and what it goes
 // back to after a pick: the widget is a button for choosing, not a value.
-const PULL = "pull a value…";
+const PULL = "value or group…";
 const NONE = "(nothing published on this canvas)";
+// A Set Hub is a GROUP: its TITLE names the set of constants it holds, and a
+// Get Hub can take the whole set in one pick. The group a Get is following
+// rides on `properties`, which serialises with the workflow and survives the
+// node being retitled by hand.
+const GROUP_PROP = "symbiotica_group";
+// How a group reads in the picker, beside the plain names.
+const groupLabel = (group) => `${group.title}  ·  ${group.names.length} `
+    + `name${group.names.length === 1 ? "" : "s"}`;
 // The dot on a Get slot pointing at a name that is gone. This pack's danger
 // colour, from hub_theme.
 const DEAD = "#f2777a";
@@ -374,6 +382,35 @@ export function publishedNames(graphs) {
         }
     }
     return out;
+}
+
+// Every Set Hub on the canvas, as a group: the node's TITLE names it and its
+// named slots are what it holds, in slot order. A hub holding nothing yet is
+// not a group -- there would be nothing to load.
+export function publishedGroups(graphs) {
+    const out = [];
+    for (const graph of graphs) {
+        for (const node of nodesOf(graph)) {
+            if (String(node.type ?? "") !== SET_HUB) continue;
+            const names = (node.inputs ?? [])
+                .filter((slot) => slotName(slot) && slotName(slot) !== GROW)
+                .map((slot) => ({ name: slotName(slot),
+                                  type: String(slot.type ?? ANY) }));
+            if (!names.length) continue;
+            out.push({ title: String(node.title ?? "").trim() || "Set Hub",
+                       names, node, graph });
+        }
+    }
+    return out;
+}
+
+// The group a Get Hub is following, and what it holds now. Null when the node
+// follows none, or when the Set Hub it named is gone -- the slots it already
+// has stay either way; `markDeadNames` is what says the names behind them went.
+export function groupOf(node, graphs) {
+    const title = String(node?.properties?.[GROUP_PROP] ?? "").trim();
+    if (!title) return null;
+    return publishedGroups(graphs).find((g) => g.title === title) ?? null;
 }
 
 // The slot a name is fed through: `{graph, node, index}`, on a hub or on a
@@ -576,6 +613,54 @@ function addGetSlot(node, name) {
     assignGetSlot(node, node.outputs.length - 1, entry);
 }
 
+// A whole group, taken at once: every name on that Set Hub lands on this one,
+// and the node remembers which group it is following so that a name added to
+// the Set later arrives here too.
+export function loadGroup(node, group) {
+    if (!group) return;
+    node.properties ??= {};
+    node.properties[GROUP_PROP] = group.title;
+    // The title is the one place with room to say which group this is -- but
+    // only while it is still the name every Get Hub is born with.
+    const stock = ["", "Get Hub", TITLES[GET_HUB]];
+    if (stock.includes(String(node.title ?? "").trim())) node.title = group.title;
+    syncGroup(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
+// What following a group means, re-asserted on every draw: the Set Hub's names
+// are all here. Asserted rather than copied once, because a group whose new
+// third name never reaches the Gets is the stale copy this node exists to
+// replace.
+export function syncGroup(node) {
+    const scope = graphScope(node.graph, app.graph);
+    const group = groupOf(node, scope);
+    if (!group) return false;
+    const wanted = new Set(group.names.map((e) => e.name));
+    let changed = false;
+    // A name that has left the group and that nothing else publishes is
+    // litter. A slot with a WIRE on it is never taken away silently, whatever
+    // its name says -- it stays, and goes red.
+    for (let i = (node.outputs?.length ?? 0) - 1; i >= 0; i -= 1) {
+        const slot = node.outputs[i];
+        const name = slotName(slot);
+        if (!name || name === GROW || wanted.has(name)) continue;
+        if (slot.links?.length || findSource(scope, name)) continue;
+        node.removeOutput(i);
+        changed = true;
+    }
+    const have = new Set((node.outputs ?? []).map(slotName));
+    for (const entry of group.names) {
+        if (have.has(entry.name)) continue;
+        // Appended, never inserted: a wire holds on to a slot's INDEX, so
+        // making room in the middle would move every wire below it.
+        ensureTail(node, "out");
+        assignGetSlot(node, node.outputs.length - 1, entry);
+        changed = true;
+    }
+    return changed;
+}
+
 // The named slots, in order. The rows below are a positional view of this
 // list, so index 3 means "whatever the fourth constant is right now".
 export function namedSlots(node) {
@@ -763,8 +848,12 @@ function assertTailOnDraw(node, kind) {
     node.onDrawForeground = function () {
         if (!app.configuringGraph) {
             ensureTail(this, kind);
-            if (kind === "in") syncNameWidgets(this);
-            else markDeadNames(this);
+            if (kind === "in") {
+                syncNameWidgets(this);
+            } else {
+                syncGroup(this);
+                markDeadNames(this);
+            }
         }
         return onDrawForeground?.apply(this, arguments);
     };
@@ -863,12 +952,23 @@ registerSymbioticaExtension(app, {
                 // list, on the node, always. The values are read live rather
                 // than stored, because a name published a minute ago has to be
                 // in it without the node having heard anything.
+                //
+                // The groups come first: a Set Hub holding six paths is one
+                // pick here, and pulling its names one at a time is the work
+                // this node exists to save.
                 const options = {};
                 Object.defineProperty(options, "values", {
                     get: () => {
-                        const names = publishedNames(
-                            graphScope(this.graph, app.graph)).map((e) => e.name);
-                        return names.length ? names : [NONE];
+                        const scope = graphScope(this.graph, app.graph);
+                        const rows = publishedGroups(scope)
+                            .map((group) => ({ label: groupLabel(group), group }));
+                        for (const entry of publishedNames(scope)) {
+                            rows.push({ label: entry.name, entry });
+                        }
+                        // Kept for the callback: a row is picked by the label
+                        // the menu drew, and a group's label is not a name.
+                        this._symPullRows = rows;
+                        return rows.length ? rows.map((r) => r.label) : [NONE];
                     },
                     enumerable: true,
                     configurable: true,
@@ -876,7 +976,10 @@ registerSymbioticaExtension(app, {
                 const pull = this.addWidget("combo", "pull", PULL, (value) => {
                     pull.value = PULL;
                     if (!value || value === PULL || value === NONE) return;
-                    addGetSlot(this, String(value));
+                    const row = (this._symPullRows ?? [])
+                        .find((r) => r.label === value);
+                    if (row?.group) loadGroup(this, row.group);
+                    else addGetSlot(this, String(row?.entry?.name ?? value));
                 }, options);
                 // The picker is a button, not a value: saving it would restore
                 // a name into a node whose slots already say which they are.
@@ -956,13 +1059,31 @@ registerSymbioticaExtension(app, {
             }
 
             getExtraMenuOptions(_canvas, options) {
+                const group = String(this.properties?.[GROUP_PROP] ?? "").trim();
+                if (group) {
+                    options.push({
+                        content: `Stop following "${group}"`,
+                        callback: () => {
+                            delete this.properties[GROUP_PROP];
+                            toast("info", "Get Hub",
+                                  `The slots stay; "${group}" no longer adds to them.`);
+                            this.setDirtyCanvas(true, true);
+                        },
+                    });
+                }
                 options.push({
                     content: "Remove unused slots",
                     callback: () => {
+                        // Curating the list by hand makes it yours: a hub that
+                        // kept following would put every removed slot back on
+                        // the next draw, and the menu row would read as broken.
+                        const followed = group && this.properties[GROUP_PROP];
+                        if (followed) delete this.properties[GROUP_PROP];
                         const n = dropUnusedSlots(this, "out");
                         toast("info", "Get Hub",
-                              n ? `${n} slot${n === 1 ? "" : "s"} removed.`
-                                : "Every slot is wired.");
+                              (n ? `${n} slot${n === 1 ? "" : "s"} removed.`
+                                 : "Every slot is wired.")
+                              + (followed ? ` "${group}" no longer adds to them.` : ""));
                     },
                 });
                 return options;
@@ -987,9 +1108,11 @@ registerSymbioticaExtension(app, {
             def.python_module = "custom_nodes.symbiotica";
             def.description = def.name === SET_HUB
                 ? "Holds many named constants. Wire an output into its empty "
-                  + "slot and the slot takes that name; a Get Hub reads it."
-                : "Reads named constants. Drag from its empty slot onto an "
-                  + "input and pick the name to pull.";
+                  + "slot and the slot takes that name; a Get Hub reads it. "
+                  + "Its title names the GROUP a Get Hub can take whole."
+                : "Reads named constants. Pick a Set Hub's title to take its "
+                  + "whole group at once, or drag from its empty slot onto an "
+                  + "input and pick one name.";
         }
     },
 });

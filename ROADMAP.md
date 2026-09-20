@@ -65,6 +65,9 @@ Set/Get pairs. Both are frontend-only virtual nodes in `web/js/find_node.js`
 (a NEW web file never reaches the Modal sandbox, which is why they live in that
 file rather than their own). Nothing is pushed: local tree only.
 
+- Groups are built: a Set Hub's title names the set it holds and a Get Hub
+  takes the whole set in one pick, then follows it. What is NOT built is the
+  reverse — nothing folds an existing canvas INTO a group for you.
 - The fold/explode command is not built. Folding a canvas by hand means wiring
   each source into a Set Hub and pulling each name on a Get Hub; every KJ
   Set/Get already on the canvas keeps working meanwhile, and a Get Hub can pull

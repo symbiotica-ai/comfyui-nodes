@@ -180,6 +180,22 @@ KJNodes pairs, and it is in 1.48.7 as well as 1.52.7.
   `VAE`, `IMAGE` keep their own.
 - Every hub ends in exactly one empty `+` slot, re-asserted on draw because the
   frontend's own "Remove Slot" fires no event the node can hear.
+- **A Set Hub is a GROUP and its TITLE is the group's name** — `settings-01`,
+  `paths`, `models`. The Get Hub's picker lists the groups above the individual
+  names, and taking one loads every name on that hub at once. The group a Get
+  is following rides on `node.properties.symbiotica_group` (serialises, and
+  survives a retitle); the node's title is set to it while the title is still
+  the stock one. A followed group is re-asserted on draw, so a name added to
+  the Set later arrives — APPENDED, never inserted, because a wire holds on to
+  a slot's INDEX. A name that leaves the group leaves the Get too, unless a
+  wire is on it: that one stays and goes red. "Remove unused slots" stops the
+  hub following, or every slot it removed would come back on the next draw.
+- A name row on the Set Hub holds no value of its own: `value` and `label` are
+  own properties reading the slot it sits against, and writing `value` renames
+  that slot. The frontend's widget store keys a remembered value by widget
+  NAME and hands any widget under a name it has seen the state it already
+  holds — two rows called `STRING` were handed ONE state between them and drew
+  the same name twice. Nothing to write back means nothing to drift.
 
 ## A value that arrives on a wire
 
