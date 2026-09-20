@@ -39,13 +39,15 @@ symlinked in as `custom_nodes/symbiotica`, with the packs his canvas uses
 custom-scripts, ComfyLiterals). Start it with that install's own
 `.venv/bin/python main.py`, open `http://127.0.0.1:8188` in the Browser pane,
 and click the node: the panel renders, the handler fires, the queue runs, the
-widget values survive a save and reopen. It runs ComfyUI 0.36.0 / frontend
-1.52.7 against his 0.33.1 / 1.48.7. For anything the frontend decides, run a
-second copy on HIS version instead of guessing, from the same install and
-without touching the one he has open:
+widget values survive a save and reopen. ONE instance, on whatever frontend
+that install ships. Never start a second copy on another frontend version and
+never pin one with `--front-end-version` or `--front-end-root`: the code has to
+hold on ANY version, so a version difference is something to code around — the
+links table as a Map or an object, a widget's value as an accessor or a plain
+field — not something to prove twice. A spare, without touching the one he has
+open:
 
     .venv/bin/python main.py --port 8189 --cpu --disable-auto-launch \
-      --front-end-version Comfy-Org/ComfyUI_frontend@1.48.7 \
       --user-directory <tmp> --output-directory <tmp>
 
 Drive either one headless with playwright (`python3 -m playwright`, chromium is
