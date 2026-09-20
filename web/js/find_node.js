@@ -613,16 +613,25 @@ function addGetSlot(node, name) {
     assignGetSlot(node, node.outputs.length - 1, entry);
 }
 
-// A whole group, taken at once: every name on that Set Hub lands on this one,
-// and the node remembers which group it is following so that a name added to
-// the Set later arrives here too.
+// A whole group, taken at once. The node BECOMES that group: picking
+// `settings-01` means the node holds settings-01 and nothing else, not
+// settings-02 with settings-01 added underneath it. Everything it was
+// carrying goes first, wires and all -- there is no slot to keep a wire on
+// once the name behind it is not in the group you asked for.
 export function loadGroup(node, group) {
     if (!group) return;
     node.properties ??= {};
+    const was = String(node.properties[GROUP_PROP] ?? "").trim();
     node.properties[GROUP_PROP] = group.title;
-    // The title is the one place with room to say which group this is -- but
-    // only while it is still the name every Get Hub is born with.
-    const stock = ["", "Get Hub", TITLES[GET_HUB]];
+    for (let i = (node.outputs?.length ?? 0) - 1; i >= 0; i -= 1) {
+        if (slotName(node.outputs[i]) === GROW) continue;
+        node.disconnectOutput?.(i);
+        node.removeOutput(i);
+    }
+    // The title follows the group -- while it is still the name every Get Hub
+    // is born with, or the group it was showing a second ago. A title typed by
+    // hand is his and stays.
+    const stock = ["", "Get Hub", TITLES[GET_HUB], was];
     if (stock.includes(String(node.title ?? "").trim())) node.title = group.title;
     syncGroup(node);
     node.setDirtyCanvas?.(true, true);

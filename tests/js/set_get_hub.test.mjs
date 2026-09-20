@@ -219,6 +219,40 @@ test("a Get Hub following a group grows with it", async () => {
                      ["project", "output", "+"]);
 });
 
+test("picking a second group replaces the first, it does not add to it",
+     async () => {
+    const { loadGroup, publishedGroups } = await import("../../web/js/find_node.js");
+    const one = setHub([["stupid", "STRING", 1], ["agent", "STRING", 2]]);
+    one.title = "settings-01";
+    const two = setHub([["incompetent", "STRING", 3], ["claude", "STRING", 4]]);
+    two.title = "settings-02";
+    const graph = { nodes: [one, two] };
+    const get = slotHolder([], []);
+    get.type = "SymbioticaGetHub";
+    get.graph = graph;
+    get.disconnectOutput = () => {};
+    graph.nodes.push(get);
+    const groups = () => publishedGroups([graph]);
+
+    loadGroup(get, groups()[1]);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["incompetent", "claude", "+"]);
+    assert.equal(get.title, "settings-02");
+    // The other group now: what it held before is gone, and the title moves
+    // with it -- a node reading settings-02 while it carries settings-01 is a
+    // node lying about what it holds.
+    loadGroup(get, groups()[0]);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["stupid", "agent", "+"]);
+    assert.equal(get.title, "settings-01");
+    // A title typed by hand is his, and survives the switch.
+    get.title = "my paths";
+    loadGroup(get, groups()[1]);
+    assert.equal(get.title, "my paths");
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["incompetent", "claude", "+"]);
+});
+
 test("a Get Hub follows no group until it is told to", async () => {
     const { groupOf, syncGroup } = await import("../../web/js/find_node.js");
     const get = slotHolder([], []);
