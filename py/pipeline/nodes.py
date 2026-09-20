@@ -374,15 +374,25 @@ def _focus_columns(order, items, raw, asset="", ref=""):
     # `refPick` carries the file this run actually resolved, so the wire
     # holds the WHOLE pick and not just the asset. An additive key: every
     # existing consumer reads the dict by name and ignores it.
+    # `eventAssets` is what `event_order` is rebuilt from a node later. The
+    # narrowing replaces `assets` with the one asset, so without it the event
+    # is GONE the moment the pick goes on a wire — and the Order Tracker wants
+    # the event, not the asset. Carried forward through any number of hops,
+    # because the next narrowing copies it with the rest of the dict.
+    whole = order.get("eventAssets") or order.get("assets") or []
     narrowed = [{**order, "assets": [raw.get(i["assetName"], i)],
-                 "refPick": r[2]}
+                 "eventAssets": whole, "refPick": r[2]}
                 for i, r in zip(picked, chosen_refs)]
+    # The event this pick came out of. An order that was never narrowed IS its
+    # own event, and is returned untouched so a graph that wires it keeps the
+    # object it was given.
+    event = ({**order, "assets": whole} if "eventAssets" in order else order)
     return ([i["assetName"] for i in picked],
             [i["category"] for i in picked],
             [i["prompt"] for i in picked],
             save_paths(order, picked),
             narrowed,
-            order,
+            event,
             # Re-read rather than taken off the row: an order parsed before
             # buckets existed carries no key, and the answer is the same
             # either way.
@@ -582,41 +592,23 @@ class SymbioticaTask(io.ComfyNode):
                         "the end of it for the name, the save path, the "
                         "canvas size and the category recipe. Choose no asset "
                         "and it emits the whole event instead.",
-            # The SAME seven, in the SAME order, under the SAME names: the
-            # panel code, the prefill snapshot and `wireOrderSpecs` all key on
-            # those names, so one code path serves both nodes rather than two
-            # that drift.
-            inputs=copy.deepcopy(base.inputs),
+            # `project_path` is the only input. Asset Focus carries an `order`
+            # socket so one of them can feed another; this node reads the
+            # folder and that is the whole of it — a socket for an order it
+            # never takes is a wire he has to look at and decide about every
+            # time. The rest are the widgets the tree drives, under the names
+            # the panel code and `wireOrderSpecs` already key on.
+            inputs=[i for i in copy.deepcopy(base.inputs) if i.id != "order"],
             outputs=[
                 Order.Output(display_name="specs", is_output_list=True,
-                             tooltip="The whole record on ONE wire — same "
-                                     "event, same project, a one-asset assets "
-                                     "list, and the reference you clicked. "
-                                     "Task Specs reads it; so does another "
-                                     "Asset Focus. One of these per focused "
-                                     "asset, so downstream runs once per "
-                                     "asset."),
-                io.Image.Output(display_name="ref_image", is_output_list=True,
-                                tooltip="The client reference you clicked, "
-                                        "composited onto the sheet grey. An "
-                                        "asset the client sent no art for "
-                                        "gets a one-pixel plate."),
-                io.Mask.Output(display_name="ref_mask", is_output_list=True,
-                               tooltip="That reference's alpha, opaque where "
-                                       "the art is."),
-                io.String.Output(display_name="client_prompt",
-                                 is_output_list=True,
-                                 tooltip="What the client wrote for this "
-                                         "asset, verbatim from the order "
-                                         "sheet."),
-                # Not derivable from `specs`, which is narrowed to the asset:
-                # the Order Tracker wants the EVENT, and it must not change
-                # every time you focus a different one.
-                Order.Output(display_name="event_order",
-                             tooltip="The WHOLE event, unnarrowed — what the "
-                                     "Order Tracker reads. Wire it into "
-                                     "another Task's `order` to browse the "
-                                     "same event on a second node."),
+                             tooltip="The whole pick on ONE wire — same event, "
+                                     "same project, a one-asset assets list, "
+                                     "and the reference you clicked. Put a "
+                                     "Task Specs on the end of it for the "
+                                     "name, the prompt, the save path, the "
+                                     "reference art and the canvas size. One "
+                                     "of these per focused asset, so "
+                                     "downstream runs once per asset."),
             ],
             hidden=[io.Hidden.unique_id],
             # Queueable on its own: the panel's list of choices only exists
@@ -625,25 +617,24 @@ class SymbioticaTask(io.ComfyNode):
         )
 
     @classmethod
-    def fingerprint_inputs(cls, order=None, category="", asset="",
-                           project_path="", month="", feature="", ref=""):
+    def fingerprint_inputs(cls, category="", asset="", project_path="",
+                           month="", feature="", ref=""):
         return SymbioticaAssetFocus.fingerprint_inputs(
-            order=order, category=category, asset=asset,
-            project_path=project_path, month=month, feature=feature, ref=ref)
+            category=category, asset=asset, project_path=project_path,
+            month=month, feature=feature, ref=ref)
 
     @classmethod
-    def execute(cls, order=None, category="", asset="",
-                project_path="", month="", feature="",
-                ref="") -> io.NodeOutput:
-        order = _focus_order(order, project_path, month, feature)
+    def execute(cls, category="", asset="", project_path="", month="",
+                feature="", ref="") -> io.NodeOutput:
+        order = _focus_order(None, project_path, month, feature)
         items, raw = _focus_items(order, category)
         # The same push under the same channel: the panel is shared, and the
         # node_id it lands on is this node's own.
         _focus_push(cls, order, items, raw)
-        cols = _focus_columns(order, items, raw, asset, ref)
-        # By index into the one place the columns are built, never rebuilt
-        # here: narrowed order, ref image, ref mask, client prompt, the event.
-        return io.NodeOutput(cols[4], cols[7], cols[8], cols[2], cols[5])
+        # ONE socket. Everything else this node could emit is on Task Specs
+        # already, and a value you can read off either of two nodes is a value
+        # you have to decide between every time you wire it.
+        return io.NodeOutput(_focus_columns(order, items, raw, asset, ref)[4])
 
 
 class SymbioticaTaskSpecs(io.ComfyNode):

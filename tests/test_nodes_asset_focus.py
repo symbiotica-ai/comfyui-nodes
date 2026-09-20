@@ -153,6 +153,22 @@ class TestSchema:
             "event_order", "bucket", "ref_image", "ref_mask", "ref_name",
             "category_recipe", "width", "height"]
 
+    def test_every_declared_output_is_one_the_run_answers(self, nodes_mod):
+        """Three nodes build their outputs from this schema, and a socket
+        added here and not filled in `execute` shifts every value after it by
+        one — on the Asset Recipe that means the slot table reads a column
+        short and every slot wire carries its neighbour's value."""
+        recipe = types.SimpleNamespace(unique_id="9")
+        nodes_mod.SymbioticaAssetRecipe.hidden = recipe
+        focus = run(nodes_mod, order=ORDER, asset="Bunting")
+        for cls, out in (
+                (nodes_mod.SymbioticaAssetFocus, focus),
+                (nodes_mod.SymbioticaAssetRecipe,
+                 nodes_mod.SymbioticaAssetRecipe.execute(order=ORDER)),
+                (nodes_mod.SymbioticaTaskSpecs,
+                 nodes_mod.SymbioticaTaskSpecs.execute(specs=focus.args[4][0]))):
+            assert len(cls.GET_SCHEMA().outputs) == len(out.args), cls.__name__
+
     def test_ref_is_the_last_input(self, nodes_mod):
         """Widget values restore BY POSITION, so the clicked reference goes on
         the end or every saved graph reads its neighbours' values."""
@@ -180,15 +196,18 @@ class TestWhatThePanelIsTold:
 
     def test_every_reference_file_goes_over_not_just_the_first(
             self, nodes_mod, pushed):
-        """The panel draws a strip per asset. `assets_by_category` keeps the
-        four fields a run needs and drops `refFiles`, so the names are looked
-        back up in the raw order — reading them off its output sent nothing."""
+        """The panel draws a strip per asset, under what the client wrote for
+        it. `assets_by_category` keeps the four fields a run needs and drops
+        `refFiles`, so the names are looked back up in the raw order — reading
+        them off its output sent nothing. The `prompt` is on that same raw row,
+        and on a wired order the canvas cannot parse this push is the ONLY way
+        it arrives."""
         run(nodes_mod, order={**ORDER, "refsRoot": "/refs/bakery"})
         detail = self.detail(pushed)
-        assert [(a["name"], a["refs"]) for a in detail["assets"]] == [
-            ("Frankencrisps", ["a.png", "b.png"]),
-            ("Frankenstein Pops", ["c.png"]),
-            ("Bunting", []),
+        assert [(a["name"], a["prompt"], a["refs"]) for a in detail["assets"]] == [
+            ("Frankencrisps", "crispy squares", ["a.png", "b.png"]),
+            ("Frankenstein Pops", "cake pops", ["c.png"]),
+            ("Bunting", "paper flags", []),
         ]
 
     def test_the_refs_root_rides_along(self, nodes_mod, pushed):

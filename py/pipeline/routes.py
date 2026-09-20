@@ -393,6 +393,12 @@ async def parse_order(request):
         register_root_within(assets_root)
     loaded["refsRoot"] = refs_path
     loaded["assetsRoot"] = assets_root
+    # WHICH month this order is — the canonical name `resolve_month` settled
+    # on, which is not always the one that was asked for ("" means "the one
+    # this project leads with"). The panel draws its tree off the parse, so it
+    # has to be able to say what it just read without a second request.
+    if project:
+        loaded["month"] = r["month"]
     return web.json_response(loaded)
 
 

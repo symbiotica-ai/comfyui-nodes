@@ -12,7 +12,7 @@ import { attachHoverZoom, CHECKER, el, emptyState, hideHoverZoom, ICON,
 // the whole selection: "order specs and asset focus are 2 nodes
 // that are doing one thing… i select month and feature in specs and asset in
 // asset focus. this doesn't make any sense".
-import { wireOrderSpecs } from "./order_source.js";
+import { resolveProjectPath, wireOrderSpecs } from "./order_source.js";
 
 const NODE_CLASS = "SymbioticaAssetFocus";
 // Asset Recipe IS this node with widget slots on the end of its output
@@ -744,6 +744,10 @@ api.addEventListener("symbiotica.focus", (event) => {
     node._symFocusAssets = Array.isArray(detail.assets) ? detail.assets : [];
     node._symFocusCategories = Array.isArray(detail.categories)
         ? detail.categories.map(String) : [];
+    // Which event those assets came from. The focus panel reads the widget,
+    // but a Task fed by a WIRE has no feature of its own — the run is the only
+    // thing that can say what it was given.
+    node._symFocusFeature = String(detail.feature ?? "");
     // The run's own reference root, so the thumbnails load from a graph whose
     // source node has published nothing to the canvas.
     node._symFocusRefsRoot = String(detail.refs_root ?? "");
@@ -787,7 +791,7 @@ const STRIP_PX = 40;
 // is its own object; nothing is looked up by its path.
 function taskRows(node, state) {
     const rows = [];
-    const month = String(widgetOf(node, "month")?.value ?? "").trim();
+    const month = state.month || (state.months[0] ?? "");
     for (const m of state.months) {
         const openMonth = m === month;
         rows.push({ kind: "month", label: m, month: m, open: openMonth,
@@ -850,24 +854,84 @@ function taskPanel(node) {
     // widget names. One month is parsed at a time — the `month` widget is
     // what Python reads, so expanding another month IS picking it, and there
     // is never a second references root to confuse a thumbnail with.
-    const state = { months: [], events: [] };
+    const state = { months: [], events: [], month: "" };
     const readState = () => {
+        // The month this tree is SHOWING: the one picked, else the one the
+        // parse actually read, else the first the project holds. The parse is
+        // what carries the order, and the month list is a separate, smaller
+        // request — so the tree must never wait on the list to draw what the
+        // parse already gave it. It did, and the pane counted nine assets
+        // beside a tree with no month to hang them on.
+        state.month = String(widgetOf(node, "month")?.value ?? "").trim()
+            || String(node._symOrderMonth ?? "").trim()
+            || String((node._symMonths ?? [])[0] ?? "");
+        // Every month the project holds, with the one on screen in it whether
+        // the list has arrived or not.
         state.months = (node._symMonths ?? []).map(String);
-        const month = String(widgetOf(node, "month")?.value ?? "").trim();
-        if (month && !state.months.includes(month)) state.months = [month, ...state.months];
+        if (state.month && !state.months.includes(state.month)) {
+            state.months = [state.month, ...state.months];
+        }
         state.events = Array.isArray(node._symEvents) ? node._symEvents : [];
+        // Nothing parsed on the canvas, but a RUN reported what it chose from:
+        // the only list this node has when the path resolves on the SERVER and
+        // not here. It arrives flat, so it stands in as the event it came from.
+        if (!state.events.length && node._symFocusAssets?.length) {
+            state.events = [{
+                feature: featureKey(node._symFocusFeature) || "the wired event",
+                eventName: "",
+                assets: node._symFocusAssets.map((a) => ({
+                    assetName: a.name, category: a.category ?? "",
+                    canvas: a.canvas ?? "", prompt: String(a.prompt ?? ""),
+                    refFiles: a.refs ?? [],
+                })),
+            }];
+            if (!state.months.length) state.months = [state.month || "this order"];
+        }
     };
 
-    // Every asset in the open event, by its display path — what the search
-    // box offers. A duplicate name resolves to the last row, which is what
-    // Python's own `raw` map does with the same sheet.
+    // Every asset in the MONTH, by its display path — what the search box
+    // offers. Read off the parse rather than off the drawn rows: the tree only
+    // builds rows under an open category, and a search that can only find what
+    // is already on screen is not a search. A duplicate name resolves to the
+    // last one, which is what Python's own `raw` map does with the same sheet.
     const searchable = () => {
         const out = new Map();
-        for (const row of taskRows(node, state)) {
-            if (row.kind === "asset") out.set(`${row.category}/${row.label}`, row);
+        const month = String(widgetOf(node, "month")?.value ?? "").trim();
+        for (const event of state.events) {
+            const feature = event.eventName
+                ? `${event.feature} — ${event.eventName}` : event.feature;
+            for (const a of event.assets ?? []) {
+                const name = String(a.assetName ?? "").trim();
+                if (!name) continue;
+                const category = categoryRecipeOf(a) || "uncategorised";
+                out.set(`${feature}/${category}/${name}`, {
+                    kind: "asset", label: name, month, feature, category,
+                    asset: { name, category: a.category ?? "",
+                             canvas: a.canvas ?? "",
+                             prompt: String(a.prompt ?? ""),
+                             refs: (a.refFiles ?? []).map(String) },
+                });
+            }
         }
         return out;
     };
+
+    // A search hit can be in an event the tree is not showing, so taking one
+    // moves the whole selection there — the same act as clicking down to it.
+    function chooseFound(row) {
+        const held = featureKey(widgetOf(node, "feature")?.value);
+        if (featureKey(row.feature) !== held) {
+            put("feature", row.feature);
+            node._symFocusAssets = [];
+            node._symFocusCategories = [];
+            node._symRefreshOrder?.({ explicit: true });
+        }
+        put("asset", row.label);
+        put("category", "");
+        put("ref", "");
+        node.setDirtyCanvas?.(true, true);
+        render();
+    }
 
     const shell = sidebarShell(node, {
         sideProp: TASK_SIDE, shutProp: TASK_SHUT, sideDefault: 240,
@@ -879,7 +943,7 @@ function taskPanel(node) {
             list: () => [...searchable().keys()],
             onPick: (rel) => {
                 const row = searchable().get(rel);
-                if (row) chooseAsset(row);
+                if (row) chooseFound(row);
             },
         },
         headButtons: [
@@ -963,9 +1027,10 @@ function taskPanel(node) {
         put("ref", "");
         node._symFocusAssets = [];
         node._symFocusCategories = [];
-        // The widget's own callback is what re-parses; calling it keeps the
-        // one path into `refreshOrderSpecs` rather than opening a second.
-        widgetOf(node, "month")?.callback?.(row.month);
+        // ONE path into the parse: the wrapper below, which re-draws when it
+        // lands. The widget's own chained callback reaches `refreshOrderSpecs`
+        // directly and would answer without telling the panel.
+        node._symRefreshOrder?.({ explicit: true });
         render();
     }
 
@@ -976,7 +1041,7 @@ function taskPanel(node) {
         put("ref", "");
         node._symFocusAssets = [];
         node._symFocusCategories = [];
-        widgetOf(node, "feature")?.callback?.(row.feature);
+        node._symRefreshOrder?.({ explicit: true });
         render();
     }
 
@@ -994,16 +1059,20 @@ function taskPanel(node) {
     // An asset row is one asset. `category` is CLEARED rather than set to the
     // asset's own: with a name chosen the narrowing decides nothing, and a
     // stale one that excludes the name is a hard refusal at queue time.
+    //
+    // Clicking the chosen one again clears it — how you get back to "all of
+    // them" without knowing what the first is called — and the narrowing then
+    // becomes its CATEGORY rather than nothing: an empty one closes the level
+    // the row is on, which takes the row you just clicked off the screen.
     function chooseAsset(row) {
         const held = String(widgetOf(node, "asset")?.value ?? "").trim();
         const same = held === row.label;
         put("asset", same ? "" : row.label);
-        put("category", "");
+        put("category", same ? row.category : "");
         // A filename belongs to ONE asset: carried over it would name nothing
         // in the new one's list and silently mean "the first" while the tile
         // it points at is still lit.
         put("ref", "");
-        if (same) put("category", "");
         node.setDirtyCanvas?.(true, true);
         render();
     }
@@ -1076,15 +1145,30 @@ function taskPanel(node) {
         return rows.find((r) => r.kind === "asset" && r.label === chosen) ?? null;
     }
 
+    // What the node would emit right now: the open event's named assets,
+    // narrowed by `category` — the list `_focus_items` builds on the Python
+    // side. NOT the rows on screen: a category has to be OPEN to have asset
+    // rows under it, so counting those read `runs` as nothing and the pane as
+    // "no assets" on a node that is showing two categories an inch to the
+    // left. A node has to show what it holds.
+    function runList() {
+        const wantFeature = featureKey(widgetOf(node, "feature")?.value)
+            || featureKey(node._symFocusFeature);
+        const event = state.events.find(
+            (e) => featureKey(e.feature) === wantFeature) ?? state.events[0];
+        const narrow = String(widgetOf(node, "category")?.value ?? "").trim();
+        return (event?.assets ?? [])
+            .filter((a) => String(a.assetName ?? "").trim())
+            .filter((a) => inCategory({ category: a.category, canvas: a.canvas },
+                                      narrow));
+    }
+
     function drawPane(rows) {
         const row = selectedRow(rows);
-        const assets = rows.filter((r) => r.kind === "asset");
+        const inRun = runList();
         const narrow = String(widgetOf(node, "category")?.value ?? "").trim();
-        const inRun = narrow
-            ? assets.filter((r) => r.category.toLowerCase() === narrow.toLowerCase())
-            : assets;
         // Say what the node will actually emit, not just what is listed.
-        runs.textContent = assets.length
+        runs.textContent = inRun.length
             ? `runs ${row ? 1 : inRun.length}` : "";
         crumb.textContent = row
             ? `${row.month} / ${row.feature} / ${row.category} / ${row.label}`
@@ -1096,7 +1180,7 @@ function taskPanel(node) {
         promptBox.replaceChildren();
 
         if (!row) {
-            view.appendChild(emptyState(assets.length
+            view.appendChild(emptyState(inRun.length
                 ? "Pick an asset in the tree."
                 : "No assets to show yet."));
             promptBox.appendChild(emptyState("—"));
@@ -1133,23 +1217,27 @@ function taskPanel(node) {
     function render() {
         readState();
         hideHoverZoom();
+        // Ask for whichever half has not arrived. Both are one-shot at node
+        // creation and only a TYPED project_path re-fires them; a path that
+        // comes in on a wire — a Local Path node, a Local/Modal switch, a Get
+        // Hub — resolves later than that, and nothing asked again.
+        ensureRead();
         const folded = shell.layout();
         const rows = taskRows(node, state);
 
+        tree.replaceChildren();
         if (!folded) {
-            tree.replaceChildren();
             if (!rows.length) {
                 const project = widgetOf(node, "project_path");
+                // A path can still ARRIVE on a wire — a Local/Modal switch,
+                // a Get Hub — which `resolveProjectPath` walks. Empty on both
+                // counts is the only case with nothing to say.
                 const hasProject = Boolean(project?.value?.trim?.())
                     || node.inputs?.some((i) => i.name === "project_path"
                                              && i.link != null);
-                const wired = upstreamNode(node, "order");
-                tree.appendChild(emptyState(
-                    wired
-                        ? "no assets from the wired order yet — queue this node once"
-                        : hasProject
-                            ? "reading this project's orders…"
-                            : "set project_path, or wire an order in"));
+                tree.appendChild(emptyState(hasProject
+                    ? "reading this project's orders…"
+                    : "set project_path — the folder with an orders/ subfolder"));
             }
             const chosen = String(widgetOf(node, "asset")?.value ?? "").trim();
             const narrow = String(widgetOf(node, "category")?.value ?? "").trim();
@@ -1186,17 +1274,38 @@ function taskPanel(node) {
         });
     }
 
+    // Both halves of the read, once per project: the ORDER (`parse-order`,
+    // which is where every asset, prompt and reference comes from) and the
+    // MONTH LIST (`list-orders`, which only names the other months you can
+    // switch to). Guarded on the resolved path, so the render that follows
+    // each answer does not ask again.
+    let readFor = null;
+    function ensureRead() {
+        const project = resolveProjectPath(node);
+        if (!project || readFor === project) return;
+        if (state.events.length && state.months.length) { readFor = project; return; }
+        readFor = project;
+        Promise.resolve(node._symRefreshMonths?.()).catch(() => {});
+        Promise.resolve(node._symRefreshOrder?.({ explicit: true })).catch(() => {});
+    }
+
     node._symRenderFocus = render;
-    // The order upstream changed — a different month, a different event, a
-    // re-parse. The list a RUN reported belongs to the event that ran, so it
-    // goes with it.
-    node._symOrderChanged = (source) => {
-        if (!source || (orderSource(node) ?? node) !== source) return;
-        node._symFocusAssets = [];
-        node._symFocusCategories = [];
-        node._symAskedFor = null;
-        render();
-    };
+    // Every parse re-draws the tree. `publishOrder` announces a new order to
+    // every node BUT the one that read it — and this node reads its own, so
+    // the announcement never comes back round. Chaining the parse itself
+    // covers every way into it at once: the month and feature widgets, the
+    // "Read folder" button, and the ladder that retries while a wired
+    // project_path is still resolving.
+    const parse = node._symRefreshOrder;
+    node._symRefreshOrder = (opts) =>
+        Promise.resolve(parse?.(opts)).then((r) => { render(); return r; })
+                                      .catch(() => { render(); });
+    // And the month list, which is a second request with a second answer: the
+    // tree's top level is drawn from it.
+    const months = node._symRefreshMonths;
+    node._symRefreshMonths = () =>
+        Promise.resolve(months?.()).then((r) => { render(); return r; })
+                                   .catch(() => { render(); });
     render();
 }
 
@@ -1244,13 +1353,14 @@ registerSymbioticaExtension(app, {
             queueMicrotask(() => this._symRenderFocus?.());
         };
 
+        // Wiring a path IN is the moment the project becomes knowable.
         const onConnectionsChange = nodeType.prototype.onConnectionsChange;
         nodeType.prototype.onConnectionsChange = function (type, index, connected,
                                                             link, ioSlot) {
             onConnectionsChange?.apply(this, arguments);
-            if (ioSlot?.name === "order" || ioSlot?.name === "project_path") {
+            if (ioSlot?.name === "project_path") {
                 this._symAskedFor = null;
-                queueMicrotask(() => this._symRenderFocus?.());
+                queueMicrotask(() => this._symRefreshOrder?.({ explicit: true }));
             }
         };
     },

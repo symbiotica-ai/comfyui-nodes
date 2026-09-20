@@ -272,6 +272,10 @@ async function refreshOrderSpecs(node, { explicit = false } = {}) {
 function publishOrder(node, result, events, refsRoot) {
     node._symEvents = events;
     node._symRefsRoot = refsRoot;
+    // The month the server actually read, which is not always the one that was
+    // asked for: "" means "the one this project leads with". A panel that
+    // draws the parse needs to be able to name it without a second request.
+    node._symOrderMonth = (result?.ok && String(result.data?.month ?? "")) || "";
     // Keep the feature value valid (accept the plain feature OR the labelled
     // form); empty means "the order's first event". Never reset a value that
     // still matches an event by key — that would clobber a saved workflow.
