@@ -261,6 +261,140 @@ def _focus_reference(order, asset_record, asset_name, wanted_file):
     return image, mask, names[index]
 
 
+def _focus_order(order, project_path="", month="", feature=""):
+    """The event to work from: the one on the wire, or the one this node reads
+    for itself. Month, feature, category and asset are ONE act, and doing half
+    of it on another node is what made this two nodes in the first place."""
+    if isinstance(order, dict) and "assets" in order:
+        return order
+    if str(project_path or "").strip():
+        return build_event_order(project_path, month, feature)
+    raise ValueError(
+        "set project_path (and month) to read an order here, or "
+        "wire another Asset Focus's `event_order` into 'order'")
+
+
+def _focus_items(order, category=""):
+    """`(items, raw)` — the event narrowed to one category, and the RAW sheet
+    records by name. `assets_by_category` keeps the four fields a run needs and
+    drops `refFiles`, which both the panel and the narrowed order read
+    references off."""
+    items = assets_by_category(order, category)
+    if not items:
+        present = sorted({str(a.get("category", "") or "").strip()
+                          for a in order.get("assets", []) or []
+                          if str(a.get("assetName", "") or "").strip()})
+        want = (category or "All").strip() or "All"
+        if want != "All" and present:
+            raise ValueError(
+                f"no {want!r} assets in {order.get('feature', '')!r} — "
+                f"this event holds: {', '.join(present)}")
+        raise ValueError(
+            f"the event {order.get('feature', '')!r} has no named assets — "
+            "pick a different feature")
+    raw = {str(a.get("assetName", "") or "").strip(): a
+           for a in order.get("assets", []) or []}
+    return items, raw
+
+
+def _focus_push(cls, order, items, raw):
+    """Hand the panel its choices. The order arrives on a wire the canvas
+    cannot read, so the run is what tells it what there was to pick from.
+
+    It draws the client's own reference art beside each name, so every ref file
+    goes over with the root they are relative to — the root whoever parsed the
+    order registered, which is what lets the thumbnail route serve out of it.
+    Every category the EVENT holds, not just the narrowed one: the `category`
+    dropdown is built from this when the canvas has no parse of its own (a
+    wired project it cannot read), and a list narrowed to the current pick
+    would offer nothing to switch to.
+    """
+    categories = []
+    for a in order.get("assets", []) or []:
+        if not str(a.get("assetName", "") or "").strip():
+            continue
+        recipe = category_recipe(a)
+        if recipe and recipe not in categories:
+            categories.append(recipe)
+    _push("symbiotica.focus", {
+        "node_id": str(getattr(getattr(cls, "hidden", None),
+                               "unique_id", "")),
+        "feature": str(order.get("feature", "")),
+        "refs_root": str(order.get("refsRoot", "") or ""),
+        "categories": categories,
+        # `prompt` rides along so the panel can show what the client actually
+        # wrote. It is on the raw sheet row either way, and on a wired order
+        # the canvas cannot parse this push is the ONLY way it arrives.
+        "assets": [{"name": a["assetName"], "category": a["category"],
+                    "canvas": a.get("canvas", ""),
+                    "prompt": str(a.get("prompt", "") or ""),
+                    "refs": list(raw.get(a["assetName"], {})
+                                 .get("refFiles", []) or [])}
+                   for a in items],
+    })
+
+
+def _focus_columns(order, items, raw, asset="", ref=""):
+    """The thirteen columns Asset Focus emits, for one chosen asset or for the
+    whole narrowed event. The ONE place they are built, so Task Specs cannot
+    drift from the node it stands in for."""
+    # A reference the wire already chose. `refPick` is written by the node that
+    # made the pick, so a second node never has to ask which thumbnail he
+    # clicked — "being asked the same question again is the click he wanted
+    # gone". A `ref` of this node's own still wins: it is the later answer.
+    ref = str(ref or "").strip() or str((order or {}).get("refPick", "") or "")
+
+    wanted = str(asset or "").strip()
+    chosen = list(enumerate(items))
+    if wanted:
+        names = [a["assetName"] for a in items]
+        if wanted not in names:
+            # Falling back silently would render the wrong asset under the
+            # wrong name and file it in the wrong folder. An event whose
+            # assets were renamed must say so.
+            raise ValueError(
+                f"no asset called {wanted!r} in "
+                f"{order.get('feature', '')!r} — it holds: "
+                f"{', '.join(names)}")
+        index = names.index(wanted)
+        chosen = [(index, items[index])]
+    # No choice means the whole event, which is what the panel's "all"
+    # says: a button that reads "all" and emits one asset is lying about
+    # what the node is going to do.
+    picked = [item for _, item in chosen]
+
+    # The reference he clicked, resolved here rather than on a second
+    # node: clicking the thumbnail already said which one, and being asked
+    # the same question again is the click he wanted gone.
+    chosen_refs = [_focus_reference(order, raw.get(i["assetName"]),
+                                    i["assetName"], ref) for i in picked]
+    # A narrowed order per asset: the whole record on ONE wire, in the
+    # shape every order consumer already reads. The RAW asset record goes
+    # in — `refFiles` is what a downstream reference read needs — and
+    # `refPick` carries the file this run actually resolved, so the wire
+    # holds the WHOLE pick and not just the asset. An additive key: every
+    # existing consumer reads the dict by name and ignores it.
+    narrowed = [{**order, "assets": [raw.get(i["assetName"], i)],
+                 "refPick": r[2]}
+                for i, r in zip(picked, chosen_refs)]
+    return ([i["assetName"] for i in picked],
+            [i["category"] for i in picked],
+            [i["prompt"] for i in picked],
+            save_paths(order, picked),
+            narrowed,
+            order,
+            # Re-read rather than taken off the row: an order parsed before
+            # buckets existed carries no key, and the answer is the same
+            # either way.
+            [bucket_for(i) for i in picked],
+            [r[0] for r in chosen_refs],
+            [r[1] for r in chosen_refs],
+            [r[2] for r in chosen_refs],
+            [category_recipe(raw.get(i["assetName"], i)) for i in picked],
+            [canvas_size(raw.get(i["assetName"], i))[0] for i in picked],
+            [canvas_size(raw.get(i["assetName"], i))[1] for i in picked])
+
+
 class SymbioticaAssetFocus(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -414,109 +548,142 @@ class SymbioticaAssetFocus(io.ComfyNode):
     def execute(cls, order=None, category="", asset="",
                 project_path="", month="", feature="",
                 ref="") -> io.NodeOutput:
-        # Its own selection when nothing is wired in: month, feature, category
-        # and asset are one act, and doing half of it on another node is what
-        # made this two nodes.
-        if not isinstance(order, dict) or "assets" not in order:
-            if str(project_path or "").strip():
-                order = build_event_order(project_path, month, feature)
-            else:
-                raise ValueError(
-                    "set project_path (and month) to read an order here, or "
-                    "wire another Asset Focus's `event_order` into 'order'")
-        items = assets_by_category(order, category)
-        if not items:
-            present = sorted({str(a.get("category", "") or "").strip()
-                              for a in order.get("assets", []) or []
-                              if str(a.get("assetName", "") or "").strip()})
-            want = (category or "All").strip() or "All"
-            if want != "All" and present:
-                raise ValueError(
-                    f"no {want!r} assets in {order.get('feature', '')!r} — "
-                    f"this event holds: {', '.join(present)}")
+        order = _focus_order(order, project_path, month, feature)
+        items, raw = _focus_items(order, category)
+        _focus_push(cls, order, items, raw)
+        return io.NodeOutput(*_focus_columns(order, items, raw, asset, ref))
+
+
+class SymbioticaTask(io.ComfyNode):
+    """The browser. Pick the asset you are working on, and hand the whole pick
+    down ONE wire.
+
+    Everything Asset Focus emits on thirteen sockets is derivable from the
+    narrowed order, so this node keeps the two things you are looking at while
+    you browse — the reference you clicked and what the client wrote — and puts
+    the rest on `specs`, for Task Specs to fan out wherever you need it. A
+    browsing node that is thirteen sockets tall is a browsing node you park off
+    screen.
+    """
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        base = SymbioticaAssetFocus.define_schema()
+        return io.Schema(
+            node_id="SymbioticaTask",
+            display_name="Task (Symbiotica)",
+            category=base.category,
+            description="The asset you are working on, chosen in the sidebar: "
+                        "month, event, category and asset as a tree, the "
+                        "client's own reference art beside it, and the prompt "
+                        "they wrote under it. Clicking a thumbnail is the "
+                        "whole pick — `ref_image` carries it. `specs` is the "
+                        "rest of the record on one wire; put a Task Specs on "
+                        "the end of it for the name, the save path, the "
+                        "canvas size and the category recipe. Choose no asset "
+                        "and it emits the whole event instead.",
+            # The SAME seven, in the SAME order, under the SAME names: the
+            # panel code, the prefill snapshot and `wireOrderSpecs` all key on
+            # those names, so one code path serves both nodes rather than two
+            # that drift.
+            inputs=copy.deepcopy(base.inputs),
+            outputs=[
+                Order.Output(display_name="specs", is_output_list=True,
+                             tooltip="The whole record on ONE wire — same "
+                                     "event, same project, a one-asset assets "
+                                     "list, and the reference you clicked. "
+                                     "Task Specs reads it; so does another "
+                                     "Asset Focus. One of these per focused "
+                                     "asset, so downstream runs once per "
+                                     "asset."),
+                io.Image.Output(display_name="ref_image", is_output_list=True,
+                                tooltip="The client reference you clicked, "
+                                        "composited onto the sheet grey. An "
+                                        "asset the client sent no art for "
+                                        "gets a one-pixel plate."),
+                io.Mask.Output(display_name="ref_mask", is_output_list=True,
+                               tooltip="That reference's alpha, opaque where "
+                                       "the art is."),
+                io.String.Output(display_name="client_prompt",
+                                 is_output_list=True,
+                                 tooltip="What the client wrote for this "
+                                         "asset, verbatim from the order "
+                                         "sheet."),
+                # Not derivable from `specs`, which is narrowed to the asset:
+                # the Order Tracker wants the EVENT, and it must not change
+                # every time you focus a different one.
+                Order.Output(display_name="event_order",
+                             tooltip="The WHOLE event, unnarrowed — what the "
+                                     "Order Tracker reads. Wire it into "
+                                     "another Task's `order` to browse the "
+                                     "same event on a second node."),
+            ],
+            hidden=[io.Hidden.unique_id],
+            # Queueable on its own: the panel's list of choices only exists
+            # once the node has run at least once on a wired order.
+            is_output_node=True,
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, order=None, category="", asset="",
+                           project_path="", month="", feature="", ref=""):
+        return SymbioticaAssetFocus.fingerprint_inputs(
+            order=order, category=category, asset=asset,
+            project_path=project_path, month=month, feature=feature, ref=ref)
+
+    @classmethod
+    def execute(cls, order=None, category="", asset="",
+                project_path="", month="", feature="",
+                ref="") -> io.NodeOutput:
+        order = _focus_order(order, project_path, month, feature)
+        items, raw = _focus_items(order, category)
+        # The same push under the same channel: the panel is shared, and the
+        # node_id it lands on is this node's own.
+        _focus_push(cls, order, items, raw)
+        cols = _focus_columns(order, items, raw, asset, ref)
+        # By index into the one place the columns are built, never rebuilt
+        # here: narrowed order, ref image, ref mask, client prompt, the event.
+        return io.NodeOutput(cols[4], cols[7], cols[8], cols[2], cols[5])
+
+
+class SymbioticaTaskSpecs(io.ComfyNode):
+    """Task's `specs` wire, fanned back out into the columns a graph wires.
+
+    No widgets and nothing to browse: the pick was made on the Task, and being
+    asked the same question twice is the click that was removed. Its outputs
+    are BUILT from Asset Focus's, so an output added there lands here in the
+    same order and the two cannot drift.
+    """
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        base = SymbioticaAssetFocus.define_schema()
+        return io.Schema(
+            node_id="SymbioticaTaskSpecs",
+            display_name="Task Specs (Symbiotica)",
+            category=base.category,
+            description="Everything about the asset a Task picked: its name, "
+                        "category, the client's prompt, where its renders are "
+                        "filed, the canvas in pixels and the category as a "
+                        "recipe is named. One wire in, the whole record out.",
+            inputs=[Order.Input("specs",
+                                tooltip="A Task's `specs` output — or any "
+                                        "order. Fed a whole event rather than "
+                                        "one asset, every output fans out "
+                                        "over it.")],
+            outputs=copy.deepcopy(base.outputs),
+        )
+
+    @classmethod
+    def execute(cls, specs=None) -> io.NodeOutput:
+        if not isinstance(specs, dict) or "assets" not in specs:
             raise ValueError(
-                f"the event {order.get('feature', '')!r} has no named assets — "
-                "pick a different feature")
-
-        # The RAW asset record, by name: `assets_by_category` keeps the four
-        # fields a run needs and drops `refFiles`, which both the panel below
-        # and the narrowed order at the end read references off.
-        raw = {str(a.get("assetName", "") or "").strip(): a
-               for a in order.get("assets", []) or []}
-
-        # The panel needs the choices before anything is chosen, and the order
-        # arrives on a wire the canvas cannot read. It draws the client's own
-        # reference art beside each name, so every ref file goes over with the
-        # root they are relative to — the root whoever parsed the order
-        # registered, which is what lets the thumbnail route serve out of it.
-        # Every category the EVENT holds, not just the narrowed one: the
-        # `category` dropdown is built from this when the canvas has no parse
-        # of its own (a wired project it cannot read), and a list narrowed to
-        # the current pick would offer nothing to switch to.
-        categories = []
-        for a in order.get("assets", []) or []:
-            if not str(a.get("assetName", "") or "").strip():
-                continue
-            recipe = category_recipe(a)
-            if recipe and recipe not in categories:
-                categories.append(recipe)
-        _push("symbiotica.focus", {
-            "node_id": str(getattr(getattr(cls, "hidden", None),
-                                   "unique_id", "")),
-            "feature": str(order.get("feature", "")),
-            "refs_root": str(order.get("refsRoot", "") or ""),
-            "categories": categories,
-            "assets": [{"name": a["assetName"], "category": a["category"],
-                        "canvas": a.get("canvas", ""),
-                        "refs": list(raw.get(a["assetName"], {})
-                                     .get("refFiles", []) or [])}
-                       for a in items],
-        })
-
-        wanted = str(asset or "").strip()
-        chosen = list(enumerate(items))
-        if wanted:
-            names = [a["assetName"] for a in items]
-            if wanted not in names:
-                # Falling back silently would render the wrong asset under the
-                # wrong name and file it in the wrong folder. An event whose
-                # assets were renamed must say so.
-                raise ValueError(
-                    f"no asset called {wanted!r} in "
-                    f"{order.get('feature', '')!r} — it holds: "
-                    f"{', '.join(names)}")
-            index = names.index(wanted)
-            chosen = [(index, items[index])]
-        # No choice means the whole event, which is what the panel's "all"
-        # says: a button that reads "all" and emits one asset is lying about
-        # what the node is going to do.
-        picked = [item for _, item in chosen]
-        # A narrowed order per asset: the whole record on ONE wire, in the
-        # shape every order consumer already reads. The RAW asset record goes
-        # in — `refFiles` is what a downstream reference read needs.
-        narrowed = [{**order,
-                     "assets": [raw.get(i["assetName"], i)]} for i in picked]
-        # The reference he clicked, resolved here rather than on a second
-        # node: clicking the thumbnail already said which one, and being asked
-        # the same question again is the click he wanted gone.
-        chosen_refs = [_focus_reference(order, raw.get(i["assetName"]),
-                                        i["assetName"], ref) for i in picked]
-        return io.NodeOutput([i["assetName"] for i in picked],
-                             [i["category"] for i in picked],
-                             [i["prompt"] for i in picked],
-                             save_paths(order, picked),
-                             narrowed,
-                             order,
-                             # Re-read rather than taken off the row: an order
-                             # parsed before buckets existed carries no key,
-                             # and the answer is the same either way.
-                             [bucket_for(i) for i in picked],
-                             [r[0] for r in chosen_refs],
-                             [r[1] for r in chosen_refs],
-                             [r[2] for r in chosen_refs],
-                             [category_recipe(raw.get(i["assetName"], i)) for i in picked],
-                             [canvas_size(raw.get(i["assetName"], i))[0] for i in picked],
-                             [canvas_size(raw.get(i["assetName"], i))[1] for i in picked])
+                "wire a Task's `specs` into this node — it holds no pick of "
+                "its own")
+        items, raw = _focus_items(specs)
+        # No push: this node has no panel to fill, and a push under a class
+        # nothing listens for would land on no node at all.
+        return io.NodeOutput(*_focus_columns(specs, items, raw))
 
 
 # The slots an Asset Recipe can hold. ComfyUI has no dynamic outputs, so the
@@ -856,6 +1023,8 @@ class SymbioticaOrderTracker(io.ComfyNode):
 
 PIPELINE_NODE_CLASSES = [
     SymbioticaStudioLibrary,
+    SymbioticaTask,
+    SymbioticaTaskSpecs,
     SymbioticaAssetFocus,
     SymbioticaAssetRecipe,
     SymbioticaPromptBlock,

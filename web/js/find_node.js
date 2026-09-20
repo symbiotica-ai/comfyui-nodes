@@ -293,6 +293,30 @@ const GROUP_PROP = "symbiotica_group";
 // The Set Hub the group came from. A title is what you read, but it is also
 // what he retitles: the id is what carries a following Get across a rename.
 const GROUP_ID_PROP = "symbiotica_group_id";
+// The last title this node wrote for itself. A title it still carries is one
+// it may replace; anything else on the node is a title HE typed, and stays.
+const TITLE_PROP = "symbiotica_title";
+// A title the node wrote for itself, and may write over. What he typed is his.
+export function setOwnTitle(node, title) {
+    node.properties ??= {};
+    const showing = String(node.title ?? "").trim();
+    const mine = String(node.properties[TITLE_PROP] ?? "");
+    if (showing && !STOCK_TITLES.has(showing) && showing !== mine) return false;
+    if (showing === title) return false;
+    node.title = title;
+    node.properties[TITLE_PROP] = title;
+    return true;
+}
+
+// What a Get Hub is: the group it follows, the one name it carries, or neither.
+export function titleForGet(node) {
+    const group = String(node?.properties?.[GROUP_PROP] ?? "").trim();
+    if (group) return `Get ${group}`;
+    const names = (node?.outputs ?? []).map(slotName)
+        .filter((n) => n && n !== GROW);
+    return names.length === 1 ? `Get ${names[0]}` : "Get Hub";
+}
+
 // How a group reads in the picker, beside the plain names.
 const groupLabel = (group) => `${group.title}  ·  ${group.names.length} `
     + `name${group.names.length === 1 ? "" : "s"}`;
@@ -450,11 +474,8 @@ export function groupOf(node, graphs) {
     const group = byId ?? groups.find((g) => g.title === title) ?? null;
     if (!group) return null;
     if (group.title !== title) {
-        const showing = String(node.title ?? "").trim();
-        if (showing === title || showing === `Get ${title}`) {
-            node.title = `Get ${group.title}`;
-        }
         props[GROUP_PROP] = group.title;
+        setOwnTitle(node, `Get ${group.title}`);
     }
     if (group.node?.id != null) props[GROUP_ID_PROP] = group.node.id;
     return group;
@@ -691,23 +712,50 @@ function addGetSlot(node, name) {
 export function loadGroup(node, group) {
     if (!group) return;
     node.properties ??= {};
-    const was = String(node.properties[GROUP_PROP] ?? "").trim();
     node.properties[GROUP_PROP] = group.title;
     node.properties[GROUP_ID_PROP] = group.node?.id ?? null;
+    // Everything that is not in the group goes; a name that IS in it keeps the
+    // slot it already had, and the wire on that slot with it.
+    keepOnly(node, group.names.map((e) => e.name));
+    setOwnTitle(node, titleForGet(node));
+    syncGroup(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
+// One name off the picker. On a hub that follows no group this is the old
+// behaviour -- pull them one at a time -- but on one that DOES, picking a
+// single value is picking that value: the node stops following and carries it
+// alone. Its slot is kept rather than rebuilt, so a wire already on that name
+// is still there afterwards.
+export function loadName(node, entry) {
+    if (!entry) return;
+    node.properties ??= {};
+    if (!String(node.properties[GROUP_PROP] ?? "").trim()) {
+        addGetSlot(node, entry.name);
+        return;
+    }
+    delete node.properties[GROUP_PROP];
+    delete node.properties[GROUP_ID_PROP];
+    keepOnly(node, [entry.name]);
+    if (!(node.outputs ?? []).some((s) => slotName(s) === entry.name)) {
+        ensureTail(node, "out");
+        assignGetSlot(node, node.outputs.length - 1, entry);
+    }
+    setOwnTitle(node, titleForGet(node));
+    ensureTail(node, "out");
+    node.setDirtyCanvas?.(true, true);
+}
+
+// Everything the node carries except these names, wires and all: what it holds
+// is what was asked for, not what was asked for plus what was there before.
+function keepOnly(node, names) {
+    const keep = new Set(names);
     for (let i = (node.outputs?.length ?? 0) - 1; i >= 0; i -= 1) {
-        if (slotName(node.outputs[i]) === GROW) continue;
+        const name = slotName(node.outputs[i]);
+        if (name === GROW || keep.has(name)) continue;
         node.disconnectOutput?.(i);
         node.removeOutput(i);
     }
-    // The title follows the group -- while it is still the name every Get Hub
-    // is born with, or the group it was showing a second ago. A title typed by
-    // hand is his and stays.
-    const stock = ["", "Get Hub", TITLES[GET_HUB], was, `Get ${was}`];
-    if (stock.includes(String(node.title ?? "").trim())) {
-        node.title = `Get ${group.title}`;
-    }
-    syncGroup(node);
-    node.setDirtyCanvas?.(true, true);
 }
 
 // What following a group means, re-asserted on every draw: the Set Hub's names
@@ -968,6 +1016,7 @@ function assertTailOnDraw(node, kind) {
             } else {
                 syncGroup(this);
                 dropDeadNames(this);
+                setOwnTitle(this, titleForGet(this));
             }
         }
         return onDrawForeground?.apply(this, arguments);
@@ -1109,7 +1158,8 @@ registerSymbioticaExtension(app, {
                     const row = (this._symPullRows ?? [])
                         .find((r) => r.label === value);
                     if (row?.group) loadGroup(this, row.group);
-                    else addGetSlot(this, String(row?.entry?.name ?? value));
+                    else if (row?.entry) loadName(this, row.entry);
+                    else addGetSlot(this, String(value));
                 }, options);
                 // The picker is a button, not a value: saving it would restore
                 // a name into a node whose slots already say which they are.

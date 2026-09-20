@@ -361,6 +361,15 @@ async def parse_order(request):
     month = request.query.get("month", "").strip()
     assets_root = ""
     if project:
+        # The folder he typed IS the project — the same act as queueing the
+        # node, which until now was the only way one was ever learned. Without
+        # this the panel cannot read its own tree before the graph has run
+        # once, and `order_cache` keeps the 403 as a FINAL answer for the rest
+        # of the session. What a request may touch is still CONTAINMENT: every
+        # path below is derived from this folder by `resolve_month`, and an
+        # `order_path` the request named for itself is checked against it and
+        # refused when it climbs out.
+        register_project(project)
         r = resolve_month(project, month)
         order_path = order_path or r["order_path"]
         refs_path = refs_path or r["refs_path"]

@@ -104,9 +104,31 @@ function nodeText(graph, node, slot, depth) {
         const widget = node.widgets?.find((w) => typeof w.value === "string");
         return widget ? String(widget.value) : null;
     }
+    // Task Specs holds no pick of its own — the Task feeding its `specs`
+    // wire made it. Same question, one hop up, and the answer is read off the
+    // SAME output name rather than the same slot: the two nodes do not share
+    // an output column.
+    if (type === "SymbioticaTaskSpecs") {
+        const input = node.inputs?.find((i) => i.name === "specs");
+        const link = input?.link == null ? null
+            : (graph.links?.get?.(input.link) ?? graph.links?.[input.link]);
+        const origin = link ? graph.getNodeById?.(link.origin_id) : null;
+        if (!origin) return null;
+        const wanted = node.outputs?.[slot]?.name;
+        const picked = String(widgetValue(origin, "category") ?? "").trim();
+        if (wanted === "category" || wanted === "category_recipe") {
+            if (!picked || picked === "All") return null;
+            return wanted === "category"
+                ? picked.replace(/\s+\d+x\d+$/i, "") : picked;
+        }
+        const value = wanted ? widgetValue(origin, wanted) : undefined;
+        return typeof value === "string" ? value : null;
+    }
     // Asset Recipe is the same node with widget slots on the end, and it
-    // names a recipe the same way.
-    if (type === "SymbioticaAssetFocus" || type === "SymbioticaAssetRecipe") {
+    // names a recipe the same way. So is Task — the same widgets under a
+    // sidebar.
+    if (type === "SymbioticaAssetFocus" || type === "SymbioticaAssetRecipe"
+            || type === "SymbioticaTask") {
         const output = node.outputs?.[slot]?.name;
         // The dropdown holds the recipe label (`Appliance 1x2`); the plain
         // `category` output is that without its size, and "All" names nothing.

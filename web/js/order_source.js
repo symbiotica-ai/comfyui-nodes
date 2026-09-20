@@ -37,7 +37,7 @@ function widgetOf(node, name) {
 // Event combo label ("Mini 1 — Ghostly Goodies") vs the stored key ("Mini 1").
 // The value may be either form (saved workflows keep the plain feature); the
 // key strips the " — <name>" the combo appends.
-function eventLabel(e) {
+export function eventLabel(e) {
     return e.eventName ? `${e.feature} — ${e.eventName}` : e.feature;
 }
 function featureKey(value) {

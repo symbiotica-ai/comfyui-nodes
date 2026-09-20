@@ -209,9 +209,14 @@ KJNodes pairs, and it is in 1.48.7 as well as 1.52.7.
   `paths`, `models`. The Get Hub's picker lists the groups above the individual
   names, and taking one loads every name on that hub at once. The group a Get
   is following rides on `node.properties.symbiotica_group` (serialises, and
-  survives a retitle). Picking a group REPLACES what the node holds, wires and
-  all — the node becomes that group, it does not accumulate the last one plus
-  this one — and the title follows, from the stock title or from the group it
+  survives a retitle). **The picker sets what the node holds**: a group replaces
+  what was there — the node becomes that group, it does not accumulate the last
+  one plus this one — and a single value picked on a hub that FOLLOWS a group
+  switches it to that one value and stops it following. A name that survives
+  the switch keeps the slot it had, so the wire on it is not cut. On a hub
+  following nothing, a single value is added, which is the one-at-a-time pull
+  the node started as. The title says which of the three it is (`titleForGet`),
+  and only ever overwrites a title the node wrote itself. The title follows, from the stock title or from the group it
   was showing a second ago. A title typed by hand is his and stays. A followed group is re-asserted on draw, so a name added to
   the Set later arrives — APPENDED, never inserted, because a wire holds on to
   a slot's INDEX. A name that leaves the group leaves the Get too, unless a

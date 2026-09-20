@@ -5,8 +5,9 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, injectHubStyles, ghostButtonCss } from "./hub_theme.js";
-import { attachHoverZoom, el, emptyState, hideHoverZoom, imageFullUrl,
-         imageThumbUrl, pinPanelWidth } from "./browser_chrome.js";
+import { attachHoverZoom, CHECKER, el, emptyState, hideHoverZoom, ICON,
+         iconButton, imageFullUrl, imageThumbUrl, ONE_LINE, pinPanelWidth,
+         sidebarShell, svgIcon, treeRow } from "./browser_chrome.js";
 // The order picker — project, month, feature, "Read folder". This node hosts
 // the whole selection: "order specs and asset focus are 2 nodes
 // that are doing one thing… i select month and feature in specs and asset in
@@ -18,6 +19,11 @@ const NODE_CLASS = "SymbioticaAssetFocus";
 // column, so the selection widgets, the panel and the run's push serve
 // both classes. `web/js/asset_recipe.js` adds only the slots.
 export const FOCUS_CLASSES = [NODE_CLASS, "SymbioticaAssetRecipe"];
+// Every class that HOLDS a parsed order and can stand at the top of an order
+// wire. `orderSource` walks up to one of these, so a Task between two Focus
+// nodes has to be here or the panel below it reads "wire an order in" until
+// the graph is queued.
+const ORDER_SOURCES = [...FOCUS_CLASSES, "SymbioticaTask"];
 const MIN_NODE_W = 300;
 // The client's own reference art for an asset, at the size the cell strips
 // use, so every panel that lists these assets reads alike.
@@ -45,7 +51,7 @@ const featureKey = (value) => String(value ?? "").split(" — ")[0].trim();
 function orderSource(node) {
     let cur = upstreamNode(node, "order");
     for (let hop = 0; hop < 6 && cur; hop++) {
-        if (cur.comfyClass === NODE_CLASS) return cur;
+        if (ORDER_SOURCES.includes(cur.comfyClass)) return cur;
         const next = upstreamNode(cur, "order");
         if (next) { cur = next; continue; }
         // A reroute names its input whatever it likes; one wired input is
@@ -742,4 +748,510 @@ api.addEventListener("symbiotica.focus", (event) => {
     // source node has published nothing to the canvas.
     node._symFocusRefsRoot = String(detail.refs_root ?? "");
     node._symRenderFocus?.();
+});
+
+
+// ===========================================================================
+// Task — the browser.
+//
+// The same selection Asset Focus makes, made in a SIDEBAR instead of four
+// dropdowns: month, event, category and asset as a tree, the client's own
+// reference art in the pane beside it, and the prompt they wrote under it.
+// The node emits the pick on ONE wire (`specs`) plus the two things you are
+// looking at while you browse, and a Task Specs on the end of that wire fans
+// the rest back out — so the node you browse on is not thirteen sockets tall.
+//
+// It lives in THIS file, not a new one: a new `web/js` file never reaches the
+// Modal sandbox (the Volume sync updates files a running sandbox already has
+// and never creates one), and `hideWidget` is exported from here and imported
+// by three other panels.
+// ===========================================================================
+export const TASK_CLASS = "SymbioticaTask";
+const TASK_MIN_W = 560;
+// The sidebar's width and fold are VIEW state, so they ride on properties.
+// Widgets would shift the saved values of every workflow holding the node.
+const TASK_SIDE = "symbiotica_task_sidebar";
+const TASK_SHUT = "symbiotica_task_shut";
+// The strip under the big view. Two-up on a retina panel, same as the focus
+// panel's rows, so a reference reads the same size wherever it is drawn.
+const STRIP_PX = 40;
+
+// The tree's four levels as one flat list of rows, top to bottom, in the order
+// the ORDER gives them: months calendar-wise from the server, events and
+// categories in first-appearance order down the sheet. Never alphabetical —
+// `walkTree` sorts, and the sheet's order is the order he reads.
+//
+// Rows are built here rather than by `walkTree` for a second reason: that
+// function derives parentage from a slash-joined key, and his sheet holds
+// names with slashes in them and two rows that flatten to the same key. A row
+// is its own object; nothing is looked up by its path.
+function taskRows(node, state) {
+    const rows = [];
+    const month = String(widgetOf(node, "month")?.value ?? "").trim();
+    for (const m of state.months) {
+        const openMonth = m === month;
+        rows.push({ kind: "month", label: m, month: m, open: openMonth,
+                    rel: m });
+        if (!openMonth) continue;
+        const wantFeature = featureKey(widgetOf(node, "feature")?.value);
+        for (const event of state.events) {
+            const key = featureKey(event.feature);
+            const label = event.eventName
+                ? `${event.feature} — ${event.eventName}` : event.feature;
+            const openEvent = key === wantFeature
+                || (!wantFeature && event === state.events[0]);
+            rows.push({ kind: "feature", label, month: m, feature: label,
+                        open: openEvent, rel: `${m}/${label}` });
+            if (!openEvent) continue;
+            // Named assets only, and grouped the way `assets_by_category`
+            // groups them — the panel has to show the run order it describes.
+            // The nine unnamed padding rows in a real sheet are dropped here,
+            // exactly as Python drops them.
+            const groups = new Map();
+            for (const a of event.assets ?? []) {
+                const name = String(a.assetName ?? "").trim();
+                if (!name) continue;
+                const key2 = categoryRecipeOf(a) || "uncategorised";
+                if (!groups.has(key2)) groups.set(key2, []);
+                groups.get(key2).push({
+                    name,
+                    category: a.category ?? "",
+                    canvas: a.canvas ?? "",
+                    prompt: String(a.prompt ?? ""),
+                    refs: (a.refFiles ?? []).map(String),
+                });
+            }
+            const pick = String(widgetOf(node, "category")?.value ?? "").trim();
+            const chosen = String(widgetOf(node, "asset")?.value ?? "").trim();
+            for (const [recipe, members] of groups) {
+                const holdsPick = members.some((a) => a.name === chosen);
+                const openCat = holdsPick
+                    || recipe.toLowerCase() === pick.toLowerCase();
+                rows.push({ kind: "category", label: recipe, count: members.length,
+                            month: m, feature: label, category: recipe,
+                            open: openCat, rel: `${m}/${label}/${recipe}` });
+                if (!openCat) continue;
+                for (const a of members) {
+                    rows.push({ kind: "asset", label: a.name, asset: a,
+                                month: m, feature: label, category: recipe,
+                                rel: `${m}/${label}/${recipe}/${a.name}` });
+                }
+            }
+        }
+    }
+    return rows;
+}
+
+function taskPanel(node) {
+    injectHubStyles();
+
+    // Everything the tree draws, re-read from the node on every render: the
+    // month list the project holds, and the events of the ONE month the
+    // widget names. One month is parsed at a time — the `month` widget is
+    // what Python reads, so expanding another month IS picking it, and there
+    // is never a second references root to confuse a thumbnail with.
+    const state = { months: [], events: [] };
+    const readState = () => {
+        state.months = (node._symMonths ?? []).map(String);
+        const month = String(widgetOf(node, "month")?.value ?? "").trim();
+        if (month && !state.months.includes(month)) state.months = [month, ...state.months];
+        state.events = Array.isArray(node._symEvents) ? node._symEvents : [];
+    };
+
+    // Every asset in the open event, by its display path — what the search
+    // box offers. A duplicate name resolves to the last row, which is what
+    // Python's own `raw` map does with the same sheet.
+    const searchable = () => {
+        const out = new Map();
+        for (const row of taskRows(node, state)) {
+            if (row.kind === "asset") out.set(`${row.category}/${row.label}`, row);
+        }
+        return out;
+    };
+
+    const shell = sidebarShell(node, {
+        sideProp: TASK_SIDE, shutProp: TASK_SHUT, sideDefault: 240,
+        repaint: () => render(),
+        // Above both panes, so it survives the fold — which is how this node
+        // sits once an asset is picked and the pane is the whole of it.
+        search: {
+            placeholder: "Search assets…",
+            list: () => [...searchable().keys()],
+            onPick: (rel) => {
+                const row = searchable().get(rel);
+                if (row) chooseAsset(row);
+            },
+        },
+        headButtons: [
+            iconButton("refresh", "Re-read this project's orders", () => {
+                // The button, not a second fetch: it is a real widget holding
+                // a saved slot, it renames itself while it reads, and two
+                // paths into the same parse is two answers to keep in step.
+                const btn = node.widgets?.find(
+                    (w) => w.name?.endsWith?.("Read folder"));
+                btn?.callback?.();
+            }),
+        ],
+    });
+    const { container, tree } = shell;
+
+    // --- the pane -----------------------------------------------------------
+    const crumb = el("div", `flex:1;min-width:0;${ONE_LINE}`
+        + `font:11px ${HUB.mono};color:${HUB.inkSubtle};`);
+    const runs = el("div", `flex:none;font:10px ${HUB.mono};`
+        + `color:${HUB.inkTertiary};`);
+    const mainHead = el("div", "display:flex;align-items:center;gap:6px;"
+        + `padding:3px 6px;flex:none;background:${HUB.surface2};`
+        + `border-bottom:1px solid ${HUB.hairline};`);
+    mainHead.append(crumb, runs);
+
+    // The reference: a strip of every file the client sent for this asset,
+    // and the armed one big underneath. Clicking a tile is the whole pick —
+    // the asset AND which of its art `ref_image` carries.
+    const strip = el("div", "display:flex;gap:4px;flex-wrap:wrap;flex:none;"
+        + `padding:5px 6px;border-bottom:1px solid ${HUB.hairline};`
+        + "max-height:96px;overflow-y:auto;");
+    const view = el("div", "flex:1;min-height:60px;display:flex;padding:6px;"
+        + "align-items:center;justify-content:center;overflow:hidden;"
+        + `background:${HUB.surface1};`);
+    const shown = el("img", "max-width:100%;max-height:100%;object-fit:contain;"
+        + `display:none;background-image:${CHECKER};background-size:16px 16px;`
+        + "background-position:0 0,0 8px,8px -8px,-8px 0;");
+    shown.alt = "the client reference";
+    // What the client wrote, under the art they sent — the two halves of the
+    // brief, on screen together. Read-only: the order sheet is theirs.
+    const promptHead = el("div", `flex:none;padding:3px 6px;`
+        + `font:10px ${HUB.font};letter-spacing:.06em;text-transform:uppercase;`
+        + `color:${HUB.inkSubtle};background:${HUB.surface2};`
+        + `border-top:1px solid ${HUB.hairline};`, "client prompt");
+    const promptBox = el("div", "flex:none;max-height:38%;min-height:42px;"
+        + `overflow:auto;padding:6px 8px;font:11px ${HUB.font};`
+        + `color:var(--input-text, ${HUB.ink});white-space:pre-wrap;`
+        + `background:${HUB.surface1};`);
+    promptBox.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
+    shell.main.append(mainHead, strip, view, promptHead, promptBox);
+
+    // No `computeSize`: LiteGraph builds a node's MINIMUM height by summing
+    // its widgets and prefers `computeSize` over `computeLayoutSize`, so
+    // anything returned there becomes a floor the corner cannot drag past.
+    node.addDOMWidget("task_panel", "sym_task", container, {
+        serialize: false, hideOnZoom: true,
+        getMinHeight: () => 60,
+    });
+    const syncPanelWidth = pinPanelWidth(node, container);
+    node.size[0] = Math.max(node.size[0], TASK_MIN_W);
+
+    // --- what the tree writes ------------------------------------------------
+    // The widgets are the storage and what Python reads; the tree is the only
+    // way to set them. They stay plain text widgets — a combo drops a value
+    // that is not among its options, and hiding one does not stop it.
+    const put = (name, value) => {
+        const w = widgetOf(node, name);
+        if (w) w.value = value;
+    };
+
+    function chooseMonth(row) {
+        if (String(widgetOf(node, "month")?.value ?? "") === row.month) {
+            render();
+            return;
+        }
+        put("month", row.month);
+        // A new month is a new order: nothing chosen in the old one survives.
+        put("feature", "");
+        put("category", "");
+        put("asset", "");
+        put("ref", "");
+        node._symFocusAssets = [];
+        node._symFocusCategories = [];
+        // The widget's own callback is what re-parses; calling it keeps the
+        // one path into `refreshOrderSpecs` rather than opening a second.
+        widgetOf(node, "month")?.callback?.(row.month);
+        render();
+    }
+
+    function chooseFeature(row) {
+        put("feature", row.feature);
+        put("category", "");
+        put("asset", "");
+        put("ref", "");
+        node._symFocusAssets = [];
+        node._symFocusCategories = [];
+        widgetOf(node, "feature")?.callback?.(row.feature);
+        render();
+    }
+
+    // A category row is the "all assets of this type" run — what the old
+    // panel's `all` button said. `runs N` in the pane header is where you read
+    // what that means before you queue it.
+    function chooseCategory(row) {
+        const held = String(widgetOf(node, "category")?.value ?? "").trim();
+        put("category", held === row.category ? "" : row.category);
+        put("asset", "");
+        put("ref", "");
+        render();
+    }
+
+    // An asset row is one asset. `category` is CLEARED rather than set to the
+    // asset's own: with a name chosen the narrowing decides nothing, and a
+    // stale one that excludes the name is a hard refusal at queue time.
+    function chooseAsset(row) {
+        const held = String(widgetOf(node, "asset")?.value ?? "").trim();
+        const same = held === row.label;
+        put("asset", same ? "" : row.label);
+        put("category", "");
+        // A filename belongs to ONE asset: carried over it would name nothing
+        // in the new one's list and silently mean "the first" while the tile
+        // it points at is still lit.
+        put("ref", "");
+        if (same) put("category", "");
+        node.setDirtyCanvas?.(true, true);
+        render();
+    }
+
+    function chooseRef(row, file) {
+        put("asset", row.label);
+        put("category", "");
+        put("ref", file);
+        node.setDirtyCanvas?.(true, true);
+        render();
+    }
+
+    // --- drawing -------------------------------------------------------------
+    // A chevron on the three container levels, an empty box of the same width
+    // on an asset row, so every name in a level starts at the same x.
+    function chevron(row) {
+        const box = el("span", "flex:none;display:flex;width:12px;"
+            + `color:${HUB.inkTertiary};`);
+        if (row.kind !== "asset") {
+            box.innerHTML = svgIcon(row.open ? ICON.collapse : ICON.expand, 11);
+            box.style.transform = row.open ? "rotate(90deg)" : "";
+        }
+        return box;
+    }
+
+    function refTile(row, file, lit) {
+        const path = `${refsRoot()}/${file}`;
+        const img = el("img",
+            `width:${STRIP_PX}px;height:${STRIP_PX}px;object-fit:contain;`
+            + `background:${HUB.mat};border-radius:3px;flex:none;cursor:pointer;`
+            + `border:1px solid ${lit ? HUB.accent : HUB.hairline};`
+            + (lit ? `outline:1px solid ${HUB.accent};outline-offset:1px;` : ""));
+        img.src = imageThumbUrl(path, STRIP_PX * 2);
+        img.loading = "lazy";
+        img.draggable = false;
+        img.title = lit ? `${file} — sent on ref_image` : file;
+        // A reference the disk has lost must not leave a broken-image glyph in
+        // the strip; an empty slot reads as "no art for this one".
+        img.addEventListener("error", () => { img.style.visibility = "hidden"; });
+        img.addEventListener("pointerdown", (e) => e.stopPropagation());
+        img.addEventListener("click", (e) => {
+            e.stopPropagation();
+            hideHoverZoom();
+            chooseRef(row, file);
+        });
+        return img;
+    }
+
+    const refsRoot = () => (node._symFocusAssets?.length
+        ? node._symFocusRefsRoot : "") || node._symRefsRoot || "";
+
+    // The reference files for one asset, from whichever list holds them: a run
+    // pushes them and the canvas parse publishes them, and between a restart
+    // and the first queue only one of the two exists.
+    function refsFor(row) {
+        if (row.asset?.refs?.length) return row.asset.refs;
+        const hit = (node._symFocusAssets ?? []).find((a) => a.name === row.label);
+        return (hit?.refs ?? []).map(String);
+    }
+
+    function promptFor(row) {
+        if (row.asset?.prompt) return row.asset.prompt;
+        const hit = (node._symFocusAssets ?? []).find((a) => a.name === row.label);
+        return String(hit?.prompt ?? "");
+    }
+
+    function selectedRow(rows) {
+        const chosen = String(widgetOf(node, "asset")?.value ?? "").trim();
+        if (!chosen) return null;
+        return rows.find((r) => r.kind === "asset" && r.label === chosen) ?? null;
+    }
+
+    function drawPane(rows) {
+        const row = selectedRow(rows);
+        const assets = rows.filter((r) => r.kind === "asset");
+        const narrow = String(widgetOf(node, "category")?.value ?? "").trim();
+        const inRun = narrow
+            ? assets.filter((r) => r.category.toLowerCase() === narrow.toLowerCase())
+            : assets;
+        // Say what the node will actually emit, not just what is listed.
+        runs.textContent = assets.length
+            ? `runs ${row ? 1 : inRun.length}` : "";
+        crumb.textContent = row
+            ? `${row.month} / ${row.feature} / ${row.category} / ${row.label}`
+            : (narrow ? `${narrow} · every asset` : "every asset in the event");
+
+        strip.replaceChildren();
+        shown.style.display = "none";
+        view.replaceChildren(shown);
+        promptBox.replaceChildren();
+
+        if (!row) {
+            view.appendChild(emptyState(assets.length
+                ? "Pick an asset in the tree."
+                : "No assets to show yet."));
+            promptBox.appendChild(emptyState("—"));
+            return;
+        }
+
+        const files = refsFor(row);
+        const armed = String(widgetOf(node, "ref")?.value ?? "").trim();
+        const lit = files.includes(armed) ? armed : files[0];
+        if (!files.length || !refsRoot()) {
+            strip.appendChild(emptyState("no client reference for this asset"));
+            view.appendChild(emptyState("nothing to show"));
+        } else {
+            for (const file of files) strip.appendChild(refTile(row, file, file === lit));
+            const path = `${refsRoot()}/${lit}`;
+            shown.src = imageFullUrl(path);
+            shown.style.display = "";
+            shown.title = lit;
+            attachHoverZoom(shown, () => ({
+                w: shown.naturalWidth, h: shown.naturalHeight,
+                label: row.label, hint: lit,
+                placeholder: shown.src,
+                src: () => imageFullUrl(path),
+            }));
+        }
+        promptHead.textContent = `client prompt${row.asset?.canvas
+            ? ` · ${row.asset.canvas}` : ""}`;
+        const text = promptFor(row);
+        promptBox.appendChild(text
+            ? el("div", "", text)
+            : emptyState("no prompt on this row"));
+    }
+
+    function render() {
+        readState();
+        hideHoverZoom();
+        const folded = shell.layout();
+        const rows = taskRows(node, state);
+
+        if (!folded) {
+            tree.replaceChildren();
+            if (!rows.length) {
+                const project = widgetOf(node, "project_path");
+                const hasProject = Boolean(project?.value?.trim?.())
+                    || node.inputs?.some((i) => i.name === "project_path"
+                                             && i.link != null);
+                const wired = upstreamNode(node, "order");
+                tree.appendChild(emptyState(
+                    wired
+                        ? "no assets from the wired order yet — queue this node once"
+                        : hasProject
+                            ? "reading this project's orders…"
+                            : "set project_path, or wire an order in"));
+            }
+            const chosen = String(widgetOf(node, "asset")?.value ?? "").trim();
+            const narrow = String(widgetOf(node, "category")?.value ?? "").trim();
+            for (const row of rows) {
+                const on = (row.kind === "asset" && row.label === chosen)
+                    || (row.kind === "category" && !chosen
+                        && row.category.toLowerCase() === narrow.toLowerCase());
+                tree.appendChild(treeRow({
+                    kind: row.kind, rel: row.rel,
+                    depth: ["month", "feature", "category", "asset"].indexOf(row.kind),
+                    tone: on ? HUB.selBg : "",
+                    labelColour: on ? HUB.selInk : `var(--input-text, ${HUB.ink})`,
+                    lead: chevron(row),
+                    // The count rides in the label: `treeRow` hides its
+                    // `actions` until the pointer is on the row, and a badge
+                    // you have to hover for is a badge nobody reads.
+                    label: row.count ? `${row.label} · ${row.count}` : row.label,
+                    onClick: () => {
+                        if (row.kind === "month") chooseMonth(row);
+                        else if (row.kind === "feature") chooseFeature(row);
+                        else if (row.kind === "category") chooseCategory(row);
+                        else chooseAsset(row);
+                    },
+                }));
+            }
+        }
+        drawPane(rows);
+        shell.search?.refresh?.();
+        // Redraw, never resize: the panel's height belongs to his drag.
+        requestAnimationFrame(() => {
+            if (node.size[0] < TASK_MIN_W) node.setSize?.([TASK_MIN_W, node.size[1]]);
+            syncPanelWidth();
+            node.setDirtyCanvas?.(true, true);
+        });
+    }
+
+    node._symRenderFocus = render;
+    // The order upstream changed — a different month, a different event, a
+    // re-parse. The list a RUN reported belongs to the event that ran, so it
+    // goes with it.
+    node._symOrderChanged = (source) => {
+        if (!source || (orderSource(node) ?? node) !== source) return;
+        node._symFocusAssets = [];
+        node._symFocusCategories = [];
+        node._symAskedFor = null;
+        render();
+    };
+    render();
+}
+
+registerSymbioticaExtension(app, {
+    name: "symbiotica.task",
+    async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name !== TASK_CLASS) return;
+
+        const onNodeCreated = nodeType.prototype.onNodeCreated;
+        nodeType.prototype.onNodeCreated = function () {
+            onNodeCreated?.apply(this, arguments);
+            // The project/month/feature front end, the "Read folder" button
+            // and the auto-read ladder that fills the pickers without a
+            // click. It only acts once `project_path` resolves, so a node fed
+            // by a wire is unaffected.
+            wireOrderSpecs(this);
+            // Every widget the tree drives is hidden but PRESENT: they are
+            // what Python reads and what a saved workflow restores, and
+            // removing one would shift every value after it. `project_path`
+            // stays visible and typeable — it is the one thing the tree
+            // cannot tell you.
+            for (const name of ["month", "feature", "category", "asset", "ref"]) {
+                hideWidget(widgetOf(this, name));
+            }
+            hideWidget(this.widgets?.find((w) => w.name?.endsWith?.("Read folder")));
+            // `month` and `feature` were made combos by `wireOrderSpecs`, and
+            // a combo drops a value that is not among its options — which is
+            // every value, until the first parse lands. Hold the value open.
+            for (const name of ["month", "feature"]) {
+                const w = widgetOf(this, name);
+                if (!w?.options) continue;
+                const inner = w.options.values;
+                w.options.values = () => {
+                    const list = (typeof inner === "function" ? inner() : inner) ?? [];
+                    const held = String(w.value ?? "");
+                    return held && !list.includes(held) ? [...list, held] : list;
+                };
+            }
+            taskPanel(this);
+        };
+
+        const onConfigure = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function (info) {
+            onConfigure?.apply(this, arguments);
+            queueMicrotask(() => this._symRenderFocus?.());
+        };
+
+        const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+        nodeType.prototype.onConnectionsChange = function (type, index, connected,
+                                                            link, ioSlot) {
+            onConnectionsChange?.apply(this, arguments);
+            if (ioSlot?.name === "order" || ioSlot?.name === "project_path") {
+                this._symAskedFor = null;
+                queueMicrotask(() => this._symRenderFocus?.());
+            }
+        };
+    },
 });

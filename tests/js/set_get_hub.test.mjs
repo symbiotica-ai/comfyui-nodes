@@ -311,6 +311,8 @@ test("picking a second group replaces the first, it does not add to it",
     assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
                      ["incompetent", "claude", "+"]);
     assert.equal(get.title, "Get settings-02");
+    // A wire on a name the new group also has is not cut: the slot is kept.
+    get.outputs[0].links = [11];
     // The other group now: what it held before is gone, and the title moves
     // with it -- a node reading settings-02 while it carries settings-01 is a
     // node lying about what it holds.
@@ -380,6 +382,48 @@ test("a title keeps the side it is on", async () => {
     // The stock title already says it.
     const fresh = { title: "Get Hub (Symbiotica)" };
     assert.equal(keepSideInTitle(fresh, "Get"), false);
+});
+
+test("picking one value off a hub that follows a group switches it to that value",
+     async () => {
+    const { loadGroup, loadName, publishedGroups, publishedNames, titleForGet } =
+        await import("../../web/js/find_node.js");
+    const hub = setHub([["asset_name", "STRING", 1], ["client_prompt", "STRING", 2]]);
+    hub.id = 3;
+    hub.title = "task-specs";
+    const graph = { nodes: [hub] };
+    const get = slotHolder([], []);
+    get.type = "SymbioticaGetHub";
+    get.graph = graph;
+    get.disconnectOutput = () => {};
+    graph.nodes.push(get);
+
+    loadGroup(get, publishedGroups([graph])[0]);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["asset_name", "client_prompt", "+"]);
+    assert.equal(get.title, "Get task-specs");
+
+    // The slot he already wired is the one he is picking: it is kept, not
+    // rebuilt, so the wire on it is still there afterwards.
+    const wired = get.outputs[1];
+    wired.links = [42];
+    const entry = publishedNames([graph]).find((e) => e.name === "client_prompt");
+    loadName(get, entry);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["client_prompt", "+"]);
+    assert.equal(get.outputs[0], wired);
+    assert.deepEqual(get.outputs[0].links, [42]);
+    // It follows no group now, and says what it does hold.
+    assert.equal(get.properties.symbiotica_group, undefined);
+    assert.equal(get.title, "Get client_prompt");
+
+    // Following nothing, a second name is added rather than replacing: pulling
+    // them one at a time is what the node was for.
+    loadName(get, publishedNames([graph]).find((e) => e.name === "asset_name"));
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["client_prompt", "asset_name", "+"]);
+    // Two names are not one name, and the title says neither.
+    assert.equal(titleForGet(get), "Get Hub");
 });
 
 test("a Get Hub follows no group until it is told to", async () => {
