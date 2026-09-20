@@ -72,9 +72,13 @@ function pathOf(node, seen = new Set()) {
     if (link == null) return "";
     const ran = ranPath(node);
     if (ran) return ran;
-    const origin = app.graph.getNodeById(app.graph.links[link]?.origin_id);
+    const wire = app.graph.links[link];
+    const origin = app.graph.getNodeById(wire?.origin_id);
     if (!origin) return "";
-    let found = resolveProjectPath(origin) || nodeOutputString(origin, new Set());
+    // The slot the wire left, not just the node: a Get Hub carries one constant
+    // per output, so the node alone does not say which path this is.
+    let found = resolveProjectPath(origin)
+        || nodeOutputString(origin, new Set(), wire?.origin_slot ?? 0);
     if (!found && origin.inputs?.some((i) => i.name === "order")) {
         found = pathOf(origin, seen);
     }

@@ -13,6 +13,7 @@ import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, ghostButtonCss, injectHubStyles } from "./hub_theme.js";
 import { el, pinPanelWidth } from "./browser_chrome.js";
+import { findSource, graphScope, slotName } from "./find_node.js";
 
 const NODE_CLASS = "SymbioticaRecipe";
 const SHARED = "shared";
@@ -76,15 +77,23 @@ function widgetValue(node, name) {
 
 function inputText(graph, node, inputName, depth) {
     const index = node.inputs?.findIndex((i) => i.name === inputName) ?? -1;
-    const input = index >= 0 ? node.inputs[index] : null;
+    if (index < 0) return undefined;
+    return inputTextAt(graph, node, index, depth, inputName);
+}
+
+// The same by slot INDEX, which is what a hub lookup hands back: a Set Hub's
+// slots are named for their constants and a KJ Set node's only input is named
+// after its type, so neither name is worth a second search.
+function inputTextAt(graph, node, index, depth, inputName) {
+    const input = node.inputs?.[index];
     if (!input) return undefined;
     if (input.link != null) {
-        const link = graph.links?.[input.link];
+        const link = graph.links?.get?.(input.link) ?? graph.links?.[input.link];
         const origin = link ? graph.getNodeById?.(link.origin_id) : null;
         if (!origin) return null;
         return nodeText(graph, origin, link.origin_slot ?? 0, depth + 1);
     }
-    const value = widgetValue(node, input.widget?.name ?? inputName);
+    const value = widgetValue(node, input.widget?.name ?? inputName ?? input.name);
     return value === undefined ? undefined : String(value);
 }
 
@@ -126,13 +135,24 @@ function nodeText(graph, node, slot, depth) {
         }
         return parts.join(delimiter);
     }
+    // A Get Hub output. The constant's name is the LABEL of the slot the wire
+    // left -- one hub stands in for twenty KJ pairs, so the node alone does not
+    // say which value this is -- and from there it is the same hop: whatever is
+    // wired INTO the slot publishing that name.
+    if (type === "SymbioticaGetHub") {
+        const source = findSource(graphScope(node.graph, graph),
+                                  slotName(node.outputs?.[slot]));
+        if (!source) return null;
+        return inputTextAt(source.graph ?? graph, source.node, source.index,
+                           depth) ?? null;
+    }
     // KJNodes' Set/Get pair. A GetNode's only widget holds the NAME of the
     // constant, never its value, so the value is one input back on the SetNode
     // carrying the same name -- a walk the canvas can do without a run.
     if (type === "GetNode" || type === "SetNode") {
         const setter = type === "SetNode" ? node : findSetter(graph, node);
-        const first = setter?.inputs?.[0]?.name;
-        return first ? inputText(graph, setter, first, depth) ?? null : null;
+        return setter?.inputs?.[0]
+            ? inputTextAt(graph, setter, 0, depth) ?? null : null;
     }
     if (PASS_THROUGH.has(type)) {
         const first = node.inputs?.[0]?.name;

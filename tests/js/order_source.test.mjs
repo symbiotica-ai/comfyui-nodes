@@ -52,6 +52,38 @@ test("a project_path arriving through a Set/Get pair resolves", async () => {
     assert.equal(resolveProjectPath(focus), PROJECT);
 });
 
+test("a project_path arriving through a hub is read off the slot it left",
+     async () => {
+    // A Get Hub carries one constant per OUTPUT slot, so the node alone does
+    // not say which path this is: the walk has to be told the slot the wire
+    // left, or every panel reads the hub's first name whatever it was wired to.
+    reset();
+    const other = await node("SymbioticaStudioLibrary", { selection: "studios/other" });
+    const library = await node("SymbioticaStudioLibrary", { selection: PROJECT });
+    const hub = await node("SymbioticaSetHub");
+    hub.inputs = [];
+    link(other, hub, "controlnet");
+    link(library, hub, "project_path");
+    const getter = await node("SymbioticaGetHub");
+    getter.outputs = [{ name: "controlnet", links: [] },
+                      { name: "project_path", links: [] }];
+    const focus = await reader();
+    link(getter, focus, "project_path", 1);
+
+    assert.equal(resolveProjectPath(focus), PROJECT);
+});
+
+test("a hub slot nothing publishes resolves to nothing, not to its name",
+     async () => {
+    reset();
+    const getter = await node("SymbioticaGetHub");
+    getter.outputs = [{ name: "project_path", links: [] }];
+    const focus = await reader();
+    link(getter, focus, "project_path");
+
+    assert.equal(resolveProjectPath(focus), "");
+});
+
 test("a Get with no Set of that name resolves to nothing, not to its name",
      async () => {
     // A folder called `_project_path` does not exist; asking for one reads as

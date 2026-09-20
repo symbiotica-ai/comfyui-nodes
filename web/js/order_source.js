@@ -6,6 +6,7 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { createOrderCache } from "./order_cache.js";
+import { findSource, graphScope, slotName } from "./find_node.js";
 
 // Order parses are requested from render paths, which LiteGraph re-evaluates on
 // every repaint, so the same order would otherwise be re-fetched for every
@@ -77,11 +78,27 @@ function projectPathTyped(node) {
 }
 
 export function inputString(node, inputName, seen) {
-    const input = node?.inputs?.find((i) => i.name === inputName);
+    const index = (node?.inputs ?? []).findIndex((i) => i.name === inputName);
+    return index < 0 ? "" : inputStringAt(node, index, seen);
+}
+
+// The same by slot INDEX, which is what a hub lookup hands back: a Set Hub's
+// slots are named for their constants, a KJ Set node's only input is named
+// after its type, and neither name is worth a second search. The node's own
+// graph answers first — a Set inside a subgraph keeps its links there, not in
+// the root's table.
+function inputStringAt(node, index, seen) {
+    const input = node?.inputs?.[index];
     if (!input || input.link == null) return "";
-    const link = app.graph.links[input.link];
-    const origin = link && app.graph.getNodeById(link.origin_id);
-    return nodeOutputString(origin, seen);
+    const graph = node.graph ?? app.graph;
+    const link = graph.links?.get?.(input.link) ?? graph.links?.[input.link]
+              ?? app.graph.links?.[input.link];
+    if (!link) return "";
+    const origin = graph.getNodeById?.(link.origin_id)
+                ?? app.graph.getNodeById(link.origin_id);
+    // The output slot the wire left: a Get Hub carries a different constant on
+    // every one of them, so the node alone does not say which value this is.
+    return nodeOutputString(origin, seen, link.origin_slot ?? 0);
 }
 
 // Is a switch node's toggle ON? Not `!!value`: a widget's boolean is not always
@@ -120,7 +137,7 @@ function setNodeFor(name) {
 // (a Reroute) follows its wire. A node with several wired inputs that we can't
 // read as a switch is an ambiguous selector — we refuse to guess a branch, since
 // the wrong one silently feeds a wrong project. `seen` guards against a cycle.
-export function nodeOutputString(node, seen) {
+export function nodeOutputString(node, seen, slot = 0) {
     if (!node || seen.has(node.id)) return "";
     seen.add(node.id);
     const isSwitch = node.inputs?.some((i) => i.name === "on_true")
@@ -130,16 +147,27 @@ export function nodeOutputString(node, seen) {
             (w) => w.name === "switch" || w.name === "boolean" || w.name === "on");
         return inputString(node, switchIsOn(sw?.value) ? "on_true" : "on_false", seen);
     }
+    // A Get Hub output. The constant's name is the LABEL of the slot the wire
+    // left, so the hop needs that slot: one hub stands in for twenty KJ pairs
+    // and slot 0 is only one of them. From there it is the same hop — what is
+    // wired INTO the slot publishing that name is the value.
+    if (String(node.type ?? "") === "SymbioticaGetHub") {
+        const name = slotName(node.outputs?.[slot]);
+        const source = findSource(graphScope(node.graph, app.graph), name);
+        if (!source || seen.has(source.node.id)) return "";
+        seen.add(source.node.id);
+        return inputStringAt(source.node, source.index, seen);
+    }
     if (String(node.type ?? "") === "GetNode") {
         const name = node.widgets?.find((w) => typeof w.value === "string")
             ?.value?.trim();
         const setter = name ? setNodeFor(name) : null;
         if (!setter || seen.has(setter.id)) return "";
         seen.add(setter.id);
-        const wired = (setter.inputs ?? []).find((i) => i.link != null);
+        const wired = (setter.inputs ?? []).findIndex((i) => i.link != null);
         // Nothing wired into the Set is nothing to read — and the constant's
         // NAME is never the answer, so an unresolved Get says so with "".
-        return wired ? inputString(setter, wired.name, seen) : "";
+        return wired >= 0 ? inputStringAt(setter, wired, seen) : "";
     }
     const strW = node.widgets?.find(
         (w) => typeof w.value === "string" && w.value.trim());

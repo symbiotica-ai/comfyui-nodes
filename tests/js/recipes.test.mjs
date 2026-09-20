@@ -285,6 +285,39 @@ test("a recipe name arriving through KJNodes Set/Get is read off the Set's input
     assert.equal(resolveText(graph, target, "recipe"), null);
 });
 
+test("a recipe name arriving through a hub is read off the slot it left", () => {
+    // Same hop as the KJ pair, except the name rides on the OUTPUT slot the
+    // wire left: one hub stands in for twenty pairs, and slot 0 is one of them.
+    const focus = { id: 1, type: "SymbioticaAssetFocus", inputs: [],
+        widgets: [{ name: "category", value: "Appliance 1x1" }],
+        outputs: [{ name: "asset_name" }, { name: "category" },
+                  { name: "client_prompt" }, { name: "category_recipe" }] };
+    const plot = strNode(2, "not this one");
+    const set = { id: 3, type: "SymbioticaSetHub", widgets: [],
+        inputs: [{ name: "plot", label: "plot", link: 10 },
+                 { name: "category_recipe", label: "category_recipe", link: 11 },
+                 { name: "+", type: "*", link: null }], outputs: [] };
+    const get = { id: 4, type: "SymbioticaGetHub", widgets: [], inputs: [],
+        outputs: [{ name: "plot", label: "plot" },
+                  { name: "category_recipe", label: "category_recipe" },
+                  { name: "+", type: "*" }] };
+    const target = { id: 5, type: "SymbioticaRecipe",
+        inputs: [{ name: "recipe", link: 12, widget: { name: "recipe" } }],
+        widgets: [{ name: "recipe", value: "" }] };
+    const nodes = [focus, plot, set, get, target];
+    const graph = { ...graphOf(nodes, {
+        10: { origin_id: 2, origin_slot: 0 },
+        11: { origin_id: 1, origin_slot: 3 },
+        12: { origin_id: 4, origin_slot: 1 } }), nodes };
+    assert.equal(resolveText(graph, target, "recipe"), "Appliance 1x1");
+    // The other slot is the other constant, not the same answer twice.
+    graph.links[12].origin_slot = 0;
+    assert.equal(resolveText(graph, target, "recipe"), "not this one");
+    // A slot pointing at a name nothing publishes names nothing.
+    get.outputs[0].label = "gone";
+    assert.equal(resolveText(graph, target, "recipe"), null);
+});
+
 test("a node the resolver does not understand yields null, never a guess", () => {
     const llm = { id: 1, type: "SymbioticaClaude", inputs: [{ name: "prompt", link: null, widget: { name: "prompt" } }], widgets: [{ name: "prompt", value: "hi" }], outputs: [{ name: "text" }] };
     const target = { id: 2, type: "SymbioticaRecipe", inputs: [{ name: "recipe", link: 10, widget: { name: "recipe" } }], widgets: [{ name: "recipe", value: "" }] };

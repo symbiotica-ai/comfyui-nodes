@@ -44,6 +44,21 @@ function slotHolder(inputs = [], outputs = []) {
     };
 }
 
+// A node that holds widgets the way LiteGraph does: `addWidget` hands back the
+// object it pushed. Nothing here defines `value` as an accessor, which is the
+// point -- the row does that for itself.
+function widgetHolder(inputs) {
+    return {
+        inputs, widgets: [],
+        addWidget(type, name, value, callback) {
+            const widget = { type, name, value, callback };
+            this.widgets.push(widget);
+            return widget;
+        },
+        setDirtyCanvas() {},
+    };
+}
+
 test("a slot's name is its label once it has been renamed", () => {
     assert.equal(slotName({ name: "STRING", label: "asset_name" }), "asset_name");
     assert.equal(slotName({ name: "asset_name" }), "asset_name");
@@ -154,16 +169,24 @@ test("a slot is named for what the wire carries, not for its type", async () => 
     assert.equal(nameFromWire({ name: "STRING" }, "STRING", null), "STRING");
 });
 
-test("two slots of one type still get a row each", async () => {
-    const { nameWidgetSpecs } = await import("../../web/js/find_node.js");
-    const specs = nameWidgetSpecs([
-        { name: "fuck", label: "fuck", type: "STRING" },
-        { name: "you", label: "you", type: "STRING" },
+test("a name row reads its slot rather than holding a value", async () => {
+    const { addNameRow, namedSlots } = await import("../../web/js/find_node.js");
+    const node = widgetHolder([
+        { name: "stupid", label: "stupid", type: "STRING", link: 1 },
+        { name: "agent", label: "agent", type: "STRING", link: 2 },
+        { name: "+", type: "*", link: null },
     ]);
-    // Unique widget names: the renderer and ComfyUI's remembered values both
-    // key on the name, so two rows called "STRING" collapse into one.
-    assert.deepEqual(specs.map((s) => s.name), ["name_1", "name_2"]);
-    assert.deepEqual(specs.map((s) => s.value), ["fuck", "you"]);
-    // The type is what you read on the row.
-    assert.deepEqual(specs.map((s) => s.label), ["STRING", "STRING"]);
+    assert.deepEqual(namedSlots(node).map((s) => s.label), ["stupid", "agent"]);
+    const rows = [addNameRow(node, 0), addNameRow(node, 1)];
+    // Two rows of one type: what each reads is its own slot, whatever the
+    // frontend's widget store remembers under the row's name.
+    assert.deepEqual(rows.map((w) => w.value), ["stupid", "agent"]);
+    // The type is what you read on the left of the row.
+    assert.deepEqual(rows.map((w) => w.label), ["STRING", "STRING"]);
+    // A row is positional: rename the second slot and the second row follows.
+    node.inputs[1].label = "renamed";
+    assert.deepEqual(rows.map((w) => w.value), ["stupid", "renamed"]);
+    // And a slot removed under a row leaves it reading the one that moved up.
+    node.inputs.splice(0, 1);
+    assert.equal(rows[0].value, "renamed");
 });

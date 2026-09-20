@@ -54,10 +54,13 @@ function pathOf(node) {
     if (link == null) return "";
     const ran = ranPath(node);
     if (ran) return ran;
-    const origin = app.graph?.getNodeById?.(app.graph.links[link]?.origin_id);
+    const wire = app.graph.links[link];
+    const origin = app.graph?.getNodeById?.(wire?.origin_id);
     if (!origin) return "";
-    return String(nodeOutputString(origin, new Set()) ?? "").trim()
-        .replace(/\/+$/, "");
+    // The slot the wire left, not just the node: a Get Hub carries one constant
+    // per output, so the node alone does not say which folder this is.
+    return String(nodeOutputString(origin, new Set(), wire?.origin_slot ?? 0) ?? "")
+        .trim().replace(/\/+$/, "");
 }
 
 async function getJson(route) {

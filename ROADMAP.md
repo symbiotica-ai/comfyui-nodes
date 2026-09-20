@@ -71,17 +71,22 @@ file rather than their own). Nothing is pushed: local tree only.
   a name published by a plain `SetNode`. The reverse does not work — KJ's
   `GetNode` looks for `type === 'SetNode'` and cannot see a hub slot — so a
   name moves to a hub only when its Gets move with it.
-- The two static walks still hop `SetNode.inputs[0]` only:
-  `nodeOutputString` (`web/js/order_source.js:123`) and `inputText`
-  (`web/js/recipes.js:132`). A `project_path` pulled through a Get Hub reads as
-  empty in the Prompts and Control Image panels until both learn the hub —
-  they need the slot INDEX from the Get side, not slot 0.
+- The two static walks now hop a Get Hub as well as a KJ pair, by the OUTPUT
+  SLOT the wire left (`nodeOutputString` in `web/js/order_source.js`, `nodeText`
+  in `web/js/recipes.js`, and the `origin_slot` both panels now pass in).
+  Verified on a real canvas: the Control Image panel asks the server for the
+  folder behind the hub's SECOND name, not its first.
 - Auto-naming a slot from a ComfyLiterals `String` node still lands on
   `STRING`, `STRING_2`: the node's title is "String", which is the type, so the
   fallback has nothing better to offer. Renaming is the answer, not more
   guessing.
 - Muting or bypassing a hub drops every value on it — no crash, the downstream
   node just reports a missing input. Not guarded, and probably should not be.
+- A name row on the Set Hub holds no value of its own: it reads the slot it
+  sits against and renames it on write. The frontend's widget store keys a
+  remembered value by widget NAME, so the two rows of a hub with two STRING
+  slots were handed one state between them and drew the same name twice —
+  which is what the slots never said. Nothing to keep in sync now.
 - Verified by driving a real canvas (playwright, `--front-end-root` against the
   1.48.7 build on disk, and the default 1.52.7): wiring names a slot and grows
   the next, the name rows rename in place and carry the Gets with them, the

@@ -576,64 +576,76 @@ function addGetSlot(node, name) {
     assignGetSlot(node, node.outputs.length - 1, entry);
 }
 
+// The named slots, in order. The rows below are a positional view of this
+// list, so index 3 means "whatever the fourth constant is right now".
+export function namedSlots(node) {
+    return (node.inputs ?? []).filter((s) => slotName(s) !== GROW);
+}
+
 // The name of every constant on the node, typed in place. A Set node's whole
 // point is that you name the thing, so the names are rows you can edit, not a
 // dialog behind a right-click: one text field per named slot, in slot order,
 // labelled with the type the slot carries.
 //
-// They are a VIEW of the slots, never a store: nothing is serialised
-// (`serialize_widgets = false`), the values are written back from the slots
-// every time the list is rebuilt, and the slots are what a saved workflow
-// restores. ComfyUI hands back a widget remembering what that NAME held before
-// -- so the value is always assigned after adding, never passed and trusted.
+// Only the COUNT is maintained here. A row holds no value of its own -- see
+// below -- so there is nothing to write back, nothing to keep in step with the
+// slots, and no rebuild to time against a draw.
 function syncNameWidgets(node) {
-    const named = (node.inputs ?? []).filter((s) => slotName(s) !== GROW);
-    const signature = named.map((s) => `${slotName(s)}:${s.type}`).join("|");
-    if (node._symNameSig === signature) return;
-    node._symNameSig = signature;
-    node.widgets = [];
-    nameWidgetSpecs(named).forEach((spec, i) => {
-        const widget = node.addWidget("text", spec.name, spec.value,
-            (value) => renameTo(node, i, value));
-        widget.value = spec.value;       // see above: addWidget drops this
-        widget.label = spec.label;
-        widget.serializeValue = () => undefined;
-    });
+    const named = namedSlots(node);
+    node.widgets ??= [];
+    while (node.widgets.length > named.length) node.widgets.pop();
+    while (node.widgets.length < named.length) addNameRow(node, node.widgets.length);
     node.serialize_widgets = false;
 }
 
-// One row per named slot: a UNIQUE widget name, and the slot's type as the
-// label you read. The name has to be unique because both the frontend's widget
-// renderer and ComfyUI's remembered values key on it -- two slots of the same
-// type were both called "STRING", which drew one row twice and typed into
-// whichever slot the shared row's callback happened to hold.
-export function nameWidgetSpecs(slots) {
-    return slots.map((slot, i) => ({
-        name: `name_${i + 1}`,
-        label: String(slot?.type ?? ANY),
-        value: slotName(slot),
-    }));
+// One row, bound to the slot at `index` for as long as it lives.
+//
+// `value` and `label` are OWN properties, which shadow the accessors the
+// frontend's BaseWidget backs with its widget store. That store keys a
+// remembered value by (graph, node, widget NAME) and hands any widget under a
+// name it has seen the state it already holds -- two rows called "STRING" were
+// handed ONE state between them and drew the same name twice, whatever the
+// slots said. A row that reads the slot cannot drift from it, and a row that
+// renames on write cannot hold a name the slot refused.
+export function addNameRow(node, index) {
+    const widget = node.addWidget("text", `name_${index + 1}`, "",
+        (value) => renameTo(node, index, value));
+    Object.defineProperty(widget, "value", {
+        configurable: true,
+        enumerable: true,
+        get: () => slotName(namedSlots(node)[index]),
+        set: (value) => renameTo(node, index, value),
+    });
+    // The type is what you read on the left of the row, and it changes when the
+    // slot is rewired, so it is read live as well.
+    Object.defineProperty(widget, "label", {
+        configurable: true,
+        enumerable: true,
+        get: () => String(namedSlots(node)[index]?.type ?? ANY),
+        set: () => {},
+    });
+    widget.serializeValue = () => undefined;
+    return widget;
 }
 
 // A name typed into one of those fields. Same rules as the menu's rename: a
 // clash is resolved rather than allowed, and every Get pulling the old name
 // follows it over.
 function renameTo(node, index, value) {
-    const slot = (node.inputs ?? []).filter((x) => slotName(x) !== GROW)[index];
+    const slot = namedSlots(node)[index];
     if (!slot) return;
     const was = slotName(slot);
     const wanted = String(value ?? "").trim();
-    if (!wanted || wanted === was) {
-        node._symNameSig = null;
-        return;
-    }
+    // Reached twice for one edit -- the row's setter renames, then the widget's
+    // own callback arrives carrying what the slot now says. The second pass is
+    // this line.
+    if (!wanted || wanted === was) return;
     const taken = new Set(publishedNames(graphScope(node.graph, app.graph))
         .map((e) => e.name).filter((n) => n !== was));
     const name = uniqueName(taken, wanted);
     slot.name = name;
     slot.label = name;
     repointGetters(was, name);
-    node._symNameSig = null;          // the row redraws with what was accepted
     node.setDirtyCanvas?.(true, true);
 }
 
