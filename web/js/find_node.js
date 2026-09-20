@@ -527,6 +527,27 @@ function adoptInput(node, index, linkInfo) {
     retypeGetters(slotName(slot), type);
 }
 
+// A wire taken off a Set Hub input takes the slot with it. A name with nothing
+// behind it publishes nothing -- the Gets pulling it get "nothing is wired into
+// X" and the row for it is a promise the node cannot keep.
+//
+// Deferred by a tick, because REWIRING a slot is a disconnect and a connect
+// back to back: a slot that has a wire again by the time the tick comes is
+// being rewired, not abandoned. The slot OBJECT is what is held onto, never its
+// index -- anything else removed meanwhile would move it.
+export function dropWhenUnwired(node, index, defer = setTimeout) {
+    const slot = node.inputs?.[index];
+    if (!slot || slotName(slot) === GROW) return;
+    defer(() => {
+        const at = (node.inputs ?? []).indexOf(slot);
+        if (at < 0 || slot.link != null || slotName(slot) === GROW) return;
+        node.removeInput(at);
+        ensureTail(node, "in");
+        syncNameWidgets(node);
+        node.setDirtyCanvas?.(true, true);
+    }, 0);
+}
+
 // A name that changed type has to reach the Get Hubs pulling it, or their
 // outputs keep advertising the old type and the next wire off them is refused.
 function retypeGetters(name, type) {
@@ -911,6 +932,7 @@ registerSymbioticaExtension(app, {
                 if (app.configuringGraph) return;
                 if (slotType !== LiteGraph.INPUT) return;
                 if (isChangeConnect && linkInfo) adoptInput(this, slot, linkInfo);
+                else if (!isChangeConnect) dropWhenUnwired(this, slot);
                 ensureTail(this, "in");
                 syncNameWidgets(this);
                 this.setDirtyCanvas(true, true);

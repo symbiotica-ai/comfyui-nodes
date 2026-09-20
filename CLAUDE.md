@@ -180,6 +180,12 @@ KJNodes pairs, and it is in 1.48.7 as well as 1.52.7.
   `VAE`, `IMAGE` keep their own.
 - Every hub ends in exactly one empty `+` slot, re-asserted on draw because the
   frontend's own "Remove Slot" fires no event the node can hear.
+- **A wire taken off a Set Hub input takes the slot and its row with it** — a
+  name with nothing behind it publishes nothing, and the Gets pulling it go
+  red. The removal is deferred by a tick and re-checks the SLOT OBJECT, never
+  its index: rewiring a slot is a disconnect and a connect back to back, and
+  the slot that has a wire again by the time the tick comes is being rewired,
+  not abandoned.
 - **A Set Hub is a GROUP and its TITLE is the group's name** — `settings-01`,
   `paths`, `models`. The Get Hub's picker lists the groups above the individual
   names, and taking one loads every name on that hub at once. The group a Get

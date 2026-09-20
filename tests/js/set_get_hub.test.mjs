@@ -126,6 +126,38 @@ test("the hub always ends in exactly one empty slot", () => {
     assert.equal(node.inputs.length, 2);
 });
 
+test("a wire taken off a slot takes the slot with it", async () => {
+    const { dropWhenUnwired } = await import("../../web/js/find_node.js");
+    const node = slotHolder([
+        { name: "asset_name", label: "asset_name", type: "STRING", link: 3 },
+        { name: "ref_image", label: "ref_image", type: "IMAGE", link: null },
+        { name: "+", type: "*", link: null },
+    ]);
+    node.widgets = [];
+    node.addWidget = function (type, name, value, callback) {
+        const w = { type, name, value, callback };
+        this.widgets.push(w);
+        return w;
+    };
+    // The tick is what tells a rewire from an abandonment, so the test holds it.
+    const queued = [];
+    dropWhenUnwired(node, 1, (fn) => queued.push(fn));
+    assert.deepEqual(node.inputs.map((s) => s.name), ["asset_name", "ref_image", "+"]);
+    queued.pop()();
+    assert.deepEqual(node.inputs.map((s) => s.name), ["asset_name", "+"]);
+
+    // Rewiring the same slot is a disconnect and a connect back to back: the
+    // slot has a wire again when the tick comes, and the name stays.
+    dropWhenUnwired(node, 0, (fn) => queued.push(fn));
+    node.inputs[0].link = 9;
+    queued.pop()();
+    assert.deepEqual(node.inputs.map((s) => s.name), ["asset_name", "+"]);
+
+    // The empty tail is not a name, and is never what a disconnect removes.
+    dropWhenUnwired(node, 1, (fn) => queued.push(fn));
+    assert.equal(queued.length, 0);
+});
+
 test("an empty slot above the tail is dropped, a named one is kept", () => {
     const node = slotHolder([
         { name: "+", type: "*", link: null },
@@ -133,8 +165,8 @@ test("an empty slot above the tail is dropped, a named one is kept", () => {
         { name: "+", type: "*", link: null },
     ]);
     ensureTail(node, "in");
-    // The unwired name survives: every Get on the canvas points at it, so a
-    // wire moving off it must not take the name away.
+    // The tail is all this decides. A named slot losing its wire is removed by
+    // the disconnect above, not by a pass that is run on every draw.
     assert.deepEqual(node.inputs.map((s) => s.name), ["asset_name", "+"]);
 });
 
