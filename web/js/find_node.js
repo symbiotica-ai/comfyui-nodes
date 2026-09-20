@@ -1,5 +1,5 @@
-// ABOUTME: "Find node by ID" — a shortcut opens a small box, type the number the
-// ABOUTME: node's ID badge shows, and the canvas jumps to that node, selected.
+// ABOUTME: The canvas-wide tools, which belong to no one node: "Find node by ID",
+// ABOUTME: and the Set/Get Hubs — one node holding many named constants.
 
 // Why this exists: an error message, a log line and the node badge all name a
 // node by its id, and on a graph of two hundred nodes there is no way to get
@@ -249,4 +249,735 @@ registerSymbioticaExtension(app, {
         function: openBox,
     }],
     keybindings: [{ commandId: COMMAND_ID, combo: COMBO }],
+});
+
+// ======================================================== Set Hub / Get Hub ==
+
+// Why these exist: a canvas wired through KJNodes' Set/Get grows one node per
+// constant — tens of them, each carrying a single name. A hub carries many.
+// Wire an output into a hub's empty slot and that slot takes the wire's type
+// and the name of the output it came from, then a fresh empty slot appears
+// underneath. The Get side grows the same way, one output per name it pulls.
+//
+// Both are VIRTUAL nodes: no Python class, nothing in the queued prompt. The
+// frontend resolves them away — `ExecutableNodeDTO.resolveOutput` asks a
+// virtual node for `resolveVirtualOutput(slot)`, then falls back to
+// `getInputLink(slot)`, both indexed BY OUTPUT SLOT. That per-slot indexing is
+// the whole trick: it is what lets one node stand in for twenty pairs, and it
+// is in the 1.48.7 bundle, not just in newer frontends.
+//
+// A constant's NAME is the slot's label. That is what the frontend's own
+// "Rename Slot" writes, so renaming costs no code here, and it rides on the
+// slot rather than on a widget — none of this pack's widget-shift traps apply,
+// because a hub has no widgets at all.
+//
+// Names are one flat namespace shared with KJNodes' SetNode: a Get Hub reads a
+// name published by a plain Set node just as happily as one on a hub, so a
+// canvas can move a handful at a time. It does not work the other way — KJ's
+// GetNode looks for `type === 'SetNode'` and cannot see a hub slot.
+
+const SET_HUB = "SymbioticaSetHub";
+const GET_HUB = "SymbioticaGetHub";
+// The empty slot at the bottom of every hub. No constant may be called this.
+const GROW = "+";
+const ANY = "*";
+// What the Get Hub's picker reads when nothing is picked, and what it goes
+// back to after a pick: the widget is a button for choosing, not a value.
+const PULL = "pull a value…";
+const NONE = "(nothing published on this canvas)";
+// The dot on a Get slot pointing at a name that is gone. This pack's danger
+// colour, from hub_theme.
+const DEAD = "#f2777a";
+// One folder for the pack, as everything else here declares.
+const CATEGORY = "Symbiotica";
+const TITLES = {
+    [SET_HUB]: "Set Hub (Symbiotica)",
+    [GET_HUB]: "Get Hub (Symbiotica)",
+};
+
+// Where the last click was, for placing the name menu. LiteGraph's ContextMenu
+// is positioned from an event, and the one that opens the menu (dropping a
+// wire) is long gone by the time the connection callback runs.
+let lastPointer = null;
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    for (const type of ["pointerdown", "pointerup"]) {
+        window.addEventListener(type, (e) => { lastPointer = e; }, true);
+    }
+}
+
+function toast(severity, summary, detail, life = 5000) {
+    app.extensionManager?.toast?.add({ severity, summary, detail, life });
+}
+
+// A slot's constant name. "Rename Slot" writes `label` and leaves `name` as it
+// was, so the label is the answer whenever there is one.
+export function slotName(slot) {
+    return String(slot?.label ?? slot?.name ?? "").trim();
+}
+
+// LiteGraph's link table is a Map on current frontends and a plain object on
+// older ones. Both are on canvases this pack runs against.
+function getLink(graph, id) {
+    if (id == null || !graph) return null;
+    return graph.links?.get?.(id) ?? graph.links?.[id] ?? null;
+}
+
+export function nodesOf(graph) {
+    return graph?._nodes ?? graph?.nodes ?? [];
+}
+
+// The graphs a name is looked up in: the one the node sits on, then the root.
+// A Set commonly sits on the root graph while the Gets are inside subgraphs,
+// and the frontend carries a virtual node's value across that boundary.
+export function graphScope(graph, root) {
+    return [graph, root].filter((g, i, all) => g && all.indexOf(g) === i);
+}
+
+// Every graph on the canvas, root first, subgraphs through the nodes that hold
+// them. Used to reach Get Hubs that need a type refreshed, which can be
+// anywhere, unlike a lookup, which only ever looks up.
+function everyGraph(root) {
+    const seen = new Set();
+    const out = [];
+    const walk = (graph) => {
+        if (!graph || seen.has(graph)) return;
+        seen.add(graph);
+        out.push(graph);
+        for (const node of nodesOf(graph)) walk(node.subgraph);
+    };
+    walk(root);
+    return out;
+}
+
+// Every name published in scope and the type it carries. A Set Hub publishes
+// one per named input; a KJNodes SetNode publishes the one on its widget.
+export function publishedNames(graphs) {
+    const out = [];
+    const seen = new Set();
+    for (const graph of graphs) {
+        for (const node of nodesOf(graph)) {
+            const type = String(node.type ?? "");
+            if (type === SET_HUB) {
+                for (const slot of node.inputs ?? []) {
+                    const name = slotName(slot);
+                    if (!name || name === GROW || seen.has(name)) continue;
+                    seen.add(name);
+                    out.push({ name, type: String(slot.type ?? ANY), node, graph });
+                }
+            } else if (type === "SetNode") {
+                const name = String(node.widgets?.[0]?.value ?? "").trim();
+                if (!name || seen.has(name)) continue;
+                seen.add(name);
+                out.push({ name, type: String(node.inputs?.[0]?.type ?? ANY),
+                           node, graph });
+            }
+        }
+    }
+    return out;
+}
+
+// The slot a name is fed through: `{graph, node, index}`, on a hub or on a
+// plain SetNode. A Get reads whatever is wired INTO that slot, never the name.
+export function findSource(graphs, name) {
+    if (!name || name === GROW) return null;
+    for (const graph of graphs) {
+        for (const node of nodesOf(graph)) {
+            const type = String(node.type ?? "");
+            if (type === SET_HUB) {
+                const index = (node.inputs ?? [])
+                    .findIndex((slot) => slotName(slot) === name);
+                if (index >= 0) return { graph, node, index };
+            } else if (type === "SetNode"
+                    && String(node.widgets?.[0]?.value ?? "").trim() === name) {
+                return { graph, node, index: 0 };
+            }
+        }
+    }
+    return null;
+}
+
+// A name nothing else in scope is using: two slots under one name would make
+// which of them a Get reads a matter of node order.
+export function uniqueName(taken, base) {
+    const clean = String(base ?? "").trim().replace(/^[+*]+$/, "") || "value";
+    if (!taken.has(clean)) return clean;
+    for (let n = 2; n < 999; n += 1) {
+        if (!taken.has(`${clean}_${n}`)) return `${clean}_${n}`;
+    }
+    return `${clean}_${Date.now()}`;
+}
+
+// Whether a published name can be dropped on an input. `*` on either side
+// takes anything, and a comma list is the frontend's own way of writing "one
+// of these".
+export function typeAccepts(target, offered) {
+    const wanted = String(target ?? ANY).trim();
+    const has = String(offered ?? ANY).trim();
+    if (!wanted || !has || wanted === ANY || has === ANY) return true;
+    const wantedList = wanted.split(",").map((t) => t.trim());
+    return has.split(",").some((t) => wantedList.includes(t.trim()));
+}
+
+// One empty slot at the bottom, always, and never two. Asserted on draw as
+// well as on every wire change, because the frontend's own "Remove Slot" takes
+// a slot off the node without any event reaching it.
+export function ensureTail(node, kind) {
+    const list = (kind === "in" ? node.inputs : node.outputs) ?? [];
+    const isEmpty = (slot) => (kind === "in"
+        ? slot.link == null : !(slot.links?.length));
+    for (let i = list.length - 2; i >= 0; i -= 1) {
+        if (slotName(list[i]) !== GROW || !isEmpty(list[i])) continue;
+        if (kind === "in") node.removeInput(i); else node.removeOutput(i);
+    }
+    const last = list[list.length - 1];
+    if (last && slotName(last) === GROW && isEmpty(last)) return false;
+    if (kind === "in") node.addInput(GROW, ANY, { removable: true });
+    else node.addOutput(GROW, ANY, { removable: true });
+    return true;
+}
+
+// The output slot a wire leaves. `resolve` is the frontend's own reader and
+// handles a wire coming out of a subgraph input; the link's own ids are the
+// fallback for anything that does not carry it.
+function originSlot(graph, linkInfo) {
+    const resolved = linkInfo?.resolve?.(graph);
+    const found = resolved?.subgraphInput ?? resolved?.output;
+    if (found) return found;
+    const source = graph?.getNodeById?.(linkInfo?.origin_id);
+    return source?.outputs?.[linkInfo?.origin_slot] ?? null;
+}
+
+// The types whose NAME carries no meaning. `MODEL`, `VAE`, `CONTROL_NET` say
+// exactly what the value is and make good names; `STRING` says nothing, and
+// three of them become STRING, STRING_2, STRING_3 -- which is what he got.
+const NAMELESS_TYPES = new Set(["STRING", "INT", "FLOAT", "BOOLEAN", "BOOL",
+                                "NUMBER", "COMBO", ANY]);
+
+// What to call a slot a wire just landed on. An output named for what it
+// carries -- `asset_name`, `save_path`, `MODEL` -- is already the name you
+// would have typed. One named after a type that says nothing falls back to the
+// node it came from. Rename takes it from there either way.
+export function nameFromWire(origin, type, sourceNode) {
+    const slot = String(origin?.label ?? origin?.name ?? "").trim();
+    const kind = String(type ?? ANY).trim();
+    const sameAsType = slot.toUpperCase() === kind.toUpperCase();
+    if (slot && (!sameAsType || !NAMELESS_TYPES.has(kind.toUpperCase()))) {
+        return slot === ANY ? kind : slot;
+    }
+    const title = String(sourceNode?.title ?? "").trim();
+    if (title && title.toUpperCase() !== kind.toUpperCase()) return title;
+    return slot || kind;
+}
+
+// A wire landed on a hub input. An unnamed slot takes the name of the output
+// feeding it — nearly always what you would have typed into a SetNode anyway —
+// and a slot that already has a name keeps it: the name is what every Get on
+// the canvas points at, so rewiring one changes the value, never the contract.
+function adoptInput(node, index, linkInfo) {
+    const slot = node.inputs?.[index];
+    if (!slot) return;
+    const origin = originSlot(node.graph, linkInfo);
+    const type = String(origin?.type ?? ANY);
+    if (slotName(slot) === GROW || slotName(slot) === "") {
+        const taken = new Set(
+            publishedNames(graphScope(node.graph, app.graph)).map((e) => e.name));
+        const from = node.graph?.getNodeById?.(linkInfo?.origin_id);
+        const name = uniqueName(taken, nameFromWire(origin, type, from));
+        slot.name = name;
+        slot.label = name;
+    }
+    slot.type = type;
+    retypeGetters(slotName(slot), type);
+}
+
+// A name that changed type has to reach the Get Hubs pulling it, or their
+// outputs keep advertising the old type and the next wire off them is refused.
+function retypeGetters(name, type) {
+    if (!name || name === GROW) return;
+    for (const graph of everyGraph(app.graph)) {
+        for (const node of nodesOf(graph)) {
+            if (String(node.type ?? "") !== GET_HUB) continue;
+            for (const slot of node.outputs ?? []) {
+                if (slotName(slot) === name) slot.type = type;
+            }
+        }
+    }
+}
+
+// The name menu: every constant in scope, the ones that fit the input the wire
+// landed on first. Dismissing it without picking has to undo the wire, so the
+// slot is never left connected under the placeholder name — the menu has no
+// cancel callback, so its element going away is what we watch.
+function pickName(node, index, wantedType, onPick) {
+    const all = publishedNames(graphScope(node.graph, app.graph));
+    const fits = all.filter((e) => typeAccepts(wantedType, e.type));
+    const list = fits.length ? fits : all;
+    if (!list.length) {
+        toast("warn", "Nothing to get",
+              "No Set Hub slot or Set node on this canvas has a name yet.");
+        onPick(null);
+        return;
+    }
+    const labels = list.map((e) => (e.type && e.type !== ANY
+        ? `${e.name}   ·   ${e.type}` : e.name));
+    let picked = false;
+    const menu = new LiteGraph.ContextMenu(labels, {
+        event: lastPointer,
+        title: "Get",
+        className: "dark",
+        scale: Math.max(1, app.canvas?.ds?.scale ?? 1),
+        callback: (label) => {
+            picked = true;
+            onPick(list[labels.indexOf(label)] ?? null);
+        },
+    });
+    const root = menu?.root;
+    if (!root) return;
+    const watch = () => {
+        if (picked) return;
+        if (root.isConnected === false || !root.parentElement) { onPick(null); return; }
+        setTimeout(watch, 150);
+    };
+    setTimeout(watch, 150);
+}
+
+// A picked name on a Get Hub output. The link already on the slot survives a
+// type change, so a name that does not fit what it was dropped on is dropped
+// instead of quietly sitting there as a wire the backend will refuse.
+function assignGetSlot(node, index, entry) {
+    const slot = node.outputs?.[index];
+    if (!slot || !entry) return;
+    slot.name = entry.name;
+    slot.label = entry.name;
+    slot.type = entry.type && entry.type !== ANY ? entry.type : ANY;
+    for (const id of [...(slot.links ?? [])]) {
+        const link = getLink(node.graph, id);
+        const target = node.graph?.getNodeById?.(link?.target_id);
+        const input = target?.inputs?.[link?.target_slot];
+        if (input && !typeAccepts(input.type, slot.type)) {
+            target.disconnectInput?.(link.target_slot, true);
+        }
+    }
+    ensureTail(node, "out");
+    node.setDirtyCanvas?.(true, true);
+}
+
+// A name picked off the node's own list: it lands on the empty tail slot, the
+// same place a dropped wire would have named.
+function addGetSlot(node, name) {
+    const entry = publishedNames(graphScope(node.graph, app.graph))
+        .find((e) => e.name === name);
+    if (!entry) return;
+    if ((node.outputs ?? []).some((s) => slotName(s) === name)) {
+        toast("info", "Get Hub", `"${name}" is already on this node.`);
+        return;
+    }
+    ensureTail(node, "out");
+    assignGetSlot(node, node.outputs.length - 1, entry);
+}
+
+// The name of every constant on the node, typed in place. A Set node's whole
+// point is that you name the thing, so the names are rows you can edit, not a
+// dialog behind a right-click: one text field per named slot, in slot order,
+// labelled with the type the slot carries.
+//
+// They are a VIEW of the slots, never a store: nothing is serialised
+// (`serialize_widgets = false`), the values are written back from the slots
+// every time the list is rebuilt, and the slots are what a saved workflow
+// restores. ComfyUI hands back a widget remembering what that NAME held before
+// -- so the value is always assigned after adding, never passed and trusted.
+function syncNameWidgets(node) {
+    const named = (node.inputs ?? []).filter((s) => slotName(s) !== GROW);
+    const signature = named.map((s) => `${slotName(s)}:${s.type}`).join("|");
+    if (node._symNameSig === signature) return;
+    node._symNameSig = signature;
+    node.widgets = [];
+    nameWidgetSpecs(named).forEach((spec, i) => {
+        const widget = node.addWidget("text", spec.name, spec.value,
+            (value) => renameTo(node, i, value));
+        widget.value = spec.value;       // see above: addWidget drops this
+        widget.label = spec.label;
+        widget.serializeValue = () => undefined;
+    });
+    node.serialize_widgets = false;
+}
+
+// One row per named slot: a UNIQUE widget name, and the slot's type as the
+// label you read. The name has to be unique because both the frontend's widget
+// renderer and ComfyUI's remembered values key on it -- two slots of the same
+// type were both called "STRING", which drew one row twice and typed into
+// whichever slot the shared row's callback happened to hold.
+export function nameWidgetSpecs(slots) {
+    return slots.map((slot, i) => ({
+        name: `name_${i + 1}`,
+        label: String(slot?.type ?? ANY),
+        value: slotName(slot),
+    }));
+}
+
+// A name typed into one of those fields. Same rules as the menu's rename: a
+// clash is resolved rather than allowed, and every Get pulling the old name
+// follows it over.
+function renameTo(node, index, value) {
+    const slot = (node.inputs ?? []).filter((x) => slotName(x) !== GROW)[index];
+    if (!slot) return;
+    const was = slotName(slot);
+    const wanted = String(value ?? "").trim();
+    if (!wanted || wanted === was) {
+        node._symNameSig = null;
+        return;
+    }
+    const taken = new Set(publishedNames(graphScope(node.graph, app.graph))
+        .map((e) => e.name).filter((n) => n !== was));
+    const name = uniqueName(taken, wanted);
+    slot.name = name;
+    slot.label = name;
+    repointGetters(was, name);
+    node._symNameSig = null;          // the row redraws with what was accepted
+    node.setDirtyCanvas?.(true, true);
+}
+
+// Renaming a constant on the Set side has to carry every Get that pulls it, or
+// the rename silently unplugs them. KJNodes' Set does the same thing when its
+// widget changes; here the old name is known because the slot held it.
+function repointGetters(was, now) {
+    if (!was || was === now) return;
+    for (const graph of everyGraph(app.graph)) {
+        for (const node of nodesOf(graph)) {
+            if (String(node.type ?? "") !== GET_HUB) continue;
+            for (const slot of node.outputs ?? []) {
+                if (slotName(slot) !== was) continue;
+                slot.name = now;
+                slot.label = now;
+            }
+        }
+    }
+}
+
+// Ask for a name. The frontend's dialog when there is one -- there is on every
+// version this pack runs against -- and the browser's as the last resort, so
+// the entry is never a menu row that does nothing.
+async function askForName(title, current) {
+    const dialog = app.extensionManager?.dialog;
+    if (dialog?.prompt) {
+        return await dialog.prompt({ title, message: "Name", defaultValue: current });
+    }
+    if (typeof window !== "undefined" && window.prompt) {
+        return window.prompt(title, current);
+    }
+    return null;
+}
+
+// The constant a slot carries, renamed in place. The name is the contract, so
+// a clash is resolved rather than allowed, and the Gets follow it over.
+function renameSlot(node, kind, index) {
+    const list = (kind === "in" ? node.inputs : node.outputs) ?? [];
+    const slot = list[index];
+    if (!slot || slotName(slot) === GROW) return;
+    const was = slotName(slot);
+    askForName(`Rename "${was}"`, was).then((answer) => {
+        const wanted = String(answer ?? "").trim();
+        if (!wanted || wanted === was) return;
+        const taken = new Set(publishedNames(graphScope(node.graph, app.graph))
+            .map((e) => e.name).filter((n) => n !== was));
+        const name = uniqueName(taken, wanted);
+        slot.name = name;
+        slot.label = name;
+        if (kind === "in") repointGetters(was, name);
+        node.setDirtyCanvas?.(true, true);
+    });
+}
+
+// The slot's own right-click menu, written out here rather than left to the
+// frontend's default: the default differs by version -- it hangs rename off a
+// `nameLocked` flag and remove off `removable` -- and a rename that is there on
+// one canvas and missing on the next is the same as not having one.
+function slotMenu(node, kind, slotInfo, extra) {
+    const index = slotInfo?.slot ?? 0;
+    const list = (kind === "in" ? node.inputs : node.outputs) ?? [];
+    const slot = list[index];
+    const options = [];
+    if (slot && slotName(slot) !== GROW) options.push(...extra(index, slot));
+    const connected = kind === "in" ? slot?.link != null : !!slot?.links?.length;
+    if (connected) {
+        options.push({
+            content: "Disconnect",
+            callback: () => {
+                if (kind === "in") node.disconnectInput(index, true);
+                else node.disconnectOutput(index);
+                ensureTail(node, kind);
+                node.setDirtyCanvas?.(true, true);
+            },
+        });
+    }
+    if (slot && slotName(slot) !== GROW) {
+        options.push(null, {
+            content: "Remove",
+            className: "danger",
+            callback: () => {
+                if (kind === "in") node.removeInput(index);
+                else node.removeOutput(index);
+                ensureTail(node, kind);
+                node.setDirtyCanvas?.(true, true);
+            },
+        });
+    }
+    return options;
+}
+
+// Slots carrying a name that nothing feeds and nothing reads. Wiring a hub is
+// additive by design, so this is the only way a row leaves it besides the
+// frontend's own "Remove Slot".
+function dropUnusedSlots(node, kind) {
+    const list = (kind === "in" ? node.inputs : node.outputs) ?? [];
+    let removed = 0;
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+        const slot = list[i];
+        if (slotName(slot) === GROW) continue;
+        const used = kind === "in" ? slot.link != null : !!slot.links?.length;
+        if (used) continue;
+        if (kind === "in") node.removeInput(i); else node.removeOutput(i);
+        removed += 1;
+    }
+    ensureTail(node, kind);
+    node.setDirtyCanvas?.(true, true);
+    return removed;
+}
+
+// The tail has to be re-asserted outside the wire callbacks, because a slot
+// removed through the frontend's own menu fires nothing this node can hear.
+function assertTailOnDraw(node, kind) {
+    const onDrawForeground = node.onDrawForeground;
+    node.onDrawForeground = function () {
+        if (!app.configuringGraph) {
+            ensureTail(this, kind);
+            if (kind === "in") syncNameWidgets(this);
+            else markDeadNames(this);
+        }
+        return onDrawForeground?.apply(this, arguments);
+    };
+}
+
+// A Get slot whose name nothing publishes any more -- the Set it read was
+// deleted, or renamed while this node was not looking. It resolves to nothing
+// and the run fails on a missing input, so the dot goes red rather than the
+// node looking fine until you queue it. The colour rides on the slot, never on
+// its label: the label IS the name.
+function markDeadNames(node) {
+    const scope = graphScope(node.graph, app.graph);
+    for (const slot of node.outputs ?? []) {
+        const name = slotName(slot);
+        if (!name || name === GROW) continue;
+        const dead = !findSource(scope, name);
+        if (dead) {
+            slot.color_on = DEAD;
+            slot.color_off = DEAD;
+        } else if (slot.color_on === DEAD) {
+            delete slot.color_on;
+            delete slot.color_off;
+        }
+    }
+}
+
+registerSymbioticaExtension(app, {
+    name: "symbiotica.set_get_hub",
+    registerCustomNodes() {
+        class SetHub extends LGraphNode {
+            static title = "Set Hub";
+            static category = "Symbiotica";
+
+            constructor(title) {
+                super(title);
+                this.isVirtualNode = true;
+                this.properties ??= {};
+                this.properties["Node name for S&R"] = SET_HUB;
+                this.addInput(GROW, ANY, { removable: true });
+                assertTailOnDraw(this, "in");
+            }
+
+            onConnectionsChange(slotType, slot, isChangeConnect, linkInfo) {
+                // Loading a graph restores slots wholesale; the side effects
+                // here would rename them against a half-built canvas.
+                if (app.configuringGraph) return;
+                if (slotType !== LiteGraph.INPUT) return;
+                if (isChangeConnect && linkInfo) adoptInput(this, slot, linkInfo);
+                ensureTail(this, "in");
+                syncNameWidgets(this);
+                this.setDirtyCanvas(true, true);
+            }
+
+            getSlotMenuOptions(slotInfo) {
+                return slotMenu(this, "in", slotInfo, (index) => [{
+                    content: "Rename…",
+                    callback: () => renameSlot(this, "in", index),
+                }]);
+            }
+
+            getExtraMenuOptions(_canvas, options) {
+                options.push({
+                    content: "Remove unused slots",
+                    callback: () => {
+                        const n = dropUnusedSlots(this, "in");
+                        toast("info", "Set Hub",
+                              n ? `${n} slot${n === 1 ? "" : "s"} removed.`
+                                : "Every slot is wired.");
+                    },
+                });
+                return options;
+            }
+        }
+        LiteGraph.registerNodeType(SET_HUB, SetHub);
+        // registerNodeType writes the category from the TYPE string it was
+        // handed -- everything before the last "/", so an unslashed name lands
+        // the node in "__frontend_only__" and its own `static category` is
+        // overwritten. Putting the folder in the type string instead would put
+        // it in what a saved workflow records as the node's identity, so the
+        // category goes back on afterwards.
+        SetHub.category = CATEGORY;
+
+        class GetHub extends LGraphNode {
+            static title = "Get Hub";
+            static category = "Symbiotica";
+
+            constructor(title) {
+                super(title);
+                this.isVirtualNode = true;
+                this.properties ??= {};
+                this.properties["Node name for S&R"] = GET_HUB;
+                this.addOutput(GROW, ANY, { removable: true });
+                // Nothing on the node said what it could pull: a name only
+                // arrived by dragging a wire onto an input, so a Get Hub
+                // sitting on its own read as empty and broken. This is the
+                // list, on the node, always. The values are read live rather
+                // than stored, because a name published a minute ago has to be
+                // in it without the node having heard anything.
+                const options = {};
+                Object.defineProperty(options, "values", {
+                    get: () => {
+                        const names = publishedNames(
+                            graphScope(this.graph, app.graph)).map((e) => e.name);
+                        return names.length ? names : [NONE];
+                    },
+                    enumerable: true,
+                    configurable: true,
+                });
+                const pull = this.addWidget("combo", "pull", PULL, (value) => {
+                    pull.value = PULL;
+                    if (!value || value === PULL || value === NONE) return;
+                    addGetSlot(this, String(value));
+                }, options);
+                // The picker is a button, not a value: saving it would restore
+                // a name into a node whose slots already say which they are.
+                this.serialize_widgets = false;
+                assertTailOnDraw(this, "out");
+            }
+
+            onConnectionsChange(slotType, slot, isChangeConnect, linkInfo) {
+                if (app.configuringGraph) return;
+                if (slotType !== LiteGraph.OUTPUT) return;
+                const out = this.outputs?.[slot];
+                // Only a wire off the empty slot asks a question: it is the
+                // one that has no name yet.
+                if (isChangeConnect && linkInfo && out && slotName(out) === GROW) {
+                    const resolved = linkInfo.resolve?.(this.graph);
+                    const target = resolved?.input
+                        ?? this.graph?.getNodeById?.(linkInfo.target_id)
+                            ?.inputs?.[linkInfo.target_slot];
+                    pickName(this, slot, target?.type, (entry) => {
+                        if (entry) assignGetSlot(this, slot, entry);
+                        else this.disconnectOutput(slot);
+                        ensureTail(this, "out");
+                        this.setDirtyCanvas(true, true);
+                    });
+                    return;
+                }
+                ensureTail(this, "out");
+                this.setDirtyCanvas(true, true);
+            }
+
+            // Same graph: hand back the link feeding the named slot, exactly
+            // as the frontend expects — it resolves that link's TARGET (the
+            // hub holding the name) and walks on from there.
+            getInputLink(slot) {
+                const name = slotName(this.outputs?.[slot]);
+                if (!name || name === GROW) return null;
+                const source = findSource([this.graph], name);
+                if (!source) {
+                    if (!findSource(graphScope(this.graph, app.graph), name)) {
+                        toast("error", "Get Hub",
+                              `Nothing on this canvas publishes "${name}".`);
+                    }
+                    return null;
+                }
+                const input = source.node.inputs?.[source.index];
+                if (!input || input.link == null) {
+                    toast("error", "Get Hub", `Nothing is wired into "${name}".`);
+                    return null;
+                }
+                return getLink(this.graph, input.link);
+            }
+
+            // Across graphs the link ids mean nothing to the caller, so the
+            // source node and slot go back instead.
+            resolveVirtualOutput(slot) {
+                const name = slotName(this.outputs?.[slot]);
+                if (!name || name === GROW) return undefined;
+                const source = findSource(graphScope(this.graph, app.graph), name);
+                if (!source || source.graph === this.graph) return undefined;
+                const input = source.node.inputs?.[source.index];
+                if (!input || input.link == null) return undefined;
+                const link = getLink(source.graph, input.link);
+                const origin = source.graph.getNodeById?.(link?.origin_id);
+                if (!origin) return undefined;
+                return { node: origin, slot: link.origin_slot };
+            }
+
+            // A Get slot does not get a free-text name: it points at one that
+            // exists, so the entry is the same list the `pull` widget shows.
+            getSlotMenuOptions(slotInfo) {
+                return slotMenu(this, "out", slotInfo, (index) => [{
+                    content: "Point at…",
+                    callback: () => pickName(this, index, null, (entry) => {
+                        if (entry) assignGetSlot(this, index, entry);
+                    }),
+                }]);
+            }
+
+            getExtraMenuOptions(_canvas, options) {
+                options.push({
+                    content: "Remove unused slots",
+                    callback: () => {
+                        const n = dropUnusedSlots(this, "out");
+                        toast("info", "Get Hub",
+                              n ? `${n} slot${n === 1 ? "" : "s"} removed.`
+                                : "Every slot is wired.");
+                    },
+                });
+                return options;
+            }
+        }
+        LiteGraph.registerNodeType(GET_HUB, GetHub);
+        GetHub.category = CATEGORY;
+    },
+
+    // A node registered on the canvas alone has no Python schema, so the
+    // frontend invents one -- named after the class, described as "Frontend
+    // only node". This is the hook that runs before those reach the node
+    // library and the search box.
+    beforeRegisterVueAppNodeDefs(defs) {
+        for (const def of defs ?? []) {
+            const name = TITLES[def?.name];
+            if (!name) continue;
+            def.display_name = name;
+            def.category = CATEGORY;
+            // The badge beside the row in the search box, which otherwise
+            // reads "frontend_only" while every other node here says the pack.
+            def.python_module = "custom_nodes.symbiotica";
+            def.description = def.name === SET_HUB
+                ? "Holds many named constants. Wire an output into its empty "
+                  + "slot and the slot takes that name; a Get Hub reads it."
+                : "Reads named constants. Drag from its empty slot onto an "
+                  + "input and pick the name to pull.";
+        }
+    },
 });

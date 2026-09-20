@@ -153,6 +153,32 @@ against the folder it named and refuses anything that climbs out, and
 `tests/test_routes_control_images.py` is where that is held. The Prompts
 routes never had the allowlist. Do not put it back.
 
+## Set Hub / Get Hub — one node, many named constants
+
+`web/js/find_node.js`, registered on the canvas alone: no Python, nothing in
+the queued prompt. They are VIRTUAL nodes, and the frontend resolves them away
+through `resolveVirtualOutput(slot)` then `getInputLink(slot)`, both indexed by
+OUTPUT SLOT — that per-slot indexing is what lets one node stand in for twenty
+KJNodes pairs, and it is in 1.48.7 as well as 1.52.7.
+
+- **A constant's name is the slot's `label`**, not a widget value. The Set Hub
+  draws one text row per named slot (`name_1`, `name_2`, … as widget names —
+  they must be UNIQUE, the renderer keys on them, and two rows called `STRING`
+  drew one row twice) and those rows are a VIEW: `serialize_widgets = false`,
+  values written back from the slots on every rebuild, slots are what a saved
+  workflow restores. So none of the widget-shift traps above apply.
+- Renaming on the Set side carries every Get Hub pulling the old name
+  (`repointGetters`). A Get slot whose name nothing publishes goes red.
+- Names are ONE flat namespace shared with KJNodes' `SetNode`, so a Get Hub
+  pulls a name off a plain Set node. Not the reverse: KJ's `GetNode` matches
+  `type === 'SetNode'`.
+- Wiring a slot names it after the output it came from, except when that name
+  is a scalar type (`STRING`, `INT`, `FLOAT`, …) — then the source node's title
+  answers, because STRING, STRING_2, STRING_3 is not a set of names. `MODEL`,
+  `VAE`, `IMAGE` keep their own.
+- Every hub ends in exactly one empty `+` slot, re-asserted on draw because the
+  frontend's own "Remove Slot" fires no event the node can hear.
+
 ## A value that arrives on a wire
 
 He wires almost everything through KJNodes **Set/Get** nodes. A GetNode's only
