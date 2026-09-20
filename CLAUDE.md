@@ -200,6 +200,11 @@ KJNodes pairs, and it is in 1.48.7 as well as 1.52.7.
   its index: rewiring a slot is a disconnect and a connect back to back, and
   the slot that has a wire again by the time the tick comes is being rewired,
   not abandoned.
+- **A hub's title keeps the side it is on**: `Set _paths` and `Get _paths`, never
+  two nodes carrying one name. The word is put in front of a title he types
+  (`groupNameOf` / `keepSideInTitle`), the stock titles already say it, and the
+  GROUP's name is the title without it — so `Set _paths` and `_paths` name the
+  same group and a Get reading it is titled `Get _paths`.
 - **A Set Hub is a GROUP and its TITLE is the group's name** — `settings-01`,
   `paths`, `models`. The Get Hub's picker lists the groups above the individual
   names, and taking one loads every name on that hub at once. The group a Get

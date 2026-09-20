@@ -306,6 +306,30 @@ const TITLES = {
     [GET_HUB]: "Get Hub (Symbiotica)",
 };
 
+// The titles a hub is born with, which name no group.
+const STOCK_TITLES = new Set(["", "Set Hub", "Get Hub",
+                              TITLES[SET_HUB], TITLES[GET_HUB]]);
+// Which side of the pair you are looking at, kept at the front of the title so
+// that a Set and the Get reading it are never two nodes with one name.
+const SIDE = /^(set|get)\s+/i;
+
+// The group a title names: the title without the word that says which side it
+// is. `Set _paths` and `_paths` name the same group, and `Get _paths` reads it.
+export function groupNameOf(title) {
+    const clean = String(title ?? "").trim();
+    if (STOCK_TITLES.has(clean)) return "";
+    return clean.replace(SIDE, "").trim() || clean;
+}
+
+// A title he typed keeps the side in front of it. The stock titles already say
+// it, and a title that says it once is left exactly as it is.
+export function keepSideInTitle(node, side) {
+    const title = String(node?.title ?? "").trim();
+    if (!title || STOCK_TITLES.has(title) || SIDE.test(title)) return false;
+    node.title = `${side} ${title}`;
+    return true;
+}
+
 // Where the last click was, for placing the name menu. LiteGraph's ContextMenu
 // is positioned from an event, and the one that opens the menu (dropping a
 // wire) is long gone by the time the connection callback runs.
@@ -400,7 +424,7 @@ export function publishedGroups(graphs) {
                 .map((slot) => ({ name: slotName(slot),
                                   type: String(slot.type ?? ANY) }));
             if (!names.length) continue;
-            out.push({ title: String(node.title ?? "").trim() || "Set Hub",
+            out.push({ title: groupNameOf(node.title) || "Set Hub",
                        names, node, graph });
         }
     }
@@ -426,7 +450,10 @@ export function groupOf(node, graphs) {
     const group = byId ?? groups.find((g) => g.title === title) ?? null;
     if (!group) return null;
     if (group.title !== title) {
-        if (String(node.title ?? "").trim() === title) node.title = group.title;
+        const showing = String(node.title ?? "").trim();
+        if (showing === title || showing === `Get ${title}`) {
+            node.title = `Get ${group.title}`;
+        }
         props[GROUP_PROP] = group.title;
     }
     if (group.node?.id != null) props[GROUP_ID_PROP] = group.node.id;
@@ -675,8 +702,10 @@ export function loadGroup(node, group) {
     // The title follows the group -- while it is still the name every Get Hub
     // is born with, or the group it was showing a second ago. A title typed by
     // hand is his and stays.
-    const stock = ["", "Get Hub", TITLES[GET_HUB], was];
-    if (stock.includes(String(node.title ?? "").trim())) node.title = group.title;
+    const stock = ["", "Get Hub", TITLES[GET_HUB], was, `Get ${was}`];
+    if (stock.includes(String(node.title ?? "").trim())) {
+        node.title = `Get ${group.title}`;
+    }
     syncGroup(node);
     node.setDirtyCanvas?.(true, true);
 }
@@ -932,6 +961,7 @@ function assertTailOnDraw(node, kind) {
     node.onDrawForeground = function () {
         if (!app.configuringGraph) {
             ensureTail(this, kind);
+            keepSideInTitle(this, kind === "in" ? "Set" : "Get");
             if (kind === "in") {
                 followWireNames(this);
                 syncNameWidgets(this);

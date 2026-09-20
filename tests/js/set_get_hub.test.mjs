@@ -272,8 +272,9 @@ test("a Get Hub following a group grows with it", async () => {
     loadGroup(get, publishedGroups([graph])[0]);
     assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
                      ["project", "controlnet", "+"]);
-    // The title says which group, while it is still the name it was born with.
-    assert.equal(get.title, "paths");
+    // The title says which group -- and which SIDE, so a Set and the Get
+    // reading it are never two nodes carrying one name.
+    assert.equal(get.title, "Get paths");
     // A name added to the Set Hub arrives here, at the END: a wire holds on to
     // a slot's index, so nothing already on the node may be pushed down.
     hub.inputs.splice(2, 0, { name: "output", label: "output", type: "STRING", link: 3 });
@@ -309,14 +310,14 @@ test("picking a second group replaces the first, it does not add to it",
     loadGroup(get, groups()[1]);
     assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
                      ["incompetent", "claude", "+"]);
-    assert.equal(get.title, "settings-02");
+    assert.equal(get.title, "Get settings-02");
     // The other group now: what it held before is gone, and the title moves
     // with it -- a node reading settings-02 while it carries settings-01 is a
     // node lying about what it holds.
     loadGroup(get, groups()[0]);
     assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
                      ["stupid", "agent", "+"]);
-    assert.equal(get.title, "settings-01");
+    assert.equal(get.title, "Get settings-01");
     // A title typed by hand is his, and survives the switch.
     get.title = "my paths";
     loadGroup(get, groups()[1]);
@@ -339,14 +340,14 @@ test("retitling a Set Hub carries every Get following it", async () => {
     graph.nodes.push(get);
 
     loadGroup(get, publishedGroups([graph])[0]);
-    assert.equal(get.title, "settings-01");
+    assert.equal(get.title, "Get settings-01");
 
     // He retitles the group. The id is what carries the follower over, and the
     // title is healed on the node and in what it remembers.
     hub.title = "models";
     const group = groupOf(get, [graph]);
     assert.equal(group.title, "models");
-    assert.equal(get.title, "models");
+    assert.equal(get.title, "Get models");
     assert.equal(get.properties.symbiotica_group, "models");
     assert.equal(syncGroup(get), false);
     assert.deepEqual(get.outputs.map((s) => s.label ?? s.name), ["model", "+"]);
@@ -356,6 +357,29 @@ test("retitling a Set Hub carries every Get following it", async () => {
     hub.title = "checkpoints";
     assert.equal(groupOf(get, [graph]).title, "checkpoints");
     assert.equal(get.title, "mine");
+});
+
+test("a title keeps the side it is on", async () => {
+    const { groupNameOf, keepSideInTitle } =
+        await import("../../web/js/find_node.js");
+    // The group a title names is the title without the side word, so a Set
+    // titled `Set _paths` and one titled `_paths` name the same group.
+    assert.equal(groupNameOf("Set _paths"), "_paths");
+    assert.equal(groupNameOf("_paths"), "_paths");
+    assert.equal(groupNameOf("Get _paths"), "_paths");
+    // The titles a hub is born with name no group at all.
+    assert.equal(groupNameOf("Set Hub (Symbiotica)"), "");
+    assert.equal(groupNameOf(""), "");
+
+    // A title he typed takes the side in front of it, once.
+    const node = { title: "_paths" };
+    assert.equal(keepSideInTitle(node, "Set"), true);
+    assert.equal(node.title, "Set _paths");
+    assert.equal(keepSideInTitle(node, "Set"), false);
+    assert.equal(node.title, "Set _paths");
+    // The stock title already says it.
+    const fresh = { title: "Get Hub (Symbiotica)" };
+    assert.equal(keepSideInTitle(fresh, "Get"), false);
 });
 
 test("a Get Hub follows no group until it is told to", async () => {
