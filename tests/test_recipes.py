@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 from _recipes import (RecipeError, apply_recipe, generate, promote_string_input,
+                      recipe_slots,
                       recipe_slots, workflow_name)
 
 SG_ID = "4ea6e827-ec92-4fdc-8d87-a021f5d6fb0a"
@@ -146,6 +147,91 @@ class TestApplyRecipe:
         report = apply_recipe(template(), {"control_image": "new.png"})
         assert report["applied"] == ["control_image"]
         assert report["template"] == ["grid", "pre_flip", "render", "render_aspect"]
+
+
+# A node's widgets_values is positional and is regularly LONGER than the
+# inputs the graph declares: ComfyUI draws widgets nothing declares (a seed's
+# `control_after_generate`, a node's own DOM panel) and a saved workflow stores
+# their values with no name. His whole project refused to generate on this.
+def ksampler(widgets=None):
+    return {"id": 13, "type": "KSampler", "mode": 0, "outputs": [],
+            "color": "#323", "bgcolor": "#535",
+            "inputs": [{"name": n, "type": "INT", "widget": {"name": n}, "link": None}
+                       for n in ("seed", "steps", "cfg", "sampler_name", "scheduler", "denoise")],
+            "widgets_values": widgets if widgets is not None
+            else [2, "randomize", 20, 8, "euler", "simple", 1]}
+
+
+def control_image():
+    """Two declared inputs, one of them WIRED, and a DOM panel widget the
+    graph never declares: three values behind two names."""
+    return {"id": 21, "type": "SymbioticaControlImage", "mode": 0, "outputs": [],
+            "color": "#323", "bgcolor": "#535", "title": None,
+            "inputs": [{"name": "image", "type": "STRING", "widget": {"name": "image"}, "link": None},
+                       {"name": "path", "type": "STRING", "widget": {"name": "path"}, "link": 17}],
+            "widgets_values": ["old.png", "", ""]}
+
+
+def painted(*nodes):
+    return {"nodes": list(nodes), "links": [], "groups": [], "extra": {}, "version": 0.4}
+
+
+class TestWidgetsBehindTheNames:
+    def test_an_undeclared_widget_does_not_refuse_the_node(self):
+        wf = painted(ksampler())
+        apply_recipe(wf, {"KSampler": {
+            "seed": 9, "control_after_generate": "fixed", "steps": 30,
+            "cfg": 7, "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 0.8}},
+            "purple")
+        assert wf["nodes"][0]["widgets_values"] == [9, "fixed", 30, 7, "dpmpp_2m", "karras", 0.8]
+
+    def test_a_wired_widget_holds_its_place_and_is_not_written(self):
+        wf = painted(control_image())
+        apply_recipe(wf, {"SymbioticaControlImage": {"image": "new.png", "images_panel": ""}},
+                     "purple")
+        # `path` is fed by a link: its box keeps whatever the template had.
+        assert wf["nodes"][0]["widgets_values"] == ["new.png", "", ""]
+
+    def test_a_capture_that_names_too_few_widgets_is_refused_by_name(self):
+        wf = painted(ksampler())
+        with pytest.raises(RecipeError, match="Capture the slot again"):
+            apply_recipe(wf, {"KSampler": {"seed": 9}}, "purple")
+
+    def test_an_undeclared_name_cannot_be_told_from_a_typo(self):
+        # The limit of this, written down: a saved workflow records the VALUES
+        # of the widgets it never declared and never their names, so
+        # `control_after_generate` and a mistyped key look identical from
+        # here. The COUNT is the discipline that is left — name as many
+        # widgets as the node holds, or the slot is refused outright.
+        wf = painted(ksampler())
+        apply_recipe(wf, {"KSampler": {
+            "seed": 9, "typo": "fixed", "steps": 30, "cfg": 7,
+            "sampler_name": "euler", "scheduler": "simple", "denoise": 1}}, "purple")
+        assert wf["nodes"][0]["widgets_values"] == [9, "fixed", 30, 7, "euler", "simple", 1]
+
+
+class TestTheNameTheCanvasShows:
+    """A node never retitled is captured under the name the canvas DRAWS on it.
+    A saved workflow stores no title for one, so the server has to be told."""
+
+    def test_without_display_names_the_class_name_is_the_key(self):
+        wf = painted(control_image())
+        assert sorted(recipe_slots(wf, "purple")) == ["SymbioticaControlImage"]
+
+    def test_the_display_name_is_the_key_the_canvas_captured(self):
+        wf = painted(control_image())
+        display = {"SymbioticaControlImage": "Control Image"}
+        assert sorted(recipe_slots(wf, "purple", display)) == ["Control Image"]
+        apply_recipe(wf, {"Control Image": {"image": "new.png", "images_panel": ""}},
+                     "purple", display)
+        assert wf["nodes"][0]["widgets_values"][0] == "new.png"
+
+    def test_a_title_he_typed_still_wins(self):
+        node = control_image()
+        node["title"] = "backdrop"
+        wf = painted(node)
+        assert sorted(recipe_slots(wf, "purple", {"SymbioticaControlImage": "Control Image"})) \
+            == ["backdrop"]
 
 
 class TestGenerate:

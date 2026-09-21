@@ -63,6 +63,18 @@ if PromptServer is not None:
         import folder_paths
         return os.path.join(folder_paths.get_user_directory(), "default", "workflows")
 
+    def _display_names():
+        """What the CANVAS draws on a node that was never retitled. A saved
+        workflow stores no title for one, so without this the server reads
+        `SymbioticaControlImage` where the canvas captured `Control Image`,
+        and the recipe's value has no slot to land in."""
+        try:
+            import nodes
+            return {k: v for k, v in (nodes.NODE_DISPLAY_NAME_MAPPINGS or {}).items()
+                    if isinstance(k, str) and isinstance(v, str)}
+        except Exception:
+            return {}
+
     @routes.get("/symbiotica/recipes")
     async def projects_list(request):
         return web.json_response({"projects": list_projects(projects_dir()),
@@ -75,7 +87,7 @@ if PromptServer is not None:
             if project is None:
                 return web.json_response({"error": "no such project"}, status=404)
             slots = template_slots(read_template(_workflows_dir(), project.get("template")),
-                                   project.get("match_color"))
+                                   project.get("match_color"), _display_names())
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response({"project": project, "slots": slots})
@@ -90,7 +102,7 @@ if PromptServer is not None:
                 return web.json_response({"error": f"project {name!r} exists — pick it instead"}, status=409)
             write_project(projects_dir(), name, project)
             slots = template_slots(read_template(_workflows_dir(), project["template"]),
-                                   project.get("match_color"))
+                                   project.get("match_color"), _display_names())
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response({"name": name, "project": project, "slots": slots})
@@ -121,7 +133,8 @@ if PromptServer is not None:
             project = read_project(projects_dir(), body.get("name") or "")
             if project is None:
                 return web.json_response({"error": "no such project"}, status=404)
-            report = generate_all(_workflows_dir(), project)
+            report = generate_all(_workflows_dir(), project, _display_names(),
+                                  body.get("recipe") or None)
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(report)

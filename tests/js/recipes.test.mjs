@@ -384,6 +384,66 @@ test("asset focus's category_recipe output is the picked label, and category the
     assert.equal(resolveText(graphFor(3), target(3), "recipe"), null);
 });
 
+// Picking an asset EMPTIES the category (`chooseAsset`, asset_focus.js): with a
+// name chosen the narrowing decides nothing, and a stale one is a hard refusal
+// at queue time. The recipe still has to be named, or the Recipes node stores
+// nothing for the asset he just picked.
+const GARGOYLE = () => ([
+    { name: "category", value: "" },
+    { name: "asset", value: "Gargoyle Drink Machine" },
+    { name: "feature", value: "QE 2 — Coven of Shadows" },
+]);
+const EVENTS = () => ([{ feature: "QE 2 — Coven of Shadows", assets: [
+    { assetName: "Gargoyle Drink Machine", category: "Appliance", canvas: "128x256" },
+    { assetName: "Spider Mosaic Counter", category: "Counter", canvas: "128x128" }] }]);
+const FOCUS_OUTS = [{ name: "asset_name" }, { name: "category" },
+                    { name: "client_prompt" }, { name: "category_recipe" }];
+
+test("an asset picked with no category names the recipe from the asset's own row", () => {
+    const focus = { id: 1, type: "SymbioticaAssetFocus", inputs: [],
+                    widgets: GARGOYLE(), _symEvents: EVENTS(), outputs: FOCUS_OUTS };
+    const target = (slot) => ({ id: 2, type: "SymbioticaRecipe",
+        inputs: [{ name: "recipe", link: 10, widget: { name: "recipe" } }],
+        widgets: [{ name: "recipe", value: "" }] });
+    const graphFor = (slot) => graphOf([focus, target(slot)],
+                                       { 10: { origin_id: 1, origin_slot: slot } });
+    assert.equal(resolveText(graphFor(3), target(3), "recipe"), "Appliance 1x2");
+    assert.equal(resolveText(graphFor(1), target(1), "recipe"), "Appliance");
+    // A category typed by hand still wins over the asset's own.
+    focus.widgets[0].value = "Counter 1x1";
+    assert.equal(resolveText(graphFor(3), target(3), "recipe"), "Counter 1x1");
+    // A name the order does not hold names nothing, rather than guessing.
+    focus.widgets[0].value = "";
+    focus.widgets[1].value = "Not In The Order";
+    assert.equal(resolveText(graphFor(3), target(3), "recipe"), null);
+    // And neither does an empty node: no category, no asset, no order.
+    focus.widgets[1].value = "";
+    assert.equal(resolveText(graphFor(3), target(3), "recipe"), null);
+});
+
+test("Task Specs answers the same way — the Task feeding it holds the asset", () => {
+    const task = { id: 1, type: "SymbioticaTask", inputs: [],
+                   widgets: GARGOYLE(), _symEvents: EVENTS(),
+                   outputs: [{ name: "specs" }] };
+    const NAMES = ["asset_name", "category", "client_prompt", "save_path", "order",
+                   "event_order", "bucket", "ref_image", "ref_mask", "ref_name",
+                   "category_recipe", "width", "height"];
+    const specs = { id: 2, type: "SymbioticaTaskSpecs",
+                    inputs: [{ name: "specs", link: 6 }],
+                    outputs: NAMES.map((name) => ({ name })) };
+    const target = { id: 3, type: "SymbioticaRecipe",
+        inputs: [{ name: "recipe", link: 10, widget: { name: "recipe" } }],
+        widgets: [{ name: "recipe", value: "" }] };
+    const graphFor = (slot) => graphOf([task, specs, target], {
+        6: { origin_id: 1, origin_slot: 0 },
+        10: { origin_id: 2, origin_slot: slot },
+    });
+    assert.equal(resolveText(graphFor(10), target, "recipe"), "Appliance 1x2");
+    assert.equal(resolveText(graphFor(1), target, "recipe"), "Appliance");
+    task.widgets[1].value = "Spider Mosaic Counter";
+    assert.equal(resolveText(graphFor(10), target, "recipe"), "Counter 1x1");
+});
+
 import { liveSlots, retable } from "../../web/js/recipes.js";
 
 const canvas = () => ({ nodes: [

@@ -130,8 +130,10 @@ still open. Move to an issue when one is picked up.
   (`validate_node_input` returns true when either side is `*`); what the
   FRONTEND does when a `*` output is dropped on a typed widget input has never
   been watched.
-- The `auto` toggle on the Recipes node (save on edit, load/create on a name
-  change) has unit tests only; nobody has watched it on a canvas.
+- The `auto` toggle on the Recipes node has been run on his local canvas
+  (2026-09-21): it created three recipes from asset picks. The failures it
+  surfaced are G1-G5 in the contract. Still unwatched: `create` on a name typed
+  into the widget rather than arriving on the wire, and the 1s settle.
 - Slot matching by colour (2026-09-17) has unit tests only; not yet watched on
   the Modal canvas, and no template has been converted from `recipe:` titles.
 - A Recipes node saved before `match_color` existed loads it with the old
@@ -160,6 +162,39 @@ still open. Move to an issue when one is picked up.
 - Hub side: the module library dir `user/default/symbiotica-modules` is not
   symlinked to the shared Volume (`canvas_entry.user_tree`), so published
   modules stay per user.
+
+Added 2026-09-21, from the recipe storage work. Nothing here was watched on the
+Modal canvas; the fixes were reproduced against his own project file and node
+shapes on the local install.
+
+- His `_node-asset-focus-rework` project is crossed from the switch bug (G4):
+  `appliance-1x1` holds `asset: "appliance 1x2"` and `appliance-1x2` holds
+  `asset: "food"`. Left alone — his data. Open: retype the two cells, or load
+  each recipe and re-capture.
+- `_widget_positions` cannot tell an undeclared widget from a typo, because a
+  saved workflow records the values of the widgets it never declared and never
+  their names. The count is the only discipline. Open: whether a capture should
+  store the widget ORDER alongside the values, which is a project-file format
+  change.
+- `pointWireAt` matches a recipe to a category by slug. Two categories whose
+  slugs collide (`Food - 3 stages` and `Food 3 stages`) would pick the first.
+  Noticed, not chased.
+- The regenerate-after-save writes only the recipe that moved. `shared` writes
+  none, so a shared edit leaves all the per-recipe files stale until
+  `generate workflows` is pressed. Open: regenerate every recipe on a shared
+  save, or say so in the status.
+- `generate_all` still RAISES on the first node it cannot write, so one bad
+  slot leaves the whole folder untouched. The contract says name the one it
+  could not; it names none. Open, and separate from G2.
+- `shared` is written only by pressing `capture` while shared or the project
+  row is picked; `auto` never writes it. So a project can run for a week with
+  `shared: {}` and every recipe holding a full copy — his does. Open: whether
+  the first capture should seed shared.
+- `askForName` is now exported from `find_node.js` and used by Recipes. It is
+  the only cross-panel import of that file that is not a Set/Get Hub lookup.
+- Whether an un-retitled node inside a SUBGRAPH resolves its display name the
+  same way was never checked; `subgraph_names` and the display map are merged
+  into one lookup, subgraph names winning.
 
 Added 2026-09-17, from the Control Image / Prompts / switch-render-engine work.
 Nothing below was watched on the Modal canvas except where it says otherwise.

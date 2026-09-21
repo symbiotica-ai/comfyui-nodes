@@ -162,6 +162,27 @@ export function categoryRecipeOf(asset) {
     return size ? `${category} ${size}`.trim() : category;
 }
 
+// The recipe an ASSET belongs to, for a node whose `category` is empty. Picking
+// an asset CLEARS the category on purpose (`chooseAsset` below), so with a name
+// chosen the category output would answer nothing and the Recipes node could
+// never name the recipe it is meant to store the canvas into. The asset's own
+// row answers instead, read off the order the node ALREADY holds: no request,
+// no run, and `null` when this node has no order or the name is not in it.
+export function assetRecipeOf(node, assetName) {
+    const want = String(assetName ?? "").trim();
+    if (!want) return null;
+    const source = orderSource(node) ?? node;
+    if (!Array.isArray(source?._symEvents)) return null;
+    const key = featureKey(widgetOf(source, "feature")?.value);
+    const event = source._symEvents.find((e) => featureKey(e.feature) === key)
+        || source._symEvents[0] || null;
+    const asset = (event?.assets ?? []).find(
+        (a) => String(a.assetName ?? "").trim() === want);
+    if (!asset) return null;
+    return { category: String(asset.category ?? "").trim(),
+             recipe: categoryRecipeOf(asset) };
+}
+
 // Does an asset fall under a dropdown pick? The pick is a recipe label
 // (`Appliance 1x2`, one canvas) or a plain category (every canvas).
 function inCategory(asset, pick) {

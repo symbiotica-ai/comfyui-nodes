@@ -125,13 +125,18 @@ def is_toggle(node: dict) -> bool:
     return str(node.get("title", "")).rstrip().endswith(TOGGLE)
 
 
-def recipe_slots(workflow: dict, color=None) -> dict[str, list[dict]]:
+def recipe_slots(workflow: dict, color=None, display=None) -> dict[str, list[dict]]:
     """Every root slot node, keyed by its title. Two nodes may share a key
     (the same aspect fed to two places). Nodes inside subgraph definitions are
-    not slots: a recipe speaks to the graph's surface."""
+    not slots: a recipe speaks to the graph's surface.
+
+    `display` maps a node type to the name the CANVAS draws on it when it was
+    never retitled. A saved workflow stores no title for such a node, so
+    without it this reads `SymbioticaControlImage` where the canvas captured
+    `Control Image`, and the recipe's value has no slot to land in."""
     slots: dict[str, list[dict]] = {}
     matches = color_matcher(color)
-    names = subgraph_names(workflow)
+    names = {**subgraph_names(workflow), **(display or {})}
     for node in workflow.get("nodes") or []:
         key = slot_key(node, matches, names)
         if key:
@@ -191,6 +196,60 @@ def _set_groups(workflow: dict, node: dict, key: str, value: dict) -> None:
             member["mode"] = MODE_ACTIVE if on else mode_off
 
 
+# The name behind every widget input the graph declares, wired or not, and the
+# subset of those whose value arrives on a link.
+def _wired_widget_names(node: dict) -> set:
+    out = set()
+    for inp in node.get("inputs") or []:
+        widget = inp.get("widget")
+        if not widget or inp.get("link") is None:
+            continue
+        name = widget.get("name") if isinstance(widget, dict) else None
+        out.add(name or inp.get("name"))
+    return out
+
+
+# Where each captured widget name sits in `widgets_values`, or None when the
+# node cannot be addressed by name at all.
+#
+# `widgets_values` is POSITIONAL and is regularly longer than the inputs the
+# graph declares. ComfyUI draws widgets the graph never declares -- a seed's
+# `control_after_generate`, the DOM panel a node draws for itself -- and a
+# saved workflow records their values with no name attached. A KSampler is six
+# declared names against seven values, which used to refuse the whole project.
+#
+# Two orders are known and both are subsequences of the real one: the DECLARED
+# names, in input order, and the CAPTURED keys, which the canvas wrote in
+# widget order with the wired ones left out (`widgetValues`, web/js/recipes.js).
+# Merging them reconstructs the layout -- a wired name sits where the declared
+# order puts it, an undeclared one where the capture puts it -- and the merge
+# only counts if it lands on exactly as many widgets as the node holds.
+def _widget_positions(node: dict, captured) -> dict | None:
+    names = promoted_names(node)
+    widgets = node.get("widgets_values") or []
+    if len(names) == len(widgets):
+        return {name: i for i, name in enumerate(names)}
+    wired = _wired_widget_names(node)
+    keys = list(captured)
+    order = []
+    i = 0
+    for name in names:
+        if name in wired:
+            order.append(name)
+            continue
+        while i < len(keys) and keys[i] != name:
+            order.append(keys[i])
+            i += 1
+        if i >= len(keys):
+            return None
+        order.append(name)
+        i += 1
+    order.extend(keys[i:])
+    if len(order) != len(widgets) or len(set(order)) != len(order):
+        return None
+    return {name: n for n, name in enumerate(order)}
+
+
 def _set_value(node: dict, key: str, value) -> None:
     if is_toggle(node):
         if not isinstance(value, bool):
@@ -201,15 +260,16 @@ def _set_value(node: dict, key: str, value) -> None:
     if not isinstance(widgets, list):
         raise RecipeError(f"{key}: node {node.get('id')} has no widgets to set")
     if isinstance(value, dict):
-        names = promoted_names(node)
-        if len(names) != len(widgets):
+        positions = _widget_positions(node, value)
+        if positions is None:
             raise RecipeError(
-                f"{key}: node {node.get('id')} widgets cannot be addressed by name "
-                f"({len(names)} names for {len(widgets)} values)")
+                f"{key}: node {node.get('id')} holds {len(widgets)} widget values but the "
+                f"template declares {len(promoted_names(node))} widget names, and the recipe "
+                f"names {len(value)} of them. Capture the slot again so it holds every widget.")
         for name, item in value.items():
-            if name not in names:
+            if name not in positions:
                 raise RecipeError(f"{key}: node {node.get('id')} has no widget {name!r}")
-            widgets[names.index(name)] = copy.deepcopy(item)
+            widgets[positions[name]] = copy.deepcopy(item)
     elif isinstance(value, list):
         if len(value) != len(widgets):
             raise RecipeError(
@@ -221,11 +281,11 @@ def _set_value(node: dict, key: str, value) -> None:
         widgets[0] = copy.deepcopy(value)
 
 
-def apply_recipe(workflow: dict, values: dict, color=None) -> dict:
+def apply_recipe(workflow: dict, values: dict, color=None, display=None) -> dict:
     """Write values into the workflow's slots, in place. A key no slot carries
     is refused: the alternative is a typo that silently renders the template's
     own value at full price."""
-    slots = recipe_slots(workflow, color)
+    slots = recipe_slots(workflow, color, display)
     unknown = sorted(k for k in values if k not in slots)
     if unknown:
         raise RecipeError(f"no recipe slot named {', '.join(unknown)} in the template")
@@ -250,7 +310,7 @@ def workflow_name(project: dict, recipe: str) -> str:
     return f"{project.get('workflow_prefix', '')}{recipe}"
 
 
-def generate(template: dict, project: dict, recipe: str) -> tuple[dict, dict]:
+def generate(template: dict, project: dict, recipe: str, display=None) -> tuple[dict, dict]:
     """One workflow for one recipe: the project's shared block with the
     recipe's values layered on top. The id is stable per (project, recipe)
     so a regenerated file is the same workflow to the editor, not a new one."""
@@ -263,9 +323,10 @@ def generate(template: dict, project: dict, recipe: str) -> tuple[dict, dict]:
     # A key the template has no slot for is a value the panel already shows
     # struck through as ignored (a slot renamed since the capture), so it is
     # reported, not refused: one stale key must not block every workflow.
-    slots = recipe_slots(workflow, color)
+    slots = recipe_slots(workflow, color, display)
     ignored = sorted(k for k in values if k not in slots)
-    report = apply_recipe(workflow, {k: v for k, v in values.items() if k in slots}, color)
+    report = apply_recipe(workflow, {k: v for k, v in values.items() if k in slots},
+                          color, display)
     report["ignored"] = ignored
     workflow["id"] = str(uuid.uuid5(NAMESPACE, workflow_name(project, recipe)))
     workflow["revision"] = 0
@@ -342,7 +403,7 @@ def promote_string_input(workflow: dict, subgraph_name: str, inner_id: int,
 
 # ------------------------------------------------------------------ slots --
 
-def template_slots(workflow: dict, color=None) -> list[dict]:
+def template_slots(workflow: dict, color=None, display=None) -> list[dict]:
     """What a recipe can set in this template, one entry per key, in canvas
     order: the kind a value takes (toggle, dict for a subgraph instance,
     scalar otherwise), the template's own value, and how many widgets the
@@ -350,7 +411,7 @@ def template_slots(workflow: dict, color=None) -> list[dict]:
     subgraph_ids = {s.get("id") for s in
                     ((workflow.get("definitions") or {}).get("subgraphs") or [])}
     out = []
-    for key, nodes in sorted(recipe_slots(workflow, color).items()):
+    for key, nodes in sorted(recipe_slots(workflow, color, display).items()):
         node = nodes[0]
         widgets = node.get("widgets_values") or []
         if is_toggle(node):
@@ -527,7 +588,7 @@ def list_projects(dir_: str) -> list[dict]:
     return out
 
 
-def generate_all(workflows_dir: str, project: dict) -> dict:
+def generate_all(workflows_dir: str, project: dict, display=None, only=None) -> dict:
     """Every recipe of one project, written beside its template (or into the
     project's `output` folder). Every workflow is generated before any is
     written, so a bad row leaves the folder as it was."""
@@ -535,8 +596,11 @@ def generate_all(workflows_dir: str, project: dict) -> dict:
     output_rel = project.get("output") or os.path.dirname(_template_rel(project.get("template")))
     output_dir = _under(workflows_dir, output_rel, "output folder") if output_rel else workflows_dir
     written = []
-    for recipe in project.get("recipes") or {}:
-        workflow, report = generate(template, project, recipe)
+    wanted = [r for r in (project.get("recipes") or {}) if only is None or r == only]
+    if only is not None and not wanted:
+        raise RecipeError(f"project has no recipe {only!r}")
+    for recipe in wanted:
+        workflow, report = generate(template, project, recipe, display)
         filename = f"{workflow_name(project, recipe)}.json"
         rel = f"{output_rel}/{filename}" if output_rel else filename
         written.append({"path": rel, "recipe": recipe, "workflow": workflow, **report})

@@ -12,8 +12,13 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, ghostButtonCss, injectHubStyles } from "./hub_theme.js";
-import { el, pinPanelWidth } from "./browser_chrome.js";
-import { findSource, graphScope, slotName } from "./find_node.js";
+import { el, emptyState, iconButton, ONE_LINE, pinPanelWidth,
+         sidebarShell, treeRow } from "./browser_chrome.js";
+import { askForName, findSource, graphScope, slotName } from "./find_node.js";
+// The panel hides the widgets its head drives, exactly as the Task node
+// does. `hideWidget` is exported from there and imported by three other
+// panels; a second copy of it is how they drift.
+import { assetRecipeOf, hideWidget } from "./asset_focus.js";
 
 const NODE_CLASS = "SymbioticaRecipe";
 const SHARED = "shared";
@@ -97,6 +102,22 @@ function inputTextAt(graph, node, index, depth, inputName) {
     return value === undefined ? undefined : String(value);
 }
 
+// What a focus/task node's `category` / `category_recipe` output says on the
+// canvas. The dropdown holds the recipe label (`Appliance 1x2`); the plain
+// `category` output is that without its size, and "All" names nothing. Picking
+// an ASSET clears the dropdown, and the asset's own row is what names its
+// recipe -- without that fallback, choosing an asset leaves the Recipes node
+// with no name and it silently stores nothing.
+function categoryOutput(node, output) {
+    const picked = String(widgetValue(node, "category") ?? "").trim();
+    if (picked && picked !== "All") {
+        return output === "category" ? picked.replace(/\s+\d+x\d+$/i, "") : picked;
+    }
+    const fromAsset = assetRecipeOf(node, widgetValue(node, "asset"));
+    if (!fromAsset) return null;
+    return (output === "category" ? fromAsset.category : fromAsset.recipe) || null;
+}
+
 function nodeText(graph, node, slot, depth) {
     if (depth > 12) return null;
     const type = String(node.type ?? "");
@@ -115,11 +136,8 @@ function nodeText(graph, node, slot, depth) {
         const origin = link ? graph.getNodeById?.(link.origin_id) : null;
         if (!origin) return null;
         const wanted = node.outputs?.[slot]?.name;
-        const picked = String(widgetValue(origin, "category") ?? "").trim();
         if (wanted === "category" || wanted === "category_recipe") {
-            if (!picked || picked === "All") return null;
-            return wanted === "category"
-                ? picked.replace(/\s+\d+x\d+$/i, "") : picked;
+            return categoryOutput(origin, wanted);
         }
         const value = wanted ? widgetValue(origin, wanted) : undefined;
         return typeof value === "string" ? value : null;
@@ -130,12 +148,8 @@ function nodeText(graph, node, slot, depth) {
     if (type === "SymbioticaAssetFocus" || type === "SymbioticaAssetRecipe"
             || type === "SymbioticaTask") {
         const output = node.outputs?.[slot]?.name;
-        // The dropdown holds the recipe label (`Appliance 1x2`); the plain
-        // `category` output is that without its size, and "All" names nothing.
         if (output === "category" || output === "category_recipe") {
-            const picked = String(widgetValue(node, "category") ?? "").trim();
-            if (!picked || picked === "All") return null;
-            return output === "category" ? picked.replace(/\s+\d+x\d+$/i, "") : picked;
+            return categoryOutput(node, output);
         }
         const value = output ? widgetValue(node, output) : undefined;
         return typeof value === "string" ? value : null;
@@ -190,6 +204,48 @@ function findSetter(graph, get) {
     if (!name) return null;
     return (graph?.nodes ?? []).find((n) => String(n.type ?? "") === "SetNode"
         && String(n.widgets?.[0]?.value ?? "").trim() === name) ?? null;
+}
+
+// The node whose `category` names the recipe: the same walk `nodeText` makes,
+// stopping at the node rather than at its text. Picking a recipe in the sidebar
+// sets that widget, so the wire agrees with the panel -- without it, auto reads
+// the old name on the next repaint and pulls the canvas straight back.
+const FOCUS_TYPES = new Set(["SymbioticaAssetFocus", "SymbioticaAssetRecipe",
+                             "SymbioticaTask"]);
+
+function focusBehindAt(graph, node, index, depth) {
+    const input = node?.inputs?.[index];
+    if (!input || input.link == null || depth > 12) return null;
+    const link = graph.links?.get?.(input.link) ?? graph.links?.[input.link];
+    const origin = link ? graph.getNodeById?.(link.origin_id) : null;
+    if (!origin) return null;
+    return focusBehindNode(graph, origin, link.origin_slot ?? 0, depth + 1);
+}
+
+function focusBehindNode(graph, node, slot, depth) {
+    const type = String(node?.type ?? "");
+    if (FOCUS_TYPES.has(type)) return node;
+    if (type === "SymbioticaTaskSpecs") {
+        const index = (node.inputs ?? []).findIndex((i) => i.name === "specs");
+        return index < 0 ? null : focusBehindAt(graph, node, index, depth);
+    }
+    if (type === "SymbioticaGetHub") {
+        const source = findSource(graphScope(node.graph, graph),
+                                  slotName(node.outputs?.[slot]));
+        return source ? focusBehindAt(source.graph ?? graph, source.node,
+                                      source.index, depth) : null;
+    }
+    if (type === "GetNode" || type === "SetNode") {
+        const setter = type === "SetNode" ? node : findSetter(graph, node);
+        return setter ? focusBehindAt(graph, setter, 0, depth) : null;
+    }
+    if (PASS_THROUGH.has(type)) return focusBehindAt(graph, node, 0, depth);
+    return null;
+}
+
+export function focusBehind(graph, node, inputName) {
+    const index = (node?.inputs ?? []).findIndex((i) => i.name === inputName);
+    return index < 0 ? null : focusBehindAt(graph, node, index, 0);
 }
 
 // The text arriving on one of this node's inputs: typed, or resolved live
@@ -657,13 +713,33 @@ export function generateSummary(report) {
     return { summary, detail: detail + note };
 }
 
-// ----------------------------------------------------------------- panel --
 
+// ----------------------------------------------------------------- panel --
+// A sidebar of names and a pane of values, the shape the Task node is built
+// in: `shared` and the recipes on the left, the selected one's cells on the
+// right. The rules above are untouched — this is the view.
+
+const RECIPE_MIN_W = 760;
+// The sidebar's width, its fold and which row the pane is showing are VIEW
+// state, so they ride on node.properties. A widget for any of them would shift
+// the saved values of every workflow already holding this node.
+const RECIPE_SIDE = "symbiotica_recipes_sidebar";
+const RECIPE_SHUT = "symbiotica_recipes_shut";
+const RECIPE_PICK = "symbiotica_recipes_pick";
+// The project's own row, above `shared`: `template`, `output` and `prefix`
+// live there. `template` is what `projectForWorkflow` matches the open
+// workflow against, and the only repair after a Save As, so it has to stay
+// reachable. No recipe can be called this — `recipeSlug` turns a colon into a
+// dash.
+const PROJECT_ROW = ":project";
+const LABEL_W = 150;
 
 const inputCss = "box-sizing:border-box;min-width:0;padding:3px 5px;"
     + `font:11px ${HUB.mono};background:var(--comfy-input-bg, transparent);`
     + `color:var(--input-text, ${HUB.ink});border:1px solid ${HUB.hairline};border-radius:${HUB.radius.sm};`;
 const cellCss = inputCss + "width:100%;resize:vertical;min-height:24px;line-height:1.35;";
+const wordButtonCss = ghostButtonCss + "padding:2px 8px;flex:0 0 auto;"
+    + `font:11px ${HUB.font};`;
 
 function stopCanvas(node) {
     node.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -672,26 +748,41 @@ function stopCanvas(node) {
     return node;
 }
 
+// The object a cell's text stands for, or null. A cell is text — this only
+// asks what shape that text is in.
+function objectCell(text) {
+    const trimmed = String(text ?? "").trim();
+    if (!trimmed.startsWith("{")) return null;
+    const parsed = parseJson(trimmed);
+    return parsed.ok && parsed.value && typeof parsed.value === "object"
+        && !Array.isArray(parsed.value) ? parsed.value : null;
+}
+
+const plainObject = (value) => (value && typeof value === "object"
+    && !Array.isArray(value) ? value : null);
+
+// Does this row get the sub-grid of one field per key, or one box of text?
+// The VALUE decides, and the slot's `kind` only answers when no value does:
+// the template's `kind` is read off the SAVED workflow, and on his canvas it
+// says `scalar` for slots every recipe stores a dict in. A text box drawn over
+// a JSON object is a 1100-character prompt dict flattened on the first save.
+export function dictRow(slot, own, inherited) {
+    if (objectCell(own)) return true;
+    if (objectCell(inherited)) return true;
+    if (plainObject(slot?.default)) return true;
+    return slot?.kind === "dict";
+}
+
 function recipePanel(node) {
     injectHubStyles();
-    const container = el("div", "box-sizing:border-box;width:100%;height:100%;overflow:auto;");
-    const body = el("div", `box-sizing:border-box;padding:2px;font:11px ${HUB.font};color:var(--input-text, ${HUB.ink});`);
-    container.appendChild(body);
-    container.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
-    node.addDOMWidget("recipe_panel", "sym_recipe", container, {
-        serialize: false, hideOnZoom: true,
-        getMinHeight: () => 60,
-    });
-    node.size[0] = Math.max(node.size[0], 560);
-    const syncPanelWidth = pinPanelWidth(node, container);
-    const refit = () => requestAnimationFrame(() => {
-        syncPanelWidth();
-        node.setDirtyCanvas?.(true, true);
-    });
+    node.properties = node.properties ?? {};
 
     // What is on screen: the project as loaded, the template's slots, and the
-    // table the person is editing. `dirty` is unsaved edits.
-    const state = { name: null, project: null, slots: [], table: null, dirty: false };
+    // table the person is editing. `dirty` is unsaved edits. `projects` is
+    // every project file, so the ones this workflow is not the template of can
+    // be named rather than silently missing.
+    const state = { name: null, project: null, slots: [], table: null,
+                    dirty: false, projects: [] };
     // The colour that marks a slot: typed on the node, or wired like the name.
     const matchColor = () => {
         const wired = textValue(node, "match_color");
@@ -699,21 +790,48 @@ function recipePanel(node) {
         const widget = node.widgets?.find((w) => w.name === "match_color");
         return String(widget?.value ?? "").trim();
     };
-    // Which sections are open. A freshly opened project shows its headers only.
-    const expanded = new Set();
     // The recipe the canvas is on -- the category picked in Asset Focus, down
-    // the wire. Its section is highlighted and opened, and the one this opened
-    // before closes again, so the panel follows the pick without piling up.
+    // the wire. Its row is highlighted, and the pane follows it unless he has
+    // picked another by hand.
     let active = "";
-    let autoOpened = null;
+    // What the wire put in the pane last, so a pick of his own can be told
+    // from one the wire made. Null means the selection is his.
+    let autoSelected = SHARED;
     let busy = false;
+    // The field the caret is in. Nothing on any render path may replace it:
+    // painting a node while typing a 2000-character preamble is exactly when
+    // a rebuild happens, and losing the caret mid-word is what the split of
+    // the tree from the pane is for.
+    let focused = null;
+    // A field REMOVED from the page fires no blur — the browser does not send
+    // one for an element it took away — so a rebuild would leave this pointing
+    // at a field nobody can type in, and every path that waits for the caret to
+    // leave would wait for ever.
+    const caret = () => {
+        if (focused && !focused.parentElement) focused = null;
+        return focused;
+    };
+
+    // Which row the pane is showing: VIEW state on the node, and a DIFFERENT
+    // variable from `active`. Selecting a recipe SHOWS it; the `recipe` wire
+    // is still what decides which one is live, and `load` is still explicit.
+    const picked = () => String(node.properties?.[RECIPE_PICK] ?? SHARED);
+    const pickRow = (row) => { node.properties[RECIPE_PICK] = String(row); };
+    // The table column a selected row edits. The project row edits `shared`:
+    // its three fields are the project's, its values are the ones every
+    // recipe takes.
+    const columnOf = (row) => (row === PROJECT_ROW ? SHARED : row);
+    const slotOf = (key) => state.slots.find((s) => s.key === key);
+    const setCount = (column) => (state.table?.rows ?? [])
+        .filter((row) => (row.cells[column] ?? "").trim()).length;
 
     function status(text, subtle = true) {
         statusLine.textContent = text;
         statusLine.style.color = subtle ? HUB.inkSubtle : HUB.ink;
     }
 
-    const statusLine = el("div", `padding:4px 3px;color:${HUB.inkSubtle};`);
+    const statusLine = el("div", `flex:1;min-width:0;${ONE_LINE}`
+        + `padding:3px 8px;color:${HUB.inkSubtle};`);
 
     function collect() {
         const project = tableToProject(state.project, state.table, state.slots);
@@ -722,6 +840,125 @@ function recipePanel(node) {
         return project;
     }
 
+    // --- the shell ---------------------------------------------------------
+    const shell = sidebarShell(node, {
+        sideProp: RECIPE_SIDE, shutProp: RECIPE_SHUT, sideDefault: 180,
+        repaint: () => renderAll(),
+        // Above both panes, so it survives the fold — and it answers on the
+        // names, which is the one thing the tree cannot scroll to for you once
+        // a project has thirty recipes.
+        search: {
+            placeholder: "Search recipes…",
+            list: () => state.table?.columns ?? [],
+            onPick: (name) => choose(name),
+        },
+        headButtons: [
+            iconButton("newFile", "Start a project from the open workflow",
+                       () => startNew()),
+        ],
+    });
+    const { container, tree } = shell;
+    shell.sideTitle.textContent = "recipes";
+
+    // --- the pane ----------------------------------------------------------
+    // Built ONCE and updated in place. A render that replaced the head would
+    // take the caret out of the name field with it.
+    const crumb = el("div", `flex:1;min-width:0;${ONE_LINE}`
+        + `font:11px ${HUB.mono};color:${HUB.inkSubtle};`);
+    const nameField = stopCanvas(el("input", inputCss + "flex:1 1 160px;"));
+    nameField.title = "Recipe: also the suffix of the generated workflow's name.";
+    const countBadge = el("div", `flex:0 0 auto;color:${HUB.inkSubtle};`
+        + `font:11px ${HUB.mono};`);
+    const loadButton = el("button", wordButtonCss, "load");
+    const captureButton = el("button", wordButtonCss, "capture");
+    // The same act as picking an asset in Task, without the wire: name it, and
+    // the canvas as it stands becomes that recipe.
+    const newButton = el("button", wordButtonCss, "new recipe");
+    const dropButton = iconButton("remove", "Remove this recipe",
+                                  () => dropRecipe(), { px: 12, hover: HUB.danger });
+    loadButton.className = "sym-btn";
+    captureButton.className = "sym-btn";
+    newButton.className = "sym-btn";
+    const mainHead = el("div", "display:flex;align-items:center;gap:6px;"
+        + `padding:3px 6px;flex:none;background:${HUB.surface2};`
+        + `border-bottom:1px solid ${HUB.hairline};`);
+    mainHead.append(crumb, nameField, countBadge, newButton, loadButton,
+                    captureButton, dropButton);
+
+    // The project's own actions, under the row's. `auto` is a control here
+    // rather than a widget on the node body — the widget stays, hidden, and
+    // this writes it.
+    const autoBox = stopCanvas(el("input", "flex:none;margin:0;cursor:pointer;"));
+    autoBox.type = "checkbox";
+    const autoWrap = el("label", "display:flex;align-items:center;gap:4px;"
+        + `flex:0 0 auto;color:${HUB.inkSubtle};cursor:pointer;`);
+    autoWrap.title = "Follow the recipe wire: save the one you leave, load the "
+        + "one you arrive at.";
+    autoWrap.append(autoBox, el("span", "", "auto"));
+    const saveButton = el("button", wordButtonCss, "save project");
+    const generateButton = el("button", wordButtonCss, "generate workflows");
+    const deleteButton = el("button", wordButtonCss, "delete project");
+    for (const b of [saveButton, generateButton, deleteButton]) b.className = "sym-btn";
+    const actionBar = el("div", "display:flex;align-items:center;gap:6px;"
+        + `padding:3px 6px;flex:none;background:${HUB.surface2};`
+        + `border-bottom:1px solid ${HUB.hairline};`);
+    actionBar.append(autoWrap, el("div", "flex:1;"), saveButton, generateButton,
+                     deleteButton);
+
+    // The three PROJECT fields, shown under the project row only.
+    const headerInputs = {};
+    function headerField(label, key, placeholder) {
+        const wrap = el("label", "display:flex;align-items:center;gap:6px;"
+            + "min-width:0;flex:1 1 30%;");
+        wrap.append(el("span", `flex:0 0 auto;color:${HUB.inkSubtle};`, label));
+        const input = stopCanvas(el("input", inputCss + "flex:1 1 auto;width:100%;"));
+        input.placeholder = placeholder;
+        input._symField = key;
+        input.addEventListener("focus", () => { focused = input; });
+        input.addEventListener("blur", () => { if (focused === input) focused = null; });
+        input.addEventListener("input", () => {
+            if (!state.table) return;
+            state.table.header[key] = input.value;
+            touched();
+        });
+        wrap.appendChild(input);
+        headerInputs[key] = input;
+        return wrap;
+    }
+    const headerBox = el("div", "display:flex;gap:8px;flex-wrap:wrap;flex:none;"
+        + `padding:6px 8px;border-bottom:1px solid ${HUB.hairline};`);
+    headerBox.append(headerField("template", "template", "folder/template.json"),
+                     headerField("output", "output", "folder (default: the template's)"),
+                     headerField("prefix", "workflow_prefix", "dev-imperia-bakery-"));
+
+    const rowsBox = el("div", "flex:1;min-height:0;overflow:auto;padding:2px 8px 8px;");
+    rowsBox.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
+    const paneFoot = el("div", "display:flex;align-items:center;flex:none;"
+        + `border-top:1px solid ${HUB.hairline};background:${HUB.surface2};`);
+    // The status line is re-anchored ONCE, into a foot that no render path
+    // replaces — the old panel re-appended it at the end of the body on every
+    // draw, and a persistent shell has nowhere to do that.
+    paneFoot.appendChild(statusLine);
+    shell.main.append(mainHead, actionBar, headerBox, rowsBox, paneFoot);
+
+    // No `computeSize`: LiteGraph builds a node's MINIMUM height by summing
+    // its widgets and prefers `computeSize` over `computeLayoutSize`, so
+    // anything returned there becomes a floor the corner cannot drag past.
+    node.addDOMWidget("recipe_panel", "sym_recipe", container, {
+        serialize: false, hideOnZoom: true,
+        getMinHeight: () => 60,
+    });
+    node.size[0] = Math.max(node.size[0], RECIPE_MIN_W);
+    const syncPanelWidth = pinPanelWidth(node, container);
+    // Redraw, never resize: the panel's height belongs to his drag. A render
+    // may push the WIDTH back to what this pane needs — never the height.
+    const refit = () => requestAnimationFrame(() => {
+        if (node.size[0] < RECIPE_MIN_W) node.setSize?.([RECIPE_MIN_W, node.size[1]]);
+        syncPanelWidth();
+        node.setDirtyCanvas?.(true, true);
+    });
+
+    // --- the server --------------------------------------------------------
     // Which project this canvas is: looked up by the open workflow's path,
     // again whenever that path changes (a Save As, another tab).
     let resolvedFor = undefined;
@@ -729,20 +966,24 @@ function recipePanel(node) {
         const path = activeWorkflowPath();
         if (path === resolvedFor) return;
         resolvedFor = path;
+        let projects = [];
         let name = null;
         try {
-            name = projectForWorkflow(await listProjects(), path);
+            projects = await listProjects();
+            name = projectForWorkflow(projects, path);
         } catch (err) {
             status(`Could not list projects: ${String(err?.message ?? err)}`, false);
             return;
         }
+        state.projects = projects;
         if (!name) {
-            state.name = null; state.project = null; state.slots = []; state.table = null; state.dirty = false;
-            render();
+            state.name = null; state.project = null; state.slots = [];
+            state.templateSlots = []; state.table = null; state.dirty = false;
+            renderFull();
             status(path ? "No project has this workflow as its template. Press new project." : "Save the workflow first.", false);
             return;
         }
-        if (name !== state.name) await load(name);
+        if (name !== state.name) await load(name); else renderAll();
     }
 
     async function load(name) {
@@ -754,13 +995,26 @@ function recipePanel(node) {
             state.name = name;
             state.project = project;
             state.slots = slots;
+            // What the TEMPLATE FILE on disk declares, kept while `state.slots`
+            // follows the canvas: the difference between the two is what a
+            // workflow he has painted but not saved would lose on generate.
+            state.templateSlots = slots;
             state.table = projectToTable(project, slots);
             state.dirty = false;
             slotSig = null;
             auto.last = { name: null, sig: null };
-            expanded.clear();
-            active = ""; autoOpened = null;
-            render();
+            takeShot();
+            active = "";
+            // The row he was on, if the project still has it. A selection that
+            // names nothing goes back to shared.
+            const held = picked();
+            pickRow(held === PROJECT_ROW || state.table.columns.includes(held)
+                ? held : SHARED);
+            // Nothing picked by hand YET, so the wire may take the pane: on
+            // opening a workflow the wire names the recipe the canvas is on,
+            // and that is the one to be looking at.
+            autoSelected = picked();
+            renderFull();
         } catch (err) {
             toast("error", `Could not open "${name}"`, String(err?.message ?? err));
         }
@@ -780,6 +1034,7 @@ function recipePanel(node) {
             state.project = project;
             state.dirty = false;
             status(`Saved ${state.name}.`);
+            rebuildWorkflow(auto.last.name);
             return true;
         } catch (err) {
             toast("error", "Save failed", String(err?.message ?? err));
@@ -787,10 +1042,32 @@ function recipePanel(node) {
         }
     }
 
+    // The recipe's own workflow file, rewritten after the project is saved, so
+    // what is on disk is the recipe rather than whatever generate last wrote.
+    // Debounced, and only the recipe that moved: auto saves a second after a
+    // value changes, and one 250KB workflow per keystroke is churn, not a file.
+    const rebuild = { timer: null, name: null };
+    function rebuildWorkflow(column) {
+        if (!state.name || !column || column === SHARED) return;
+        rebuild.name = column;
+        if (rebuild.timer) return;
+        rebuild.timer = setTimeout(async () => {
+            rebuild.timer = null;
+            const recipe = rebuild.name;
+            try {
+                await postJson("/symbiotica/recipes/generate", { name: state.name, recipe });
+            } catch (err) {
+                status(`${recipe}: its workflow was not written — ${String(err?.message ?? err)}`, false);
+            }
+        }, 2000);
+    }
+
     async function generate() {
         if (busy) return;
         busy = true;
         try {
+            // The route re-reads the project FROM DISK, so an unsaved edit
+            // would generate the last saved values without saying so.
             if (!(await save())) return;
             const report = await postJson("/symbiotica/recipes/generate", { name: state.name });
             const { summary, detail } = generateSummary(report);
@@ -820,11 +1097,11 @@ function recipePanel(node) {
             await deleteJson(`/symbiotica/recipes/${encodeURIComponent(name)}`);
             state.name = null;
             state.project = null;
-            state.slots = [];
+            state.slots = []; state.templateSlots = [];
             state.table = null;
             state.dirty = false;
             resolvedFor = undefined;
-            render();
+            renderFull();
             toast("info", `Deleted project "${name}"`, "Its generated workflows are still in the workflows folder.");
         } catch (err) {
             toast("error", "Delete failed", String(err?.message ?? err));
@@ -839,14 +1116,19 @@ function recipePanel(node) {
             state.name = name;
             state.project = project;
             state.slots = slots;
+            state.templateSlots = slots;
             state.table = projectToTable(project, slots);
             state.dirty = false;
             slotSig = null;
-            expanded.clear();
-            expanded.add(SHARED);
-            active = ""; autoOpened = null;
+            active = ""; autoSelected = SHARED;
+            pickRow(SHARED);
             resolvedFor = template;
-            render();
+            // The list it is not on yet: the sidebar names every other project
+            // under this one, and a project just started must not be one of
+            // them.
+            listProjects().then((projects) => { state.projects = projects; renderTree(); })
+                          .catch(() => {});
+            renderFull();
             toast("success", `Started project "${name}"`, `Template: ${project.template}. Set the canvas, name a recipe, press Capture.`);
         } catch (err) {
             toast("error", "Could not start the project", String(err?.message ?? err));
@@ -866,7 +1148,9 @@ function recipePanel(node) {
             noSlotsToast(matchColor());
             return;
         }
-        app.graph?.setDirtyCanvas(true, true);
+        liveGraph()?.setDirtyCanvas?.(true, true);
+        auto.last = { name: column, sig: slotSignature(liveSlotValues(liveGraph(), matchColor())) };
+        takeShot();
         const missing = report.missing.length ? ` Not on this canvas: ${report.missing.join(", ")}.` : "";
         status(`Loaded ${column} onto the canvas (${report.applied.length} slots).${missing}`, false);
     }
@@ -874,8 +1158,64 @@ function recipePanel(node) {
     // ------------------------------------------------------------ auto --
     // Watched on every repaint, like the Module node's rows. `last` is the
     // recipe the canvas is on and the slot signature it was last written with.
+    // It is written by every path that puts a recipe on the canvas or takes
+    // the canvas into one, auto or not, so a switch by hand knows what it is
+    // leaving behind.
     const auto = { last: { name: null, sig: null }, timer: null, busy: false, on: false };
     const slotSignature = (values) => JSON.stringify(values);
+
+    // What every node on the canvas held the last time a recipe was put on it
+    // or read off it, by node id. A node that has moved since and carries no
+    // paint is a change with nowhere to go, and the panel says so rather than
+    // letting it vanish.
+    let canvasShot = new Map();
+    function shotOf(graph) {
+        const shot = new Map();
+        for (const node of graph?.nodes ?? []) {
+            const widgets = settableWidgets(node);
+            if (!widgets.length) continue;
+            shot.set(node.id, JSON.stringify(widgets.map((w) => w.value)));
+        }
+        return shot;
+    }
+    function takeShot() { canvasShot = shotOf(liveGraph()); }
+
+    // The nodes whose values moved since that snapshot and that no recipe can
+    // hold, newest first. `slotKey` answers null for anything unpainted.
+    function strayChanges() {
+        const matches = colorMatcher(matchColor());
+        const out = [];
+        for (const node of liveGraph()?.nodes ?? []) {
+            if (slotKey(node, matches)) continue;
+            const was = canvasShot.get(node.id);
+            if (was === undefined) continue;
+            const widgets = settableWidgets(node);
+            if (!widgets.length) continue;
+            if (JSON.stringify(widgets.map((w) => w.value)) !== was) {
+                out.push(String(node.title ?? node.type ?? node.id));
+            }
+        }
+        return out;
+    }
+
+    // What the SAVED template has no slot for: the keys generate would drop.
+    // The slot list comes off the template FILE, so this is also how a
+    // workflow he has not saved since painting announces itself.
+    // What the SAVED template has no slot for: the keys `generate` would drop.
+    // Both sides are read off DISK -- the project file as it was last written,
+    // the slot list off the template workflow -- because that is the pair the
+    // generator sees. A canvas painted since and not saved shows up here.
+    function strandedKeys() {
+        if (!state.project || !state.templateSlots?.length) return [];
+        const known = new Set(state.templateSlots.map((s) => s.key));
+        const out = new Set();
+        const blocks = [state.project.shared ?? {},
+                        ...Object.values(state.project.recipes ?? {})];
+        for (const block of blocks) {
+            for (const key of Object.keys(block ?? {})) if (!known.has(key)) out.add(key);
+        }
+        return [...out].sort();
+    }
 
     async function autoTick() {
         if (!auto.on || auto.busy || !state.table) return;
@@ -916,7 +1256,9 @@ function recipePanel(node) {
                     // same values do not retry on every repaint; the toast said why.
                     auto.last = { name, sig };
                     if (!(await save())) return;
-                    render();
+                    // RECONCILED, not rebuilt: auto fires a second after an
+                    // edit, which is while he is still typing the next one.
+                    renderAll();
                     status(`auto: ${verb === "save" ? "saved" : "created"} ${name}`, false);
                 } else if (verb === "load") {
                     loadColumn(name);
@@ -932,20 +1274,34 @@ function recipePanel(node) {
     // The slot list follows the canvas; the saved template's stands in only
     // while the canvas has no slot nodes (or a cell cannot be parsed).
     let slotSig = null;
+    let colorSig = null;
     function syncSlots() {
         if (!state.table) return;
         const graph = liveGraph();
         // No nodes at all is a graph still loading, not a canvas with nothing
         // painted on it. Nothing painted IS a real answer: the rows go.
         if (!graph?.nodes?.length) return;
-        const live = liveSlots(graph, matchColor());
+        const color = matchColor();
+        const live = liveSlots(graph, color);
         const sig = JSON.stringify(live);
-        if (sig === slotSig) return;
+        // The colour is half of that answer. A typo in `match_color` empties
+        // the table without changing the slot list the last one produced, and
+        // the panel would go on naming the reason before it.
+        if (sig === slotSig && color === colorSig) return;
         slotSig = sig;
-        if (sig === JSON.stringify(state.slots)) return;
-        state.table = retable(state.table, live);
-        state.slots = live;
-        render();
+        colorSig = color;
+        // NOTHING is parsed here. A cell mid-edit that does not parse yet must
+        // not stop a newly painted node from becoming a row.
+        if (sig !== JSON.stringify(state.slots)) {
+            state.table = retable(state.table, live);
+            state.slots = live;
+        }
+        // The tree's counts moved. The pane keeps every row it already has —
+        // one of them is holding the caret — and only grows the new one.
+        renderTree();
+        renderPane();
+        drawStatus();
+        refit();
     }
 
     // The name on the `recipe` wire, as a recipe key. "" when nothing is
@@ -959,17 +1315,25 @@ function recipePanel(node) {
         if (!state.table) return;
         const next = activeColumn();
         if (next === active) return;
+        // A wire that moves while he is typing must not take the pane with
+        // it. The wire is still there on the next frame.
+        if (caret()) return;
         active = next;
-        if (autoOpened && autoOpened !== next) expanded.delete(autoOpened);
-        autoOpened = null;
-        if (next && state.table.columns.includes(next) && !expanded.has(next)) {
-            expanded.add(next);
-            autoOpened = next;
+        // The pane follows the wire while it is on `shared` — nothing chosen —
+        // or while it is still showing what the wire put there. A recipe he
+        // picked by hand is his, and the wire leaves it alone.
+        const follows = picked() === SHARED
+            || (autoSelected !== null && picked() === autoSelected);
+        autoSelected = null;
+        if (follows && next && state.table.columns.includes(next)) {
+            pickRow(next);
+            autoSelected = next;
         }
-        render();
+        renderAll();
     }
 
     node._symAuto = auto;
+    node._symRebuild = rebuild;
     const onDrawForeground = node.onDrawForeground;
     node.onDrawForeground = function () {
         resolveProject();
@@ -979,192 +1343,583 @@ function recipePanel(node) {
         return onDrawForeground?.apply(this, arguments);
     };
 
-    function headerField(label, key, placeholder) {
-        const wrap = el("label", "display:flex;align-items:center;gap:6px;min-width:0;flex:1 1 30%;");
-        wrap.append(el("span", `flex:0 0 auto;color:${HUB.inkSubtle};`, label));
-        const input = stopCanvas(el("input", inputCss + "flex:1 1 auto;width:100%;"));
-        input.value = state.table.header[key] ?? "";
-        input.placeholder = placeholder;
-        input.addEventListener("input", () => { state.table.header[key] = input.value; state.dirty = true; });
-        wrap.appendChild(input);
-        return wrap;
+    // --- what a click does -------------------------------------------------
+    // Point the wire at the recipe he picked. The `category` widget on the
+    // node feeding `recipe` is what names it, so the label whose slug matches
+    // goes in and the asset narrowing comes out -- a name chosen decides
+    // nothing once the category is the pick. Answers what it did, for the
+    // status line.
+    function pointWireAt(column) {
+        const source = focusBehind(liveGraph(), node, "recipe");
+        if (!source) return "";
+        const widget = source.widgets?.find((w) => w.name === "category");
+        if (!widget) return "";
+        const options = widget.options?.values;
+        const labels = typeof options === "function" ? options(widget, source) : options;
+        const label = (labels ?? []).find((l) => recipeSlug(l) === column);
+        if (!label) return ` Nothing on ${source.title ?? source.type} is called ${column}.`;
+        if (widget.value !== label) {
+            widget.value = label;
+            widget.callback?.(label, undefined, source);
+            const asset = source.widgets?.find((w) => w.name === "asset");
+            if (asset && asset.value) { asset.value = ""; asset.callback?.("", undefined, source); }
+            source._symRenderFocus?.();
+            source.setDirtyCanvas?.(true, true);
+        }
+        return "";
     }
 
-    function render() {
-        body.replaceChildren();
+    function choose(row) {
+        const column = state.table && row !== PROJECT_ROW ? columnOf(row) : null;
+        // What the canvas is actually ON, which is not always what is picked:
+        // auto loads from the WIRE, and writing the picked column with values
+        // the wire put there is how appliance-1x2 came to hold food's.
+        const leaving = auto.last.name;
+        // Before anything is drawn: `captureInto` would move the pick out from
+        // under us, and a load would take the edits with it.
+        if (column && leaving && leaving !== column) saveLeaving(leaving);
+        pickRow(row);
+        // Taking the recipe the wire names re-arms the follow; taking any
+        // other one is his, and the wire leaves the pane where he put it.
+        autoSelected = row === active ? row : null;
+        renderFull();
+        // Picking a recipe PULLS it: its values go onto the canvas, which is
+        // the same thing the wire does when auto is on. The project row is the
+        // project's own settings -- template, output, prefix -- and sets no
+        // slot, so it stays a view. Last, so its status line is the one left.
+        if (!column) return;
+        const note = column === SHARED ? "" : pointWireAt(column);
+        loadColumn(column);
+        if (note) status(statusLine.textContent + note, false);
+    }
+
+    function captureInto(column) {
+        const values = liveSlotValues(liveGraph(), matchColor());
+        const found = Object.keys(values).length;
+        if (!found) { noSlotsToast(matchColor()); return; }
+        // Read BEFORE the snapshot moves: a node he changed and never painted
+        // is a value going nowhere, and the capture is the moment to say so.
+        const stray = strayChanges();
+        captureColumn(state.table, state.slots, column, values);
+        state.dirty = true;
+        auto.last = { name: column, sig: slotSignature(values) };
+        takeShot();
+        if (picked() !== PROJECT_ROW) pickRow(column);
+        renderAll();
+        const kept = `Captured ${found} slots from the canvas into ${column}.`;
+        status(stray.length
+            ? `${kept} Not painted, so not kept: ${stray.join(", ")}.` : kept, false);
+    }
+
+    // The canvas WAS that column. If its slots have moved since, write them
+    // back before another recipe lands on top of them -- the same thing auto
+    // does on the way past, for a switch made by hand.
+    function saveLeaving(column) {
+        if (!state.table || !column || auto.last.name !== column) return;
+        const values = liveSlotValues(liveGraph(), matchColor());
+        if (!Object.keys(values).length) return;
+        if (slotSignature(values) === auto.last.sig) return;
+        captureColumn(state.table, state.slots, column, values);
+        state.dirty = true;
+        auto.last = { name: column, sig: slotSignature(values) };
+        takeShot();
+        save();
+    }
+
+    // A recipe named by hand: the same act as picking an asset in Task, with
+    // the name typed instead of arriving on the wire.
+    async function newRecipe() {
         if (!state.table) {
-            body.appendChild(el("div", `padding:6px 3px;color:${HUB.inkSubtle};`,
-                "No project for this workflow yet. Open the base workflow and press new project."));
-            body.appendChild(statusLine);
-            refit();
+            toast("warn", "No project for this workflow", "Press new project first.");
             return;
         }
+        const name = recipeSlug(await askForName("New recipe", ""));
+        if (!name) return;
+        if (state.table.columns.includes(name)) {
+            toast("warn", `"${name}" is already a recipe`,
+                  "Pick it in the sidebar, or give this one another name.");
+            return;
+        }
+        saveLeaving(columnOf(picked()));
+        captureInto(name);
+        if (picked() !== name) { pickRow(name); autoSelected = null; renderFull(); }
+        if (await save()) status(`Created ${name} from this canvas.`, false);
+    }
 
-        const header = el("div", "display:flex;gap:8px;flex-wrap:wrap;padding:2px 0 6px;"
-            + `border-bottom:1px solid ${HUB.hairline};margin-bottom:6px;`);
-        header.append(headerField("template", "template", "folder/template.json"),
-            headerField("output", "output", "folder (default: the template's)"),
-            headerField("prefix", "workflow_prefix", "dev-imperia-bakery-"));
-        body.appendChild(header);
-
+    // In memory until save, exactly as the old `×` was: the file still holds
+    // the recipe until `save project`.
+    function dropRecipe() {
+        const column = columnOf(picked());
+        if (!state.table || column === SHARED) return;
         const { columns, rows } = state.table;
-        const byKey = Object.fromEntries(state.slots.map((s) => [s.key, s]));
-        const setCount = (column) => rows.filter((row) => (row.cells[column] ?? "").trim()).length;
+        const at = columns.indexOf(column);
+        if (at < 0) return;
+        columns.splice(at, 1);
+        for (const row of rows) delete row.cells[column];
+        if (autoSelected === column) autoSelected = null;
+        pickRow(SHARED);
+        state.dirty = true;
+        renderFull();
+        status(`Removed ${column}. Press save project to write it.`, false);
+    }
 
-        const parsedDict = (text) => {
-            const parsed = parseJson(String(text ?? "").trim() || "{}");
-            return parsed.ok && parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
-                ? parsed.value : {};
-        };
+    function renameRecipe() {
+        const column = columnOf(picked());
+        if (!state.table || column === SHARED) return;
+        const { columns, rows } = state.table;
+        const next = recipeSlug(nameField.value);
+        if (!next || next === column) { nameField.value = column; return; }
+        if (columns.includes(next)) {
+            toast("warn", "Name taken", `There is already a "${next}" recipe.`);
+            nameField.value = column;
+            return;
+        }
+        columns[columns.indexOf(column)] = next;
+        columns.splice(0, columns.length, SHARED,
+                       ...sortedRecipes(columns.filter((c) => c !== SHARED)));
+        for (const row of rows) { row.cells[next] = row.cells[column]; delete row.cells[column]; }
+        if (autoSelected === column) autoSelected = next;
+        pickRow(next);
+        nameField.value = next;
+        state.dirty = true;
+        renderFull();
+    }
 
-        // One slot inside a section: a label and the value field. A subgraph
-        // slot gets one field per widget; the rest a single field. The
-        // placeholder is what the recipe inherits (shared, else template).
-        function slotRows(section, column, row) {
-            const slot = byKey[row.key];
-            const inherited = column === SHARED ? "" : (row.cells[SHARED] ?? "");
-            const label = el("div", "padding:4px 3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", row.key);
-            label.title = slot?.kind === "toggle" ? "true or false"
-                : `Template: ${cellText(slot?.default)}${slot?.widgets > 1 && slot?.kind !== "dict" ? ` (a JSON list sets all ${slot.widgets} widgets)` : ""}`;
-            section.appendChild(label);
-            if (slot?.kind === "dict") {
-                const own = parsedDict(row.cells[column]);
-                const base = parsedDict(inherited);
-                const names = Object.keys(slot.default ?? {});
-                for (const name of Object.keys({ ...own, ...base })) if (!names.includes(name)) names.push(name);
-                const sub = el("div", "display:grid;grid-template-columns:minmax(90px, 0.5fr) 1fr;gap:3px;align-items:center;");
-                for (const name of names) {
-                    sub.appendChild(el("div", `padding:2px 3px;color:${HUB.inkSubtle};font:11px ${HUB.mono};`, name));
-                    const field = stopCanvas(el("input", inputCss + "width:100%;"));
-                    field.value = name in own ? cellText(own[name]) : "";
-                    field.placeholder = name in base ? cellText(base[name]) : cellText(slot.default?.[name]);
-                    field.addEventListener("input", () => {
-                        row.cells[column] = dictCellUpdate(row.cells[column], name, field.value);
-                        state.dirty = true;
-                    });
-                    sub.appendChild(field);
-                }
-                section.appendChild(sub);
-                return;
+    nameField.addEventListener("focus", () => { focused = nameField; });
+    nameField.addEventListener("blur", () => { if (focused === nameField) focused = null; });
+    nameField.addEventListener("change", () => renameRecipe());
+    stopCanvas(loadButton).addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (state.table) loadColumn(columnOf(picked()));
+    });
+    stopCanvas(captureButton).addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (state.table) captureInto(columnOf(picked()));
+    });
+    stopCanvas(newButton).addEventListener("click", (e) => {
+        e.stopPropagation();
+        newRecipe();
+    });
+    stopCanvas(saveButton).addEventListener("click", (e) => { e.stopPropagation(); save(); });
+    stopCanvas(generateButton).addEventListener("click", (e) => { e.stopPropagation(); generate(); });
+    stopCanvas(deleteButton).addEventListener("click", (e) => { e.stopPropagation(); remove(); });
+    autoBox.addEventListener("change", () => {
+        const widget = node.widgets?.find((w) => w.name === "auto");
+        if (!widget) return;
+        widget.value = !!autoBox.checked;
+        widget.callback?.(widget.value);
+    });
+
+    // An edit changes a count and the status line, and nothing else. Rebuilding
+    // the pane here is what took the caret out mid-word. `drawHead` writes no
+    // field that has the caret in it.
+    function touched() {
+        state.dirty = true;
+        renderTree();
+        drawHead();
+        drawStatus();
+    }
+
+    // --- the tree ----------------------------------------------------------
+    // Rows are built here rather than by `walkTree`: that function sorts every
+    // level and derives parentage by splitting a slash-joined key, which is
+    // right for a filesystem and wrong for hand-typed recipe names.
+    function sidebarRows() {
+        const rows = [];
+        if (state.table) {
+            rows.push({ kind: "project", rel: PROJECT_ROW, depth: 0,
+                        label: state.name, hint: "The project: its template, "
+                            + "its output folder, its prefix, and the values "
+                            + "every recipe takes." });
+            for (const column of state.table.columns) {
+                const shared = column === SHARED;
+                rows.push({
+                    kind: shared ? "shared" : "recipe", rel: column, depth: 1,
+                    label: column, count: setCount(column),
+                    unit: shared ? "values" : "own",
+                    hint: shared ? "What every recipe takes unless it sets its own."
+                        : `${column}: only what differs from shared is stored.`,
+                });
             }
-            const cell = stopCanvas(el("textarea", cellCss));
-            cell.rows = 1;
-            cell.value = row.cells[column] ?? "";
-            cell.placeholder = inherited || cellText(slot?.default) || "";
-            cell.addEventListener("input", () => { row.cells[column] = cell.value; state.dirty = true; });
-            cell.addEventListener("focus", () => { if (cell.value.length > 60 || cell.placeholder.length > 60) cell.rows = 4; });
-            cell.addEventListener("blur", () => { cell.rows = 1; });
-            section.appendChild(cell);
         }
-
-        node._symCapture = (column) => captureInto(column);
-
-        function captureInto(column) {
-            const values = liveSlotValues(liveGraph(), matchColor());
-            const found = Object.keys(values).length;
-            if (!found) { noSlotsToast(matchColor()); return; }
-            captureColumn(state.table, state.slots, column, values);
-            state.dirty = true;
-            expanded.add(column);
-            render();
-            status(`Captured ${found} slots from the canvas into ${column}.`, false);
+        // Every OTHER project, named with the workflow to open instead. A
+        // project is RESOLVED, not chosen: this one is not the open workflow's
+        // template, so it is not this canvas's to edit.
+        const others = (state.projects ?? []).filter((p) => p.name !== state.name);
+        if (others.length) {
+            rows.push({ kind: "caption", rel: "other:", depth: 0,
+                        label: "other projects" });
+            for (const p of others) {
+                rows.push({ kind: "other", rel: `other:${p.name}`, depth: 1,
+                            label: `${p.name} — open ${p.template ?? "its template"}`,
+                            hint: `Open ${p.template} to edit ${p.name}.` });
+            }
         }
+        return rows;
+    }
 
-        columns.forEach((column, index) => {
-            const isShared = column === SHARED;
-            const open = expanded.has(column);
-            // The recipe the wire names is outlined and its header filled, so a
-            // pick made on another node is visible here without reading names.
-            const isActive = !isShared && column === active;
-            const box = el("div", `border:1px solid ${isActive ? HUB.selLine : HUB.hairline};`
-                + `border-radius:${HUB.radius.md};margin:0 0 6px;`
-                + (isActive ? `box-shadow:0 0 0 1px ${HUB.selLine};` : ""));
-            const head = el("div", "display:flex;align-items:center;gap:6px;padding:4px 6px;min-width:0;"
-                + (isActive ? `background:${HUB.selBg};color:${HUB.selInk};`
-                    + `border-radius:${HUB.radius.md} ${HUB.radius.md} 0 0;` : ""));
-            const toggle = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;border:none;", open ? "▾" : "▸");
-            toggle.title = open ? "Collapse" : "Expand";
-            stopCanvas(toggle).addEventListener("click", (e) => {
-                e.stopPropagation();
-                if (open) expanded.delete(column); else expanded.add(column);
-                render();
+    function renderTree() {
+        const folded = shell.layout();
+        tree.replaceChildren();
+        if (folded) { refit(); return; }
+        const rows = sidebarRows();
+        if (!state.table) {
+            tree.appendChild(emptyState(activeWorkflowPath()
+                ? "No project has this workflow as its template."
+                : "Save the workflow first."));
+        }
+        const held = picked();
+        for (const row of rows) {
+            const dim = row.kind === "other" || row.kind === "caption";
+            const on = !dim && row.rel === held;
+            const line = treeRow({
+                kind: row.kind, rel: row.rel, depth: row.depth,
+                tone: on ? HUB.selBg : "",
+                labelColour: on ? HUB.selInk
+                    : dim ? HUB.inkTertiary : `var(--input-text, ${HUB.ink})`,
+                // The count rides in the label: `treeRow` hides its `actions`
+                // until the pointer is on the row, and a badge you have to
+                // hover for is a badge nobody reads.
+                label: row.count === undefined ? row.label
+                    : `${row.label} · ${row.count}`,
+                onClick: dim ? undefined : () => choose(row.rel),
             });
-            head.appendChild(toggle);
-            if (isShared) {
-                const title = el("div", "flex:1 1 auto;min-width:0;", "shared");
-                title.title = "What every recipe takes unless it sets its own.";
-                head.appendChild(title);
-            } else {
-                const name = stopCanvas(el("input", inputCss + "flex:1 1 120px;"));
-                name.value = column;
-                name.title = "Recipe: also the suffix of the generated workflow's name.";
-                name.addEventListener("change", () => {
-                    const next = recipeSlug(name.value);
-                    if (!next || next === column) { name.value = column; return; }
-                    if (columns.includes(next)) { toast("warn", "Name taken", `There is already a "${next}" recipe.`); name.value = column; return; }
-                    columns[index] = next;
-                    columns.splice(0, columns.length, SHARED, ...sortedRecipes(columns.filter((c) => c !== SHARED)));
-                    for (const row of rows) { row.cells[next] = row.cells[column]; delete row.cells[column]; }
-                    if (expanded.delete(column)) expanded.add(next);
-                    state.dirty = true;
-                    render();
-                });
-                head.appendChild(name);
-            }
-            const count = setCount(column);
-            head.appendChild(el("div", `flex:0 0 auto;color:${HUB.inkSubtle};font:11px ${HUB.mono};`,
-                isShared ? `${count} values` : `${count} own`));
-            const load = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "load");
-            load.title = isShared ? "Put the shared values onto this canvas."
-                : `Put ${column} onto this canvas (its own values over shared), to adjust with the nodes' widgets and capture again.`;
-            stopCanvas(load).addEventListener("click", (e) => { e.stopPropagation(); loadColumn(column); });
-            const capture = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "capture");
-            capture.title = isShared ? "Read every slot off this canvas into shared."
-                : `Read the slots off this canvas into ${column}: only what differs from shared is kept.`;
-            stopCanvas(capture).addEventListener("click", (e) => { e.stopPropagation(); captureInto(column); });
-            head.append(load, capture);
-            if (!isShared) {
-                const remove = el("button", ghostButtonCss + "padding:1px 6px;flex:0 0 auto;", "×");
-                remove.title = `Remove ${column}`;
-                stopCanvas(remove).addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    columns.splice(index, 1);
-                    for (const row of rows) delete row.cells[column];
-                    expanded.delete(column);
-                    state.dirty = true;
-                    render();
-                });
-                head.appendChild(remove);
-            }
-            box.appendChild(head);
-            if (open) {
-                const section = el("div", "display:grid;grid-template-columns:minmax(110px, 0.35fr) 1fr;gap:3px;"
-                    + `align-items:start;padding:2px 6px 6px;border-top:1px solid ${HUB.hairline};`);
-                for (const row of rows) slotRows(section, column, row);
-                box.appendChild(section);
-            }
-            body.appendChild(box);
-        });
-
-        body.appendChild(statusLine);
-        const activeNote = !active ? ""
-            : columns.includes(active) ? ` · on ${active}` : ` · ${active} has no recipe yet`;
-        // Why the table is empty, rather than an empty table: a colour that is
-        // not a colour, or a canvas with nothing painted, both look the same.
-        const color = matchColor();
-        const paint = !color ? "match_color is empty — type a colour, then paint the nodes a recipe should set."
-            : !colorMatcher(color) ? `match_color is "${color}", which is not a colour. Use a palette name or a hex.`
-            : !rows.length ? `Nothing on this canvas is painted ${color}. Paint a node and it becomes a row.`
-            : "";
-        if (paint) status(paint, false);
-        else status(state.dirty ? `Unsaved edits.${activeNote}`
-            : `${state.name}: ${columns.length - 1} recipes, ${rows.length} slots.${activeNote}`);
-        if (!state.dirty && columns.length === 1) status("No recipes yet. Set the canvas, name a recipe, press Capture.");
+            if (row.hint) line.title = row.hint;
+            tree.appendChild(line);
+        }
+        // A rename or a removal must not leave the open hit list offering a
+        // name that is gone.
+        shell.search?.refresh?.();
         refit();
     }
 
-    node._symRecipe = { load, save, generate, startNew, remove, resolveProject };
-    render();
+    // --- the pane's head ---------------------------------------------------
+    function drawHead() {
+        const held = picked();
+        const column = columnOf(held);
+        const isProject = held === PROJECT_ROW;
+        const isShared = !isProject && column === SHARED;
+        const isRecipe = !isProject && !isShared;
+        const have = !!state.table;
+
+        nameField.style.display = have && isRecipe ? "" : "none";
+        crumb.style.display = have && isRecipe ? "none" : "";
+        dropButton.style.display = have && isRecipe ? "" : "none";
+        loadButton.style.display = have ? "" : "none";
+        captureButton.style.display = have ? "" : "none";
+        newButton.style.display = have ? "" : "none";
+        headerBox.style.display = have && isProject ? "" : "none";
+        countBadge.textContent = have
+            ? `${setCount(column)} ${isShared || isProject ? "values" : "own"}` : "";
+
+        if (!have) {
+            crumb.textContent = "no project";
+        } else if (isProject) {
+            crumb.textContent = `${state.name} · project`;
+        } else if (isShared) {
+            crumb.textContent = "shared · what every recipe takes";
+        } else if (nameField !== caret() && nameField.value !== column) {
+            nameField.value = column;
+        }
+        loadButton.title = isShared || isProject
+            ? "Put the shared values onto this canvas."
+            : `Put ${column} onto this canvas (its own values over shared), to `
+              + "adjust with the nodes' widgets and capture again.";
+        captureButton.title = isShared || isProject
+            ? "Read every slot off this canvas into shared."
+            : `Read the slots off this canvas into ${column}: only what differs `
+              + "from shared is kept.";
+
+        const autoWidget = node.widgets?.find((w) => w.name === "auto");
+        autoBox.checked = !!autoWidget?.value;
+        for (const key of ["template", "output", "workflow_prefix"]) {
+            const input = headerInputs[key];
+            const value = state.table?.header?.[key] ?? "";
+            if (input !== caret() && input.value !== value) input.value = value;
+        }
+    }
+
+    // --- the pane's rows ---------------------------------------------------
+    // The rows on screen, by slot key. A newly painted node is INSERTED beside
+    // them and a gone one is taken out; every other row keeps the element it
+    // had, because one of them is holding the caret.
+    let paneFor = null;
+    let paneRows = new Map();
+
+    function buildRow(row, column) {
+        const label = el("div", `flex:0 0 ${LABEL_W}px;min-width:0;${ONE_LINE}`
+            + `padding:4px 0 0;color:${HUB.inkSubtle};`
+            + "font-variant-ligatures:none;font-feature-settings:'calt' 0;",
+            row.key);
+        const box = el("div", "flex:1 1 auto;min-width:0;");
+        const tools = el("div", "flex:0 0 auto;display:flex;align-items:center;"
+            + "padding-top:2px;");
+        const wrap = el("div", "display:flex;gap:8px;align-items:flex-start;"
+            + `padding:3px 0;border-bottom:1px solid ${HUB.hairline};`);
+        wrap._symRow = row.key;
+        wrap.append(label, box, tools);
+
+        const wipe = iconButton("clear", "Clear — take the inherited value", () => {
+            row.cells[column] = "";
+            touched();
+            fill();
+        }, { px: 11 });
+        tools.appendChild(wipe);
+
+        // What is drawn right now, so a refresh can tell "the same fields with
+        // new text" from "a different editor entirely".
+        let shape = "";
+        let fields = [];
+
+        const inherited = () => (column === SHARED ? "" : (row.cells[SHARED] ?? ""));
+
+        function shapeNow() {
+            const slot = slotOf(row.key);
+            const own = row.cells[column] ?? "";
+            if (!dictRow(slot, own, inherited())) return "text";
+            return `dict:${dictNames(slot, own, inherited()).join("\u0000")}`;
+        }
+
+        function dictNames(slot, own, inh) {
+            const ownObj = objectCell(own) ?? {};
+            const baseObj = objectCell(inh) ?? {};
+            const names = Object.keys(plainObject(slot?.default) ?? {});
+            for (const name of Object.keys({ ...ownObj, ...baseObj })) {
+                if (!names.includes(name)) names.push(name);
+            }
+            return names;
+        }
+
+        function fill() {
+            const slot = slotOf(row.key);
+            fields = [];
+            box.replaceChildren();
+            shape = shapeNow();
+            label.title = slot?.kind === "toggle" ? "true or false"
+                : `Template: ${cellText(slot?.default)}`
+                  + (slot?.widgets > 1 && !shape.startsWith("dict")
+                      ? ` (a JSON list sets all ${slot.widgets} widgets)` : "");
+            if (shape.startsWith("dict")) {
+                const grid = el("div", "display:grid;"
+                    + "grid-template-columns:minmax(90px, 0.45fr) 1fr;gap:3px;"
+                    + "align-items:center;");
+                for (const name of dictNames(slot, row.cells[column] ?? "", inherited())) {
+                    grid.appendChild(el("div", `padding:2px 3px;color:${HUB.inkSubtle};`
+                        + `font:11px ${HUB.mono};`, name));
+                    const field = stopCanvas(el("input", inputCss + "width:100%;"));
+                    field._symCell = { key: row.key, name };
+                    const read = () => {
+                        const own = objectCell(row.cells[column]) ?? {};
+                        const base = objectCell(inherited()) ?? {};
+                        const def = plainObject(slotOf(row.key)?.default) ?? {};
+                        return {
+                            value: name in own ? cellText(own[name]) : "",
+                            placeholder: name in base ? cellText(base[name])
+                                : cellText(def[name]),
+                        };
+                    };
+                    const at = read();
+                    field.value = at.value;
+                    field.placeholder = at.placeholder;
+                    field.addEventListener("focus", () => { focused = field; });
+                    field.addEventListener("blur", () => { if (focused === field) focused = null; });
+                    field.addEventListener("input", () => {
+                        row.cells[column] = dictCellUpdate(row.cells[column], name, field.value);
+                        touched();
+                        arm();
+                    });
+                    fields.push({ el: field, read });
+                    grid.appendChild(field);
+                }
+                box.appendChild(grid);
+            } else {
+                const cell = stopCanvas(el("textarea", cellCss));
+                cell.rows = 1;
+                cell._symCell = { key: row.key, name: null };
+                const read = () => ({
+                    value: row.cells[column] ?? "",
+                    placeholder: inherited() || cellText(slotOf(row.key)?.default) || "",
+                });
+                const at = read();
+                cell.value = at.value;
+                cell.placeholder = at.placeholder;
+                cell.addEventListener("input", () => {
+                    row.cells[column] = cell.value;
+                    touched();
+                    arm();
+                });
+                cell.addEventListener("focus", () => {
+                    focused = cell;
+                    if (cell.value.length > 60 || cell.placeholder.length > 60) cell.rows = 4;
+                });
+                cell.addEventListener("blur", () => {
+                    if (focused === cell) focused = null;
+                    cell.rows = 1;
+                });
+                fields.push({ el: cell, read });
+                box.appendChild(cell);
+            }
+            arm();
+        }
+
+        // The clear button is only a control while there is something of its
+        // own to clear; an empty cell already takes the inherited value.
+        function arm() {
+            const own = String(row.cells[column] ?? "").trim();
+            wipe.style.visibility = own ? "visible" : "hidden";
+            wipe.title = column === SHARED
+                ? "Clear — take the template's own value"
+                : "Clear — take the shared value";
+        }
+
+        function holdsFocus() {
+            const at = caret();
+            return !!at && fields.some((f) => f.el === at);
+        }
+
+        function refresh() {
+            if (shapeNow() !== shape) {
+                // Never pull the editor out from under the caret; the shape
+                // is re-read on the next refresh.
+                if (!holdsFocus()) fill();
+                else arm();
+                return;
+            }
+            for (const field of fields) {
+                if (field.el === caret()) continue;
+                const at = field.read();
+                if (field.el.value !== at.value) field.el.value = at.value;
+                if (field.el.placeholder !== at.placeholder) {
+                    field.el.placeholder = at.placeholder;
+                }
+            }
+            arm();
+        }
+
+        fill();
+        return { wrap, refresh, holdsFocus };
+    }
+
+    // Why the table is empty, rather than an empty table: a colour that is not
+    // a colour and a canvas with nothing painted look the same.
+    function paintProblem() {
+        const color = matchColor();
+        if (!color) return "match_color is empty — type a colour, then paint the nodes a recipe should set.";
+        if (!colorMatcher(color)) return `match_color is "${color}", which is not a colour. Use a palette name or a hex.`;
+        if (!state.table?.rows?.length) return `Nothing on this canvas is painted ${color}. Paint a node and it becomes a row.`;
+        return "";
+    }
+
+    // Every row goes. The caret's field is one of them, and nothing else will
+    // tell us it left.
+    function dropRows() {
+        if (focused && [...paneRows.values()].some((b) => b.holdsFocus())) {
+            focused = null;
+        }
+        paneRows = new Map();
+    }
+
+    function renderPane(rebuild = false) {
+        const held = picked();
+        const column = columnOf(held);
+        if (!state.table) {
+            paneFor = null;
+            dropRows();
+            // The panel cannot capture into a project it does not have, and
+            // saying so is what `capture recipe` reads off this.
+            node._symCapture = null;
+            rowsBox.replaceChildren(emptyState(activeWorkflowPath()
+                ? "No project for this workflow yet. Press new project."
+                : "Save the workflow first — a project takes it as its template."));
+            return;
+        }
+        // Set AFTER the no-table return: that is what makes `capture recipe`
+        // say "No project for this workflow" instead of doing nothing.
+        node._symCapture = (col) => captureInto(col);
+
+        const rows = state.table.rows;
+        if (!rows.length) {
+            paneFor = held;
+            dropRows();
+            rowsBox.replaceChildren(emptyState(paintProblem()
+                || "Nothing painted on this canvas is a slot."));
+            return;
+        }
+        if (rebuild || paneFor !== held || !paneRows.size) {
+            paneFor = held;
+            dropRows();
+            rowsBox.replaceChildren();
+            for (const row of rows) {
+                const built = buildRow(row, column);
+                paneRows.set(row.key, built);
+                rowsBox.appendChild(built.wrap);
+            }
+            return;
+        }
+        // Same row selected: keep every field that is still a field. A slot
+        // that came or went moves one row; it must not move the others.
+        const want = rows.map((r) => r.key);
+        for (const [key, built] of [...paneRows]) {
+            if (want.includes(key)) continue;
+            built.wrap.remove();
+            paneRows.delete(key);
+        }
+        for (let i = 0; i < rows.length; i += 1) {
+            const built = paneRows.get(rows[i].key);
+            if (built) { built.refresh(); continue; }
+            // Before the first row after this one that is already drawn, so a
+            // new slot lands where the slot list puts it.
+            let before = null;
+            for (let j = i + 1; j < rows.length && !before; j += 1) {
+                before = paneRows.get(rows[j].key)?.wrap ?? null;
+            }
+            const made = buildRow(rows[i], column);
+            paneRows.set(rows[i].key, made);
+            if (before) rowsBox.insertBefore(made.wrap, before);
+            else rowsBox.appendChild(made.wrap);
+        }
+    }
+
+    function drawStatus() {
+        if (!state.table) return;
+        const { columns, rows } = state.table;
+        const activeNote = !active ? ""
+            : columns.includes(active) ? ` · on ${active}` : ` · ${active} has no recipe yet`;
+        const paint = paintProblem();
+        const stranded = strandedKeys();
+        const note = stranded.length
+            ? ` The saved template has no slot for ${stranded.join(", ")} — save the workflow,`
+              + " or generate drops them."
+            : "";
+        if (paint) status(paint, false);
+        else status(state.dirty ? `Unsaved edits.${activeNote}${note}`
+            : `${state.name}: ${columns.length - 1} recipes, ${rows.length} slots.${activeNote}${note}`,
+            !stranded.length);
+        if (!state.dirty && columns.length === 1) status("No recipes yet. Set the canvas, name a recipe, press Capture.");
+    }
+
+    // The tree and the pane are separate paths on purpose: a slot-list change
+    // redraws the tree and RECONCILES the pane, a change of which row is
+    // selected rebuilds it.
+    function renderAll() {
+        renderTree();
+        drawHead();
+        renderPane();
+        drawStatus();
+        refit();
+    }
+
+    function renderFull() {
+        renderTree();
+        drawHead();
+        renderPane(true);
+        drawStatus();
+        refit();
+    }
+
+    node._symRecipe = { load, save, generate, startNew, remove, resolveProject,
+                        render: renderFull, choose };
+    renderFull();
     resolveProject();
 }
 
@@ -1193,6 +1948,15 @@ function setupRecipeNode(node) {
     button("save project", () => node._symRecipe?.save());
     button("generate workflows", () => node._symRecipe?.generate());
     button("delete project", () => node._symRecipe?.remove());
+    // Every widget the panel's head drives is hidden but PRESENT: a saved
+    // workflow restores widget values BY POSITION, and dropping one would land
+    // `auto`'s false on `match_color`. `recipe` and `match_color` stay
+    // visible — they are what the panel cannot tell you.
+    hideWidget(autoToggle);
+    for (const name of ["new project", "capture recipe", "save project",
+                        "generate workflows", "delete project"]) {
+        hideWidget(node.widgets?.find((w) => w.name === name));
+    }
     recipePanel(node);
     const applyToggle = () => { if (node._symAuto) node._symAuto.on = !!autoToggle.value; };
     applyToggle();
@@ -1212,8 +1976,9 @@ function setupRecipeNode(node) {
         onConfigure?.apply(this, arguments);
         applyToggle();
         fixColor();
+        node._symRecipe?.render?.();
     };
-    if (node.size[1] < 320) node.setSize?.([Math.max(node.size[0], 560), 320]);
+    if (node.size[1] < 320) node.setSize?.([Math.max(node.size[0], RECIPE_MIN_W), 320]);
 }
 
 registerSymbioticaExtension(app, {

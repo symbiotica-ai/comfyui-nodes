@@ -913,7 +913,7 @@ function repointGetters(was, now) {
 // Ask for a name. The frontend's dialog when there is one -- there is on every
 // version this pack runs against -- and the browser's as the last resort, so
 // the entry is never a menu row that does nothing.
-async function askForName(title, current) {
+export async function askForName(title, current) {
     const dialog = app.extensionManager?.dialog;
     if (dialog?.prompt) {
         return await dialog.prompt({ title, message: "Name", defaultValue: current });

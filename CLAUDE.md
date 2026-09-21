@@ -251,6 +251,16 @@ The shape that works, in `prompts.js` and `control_image.js`:
 - the panel's resolver prefers a TYPED widget, then the run's value, then the
   static walk; the walk only ever stands in until the first run
 
+**A category emptied by picking an asset still has to name a recipe.**
+`chooseAsset` (`web/js/asset_focus.js`) sets `category` to `""` on purpose — with
+one asset chosen the narrowing decides nothing, and a stale one is a hard
+refusal at queue time. So the Recipes resolver falls back to the picked asset's
+OWN row: `assetRecipeOf(node, assetName)` reads the order the node already
+holds (`_symEvents`, no request and no run) and answers
+`categoryRecipeOf` — `Gargoyle Drink Machine` names `appliance-1x2`. Without
+it, picking an asset left the `recipe` wire holding null and the node stored
+nothing, silently (2026-09-21).
+
 **`VALIDATE_INPUTS` must not refuse an input that arrives on a wire.** It runs
 before anything executes, so a wired widget is EMPTY there — validating it
 rejects every node on his canvas with "a node rejected one or more input
@@ -295,6 +305,58 @@ A painted slot node is captured whole, not by its first widget
 - a key in the project file with no slot on the canvas is not a row: it leaves
   the table on sight and the file on the next `save project`.
 
+## Storing a recipe — the table, and the two sides that must agree
+
+A project is a small JSON file in `user/default/recipes/`, bound to ONE template
+workflow by path. It holds `shared` plus one block per recipe, keyed by the
+painted node's TITLE. Capture reads the canvas and stores only what differs from
+shared; load layers shared under the recipe and writes it back; `generate
+workflows` reads the TEMPLATE FILE from disk and writes one real workflow per
+recipe. The recipe is a set of DIFFERENCES against one graph, which is what lets
+a structural change reach every recipe at once — snapshots of the whole graph
+were considered on 2026-09-21 and refused for that reason.
+
+Everything below is a place the canvas and the server had to be taught to say
+the same thing. Each one failed silently first.
+
+- **`widgets_values` is positional and is regularly LONGER than the inputs the
+  graph declares.** ComfyUI draws widgets nothing declares — a seed's
+  `control_after_generate`, a node's own DOM panel — and a saved workflow
+  records their values with no name. A KSampler is six declared names against
+  seven values, which refused every recipe in the project. `_widget_positions`
+  (`py/_recipes.py`) reconstructs the layout by MERGING two known subsequences:
+  the declared input names in order, and the captured keys, which the canvas
+  wrote in widget order with the wired ones left out. The merge only counts if
+  it lands on exactly as many widgets as the node holds. Its limit, written
+  down in the tests: an undeclared widget and a typo are indistinguishable, so
+  the COUNT is the only discipline left.
+- **A node never retitled is keyed by the name the CANVAS DRAWS on it**, which
+  for a custom node is its display name (`Control Image`), not its class
+  (`SymbioticaControlImage`). A saved workflow stores no title for one, so
+  `recipe_slots`/`template_slots`/`apply_recipe`/`generate` all take a
+  `display` map and `py/recipe_node.py` builds it from ComfyUI's
+  `NODE_DISPLAY_NAME_MAPPINGS`. Without it the server keyed by class, the value
+  had no slot to land in, and the next save DELETED it from the project.
+- **`state.slots` follows the CANVAS; `state.templateSlots` is what the saved
+  template file declares.** The difference between them is what `generate`
+  would drop, and the status line names it — that is how a workflow he has
+  painted but not saved announces itself instead of losing the keys.
+- **Picking a recipe in the sidebar loads it AND points the wire at it.**
+  `pointWireAt` walks back from the `recipe` input (`focusBehind`, the same
+  hops as `nodeText`) to the Task / Asset Focus node, sets its `category` to
+  the label whose slug is the recipe, and clears `asset`. Without that, `auto`
+  read the old name on the next repaint and pulled the canvas straight back.
+- **The column a switch writes back is the one the CANVAS is on
+  (`auto.last.name`), never the one on screen.** With `auto` on, the wire loads
+  its own recipe while the pane shows another; writing the picked column is how
+  `appliance-1x2` came to hold `food`'s values on his canvas (2026-09-21).
+- **`auto`'s own save RECONCILES the pane, never rebuilds it** (`renderAll`,
+  not `renderFull`). It fires a second after an edit, which is while he is
+  still typing the next one, and a rebuild there is the caret gone.
+- After a save, that one recipe's workflow file is rewritten two seconds later
+  (`/symbiotica/recipes/generate` takes an optional `recipe`), so the file on
+  disk is the recipe rather than whatever `generate workflows` last wrote.
+
 ## Asset Recipe — Asset Focus plus wired widget values
 
 `SymbioticaAssetRecipe` (py/pipeline/nodes.py) SUBCLASSES `SymbioticaAssetFocus`
@@ -323,8 +385,17 @@ slot the table did not know about.
 
 ## Repo ground rules
 
-- Tests: run `pytest` from the repo root (tests stub `comfy_api`; see
-  `tests/comfy_api_stub.py`). All tests must pass before a PR.
+- Tests: `.venv/bin/pytest` from the repo root, and
+  `node --import ./tests/js/register_hooks.mjs --test tests/js/*.test.mjs` for
+  the canvas side. NOT `python3 -m pytest`: the repo's own `py/` directory
+  shadows the `py` package pytest imports, and it dies in `_pytest.compat`.
+  (`PYTHONSAFEPATH=1` is the other way out.) Tests stub `comfy_api`; see
+  `tests/comfy_api_stub.py`. All tests must pass before a PR.
+- **Never `assert.equal` two DOM elements from `tests/js/comfy_stub.mjs`.** They
+  are cyclic, and on a FAILURE node builds a diff that never returns: the file
+  is killed at 100s, every test after it never runs, and the reporter shows a
+  passing run with the file marked failed. One real bug hid behind that for a
+  day. Compare identity — `assert.ok(a === b, "...")`.
 - JS and Python are parallel implementations of the same draw/compose rules in
   several places (template editor, prompt book, the recipe slot rule in
   `web/js/recipes.js` and `py/_recipes.py`) — change both in one commit.
