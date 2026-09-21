@@ -150,7 +150,10 @@ told the rest:
 | G3 | An un-retitled custom node was captured as `Control Image` and read back as `SymbioticaControlImage`; the value had no slot and the next save deleted it | the server is handed the display names |
 | G4 | With `auto` running, a sidebar switch wrote the canvas into the row on SCREEN, so `appliance-1x2` came to hold `food`'s values | the column written is the one the canvas is on |
 | G5 | `auto`'s save rebuilt the pane a second after an edit, taking the caret out mid-word | it reconciles (`renderAll`) |
-| G6 | Picking a recipe left the **Task** node's `category` alone: the labels were read off the widget's combo options, which Task's plain, tree-written widget does not have — so auto read the old name off the wire on the next draw and loaded the old recipe back over the pick | `pointWireAt` reads `categoriesOf(node)`, the node's own list |
+| G6 | Picking a recipe left the **Task** node's `category` alone: the labels were read off the widget's combo options, which Task's plain, tree-written widget does not have — so auto read the old name off the wire on the next draw and loaded the old recipe back over the pick | `pointWireAt` reads the node's own category list |
+| G7 | The pane stopped following the Task after ANY sidebar click: `choose` armed the follow by comparing the click against where the wire WAS, and a pick MOVES the wire. It then sat on one recipe while the Task walked through the others | armed on `activeColumn() === column`, and a wire naming no row no longer ends the follow |
+| G8 | A category picked from another event set `category` and left `feature` behind, so the node sat on `runs 0` and the queue refused naming the event it looked in — reachable from the sidebar and from the Task's own category view | `eventForCategory`, one rule for both sides |
+| G9 | "No recipe slots on this canvas" fired on every category with nothing stored: with `shared` empty there was nothing to write either way, so the one click meant to START a recipe answered "your canvas is broken" | an empty value set is named in the status line, and nothing pops |
 
 ## Known breaks, against the above — fixed 2026-09-18
 
@@ -166,5 +169,6 @@ told the rest:
 
 Counts at 2026-09-21: 454 JS, 937 Python. G1-G5 were reproduced against his
 own project file and his node shapes; none has been watched on the Modal canvas.
-G6 was reproduced and fixed in a real browser on his own workflow and project
-file, on the local install.
+G6-G9 were reproduced and fixed in a real browser on his own workflow and
+project file, on the local install, and the canvas half is verified `ok` in the
+Modal sandbox.

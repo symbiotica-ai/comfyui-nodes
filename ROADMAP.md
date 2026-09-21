@@ -58,6 +58,39 @@ Left open on 2026-09-19. One line each, the decision still open.
   category-tree lock, the 82-node cull, the module-merge docs. Left alone when
   the branches were collapsed to `main` on 2026-09-19; merge or delete.
 
+## Recipes and Task — open threads (no issue filed yet)
+
+Left open on 2026-09-21, after the Task tree gained a category grouping and the
+Recipes sidebar gained a row per category. One line each, the decision still
+open. The node's contract is `docs/recipes-contract.md`.
+
+- With `auto` on, picking a recipe `pointWireAt` cannot name — one from
+  `new recipe`, which no category is named after — still LOADS it, and the next
+  draw reads the old name off the wire and loads that back over it. The status
+  note explaining why is overwritten inside the same frame. Open: refuse the
+  load and say so, or leave it. Reproduced in the panel harness.
+- Picking the `shared` row with `auto` on has the same shape and cannot be
+  fixed by a better lookup: `shared` is not nameable on the wire, so the pull is
+  undone one repaint later. Open: make the shared row a view while auto is on,
+  or keep `auto.last` where it was and skip the load.
+- Opening a workflow whose wire names a category with no recipe CREATES one
+  from the canvas on the first tick (`autoDecision` answers `create:`). Old
+  behaviour, deliberately preserved when the sidebar gained category rows — but
+  it now fires on more names. Open: whether an OPEN should adopt rather than
+  create, which `autoAdopt` already does for a name the project holds.
+- Two project files can name one base workflow if an older one was named from
+  the template's `library` slot: `projectForWorkflow` takes the first match and
+  the other is listed under "other projects" pointing at the workflow he already
+  has open. Not reachable on his canvas today — his one project already collides
+  with its own new name and the `new project` route 409s.
+- The month is drawn twice in the Task tree when the `month` widget's case
+  differs from the server's (`october` beside `October`): `readState` prepends
+  the widget's value when the list does not contain it, and the compare is
+  exact. One-line fix, never chased.
+- Six generated workflows from the old naming (`appliance-1x1.json` and five
+  more) are still in his workflows folder. Generate names them in its toast and
+  deletes nothing, by design — his call whether to remove them.
+
 ## Set Hub / Get Hub — open threads (no issue filed yet)
 
 One node holding many named constants, replacing a canvas full of KJNodes

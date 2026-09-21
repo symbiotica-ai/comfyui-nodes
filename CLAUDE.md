@@ -288,6 +288,35 @@ deleted with the obsolete nodes in `0a4f14d` while two panels still called it,
 and every preview outside ComfyUI's `input/` 404'd for weeks with nothing in
 the tests to catch it — the allowlist was tested, the handler was not.
 
+## The Task node — one month, two ways to read it
+
+`taskPanel` in `web/js/asset_focus.js` (not a new file: a new `web/js` file
+never reaches the Modal sandbox). The tree is built by `taskRows` as one flat
+list of row objects — never `walkTree`, which derives parentage from a
+slash-joined key, and his sheet holds names with slashes in them.
+
+- **Two groupings, one button in the head** (`ICON.layers`). By EVENT is the
+  sheet's shape: month, event, category, asset. By CATEGORY drops the event
+  level and gathers every asset of a type across the whole month — "so it's
+  easier for me to test 10 decorations for example without skipping through
+  events that contain that type of asset" (2026-09-21). The grouping rides on
+  `node.properties[TASK_GROUP]`, like the sidebar width and the fold: a widget
+  would shift the saved values of every workflow already holding the node.
+- **A row carries its event, and taking one moves the node there.** In the
+  category view an asset row is labelled `<name> · <event>`, `chooseAsset`
+  hops through `chooseFound` when the event differs, and `chooseCategory` hops
+  through `eventForCategory`. Both are the same rule: the queue builds ONE
+  event, so a pick from the month has to say which.
+- **Picking a category draws its first asset** (`previewRow`), rather than
+  "Pick an asset in the tree." on a node listing twenty. It is a PREVIEW, not
+  a pick: no widget moves, `runs N` is still the category's count, and the
+  prompt header names the asset so it is not read as the category's. Clicking
+  a reference tile is what turns it into a pick.
+- `runList` is what the node would EMIT — the held event's assets narrowed by
+  `category` — and is read off the parse, never off the rows on screen: a
+  category has to be open to have asset rows, and counting those read `runs`
+  as nothing beside a tree full of categories.
+
 ## What a Recipes slot captures
 
 A painted slot node is captured whole, not by its first widget
@@ -350,8 +379,42 @@ the same thing. Each one failed silently first.
 - **Picking a recipe in the sidebar loads it AND points the wire at it.**
   `pointWireAt` walks back from the `recipe` input (`focusBehind`, the same
   hops as `nodeText`) to the Task / Asset Focus node, sets its `category` to
-  the label whose slug is the recipe, and clears `asset`. Without that, `auto`
-  read the old name on the next repaint and pulled the canvas straight back.
+  the label whose slug is the recipe, and clears `asset` and `ref` — the same
+  act as clicking that category in the Task tree. Without it, `auto` read the
+  old name on the next repaint and pulled the canvas straight back. Three
+  things it must keep doing:
+  - **The labels come from `monthCategories(node)`, never from the widget's
+    options.** Only Asset Focus makes `category` a combo (`comboify` runs in
+    `focusPanel`, which serves `FOCUS_CLASSES` alone); on Task it is a plain
+    hidden widget its tree writes. Reading options there found no label, the
+    category never moved, and auto loaded the old recipe back over the pick.
+  - **It moves `feature` too** (`eventForCategory`). A run is ONE event —
+    the queue picks it by `feature`, then narrows by `category` — so a
+    category the held event does not have is `runs 0` and a refusal naming
+    the event it looked in. The sidebar lists the whole MONTH's categories,
+    so a pick has to carry its event.
+  - **The pane goes on following the wire afterwards.** A pick POINTS the
+    wire, so the two agree from that moment and `autoSelected` is re-armed
+    (`activeColumn() === column`). Comparing the click against where the wire
+    WAS disarmed the follow on every click, and the pane then sat on one
+    recipe while the Task walked through the others. A wire that moves to a
+    name this project has no row for does not end the follow either — the
+    pane waits for the next name it can show.
+- **Every category the parsed MONTH holds is a sidebar row**, marked with an
+  icon while nothing is stored for it (`syncCategories`, `state.offered`). A
+  marked row is a row, not a recipe: clicking it points the wire, loads
+  `shared` and writes NOTHING — `choose` adopts `auto.last` so auto does not
+  read the wire as a name it has never seen and capture the canvas on the
+  spot, which would write one recipe per click down the list. It becomes a
+  recipe the moment something is captured into it, and `tableToProject` is
+  where an offered-and-empty column is kept out of the file. `autoAdopt` /
+  `autoDecision` are handed `realColumns()`, not every column, so the WIRE
+  landing on an uncaptured category still captures the canvas into it —
+  unchanged, and the one path that does write on its own.
+- **A recipe that holds nothing writes nothing, and that is not an error.**
+  "No recipe slots on this canvas" is for a `match_color` that matches
+  nothing; with `shared` empty it fired on every category he had not been
+  through yet, on the one click meant to START a recipe.
 - **The column a switch writes back is the one the CANVAS is on
   (`auto.last.name`), never the one on screen.** With `auto` on, the wire loads
   its own recipe while the pane shows another; writing the picked column is how
