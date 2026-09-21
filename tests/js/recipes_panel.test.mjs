@@ -139,7 +139,10 @@ const part = (node, name) =>
     descendants(panel(node)).find((e) => e._symPart === name);
 const rows = (node) => descendants(panel(node)).filter((e) => e._sym);
 const rowFor = (node, rel) => rows(node).find((r) => r._sym.rel === rel);
-const labelOf = (row) => row.children[0].textContent;
+// The name cell: a row with a lead (a category with nothing stored) puts the
+// mark first, and the mark holds no text.
+const labelOf = (row) =>
+    [...row.children].find((c) => c.textContent)?.textContent ?? "";
 const labels = (node) => rows(node).map(labelOf);
 const main = (node) => part(node, "main");
 const button = (node, title) =>
@@ -937,15 +940,27 @@ test("shared is not a workflow, so saving it writes none", async () => {
 
 // Named so their slugs are the fixture's recipe keys, the way his
 // "Food - 3 stages 1x1" slugs to food-3-stages-1x1.
-const CATEGORIES = ["All", "Appliance1x1", "Appliance1x2", "Food - 3 stages 1x1"];
+const CATEGORIES = ["Appliance1x1", "Appliance1x2", "Food - 3 stages 1x1"];
 
 // His canvas: Task -> Task Specs -> the `recipe` input, with auto on.
+//
+// `category` is a PLAIN text widget here because that is what the real Task
+// node carries: its tree writes the widget, and a combo would drop every
+// value until the first parse lands. Giving the fixture options it does not
+// have is what let the label lookup pass in here while his pick set nothing.
+// The labels live on the node's parsed order, which is where they come from.
 function taskChain(node, category = "All") {
     const task = {
         id: 8, type: "SymbioticaTask", mode: 0, title: "Task", inputs: [],
-        widgets: [{ name: "category", value: category, options: { values: CATEGORIES } },
-                  { name: "asset", value: "Gargoyle Drink Machine" }],
+        widgets: [{ name: "category", value: category },
+                  { name: "asset", value: "Gargoyle Drink Machine" },
+                  { name: "ref", value: "GargoyleDrinkMachine_2.png" }],
         outputs: [{ name: "specs" }], setDirtyCanvas() {},
+        _symEvents: [{
+            feature: "QE 2", eventName: "Coven of Shadows",
+            assets: CATEGORIES.map((c, i) => ({
+                assetName: `asset ${i}`, category: c, canvas: "" })),
+        }],
     };
     const specs = {
         id: 14, type: "SymbioticaTaskSpecs", mode: 0, widgets: [],
@@ -973,9 +988,29 @@ test("picking a recipe points the wire at it, and drops the asset narrowing",
      async () => {
     const node = await recipeNode();
     const task = taskChain(node, "Appliance1x1");
+    assert.equal(task.widgets[0].options, undefined,
+                 "the real node's category has no options to read labels off");
     await click(rowFor(node, "appliance1x2"));
     assert.equal(task.widgets[0].value, "Appliance1x2", "the Task node followed");
     assert.equal(task.widgets[1].value, "", "one asset would decide it instead");
+    assert.equal(task.widgets[2].value, "",
+                 "and a reference belongs to the asset that just went");
+});
+
+test("a recipe whose key is not its label still points the wire at it", async () => {
+    // His own: `Food - 3 stages 1x1` slugs to food-3-stages-1x1, and the LABEL
+    // is the only thing the category widget can be set to. Picking it left the
+    // widget on Appliance 1x1, so auto read the old name off the wire on the
+    // next draw and pulled the canvas straight back.
+    const project = PROJECT();
+    project.recipes["food-3-stages-1x1"] = { backdrop: "floor-food.png" };
+    const node = await recipeNode({ project });
+    const task = taskChain(node, "Appliance1x1");
+    await click(rowFor(node, "food-3-stages-1x1"));
+    assert.equal(task.widgets[0].value, "Food - 3 stages 1x1",
+                 "the label whose slug is the recipe");
+    assert.equal(app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value,
+                 "floor-food.png", "and its values are on the canvas");
 });
 
 test("a recipe no category is named after says so and still loads", async () => {
@@ -1003,6 +1038,115 @@ test("the recipe the WIRE loaded is the one a switch writes back, not the picked
     assert.deepEqual(state(node).appliance1x2, before,
                      "the recipe that was merely on screen was not written");
     assert.notEqual(state(node).appliance1x2.backdrop, "wire.png");
+});
+
+// =========== the order's categories, as rows before they are recipes =========
+
+test("every category the order holds is a row, stored or not", async () => {
+    const node = await recipeNode();
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    assert.deepEqual(labels(node), [
+        "symtest-fixture",
+        "shared \u00b7 3", "appliance1x1 \u00b7 1", "appliance1x2 \u00b7 3",
+        "food-3-stages-1x1 \u00b7 0", "zebra \u00b7 0",
+        "other projects",
+        "imperia-bakery \u2014 open recipe-test/bakery-template-test.json",
+    ]);
+    // The mark is what tells the two apart: `zebra` is an empty recipe the
+    // file holds, `food-3-stages-1x1` is a category nothing is stored for.
+    assert.equal(rowFor(node, "food-3-stages-1x1").children.length, 2, "a lead");
+    assert.equal(rowFor(node, "zebra").children.length, 1, "no lead");
+    assert.equal(statusText(node),
+                 "symtest-fixture: 3 recipes, 5 slots. \u00b7 on appliance1x1"
+                 + " \u00b7 1 category empty");
+});
+
+test("an empty category is not written to the file, and an empty recipe is",
+     async () => {
+    const node = await recipeNode();
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(word(node, "save project"));
+    const written = posted.filter((p) => p.project).at(-1).project.recipes;
+    assert.deepEqual(Object.keys(written).sort(),
+                     ["appliance1x1", "appliance1x2", "zebra"],
+                     "seventeen empty blocks is seventeen workflows at full price");
+});
+
+test("picking an empty category loads shared and points the wire at it",
+     async () => {
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "food-3-stages-1x1"));
+    assert.equal(task.widgets[0].value, "Food - 3 stages 1x1", "the Task followed");
+    assert.equal(app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value,
+                 "floor-1x1.png", "shared is what a recipe starts from");
+});
+
+test("capturing into an empty category is what makes it a recipe", async () => {
+    const node = await recipeNode();
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "food-3-stages-1x1"));
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "floor-food.png";
+    await click(word(node, "capture"));
+    await click(word(node, "save project"));
+    const written = posted.filter((p) => p.project).at(-1).project.recipes;
+    assert.equal(written["food-3-stages-1x1"]?.backdrop, "floor-food.png");
+    assert.equal(rowFor(node, "food-3-stages-1x1").children.length, 1,
+                 "and the mark is gone");
+});
+
+test("the wire landing on an empty category still captures, never loads over it",
+     async () => {
+    // The row exists now, but it is not a recipe until something is stored in
+    // it — so auto must not answer the wire by writing shared over the canvas
+    // he has just painted.
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    await draw(node);
+    await autoOn(node);
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "floor-food.png";
+    task.widgets[0].value = "Food - 3 stages 1x1";
+    await draw(node);
+    await settle();
+    assert.equal(app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value,
+                 "floor-food.png", "the canvas was captured, not overwritten");
+    assert.equal(state(node)["food-3-stages-1x1"]?.backdrop, "floor-food.png");
+});
+
+test("browsing the categories with auto on writes nothing", async () => {
+    // A click points the wire at a name auto has never seen. Without adopting
+    // the row, that reads as "a recipe that does not exist yet" and the canvas
+    // is captured into it on the spot — one recipe per click down the list.
+    const node = await recipeNode({
+        project: { ...PROJECT(), shared: {}, recipes: { appliance1x1: {} } },
+    });
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    await autoOn(node);
+    await click(rowFor(node, "food-3-stages-1x1"));
+    await draw(node);
+    await settle();
+    assert.equal(state(node)["food-3-stages-1x1"], undefined,
+                 "looking at a category is not capturing it");
+    assert.ok(rowFor(node, "food-3-stages-1x1").children.length === 2,
+              "and it is still marked empty");
+});
+
+test("an empty category leaves when the order stops naming it; a captured one stays",
+     async () => {
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    await draw(node);
+    assert.ok(rowFor(node, "food-3-stages-1x1"), "offered while the order holds it");
+    task._symEvents[0].assets = [{ assetName: "a", category: "Appliance1x2", canvas: "" }];
+    await draw(node);
+    assert.equal(rowFor(node, "food-3-stages-1x1"), undefined, "and gone with it");
+    assert.ok(rowFor(node, "appliance1x1"), "a recipe the file holds is not the order's to remove");
+    assert.ok(rowFor(node, "zebra"));
 });
 
 // The project as the panel currently holds it.

@@ -114,7 +114,7 @@ function publishedAssets(node) {
 // order_source.js's `comboify`, kept here because that module does not export
 // it. Value and serialisation are preserved, so the string still reaches
 // the Python node and a saved workflow still restores it.
-const ALL_CATEGORIES = "All";
+export const ALL_CATEGORIES = "All";
 // The `asset` combo cannot offer an empty label, so "no narrowing" is
 // spelled out on screen and emptied on the way to the node.
 const ALL_ASSETS = "All assets";
@@ -202,7 +202,14 @@ function inCategory(asset, pick) {
 // the last run pushed. A wired project the canvas cannot read leaves the parse
 // empty while the run knows every category — and the run's list is what the
 // panel is already showing, so the dropdown has to agree with it.
-function categoriesOf(node) {
+//
+// Exported because the Recipes node sets this same widget when you pick a
+// recipe, and has to turn the recipe's slug back into the label that made it.
+// It cannot read the labels off the widget: on Asset Focus `category` is a
+// combo whose options ARE this list, but on Task it is a plain text widget the
+// tree writes — a combo drops a value that is not among its options, and until
+// the first parse lands that is every value.
+export function categoriesOf(node) {
     const found = [];
     for (const asset of publishedAssets(node)?.assets ?? []) {
         const category = categoryRecipeOf(asset);

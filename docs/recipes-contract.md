@@ -34,12 +34,20 @@ The rule everything else follows from:
 
 - Clicking a recipe in the sidebar puts its values on the canvas and points the
   `recipe` wire at it: the `category` widget on the node feeding that wire is
-  set to the label whose slug is the recipe, and `asset` is cleared.
+  set to the label whose slug is the recipe, and `asset` and `ref` are cleared —
+  the same act as clicking that category in the Task tree.
 - The recipe you LEAVE is written first — the one the canvas is actually on,
   which with `auto` running is not always the one on screen.
 - `new recipe` asks for a name and writes the canvas into it: the same act as
   picking an asset in Task, with the name typed instead of arriving on a wire.
 - The project row is the project's settings and sets no slot, so it stays a view.
+- **Every category the wired order holds is a row from the start**, marked while
+  nothing is stored for it — you have to go through all of them anyway. Picking
+  one points the wire at it and puts shared on the canvas; it becomes a recipe
+  the moment something is captured into it, and until then it is never written
+  to the file: an empty block per category is a workflow per category at full
+  price. Looking at one writes nothing. A category the order stops naming takes
+  its empty row with it; one that holds values is a recipe and stays.
 
 ## 4. Loading puts it back exactly
 
@@ -104,6 +112,7 @@ told the rest:
 | G3 | An un-retitled custom node was captured as `Control Image` and read back as `SymbioticaControlImage`; the value had no slot and the next save deleted it | the server is handed the display names |
 | G4 | With `auto` running, a sidebar switch wrote the canvas into the row on SCREEN, so `appliance-1x2` came to hold `food`'s values | the column written is the one the canvas is on |
 | G5 | `auto`'s save rebuilt the pane a second after an edit, taking the caret out mid-word | it reconciles (`renderAll`) |
+| G6 | Picking a recipe left the **Task** node's `category` alone: the labels were read off the widget's combo options, which Task's plain, tree-written widget does not have — so auto read the old name off the wire on the next draw and loaded the old recipe back over the pick | `pointWireAt` reads `categoriesOf(node)`, the node's own list |
 
 ## Known breaks, against the above — fixed 2026-09-18
 
@@ -117,5 +126,7 @@ told the rest:
 | F6 | Unpainting the last slot left the old rows on screen | `syncSlots` guards on "the graph has no nodes", not "no slots found" |
 | F7 | A canvas with nothing painted looked identical to a broken `match_color` | The status line names which of the two it is |
 
-Counts at 2026-09-21: 427 JS, 934 Python. G1-G5 were reproduced against his
+Counts at 2026-09-21: 435 JS, 934 Python. G1-G5 were reproduced against his
 own project file and his node shapes; none has been watched on the Modal canvas.
+G6 was reproduced and fixed in a real browser on his own workflow and project
+file, on the local install.

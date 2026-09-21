@@ -368,6 +368,14 @@ export function iconButton(name, title, onClick, { px = 14, hover = "" } = {}) {
     return b;
 }
 
+/** The same icon with nothing behind it, for a row's `lead`: a mark on the
+ * row, not a control. A button here would offer a click the row does not have. */
+export function iconLead(name, { px = 12, color = HUB.inkTertiary } = {}) {
+    const d = el("div", `flex:none;display:flex;align-items:center;color:${color};`);
+    d.innerHTML = svgIcon(ICON[name], px);
+    return d;
+}
+
 // --- a file tree inside a node -----------------------------------------------
 export const ONE_LINE = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
 const INDENT_PX = 10;

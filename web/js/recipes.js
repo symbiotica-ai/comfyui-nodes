@@ -12,13 +12,13 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { registerSymbioticaExtension } from "./register.js";
 import { HUB, ghostButtonCss, injectHubStyles } from "./hub_theme.js";
-import { el, emptyState, iconButton, ONE_LINE, pinPanelWidth,
+import { el, emptyState, iconButton, iconLead, ONE_LINE, pinPanelWidth,
          sidebarShell, treeRow } from "./browser_chrome.js";
 import { askForName, findSource, graphScope, slotName } from "./find_node.js";
 // The panel hides the widgets its head drives, exactly as the Task node
 // does. `hideWidget` is exported from there and imported by three other
 // panels; a second copy of it is how they drift.
-import { assetRecipeOf, hideWidget } from "./asset_focus.js";
+import { ALL_CATEGORIES, assetRecipeOf, categoriesOf, hideWidget } from "./asset_focus.js";
 
 const NODE_CLASS = "SymbioticaRecipe";
 const SHARED = "shared";
@@ -502,7 +502,12 @@ export function projectToTable(project, slots) {
     };
 }
 
-export function tableToProject(base, table, slots) {
+// `offered` names the columns that are only there because the ORDER holds that
+// category. One of those is written the moment it has a value and not before:
+// an empty block per category would put seventeen recipes in the file and have
+// `generate workflows` render a workflow for each at full price. A recipe the
+// file already holds is never dropped, empty or not — an empty one is his.
+export function tableToProject(base, table, slots, offered = null) {
     const byKey = Object.fromEntries(slots.map((s) => [s.key, s]));
     const out = { ...base, template: table.header.template, workflow_prefix: table.header.workflow_prefix };
     if (table.header.output) out.output = table.header.output;
@@ -523,8 +528,14 @@ export function tableToProject(base, table, slots) {
         columnValues[column] = values;
     }
     out.shared = columnValues[SHARED] ?? {};
+    const held = new Set(Object.keys(base?.recipes ?? {}));
     out.recipes = {};
-    for (const column of table.columns) if (column !== SHARED) out.recipes[column] = columnValues[column];
+    for (const column of table.columns) {
+        if (column === SHARED) continue;
+        const values = columnValues[column];
+        if (offered?.has(column) && !held.has(column) && !Object.keys(values).length) continue;
+        out.recipes[column] = values;
+    }
     return out;
 }
 
@@ -609,15 +620,40 @@ export function retable(table, nextSlots) {
     return { ...table, rows };
 }
 
+// Columns the table did not have, folded in sorted with empty cells. Two
+// callers: a capture into a name that is new, and the CATEGORIES the wired
+// order holds — every one of those is a row you can pick before anything is
+// stored in it. `tableToProject` is what decides which of them reach the file.
+export function ensureColumns(table, names) {
+    const missing = [...new Set(names)]
+        .filter((n) => n && n !== SHARED && !table.columns.includes(n));
+    if (!missing.length) return false;
+    table.columns.splice(0, table.columns.length, SHARED,
+        ...sortedRecipes([...table.columns.filter((c) => c !== SHARED), ...missing]));
+    for (const row of table.rows) {
+        for (const name of missing) row.cells[name] = "";
+    }
+    return true;
+}
+
+// The reverse: columns off the table, with their cells. Only ever the offered
+// categories that never took a value — a recipe is never dropped from under
+// him by the order moving on.
+export function dropColumns(table, names) {
+    const gone = new Set(names.filter((n) => n !== SHARED));
+    if (!gone.size) return false;
+    table.columns = table.columns.filter((c) => !gone.has(c));
+    for (const row of table.rows) {
+        for (const name of gone) delete row.cells[name];
+    }
+    return true;
+}
+
 // Write captured values into one column. A recipe takes only what differs
 // from shared, so a later shared edit still reaches it; shared takes
 // everything.
 export function captureColumn(table, slots, column, values) {
-    if (!table.columns.includes(column)) {
-        table.columns.splice(0, table.columns.length,
-            SHARED, ...sortedRecipes([...table.columns.filter((c) => c !== SHARED), column]));
-        for (const row of table.rows) row.cells[column] = "";
-    }
+    ensureColumns(table, [column]);
     for (const row of table.rows) {
         if (!(row.key in values)) continue;
         const text = cellText(values[row.key]);
@@ -781,8 +817,12 @@ function recipePanel(node) {
     // table the person is editing. `dirty` is unsaved edits. `projects` is
     // every project file, so the ones this workflow is not the template of can
     // be named rather than silently missing.
+    // `offered` is the columns the CATEGORY sweep put there: rows you can pick
+    // before anything is stored in them. They are table columns like any
+    // other; what makes them different is that an empty one never reaches the
+    // file, and `auto` does not count one as a recipe that exists.
     const state = { name: null, project: null, slots: [], table: null,
-                    dirty: false, projects: [] };
+                    dirty: false, projects: [], offered: new Set() };
     // The colour that marks a slot: typed on the node, or wired like the name.
     const matchColor = () => {
         const wired = textValue(node, "match_color");
@@ -824,6 +864,20 @@ function recipePanel(node) {
     const slotOf = (key) => state.slots.find((s) => s.key === key);
     const setCount = (column) => (state.table?.rows ?? [])
         .filter((row) => (row.cells[column] ?? "").trim()).length;
+    // A column that is only an OFFER: the order holds that category, the file
+    // holds nothing for it, and nothing has been typed into it. It is a row,
+    // not a recipe.
+    const storedColumns = () => new Set(Object.keys(state.project?.recipes ?? {}));
+    const untouched = (column, stored = storedColumns()) =>
+        column !== SHARED && state.offered.has(column)
+        && !stored.has(column) && !setCount(column);
+    // The recipes that EXIST, which is what `auto` decides against: the wire
+    // landing on a category with nothing stored must still capture the canvas
+    // into it rather than load shared over what he painted.
+    const realColumns = () => {
+        const stored = storedColumns();
+        return (state.table?.columns ?? []).filter((c) => !untouched(c, stored));
+    };
 
     function status(text, subtle = true) {
         statusLine.textContent = text;
@@ -834,7 +888,8 @@ function recipePanel(node) {
         + `padding:3px 8px;color:${HUB.inkSubtle};`);
 
     function collect() {
-        const project = tableToProject(state.project, state.table, state.slots);
+        const project = tableToProject(state.project, state.table, state.slots,
+                                       state.offered);
         const color = matchColor();
         if (color) project.match_color = color; else delete project.match_color;
         return project;
@@ -979,6 +1034,7 @@ function recipePanel(node) {
         if (!name) {
             state.name = null; state.project = null; state.slots = [];
             state.templateSlots = []; state.table = null; state.dirty = false;
+            state.offered = new Set(); categorySig = null;
             renderFull();
             status(path ? "No project has this workflow as its template. Press new project." : "Save the workflow first.", false);
             return;
@@ -1002,6 +1058,9 @@ function recipePanel(node) {
             state.table = projectToTable(project, slots);
             state.dirty = false;
             slotSig = null;
+            // The offers belong to the table they were folded into; the sweep
+            // on the next draw puts them back against this one.
+            state.offered = new Set(); categorySig = null;
             auto.last = { name: null, sig: null };
             takeShot();
             active = "";
@@ -1100,6 +1159,7 @@ function recipePanel(node) {
             state.slots = []; state.templateSlots = [];
             state.table = null;
             state.dirty = false;
+            state.offered = new Set(); categorySig = null;
             resolvedFor = undefined;
             renderFull();
             toast("info", `Deleted project "${name}"`, "Its generated workflows are still in the workflows folder.");
@@ -1120,6 +1180,7 @@ function recipePanel(node) {
             state.table = projectToTable(project, slots);
             state.dirty = false;
             slotSig = null;
+            state.offered = new Set(); categorySig = null;
             active = ""; autoSelected = SHARED;
             pickRow(SHARED);
             resolvedFor = template;
@@ -1225,12 +1286,12 @@ function recipePanel(node) {
         const sig = slotSignature(values);
         const raw = textValue(node, "recipe");
         const next = raw ? recipeSlug(raw) : "";
-        if (autoAdopt(auto.last, next, state.table.columns)) {
+        if (autoAdopt(auto.last, next, realColumns())) {
             auto.last = { name: next, sig };
             return;
         }
         const prev = { name: auto.last.name, changed: auto.last.sig !== null && auto.last.sig !== sig };
-        const actions = autoDecision(prev, next, state.table.columns);
+        const actions = autoDecision(prev, next, realColumns());
         if (!actions.length) return;
         // A value edit settles for a second before it is written; a name
         // change acts at once, so the recipe you leave is saved as it was.
@@ -1304,6 +1365,46 @@ function recipePanel(node) {
         refit();
     }
 
+    // Every CATEGORY the order holds is a row, whether or not the project has
+    // stored anything for it: "i need to test and edit all categories anyway
+    // so there is no point in not having them there". The list comes off the
+    // node feeding `recipe` — the same list that names a pick — and the
+    // sentinel at its head ("All") names no recipe.
+    //
+    // An offered row that never took a value leaves again when the order moves
+    // to another event. One that did is a recipe by then, and stays.
+    let categorySig = null;
+    function syncCategories() {
+        if (!state.table) return;
+        const source = focusBehind(liveGraph(), node, "recipe");
+        const names = (source ? categoriesOf(source) : [])
+            .filter((label) => label !== ALL_CATEGORIES)
+            .map((label) => recipeSlug(label))
+            .filter(Boolean);
+        const sig = names.join("\u0000");
+        if (sig === categorySig) return;
+        categorySig = sig;
+        const wanted = new Set(names);
+        const stored = storedColumns();
+        const gone = state.table.columns.filter(
+            (c) => !wanted.has(c) && untouched(c, stored));
+        for (const c of gone) state.offered.delete(c);
+        const left = dropColumns(state.table, gone);
+        const grew = ensureColumns(state.table, names);
+        for (const name of names) {
+            if (!stored.has(name) && !setCount(name)) state.offered.add(name);
+        }
+        if (!left && !grew) return;
+        // A row that went cannot stay selected; nothing was stored in it, so
+        // there is nothing to lose by falling back to shared.
+        if (gone.includes(picked())) pickRow(SHARED);
+        renderTree();
+        drawHead();
+        renderPane();
+        drawStatus();
+        refit();
+    }
+
     // The name on the `recipe` wire, as a recipe key. "" when nothing is
     // picked, or when the wire runs through a node the resolver cannot read.
     function activeColumn() {
@@ -1338,6 +1439,7 @@ function recipePanel(node) {
     node.onDrawForeground = function () {
         resolveProject();
         syncSlots();
+        syncCategories();
         syncActive();
         autoTick();
         return onDrawForeground?.apply(this, arguments);
@@ -1354,15 +1456,24 @@ function recipePanel(node) {
         if (!source) return "";
         const widget = source.widgets?.find((w) => w.name === "category");
         if (!widget) return "";
-        const options = widget.options?.values;
-        const labels = typeof options === "function" ? options(widget, source) : options;
-        const label = (labels ?? []).find((l) => recipeSlug(l) === column);
+        // The labels come from the node's own list, never from the widget's
+        // options: Task's `category` is a plain text widget its tree writes,
+        // so reading options there found no label and the pick set nothing —
+        // then auto read the old name off the wire and pulled the canvas back.
+        const label = categoriesOf(source).find((l) => recipeSlug(l) === column);
         if (!label) return ` Nothing on ${source.title ?? source.type} is called ${column}.`;
         if (widget.value !== label) {
             widget.value = label;
             widget.callback?.(label, undefined, source);
-            const asset = source.widgets?.find((w) => w.name === "asset");
-            if (asset && asset.value) { asset.value = ""; asset.callback?.("", undefined, source); }
+            // And the reference under it: a filename belongs to ONE asset, so
+            // one left behind has the node naming a file it is not sending.
+            // The tree clears both on every category it sets (`chooseCategory`)
+            // — this is the one way in that does not go through the tree, and
+            // on Task there is no combo callback to drop it for us.
+            for (const name of ["asset", "ref"]) {
+                const w = source.widgets?.find((x) => x.name === name);
+                if (w && w.value) { w.value = ""; w.callback?.("", undefined, source); }
+            }
             source._symRenderFocus?.();
             source.setDirtyCanvas?.(true, true);
         }
@@ -1390,6 +1501,14 @@ function recipePanel(node) {
         if (!column) return;
         const note = column === SHARED ? "" : pointWireAt(column);
         loadColumn(column);
+        // The wire names this row now, so the canvas IS this recipe as far as
+        // auto is concerned. `loadColumn` says so when it wrote something, but
+        // a category with nothing stored and an empty `shared` has nothing to
+        // write — and auto then reads the wire as a name it has never seen and
+        // captures the canvas into it on the spot. Browsing the categories
+        // would write one recipe per click.
+        auto.last = { name: column,
+                      sig: slotSignature(liveSlotValues(liveGraph(), matchColor())) };
         if (note) status(statusLine.textContent + note, false);
     }
 
@@ -1531,13 +1650,17 @@ function recipePanel(node) {
                         label: state.name, hint: "The project: its template, "
                             + "its output folder, its prefix, and the values "
                             + "every recipe takes." });
+            const stored = storedColumns();
             for (const column of state.table.columns) {
                 const shared = column === SHARED;
+                const empty = untouched(column, stored);
                 rows.push({
                     kind: shared ? "shared" : "recipe", rel: column, depth: 1,
                     label: column, count: setCount(column),
-                    unit: shared ? "values" : "own",
+                    unit: shared ? "values" : "own", empty,
                     hint: shared ? "What every recipe takes unless it sets its own."
+                        : empty ? `${column}: a category in the order, with nothing `
+                            + "stored for it yet. Pick it, set the canvas, and it is a recipe."
                         : `${column}: only what differs from shared is stored.`,
                 });
             }
@@ -1575,8 +1698,16 @@ function recipePanel(node) {
             const line = treeRow({
                 kind: row.kind, rel: row.rel, depth: row.depth,
                 tone: on ? HUB.selBg : "",
+                // A category with nothing stored says so with a mark rather
+                // than only a `· 0`: the list is the order's categories now,
+                // and which of them you have been through is the one thing
+                // you read it for.
+                lead: row.empty
+                    ? iconLead("newFile", { px: 11, color: on ? HUB.selInk : HUB.inkTertiary })
+                    : undefined,
                 labelColour: on ? HUB.selInk
-                    : dim ? HUB.inkTertiary : `var(--input-text, ${HUB.ink})`,
+                    : dim || row.empty ? HUB.inkTertiary
+                    : `var(--input-text, ${HUB.ink})`,
                 // The count rides in the label: `treeRow` hides its `actions`
                 // until the pointer is on the row, and a badge you have to
                 // hover for is a badge nobody reads.
@@ -1604,7 +1735,10 @@ function recipePanel(node) {
 
         nameField.style.display = have && isRecipe ? "" : "none";
         crumb.style.display = have && isRecipe ? "none" : "";
-        dropButton.style.display = have && isRecipe ? "" : "none";
+        // Nothing to remove on a category the file holds nothing for — the row
+        // is the order's, and it goes when the order stops naming it.
+        dropButton.style.display = have && isRecipe && !untouched(column)
+            ? "" : "none";
         loadButton.style.display = have ? "" : "none";
         captureButton.style.display = have ? "" : "none";
         newButton.style.display = have ? "" : "none";
@@ -1883,8 +2017,14 @@ function recipePanel(node) {
     function drawStatus() {
         if (!state.table) return;
         const { columns, rows } = state.table;
+        // The categories the order holds are rows, not recipes: counted apart,
+        // so "3 recipes" still means three blocks in the file.
+        const real = realColumns().filter((c) => c !== SHARED);
+        const waiting = columns.length - 1 - real.length;
         const activeNote = !active ? ""
-            : columns.includes(active) ? ` · on ${active}` : ` · ${active} has no recipe yet`;
+            : real.includes(active) ? ` · on ${active}` : ` · ${active} has no recipe yet`;
+        const emptyNote = waiting
+            ? ` · ${waiting} ${waiting === 1 ? "category" : "categories"} empty` : "";
         const paint = paintProblem();
         const stranded = strandedKeys();
         const note = stranded.length
@@ -1893,9 +2033,14 @@ function recipePanel(node) {
             : "";
         if (paint) status(paint, false);
         else status(state.dirty ? `Unsaved edits.${activeNote}${note}`
-            : `${state.name}: ${columns.length - 1} recipes, ${rows.length} slots.${activeNote}${note}`,
+            : `${state.name}: ${real.length} recipes, ${rows.length} slots.`
+              + `${activeNote}${emptyNote}${note}`,
             !stranded.length);
-        if (!state.dirty && columns.length === 1) status("No recipes yet. Set the canvas, name a recipe, press Capture.");
+        if (!state.dirty && !real.length) {
+            status(columns.length === 1
+                ? "No recipes yet. Set the canvas, name a recipe, press Capture."
+                : "No recipes yet. Pick a category, set the canvas, press capture.");
+        }
     }
 
     // The tree and the pane are separate paths on purpose: a slot-list change
