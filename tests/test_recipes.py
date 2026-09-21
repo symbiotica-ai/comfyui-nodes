@@ -281,8 +281,13 @@ class TestGenerate:
         assert a["id"] == again["id"]
         assert a["revision"] == 0
 
-    def test_the_workflow_name_is_the_prefix_plus_the_recipe(self):
-        assert workflow_name(project(), "appliance1x2") == "dev-imperia-bakery-appliance1x2"
+    def test_the_workflow_name_is_the_base_workflow_plus_the_recipe(self):
+        p = {**project(), "template": "recipe-test/bakery-template.json"}
+        assert workflow_name(p, "appliance1x2") == "recipe-test-bakery-template-appliance1x2"
+        # A `workflow_prefix` left in a project written before this is ignored:
+        # the base's name IS the prefix.
+        assert workflow_name({**p, "workflow_prefix": "dev-"}, "appliance1x2") \
+            == "recipe-test-bakery-template-appliance1x2"
 
 
 def subgraph_with_inner_string():
@@ -372,7 +377,7 @@ class TestPromoteStringInput:
             promote_string_input(workflow_with_instance(), "render", 2, "p", "recipe:p", pos=[0, 0])
 
 
-from _recipes import generate_all, list_projects, read_project
+from _recipes import NAMESPACE, generate_all, list_projects, read_project
 
 
 def write_json(path, data):
@@ -411,31 +416,67 @@ class TestRecipeLibrary:
             read_project(library["recipes"], "../secrets")
 
 
+# What `generate` names a workflow from `recipe-test/bakery-template.json`.
+GEN = "recipe-test-bakery-template"
+
+
 class TestGenerateAll:
     def test_writes_one_workflow_per_recipe_next_to_the_template(self, library):
+        # Named after the BASE and the recipe: a file called `appliance1x2.json`
+        # beside its source says nothing about which source made it.
         r = read_project(library["recipes"], "imperia-bakery")
         report = generate_all(library["workflows"], r)
         paths = [w["path"] for w in report["written"]]
-        assert paths == ["recipe-test/dev-imperia-bakery-appliance1x1.json",
-                         "recipe-test/dev-imperia-bakery-appliance1x2.json"]
+        assert paths == [f"recipe-test/{GEN}-appliance1x1.json",
+                         f"recipe-test/{GEN}-appliance1x2.json"]
         wf = json.load(open(os.path.join(library["workflows"], paths[1])))
         assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x2.png"
         assert report["written"][1]["recipe"] == "appliance1x2"
         assert report["written"][1]["applied"] == ["control_image", "grid", "pre_flip", "render", "render_aspect"]
 
-    def test_an_output_folder_in_the_recipe_wins_over_the_template_folder(self, library):
+    def test_an_output_folder_left_in_an_old_project_is_ignored(self, library):
+        # The base workflow is the source and its outputs sit beside it. The
+        # field was a second knob for the same rule and is gone; a value left
+        # in a project file written before that must not move the files.
         r = {**read_project(library["recipes"], "imperia-bakery"), "output": "bakery/generated"}
         report = generate_all(library["workflows"], r)
-        assert report["written"][0]["path"] == "bakery/generated/dev-imperia-bakery-appliance1x1.json"
+        assert report["written"][0]["path"] == f"recipe-test/{GEN}-appliance1x1.json"
         assert os.path.isfile(os.path.join(library["workflows"], report["written"][0]["path"]))
+
+    def test_a_prefix_left_in_an_old_project_is_ignored(self, library):
+        # Same: the base's name IS the prefix now.
+        r = {**read_project(library["recipes"], "imperia-bakery"),
+             "workflow_prefix": "dev-imperia-bakery-"}
+        report = generate_all(library["workflows"], r)
+        assert report["written"][0]["path"] == f"recipe-test/{GEN}-appliance1x1.json"
 
     def test_regenerating_overwrites_the_previous_file(self, library):
         r = read_project(library["recipes"], "imperia-bakery")
         generate_all(library["workflows"], r)
         r["recipes"]["appliance1x1"]["control_image"] = "changed.png"
         generate_all(library["workflows"], r)
-        wf = json.load(open(os.path.join(library["workflows"], "recipe-test/dev-imperia-bakery-appliance1x1.json")))
+        wf = json.load(open(os.path.join(library["workflows"], f"recipe-test/{GEN}-appliance1x1.json")))
         assert by_id(wf, 10)["widgets_values"][0] == "changed.png"
+
+    def test_names_the_file_the_old_naming_left_behind(self, library):
+        # His `appliance1x1.json` from before the rename is still in the folder
+        # and is not written any more: the name he has been opening all day
+        # would go on holding the graph it froze with.
+        # His own shape: no prefix, so the old name was the recipe alone.
+        r = {**read_project(library["recipes"], "imperia-bakery"), "workflow_prefix": ""}
+        old = os.path.join(library["workflows"], "recipe-test", "appliance1x1.json")
+        write_json(old, {"id": str(uuid.uuid5(NAMESPACE, "appliance1x1")), "nodes": []})
+        report = generate_all(library["workflows"], r)
+        assert report["stale"] == ["recipe-test/appliance1x1.json"]
+        assert os.path.isfile(old), "named, never deleted"
+
+    def test_a_workflow_he_wrote_himself_is_not_named(self, library):
+        # Ours is provable: a generated workflow's id is uuid5 over its own
+        # name. One he saved by hand carries the editor's and is left alone.
+        r = {**read_project(library["recipes"], "imperia-bakery"), "workflow_prefix": ""}
+        mine = os.path.join(library["workflows"], "recipe-test", "appliance1x1.json")
+        write_json(mine, {"id": "a6d1a0f2-0000-4000-8000-000000000000", "nodes": []})
+        assert generate_all(library["workflows"], r)["stale"] == []
 
     def test_a_project_without_a_template_is_refused(self, library):
         with pytest.raises(RecipeError, match="template"):
@@ -446,19 +487,16 @@ class TestGenerateAll:
         with pytest.raises(RecipeError, match="missing.json"):
             generate_all(library["workflows"], r)
 
-    def test_a_template_or_output_path_cannot_walk_out_of_the_workflows_dir(self, library):
+    def test_a_template_path_cannot_walk_out_of_the_workflows_dir(self, library):
         with pytest.raises(RecipeError):
             generate_all(library["workflows"], {**project(), "template": "../recipes/imperia-bakery.json"})
-        r = {**read_project(library["recipes"], "imperia-bakery"), "output": "../elsewhere"}
-        with pytest.raises(RecipeError):
-            generate_all(library["workflows"], r)
 
     def test_a_bad_recipe_value_fails_before_any_file_is_written(self, library):
         r = read_project(library["recipes"], "imperia-bakery")
         r["recipes"]["appliance1x2"]["pre_flip"] = "typo"
         with pytest.raises(RecipeError, match="typo"):
             generate_all(library["workflows"], r)
-        assert not os.path.exists(os.path.join(library["workflows"], "recipe-test/dev-imperia-bakery-appliance1x1.json"))
+        assert not os.path.exists(os.path.join(library["workflows"], f"recipe-test/{GEN}-appliance1x1.json"))
 
 
 from _recipes import new_project, project_name, read_template, template_slots, write_project
@@ -575,25 +613,30 @@ class TestWriteProject:
 class TestNewProject:
     def test_a_fresh_project_names_the_template_and_starts_shared_from_its_values(self, library):
         name, p = new_project(library["workflows"], "workflows/recipe-test/bakery-template.json")
-        assert name == "bakery-template"
-        assert p == {"template": "recipe-test/bakery-template.json", "output": "recipe-test",
-                     "workflow_prefix": "",
+        assert name == "recipe-test-bakery-template"
+        assert p == {"template": "recipe-test/bakery-template.json",
                      "shared": {"control_image": "old.png", "grid": 2, "pre_flip": False,
                                 "render": {"seed": 7, "lora_name": "old.safetensors", "strength_model": 0.5},
                                 "render_aspect": "1:1 (Square)"},
                      "recipes": {}}
 
-    def test_a_template_at_the_workflows_root_has_no_output_folder(self, library):
+    def test_a_project_carries_nothing_but_its_base_and_its_recipes(self, library):
+        # No `output` and no `workflow_prefix`: both were second knobs for one
+        # rule, which is "beside the base, named after it".
         write_json(os.path.join(library["workflows"], "root-template.json"), template())
-        _, p = new_project(library["workflows"], "root-template.json")
+        name, p = new_project(library["workflows"], "root-template.json")
+        assert name == "root-template"
         assert p["template"] == "root-template.json"
-        assert "output" not in p
+        assert "output" not in p and "workflow_prefix" not in p
 
-    def test_the_name_comes_from_the_library_slot_when_the_template_has_one(self):
-        slots = [{"key": "library", "kind": "scalar", "default": "studios/imperia/bakery", "widgets": 2}]
-        assert project_name("recipe-test/bakery-template.json", slots) == "imperia-bakery"
-        assert project_name("x.json", [{"key": "library", "kind": "scalar", "default": "", "widgets": 2}]) == "x"
-        assert project_name("x.json", [{"key": "library", "kind": "scalar", "default": "studios/", "widgets": 2}]) == "x"
+    def test_the_name_is_the_base_workflow_path_slugged(self):
+        # A project IS its base workflow. The FOLDER is in the name because two
+        # bases with the same file name in different folders would otherwise
+        # share one recipe table.
+        assert project_name("recipe-test/bakery-template.json") == "recipe-test-bakery-template"
+        assert project_name("workflows/October/Base Example.json") == "october-base-example"
+        assert project_name("x.json") == "x"
+        assert project_name("") == "project"
 
 
 from _recipes import delete_project

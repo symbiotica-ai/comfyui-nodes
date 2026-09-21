@@ -223,6 +223,33 @@ export function categoriesOf(node) {
                                                     { sensitivity: "base" }))];
 }
 
+// Every category the parsed MONTH holds, across all of its events, A-Z.
+//
+// `categoriesOf` above is a DROPDOWN's list and is scoped to the one event the
+// `feature` widget names — narrowing to a category another event holds would
+// offer a pick that runs nothing. The Recipes sidebar needs the other list:
+// the Task's category view walks the whole month, so an asset picked there can
+// name a recipe from any event in it, and a sidebar holding one event's worth
+// has no row to follow the wire to.
+export function monthCategories(node) {
+    const source = orderSource(node) ?? node;
+    const found = [];
+    const add = (category) => {
+        if (category && !found.includes(category)) found.push(category);
+    };
+    for (const event of source._symEvents ?? []) {
+        for (const a of event.assets ?? []) {
+            if (!String(a.assetName ?? "").trim()) continue;
+            add(categoryRecipeOf({ category: a.category, canvas: a.canvas }));
+        }
+    }
+    // A run's own list, which is all there is when the path resolves on the
+    // SERVER and the canvas never parsed the folder.
+    for (const category of node._symFocusCategories ?? []) add(category);
+    return found.sort((a, b) => a.localeCompare(b, undefined,
+                                                { sensitivity: "base" }));
+}
+
 // Put the order-reading widgets above the ones that narrow it, and the button
 // under all of them — a button between two dropdowns reads as a break in the
 // form. Order on screen is the order of `node.widgets`, and it is free to
@@ -804,14 +831,50 @@ const TASK_MIN_W = 560;
 // Widgets would shift the saved values of every workflow holding the node.
 const TASK_SIDE = "symbiotica_task_sidebar";
 const TASK_SHUT = "symbiotica_task_shut";
+// Which grouping the tree is showing. View state, so it rides on a property
+// like the width and the fold — a widget would shift the saved values of every
+// workflow already holding the node.
+const TASK_GROUP = "symbiotica_task_by_category";
 // The strip under the big view. Two-up on a retina panel, same as the focus
 // panel's rows, so a reference reads the same size wherever it is drawn.
 const STRIP_PX = 40;
 
-// The tree's four levels as one flat list of rows, top to bottom, in the order
-// the ORDER gives them: months calendar-wise from the server, events and
+// An event as the tree names it: the feature, and the client's own name for it.
+const eventLabel = (event) => (event.eventName
+    ? `${event.feature} — ${event.eventName}` : event.feature);
+
+// Named assets only, grouped the way `assets_by_category` groups them — the
+// panel has to show the run order it describes. The nine unnamed padding rows
+// in a real sheet are dropped here, exactly as Python drops them. `into` is
+// shared across events by the category view, which gathers the whole month.
+function groupAssets(assets, feature, into = new Map()) {
+    for (const a of assets ?? []) {
+        const name = String(a.assetName ?? "").trim();
+        if (!name) continue;
+        const key = categoryRecipeOf(a) || "uncategorised";
+        if (!into.has(key)) into.set(key, []);
+        into.get(key).push({
+            name, feature,
+            category: a.category ?? "",
+            canvas: a.canvas ?? "",
+            prompt: String(a.prompt ?? ""),
+            refs: (a.refFiles ?? []).map(String),
+        });
+    }
+    return into;
+}
+
+// The tree's levels as one flat list of rows, top to bottom, in the order the
+// ORDER gives them: months calendar-wise from the server, events and
 // categories in first-appearance order down the sheet. Never alphabetical —
 // `walkTree` sorts, and the sheet's order is the order he reads.
+//
+// TWO groupings of the same month. By EVENT is the sheet's own shape: month,
+// event, category, asset. By CATEGORY drops the event level and gathers every
+// asset of a type across the whole month — "so it's easier for me to test 10
+// decorations for example without skipping through events that contain that
+// type of asset". An asset row there says which event it came from, because
+// taking it moves the node to that event.
 //
 // Rows are built here rather than by `walkTree` for a second reason: that
 // function derives parentage from a slash-joined key, and his sheet holds
@@ -819,56 +882,64 @@ const STRIP_PX = 40;
 // is its own object; nothing is looked up by its path.
 function taskRows(node, state) {
     const rows = [];
+    const byCategory = !!node.properties?.[TASK_GROUP];
     const month = state.month || (state.months[0] ?? "");
+    const pick = String(widgetOf(node, "category")?.value ?? "").trim();
+    const chosen = String(widgetOf(node, "asset")?.value ?? "").trim();
+    // One category level, drawn the same in both groupings. `depth` is on the
+    // row because the category view has no event level to count.
+    const pushCategories = (groups, m, depth, relOf) => {
+        for (const [recipe, members] of groups) {
+            const holdsPick = members.some((a) => a.name === chosen);
+            const openCat = holdsPick
+                || recipe.toLowerCase() === pick.toLowerCase();
+            rows.push({ kind: "category", label: recipe, count: members.length,
+                        month: m, feature: members[0]?.feature ?? "",
+                        category: recipe, open: openCat, depth,
+                        rel: relOf(recipe) });
+            if (!openCat) continue;
+            for (const a of members) {
+                rows.push({ kind: "asset", label: a.name, asset: a,
+                            month: m, feature: a.feature, category: recipe,
+                            depth: depth + 1,
+                            // The event, after the name: two of them can hold
+                            // an asset of the same name, and taking one moves
+                            // the node to its event.
+                            note: byCategory ? featureKey(a.feature) : "",
+                            // The event only joins the path where it has to:
+                            // the event view already has it one level up, and
+                            // two assets whose names flatten to one path are
+                            // two rows there on purpose.
+                            rel: byCategory
+                                ? `${relOf(recipe)}/${a.feature}/${a.name}`
+                                : `${relOf(recipe)}/${a.name}` });
+            }
+        }
+    };
     for (const m of state.months) {
         const openMonth = m === month;
         rows.push({ kind: "month", label: m, month: m, open: openMonth,
-                    rel: m });
+                    depth: 0, rel: m });
         if (!openMonth) continue;
+        if (byCategory) {
+            const groups = new Map();
+            for (const event of state.events) {
+                groupAssets(event.assets, eventLabel(event), groups);
+            }
+            pushCategories(groups, m, 1, (recipe) => `${m}/${recipe}`);
+            continue;
+        }
         const wantFeature = featureKey(widgetOf(node, "feature")?.value);
         for (const event of state.events) {
             const key = featureKey(event.feature);
-            const label = event.eventName
-                ? `${event.feature} — ${event.eventName}` : event.feature;
+            const label = eventLabel(event);
             const openEvent = key === wantFeature
                 || (!wantFeature && event === state.events[0]);
             rows.push({ kind: "feature", label, month: m, feature: label,
-                        open: openEvent, rel: `${m}/${label}` });
+                        open: openEvent, depth: 1, rel: `${m}/${label}` });
             if (!openEvent) continue;
-            // Named assets only, and grouped the way `assets_by_category`
-            // groups them — the panel has to show the run order it describes.
-            // The nine unnamed padding rows in a real sheet are dropped here,
-            // exactly as Python drops them.
-            const groups = new Map();
-            for (const a of event.assets ?? []) {
-                const name = String(a.assetName ?? "").trim();
-                if (!name) continue;
-                const key2 = categoryRecipeOf(a) || "uncategorised";
-                if (!groups.has(key2)) groups.set(key2, []);
-                groups.get(key2).push({
-                    name,
-                    category: a.category ?? "",
-                    canvas: a.canvas ?? "",
-                    prompt: String(a.prompt ?? ""),
-                    refs: (a.refFiles ?? []).map(String),
-                });
-            }
-            const pick = String(widgetOf(node, "category")?.value ?? "").trim();
-            const chosen = String(widgetOf(node, "asset")?.value ?? "").trim();
-            for (const [recipe, members] of groups) {
-                const holdsPick = members.some((a) => a.name === chosen);
-                const openCat = holdsPick
-                    || recipe.toLowerCase() === pick.toLowerCase();
-                rows.push({ kind: "category", label: recipe, count: members.length,
-                            month: m, feature: label, category: recipe,
-                            open: openCat, rel: `${m}/${label}/${recipe}` });
-                if (!openCat) continue;
-                for (const a of members) {
-                    rows.push({ kind: "asset", label: a.name, asset: a,
-                                month: m, feature: label, category: recipe,
-                                rel: `${m}/${label}/${recipe}/${a.name}` });
-                }
-            }
+            pushCategories(groupAssets(event.assets, label), m, 2,
+                           (recipe) => `${m}/${label}/${recipe}`);
         }
     }
     return rows;
@@ -961,6 +1032,18 @@ function taskPanel(node) {
         render();
     }
 
+    // Two ways to read the same month, one click apart: the sheet's own shape,
+    // or every asset of a type across the events at once.
+    const groupButton = iconButton("layers", "Group by category", () => {
+        node.properties[TASK_GROUP] = !node.properties[TASK_GROUP];
+        render();
+    });
+    const syncGroupButton = () => {
+        const on = !!node.properties?.[TASK_GROUP];
+        groupButton.title = on ? "Group by event" : "Group by category";
+        groupButton.style.color = on ? HUB.ink : HUB.inkSubtle;
+    };
+
     const shell = sidebarShell(node, {
         sideProp: TASK_SIDE, shutProp: TASK_SHUT, sideDefault: 240,
         repaint: () => render(),
@@ -975,6 +1058,7 @@ function taskPanel(node) {
             },
         },
         headButtons: [
+            groupButton,
             iconButton("refresh", "Re-read this project's orders", () => {
                 // The button, not a second fetch: it is a real widget holding
                 // a saved slot, it renames itself while it reads, and two
@@ -1093,6 +1177,18 @@ function taskPanel(node) {
     // becomes its CATEGORY rather than nothing: an empty one closes the level
     // the row is on, which takes the row you just clicked off the screen.
     function chooseAsset(row) {
+        // In the category view an asset can be in an event the node is not on.
+        // Taking it moves the node there first — the same act as taking a
+        // search hit, which is the other way into an event off screen.
+        // Against the event the tree has OPEN, not against the widget: a blank
+        // `feature` means "whichever this order leads with", and the first
+        // event's own assets are not a hop.
+        const open = featureKey(widgetOf(node, "feature")?.value)
+            || featureKey(state.events[0]?.feature);
+        if (row.feature && featureKey(row.feature) !== open) {
+            chooseFound(row);
+            return;
+        }
         const held = String(widgetOf(node, "asset")?.value ?? "").trim();
         const same = held === row.label;
         put("asset", same ? "" : row.label);
@@ -1170,7 +1266,23 @@ function taskPanel(node) {
     function selectedRow(rows) {
         const chosen = String(widgetOf(node, "asset")?.value ?? "").trim();
         if (!chosen) return null;
-        return rows.find((r) => r.kind === "asset" && r.label === chosen) ?? null;
+        const hits = rows.filter((r) => r.kind === "asset" && r.label === chosen);
+        // Two events can hold an asset of the same name, and the category view
+        // lists both: the one the node is ON is the one the pane is about.
+        const held = featureKey(widgetOf(node, "feature")?.value);
+        return hits.find((r) => featureKey(r.feature) === held) ?? hits[0] ?? null;
+    }
+
+    // With a category picked and no asset, the pane shows the FIRST asset of
+    // that category. The run is still every asset in it — this is a PREVIEW,
+    // not a pick: no widget moves, the header goes on saying `every asset` and
+    // `runs N`, and the tree goes on highlighting the category. "there is no
+    // point in showing an empty screen".
+    function previewRow(rows) {
+        const narrow = String(widgetOf(node, "category")?.value ?? "").trim();
+        if (!narrow) return null;
+        return rows.find((r) => r.kind === "asset"
+            && String(r.category).toLowerCase() === narrow.toLowerCase()) ?? null;
     }
 
     // What the node would emit right now: the open event's named assets,
@@ -1193,6 +1305,10 @@ function taskPanel(node) {
 
     function drawPane(rows) {
         const row = selectedRow(rows);
+        // The first asset of the picked category stands in when none is
+        // chosen. Everything below draws `show`; everything that says what the
+        // node HOLDS still reads off `row`.
+        const show = row ?? previewRow(rows);
         const inRun = runList();
         const narrow = String(widgetOf(node, "category")?.value ?? "").trim();
         // Say what the node will actually emit, not just what is listed.
@@ -1207,7 +1323,7 @@ function taskPanel(node) {
         view.replaceChildren(shown);
         promptBox.replaceChildren();
 
-        if (!row) {
+        if (!show) {
             view.appendChild(emptyState(inRun.length
                 ? "Pick an asset in the tree."
                 : "No assets to show yet."));
@@ -1215,28 +1331,30 @@ function taskPanel(node) {
             return;
         }
 
-        const files = refsFor(row);
+        const files = refsFor(show);
         const armed = String(widgetOf(node, "ref")?.value ?? "").trim();
         const lit = files.includes(armed) ? armed : files[0];
         if (!files.length || !refsRoot()) {
             strip.appendChild(emptyState("no client reference for this asset"));
             view.appendChild(emptyState("nothing to show"));
         } else {
-            for (const file of files) strip.appendChild(refTile(row, file, file === lit));
+            for (const file of files) strip.appendChild(refTile(show, file, file === lit));
             const path = `${refsRoot()}/${lit}`;
             shown.src = imageFullUrl(path);
             shown.style.display = "";
             shown.title = lit;
             attachHoverZoom(shown, () => ({
                 w: shown.naturalWidth, h: shown.naturalHeight,
-                label: row.label, hint: lit,
+                label: show.label, hint: lit,
                 placeholder: shown.src,
                 src: () => imageFullUrl(path),
             }));
         }
-        promptHead.textContent = `client prompt${row.asset?.canvas
-            ? ` · ${row.asset.canvas}` : ""}`;
-        const text = promptFor(row);
+        // On a preview the prompt belongs to ONE asset while the header above
+        // says `every asset`, so it says which one.
+        promptHead.textContent = `client prompt${row ? "" : ` · ${show.label}`}`
+            + `${show.asset?.canvas ? ` · ${show.asset.canvas}` : ""}`;
+        const text = promptFor(show);
         promptBox.appendChild(text
             ? el("div", "", text)
             : emptyState("no prompt on this row"));
@@ -1244,6 +1362,7 @@ function taskPanel(node) {
 
     function render() {
         readState();
+        syncGroupButton();
         hideHoverZoom();
         // Ask for whichever half has not arrived. Both are one-shot at node
         // creation and only a TYPED project_path re-fires them; a path that
@@ -1275,14 +1394,17 @@ function taskPanel(node) {
                         && row.category.toLowerCase() === narrow.toLowerCase());
                 tree.appendChild(treeRow({
                     kind: row.kind, rel: row.rel,
-                    depth: ["month", "feature", "category", "asset"].indexOf(row.kind),
+                    depth: row.depth
+                        ?? ["month", "feature", "category", "asset"].indexOf(row.kind),
                     tone: on ? HUB.selBg : "",
                     labelColour: on ? HUB.selInk : `var(--input-text, ${HUB.ink})`,
                     lead: chevron(row),
                     // The count rides in the label: `treeRow` hides its
                     // `actions` until the pointer is on the row, and a badge
-                    // you have to hover for is a badge nobody reads.
-                    label: row.count ? `${row.label} · ${row.count}` : row.label,
+                    // you have to hover for is a badge nobody reads. The
+                    // category view says the event the same way.
+                    label: row.count ? `${row.label} · ${row.count}`
+                        : row.note ? `${row.label} · ${row.note}` : row.label,
                     onClick: () => {
                         if (row.kind === "month") chooseMonth(row);
                         else if (row.kind === "feature") chooseFeature(row);

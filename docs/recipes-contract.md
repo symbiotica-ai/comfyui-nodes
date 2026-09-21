@@ -38,16 +38,47 @@ The rule everything else follows from:
   the same act as clicking that category in the Task tree.
 - The recipe you LEAVE is written first — the one the canvas is actually on,
   which with `auto` running is not always the one on screen.
+- **The pane goes on following the wire after a pick**, because a pick POINTS
+  the wire: the two agree from that moment. Only a pick the wire could not
+  follow is his alone and left where he put it. A wire that moves to a name
+  this project has no row for does not end the follow either — the pane waits
+  for the next name it can show.
 - `new recipe` asks for a name and writes the canvas into it: the same act as
   picking an asset in Task, with the name typed instead of arriving on a wire.
 - The project row is the project's settings and sets no slot, so it stays a view.
-- **Every category the wired order holds is a row from the start**, marked while
-  nothing is stored for it — you have to go through all of them anyway. Picking
+- **Every category the parsed MONTH holds is a row from the start**, across all
+  of its events, marked while nothing is stored for it — you have to go through
+  all of them anyway. The month, not the open event: the Task's category view
+  walks the whole month, so an asset picked there names a recipe from any event
+  in it, and a sidebar holding one event's worth has no row to follow to. Picking
   one points the wire at it and puts shared on the canvas; it becomes a recipe
   the moment something is captured into it, and until then it is never written
   to the file: an empty block per category is a workflow per category at full
   price. Looking at one writes nothing. A category the order stops naming takes
   its empty row with it; one that holds values is a recipe and stays.
+
+## 3b. A project IS its base workflow
+
+- One project per base workflow, named after it: `october/base_example.json` is
+  `october-base-example`, folder included, because two bases with the same file
+  name in different folders would otherwise share one recipe table. A project is
+  resolved by its `template`, never by its name, so a file named some other way
+  goes on working.
+- `generate workflows` writes one real workflow per recipe BESIDE the base,
+  named `<project>-<recipe>.json`, both halves lowercase with dashes. A file
+  called `appliance-1x2.json` next to its source says nothing about which
+  source made it.
+- A project holds its base, `shared` and its recipes. Nothing else: `output`
+  and `workflow_prefix` were a second and third knob for one rule, and a value
+  left in an older file is ignored and dropped on the next save.
+- Opening a generated workflow finds no project, which is right: it is an
+  output, not a source.
+- A file this project wrote under an older naming rule is NAMED in the generate
+  toast, never deleted — it is a workflow in his folder like any other, and a
+  name he has been opening all day that quietly stopped being regenerated has
+  to be said out loud. Ours is provable: a generated workflow's `id` is uuid5
+  over its own name, so one he saved by hand carries the editor's id and is
+  left alone.
 
 ## 4. Loading puts it back exactly
 
@@ -126,7 +157,7 @@ told the rest:
 | F6 | Unpainting the last slot left the old rows on screen | `syncSlots` guards on "the graph has no nodes", not "no slots found" |
 | F7 | A canvas with nothing painted looked identical to a broken `match_color` | The status line names which of the two it is |
 
-Counts at 2026-09-21: 435 JS, 934 Python. G1-G5 were reproduced against his
+Counts at 2026-09-21: 449 JS, 937 Python. G1-G5 were reproduced against his
 own project file and his node shapes; none has been watched on the Modal canvas.
 G6 was reproduced and fixed in a real browser on his own workflow and project
 file, on the local install.

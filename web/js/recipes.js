@@ -18,7 +18,7 @@ import { askForName, findSource, graphScope, slotName } from "./find_node.js";
 // The panel hides the widgets its head drives, exactly as the Task node
 // does. `hideWidget` is exported from there and imported by three other
 // panels; a second copy of it is how they drift.
-import { ALL_CATEGORIES, assetRecipeOf, categoriesOf, hideWidget } from "./asset_focus.js";
+import { assetRecipeOf, hideWidget, monthCategories } from "./asset_focus.js";
 
 const NODE_CLASS = "SymbioticaRecipe";
 const SHARED = "shared";
@@ -491,15 +491,10 @@ export function projectToTable(project, slots) {
         row.cells = {};
         for (const column of columns) row.cells[column] = cellText(valuesOf(column)[row.key]);
     }
-    return {
-        header: {
-            template: project?.template ?? "",
-            output: project?.output ?? "",
-            workflow_prefix: project?.workflow_prefix ?? "",
-        },
-        columns,
-        rows,
-    };
+    // The base workflow is the whole header. `output` and `workflow_prefix`
+    // were two more knobs for one rule — beside the base, named after it —
+    // and are gone; a value left in an old file is ignored on both sides.
+    return { header: { template: project?.template ?? "" }, columns, rows };
 }
 
 // `offered` names the columns that are only there because the ORDER holds that
@@ -509,9 +504,9 @@ export function projectToTable(project, slots) {
 // file already holds is never dropped, empty or not — an empty one is his.
 export function tableToProject(base, table, slots, offered = null) {
     const byKey = Object.fromEntries(slots.map((s) => [s.key, s]));
-    const out = { ...base, template: table.header.template, workflow_prefix: table.header.workflow_prefix };
-    if (table.header.output) out.output = table.header.output;
-    else delete out.output;
+    const out = { ...base, template: table.header.template };
+    delete out.output;
+    delete out.workflow_prefix;
     const columnValues = {};
     for (const column of table.columns) {
         const values = {};
@@ -746,7 +741,16 @@ export function generateSummary(report) {
     const note = keys.length
         ? ` Ignored, no slot in the template: ${keys.map((k) => `${k} (${ignored[k].join(", ")})`).join(", ")}.`
         : "";
-    return { summary, detail: detail + note };
+    // Files this project wrote under the OLD naming and no longer maintains.
+    // Nothing is deleted — they are workflows in his folder like any other —
+    // but a name he has been opening all day that quietly stopped being
+    // regenerated has to be said out loud.
+    const stale = report?.stale ?? [];
+    const left = stale.length
+        ? ` Left from the old naming and no longer written: ${stale.join(", ")}.`
+          + " Delete them, or they go on holding the graph they froze with."
+        : "";
+    return { summary, detail: detail + note + left };
 }
 
 
@@ -960,7 +964,8 @@ function recipePanel(node) {
     actionBar.append(autoWrap, el("div", "flex:1;"), saveButton, generateButton,
                      deleteButton);
 
-    // The three PROJECT fields, shown under the project row only.
+    // The project's own field — its base workflow — shown under the project
+    // row only.
     const headerInputs = {};
     function headerField(label, key, placeholder) {
         const wrap = el("label", "display:flex;align-items:center;gap:6px;"
@@ -982,9 +987,9 @@ function recipePanel(node) {
     }
     const headerBox = el("div", "display:flex;gap:8px;flex-wrap:wrap;flex:none;"
         + `padding:6px 8px;border-bottom:1px solid ${HUB.hairline};`);
-    headerBox.append(headerField("template", "template", "folder/template.json"),
-                     headerField("output", "output", "folder (default: the template's)"),
-                     headerField("prefix", "workflow_prefix", "dev-imperia-bakery-"));
+    // The base workflow this project belongs to, and the only repair after a
+    // Save As: `projectForWorkflow` matches the open workflow against it.
+    headerBox.append(headerField("base workflow", "template", "folder/base_example.json"));
 
     const rowsBox = el("div", "flex:1;min-height:0;overflow:auto;padding:2px 8px 8px;");
     rowsBox.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
@@ -1377,8 +1382,7 @@ function recipePanel(node) {
     function syncCategories() {
         if (!state.table) return;
         const source = focusBehind(liveGraph(), node, "recipe");
-        const names = (source ? categoriesOf(source) : [])
-            .filter((label) => label !== ALL_CATEGORIES)
+        const names = (source ? monthCategories(source) : [])
             .map((label) => recipeSlug(label))
             .filter(Boolean);
         const sig = names.join("\u0000");
@@ -1425,10 +1429,15 @@ function recipePanel(node) {
         // picked by hand is his, and the wire leaves it alone.
         const follows = picked() === SHARED
             || (autoSelected !== null && picked() === autoSelected);
-        autoSelected = null;
+        // A name this project has no row for does not END the follow: the pane
+        // stays where it is until the wire names one it can show. Dropping the
+        // arm there is how one hop past an unlisted category left the pane
+        // behind for the rest of the session.
         if (follows && next && state.table.columns.includes(next)) {
             pickRow(next);
             autoSelected = next;
+        } else if (!follows) {
+            autoSelected = null;
         }
         renderAll();
     }
@@ -1460,7 +1469,9 @@ function recipePanel(node) {
         // options: Task's `category` is a plain text widget its tree writes,
         // so reading options there found no label and the pick set nothing —
         // then auto read the old name off the wire and pulled the canvas back.
-        const label = categoriesOf(source).find((l) => recipeSlug(l) === column);
+        // The MONTH's list, which is the one the sidebar's rows come from: a
+        // row it offers has to be a row it can point the wire at.
+        const label = monthCategories(source).find((l) => recipeSlug(l) === column);
         if (!label) return ` Nothing on ${source.title ?? source.type} is called ${column}.`;
         if (widget.value !== label) {
             widget.value = label;
@@ -1509,6 +1520,12 @@ function recipePanel(node) {
         // would write one recipe per click.
         auto.last = { name: column,
                       sig: slotSignature(liveSlotValues(liveGraph(), matchColor())) };
+        // And the pane goes on following the wire. `active` above is where the
+        // wire WAS, and a pick MOVES it — so comparing against it disarmed the
+        // follow on every click and the pane then sat on one recipe while the
+        // Task walked through the others. What matters is whether the wire
+        // names this row now: if it does, the two agree and the pane keeps up.
+        if (activeColumn() === column) autoSelected = row;
         if (note) status(statusLine.textContent + note, false);
     }
 
@@ -1647,9 +1664,10 @@ function recipePanel(node) {
         const rows = [];
         if (state.table) {
             rows.push({ kind: "project", rel: PROJECT_ROW, depth: 0,
-                        label: state.name, hint: "The project: its template, "
-                            + "its output folder, its prefix, and the values "
-                            + "every recipe takes." });
+                        label: state.name, hint: "The project: its base "
+                            + "workflow, and the values every recipe takes. "
+                            + "Its workflows are written beside the base, "
+                            + "named after it." });
             const stored = storedColumns();
             for (const column of state.table.columns) {
                 const shared = column === SHARED;
@@ -1766,7 +1784,7 @@ function recipePanel(node) {
 
         const autoWidget = node.widgets?.find((w) => w.name === "auto");
         autoBox.checked = !!autoWidget?.value;
-        for (const key of ["template", "output", "workflow_prefix"]) {
+        for (const key of ["template"]) {
             const input = headerInputs[key];
             const value = state.table?.header?.[key] ?? "";
             if (input !== caret() && input.value !== value) input.value = value;

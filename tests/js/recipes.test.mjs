@@ -14,8 +14,11 @@ const slots = [
     { key: "render", kind: "dict", default: { lora_name: "old.safetensors", strength_model: 0.5 }, widgets: 2 },
 ];
 
+// A project as it is written now: the base workflow and the recipes, nothing
+// else. `output` and `workflow_prefix` are gone — one rule, beside the base
+// and named after it — and a value left in an older file is dropped on save.
 const project = () => ({
-    template: "recipe-test/bakery-template.json", output: "recipe-test", workflow_prefix: "dev-imperia-bakery-",
+    template: "recipe-test/bakery-template.json",
     shared: { render: { lora_name: "bakery.safetensors" } },
     recipes: {
         appliance1x1: { control_image: "a.png", grid: [2, 1], pre_flip: false },
@@ -88,15 +91,20 @@ test("edits land in the right column, empty cells drop the key, and a new column
     table.rows.find((x) => x.key === "pre_flip").cells.appliance1x1 = "";
     table.columns.push("chair");
     table.rows.find((x) => x.key === "control_image").cells.chair = "chair.png";
-    table.header = { template: "t.json", output: "out", workflow_prefix: "p-" };
+    table.header = { template: "t.json" };
     const out = tableToProject(r, table, slots);
     assert.equal(out.recipes.appliance1x2.control_image, "c.png");
     assert.equal("pre_flip" in out.recipes.appliance1x1, false);
     assert.deepEqual(out.recipes.chair, { control_image: "chair.png" });
     assert.equal(out.template, "t.json");
-    assert.equal(out.output, "out");
-    assert.equal(out.workflow_prefix, "p-");
     assert.deepEqual(Object.keys(out.recipes), ["appliance1x1", "appliance1x2", "chair"]);
+});
+
+test("a project written before the rule loses its output and prefix on save", () => {
+    const old = { ...project(), output: "recipe-test", workflow_prefix: "dev-" };
+    const out = tableToProject(old, projectToTable(old, slots), slots);
+    assert.equal("output" in out, false);
+    assert.equal("workflow_prefix" in out, false);
 });
 
 test("a bad cell names its row and column", () => {
@@ -116,6 +124,18 @@ test("the generate toast names every file written and where edits belong", () =>
     assert.match(detail, /appliance1x1\.json, recipe-test\/dev-imperia-bakery-appliance1x2\.json\./);
     assert.match(detail, /Edits belong in the template or the recipe/);
     assert.equal(generateSummary({ template: "t.json", written: [] }).detail, "The project has no recipes.");
+});
+
+test("the summary names the files the old naming left behind", () => {
+    const { detail } = generateSummary({
+        template: "base_example.json",
+        written: [{ path: "base-example-appliance1x2.json", recipe: "appliance1x2" }],
+        stale: ["appliance1x2.json"],
+    });
+    assert.match(detail, /Left from the old naming and no longer written: appliance1x2\.json\./);
+    assert.match(detail, /go on holding the graph they froze with/);
+    assert.doesNotMatch(
+        generateSummary({ template: "t.json", written: [], stale: [] }).detail, /Left from/);
 });
 
 test("the summary names the values the template had no slot for", () => {

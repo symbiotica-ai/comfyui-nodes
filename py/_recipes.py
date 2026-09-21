@@ -307,7 +307,12 @@ def apply_recipe(workflow: dict, values: dict, color=None, display=None) -> dict
 # --------------------------------------------------------------- generate --
 
 def workflow_name(project: dict, recipe: str) -> str:
-    return f"{project.get('workflow_prefix', '')}{recipe}"
+    """What a generated workflow is called: the base workflow plus the recipe.
+    `october/base_example.json` + `appliance-1x2` is
+    `october-base-example-appliance-1x2`. The base is in the name because a
+    file called `appliance-1x2.json` beside its source says nothing about
+    which source made it."""
+    return f"{project_name(project.get('template'))}-{recipe}"
 
 
 def generate(template: dict, project: dict, recipe: str, display=None) -> tuple[dict, dict]:
@@ -449,7 +454,6 @@ def template_slots(workflow: dict, color=None, display=None) -> list[dict]:
 
 RECIPES_DIRNAME = "recipes"
 WORKFLOWS_PREFIX = "workflows/"
-LIBRARY_ROOT = "studios/"
 
 
 def _template_rel(rel) -> str:
@@ -494,42 +498,41 @@ def delete_project(dir_: str, name: str) -> bool:
     return True
 
 
-def project_name(template_rel, slots: list[dict]) -> str:
-    """What a new project is called: the template's `library` slot with the
-    studios root dropped and slashes to dashes (`studios/imperia/bakery` is
-    `imperia-bakery`), else the template's own file name."""
-    library = next((s["default"] for s in slots if s["key"] == "library"), None)
-    if isinstance(library, str) and library.strip():
-        rel = library.strip().lstrip("/")
-        if rel.startswith(LIBRARY_ROOT):
-            rel = rel[len(LIBRARY_ROOT):]
-        name = safe_project_name(rel.strip("/").replace("/", "-"))
-        if name:
-            return name
-    stem = os.path.splitext(os.path.basename(_template_rel(template_rel)))[0]
-    return safe_project_name(stem) or "project"
+def slugify(text) -> str:
+    """The shape a name takes on disk: lowercase, apostrophes dropped, one dash
+    where anything else non-alphanumeric was. The same rule `recipeSlug` gives
+    a recipe on the canvas — the two are parallel and change together."""
+    out = str(text or "").lower().replace("'", "").replace("\u2019", "")
+    return re.sub(r"[^a-z0-9._]+", "-", out).strip("-")
 
 
-def safe_project_name(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(name or "")).strip("-.")
+def project_name(template_rel) -> str:
+    """A project IS its base workflow, so it is named after it: the path under
+    the workflows folder, slugged, with the extension gone —
+    `October/Base Example.json` is `october-base-example`.
+
+    The FOLDER is in the name because two bases with the same file name in
+    different folders would otherwise share one recipe table. A project is
+    looked up by its `template`, never by its name, so a file named some other
+    way (this used to read the template's `library` slot) goes on working."""
+    rel = _template_rel(template_rel)
+    if rel.lower().endswith(".json"):
+        rel = rel[:-len(".json")]
+    return slugify(rel.replace("/", "-")) or "project"
 
 
 def new_project(workflows_dir: str, template_rel, color=None) -> tuple[str, dict]:
-    """A project for one template, named from it, with the shared block
-    started from the template's own values, no recipes yet, output beside
-    the template."""
+    """A project for one template, named after it, with the shared block
+    started from the template's own values and no recipes yet. Its workflows
+    are written beside the template; there is nowhere else to put them."""
     rel = _template_rel(template_rel)
     slots = template_slots(read_template(workflows_dir, rel), color)
     project = {"template": rel}
-    folder = os.path.dirname(rel)
-    if folder:
-        project["output"] = folder
     if str(color or "").strip():
         project["match_color"] = str(color).strip()
-    project.update({"workflow_prefix": "",
-                    "shared": {s["key"]: copy.deepcopy(s["default"]) for s in slots if s["default"] is not None},
+    project.update({"shared": {s["key"]: copy.deepcopy(s["default"]) for s in slots if s["default"] is not None},
                     "recipes": {}})
-    return project_name(rel, slots), project
+    return project_name(rel), project
 
 
 def projects_dir() -> str:
@@ -589,23 +592,55 @@ def list_projects(dir_: str) -> list[dict]:
 
 
 def generate_all(workflows_dir: str, project: dict, display=None, only=None) -> dict:
-    """Every recipe of one project, written beside its template (or into the
-    project's `output` folder). Every workflow is generated before any is
-    written, so a bad row leaves the folder as it was."""
+    """Every recipe of one project, written BESIDE its base workflow — the
+    base is the source and its outputs sit next to it. Every workflow is
+    generated before any is written, so a bad row leaves the folder as it
+    was."""
     template = read_template(workflows_dir, project.get("template"))
-    output_rel = project.get("output") or os.path.dirname(_template_rel(project.get("template")))
+    output_rel = os.path.dirname(_template_rel(project.get("template")))
     output_dir = _under(workflows_dir, output_rel, "output folder") if output_rel else workflows_dir
     written = []
+    stale = []
     wanted = [r for r in (project.get("recipes") or {}) if only is None or r == only]
     if only is not None and not wanted:
         raise RecipeError(f"project has no recipe {only!r}")
     for recipe in wanted:
         workflow, report = generate(template, project, recipe, display)
-        filename = f"{workflow_name(project, recipe)}.json"
+        name = workflow_name(project, recipe)
+        filename = f"{name}.json"
         rel = f"{output_rel}/{filename}" if output_rel else filename
         written.append({"path": rel, "recipe": recipe, "workflow": workflow, **report})
+        was = _left_behind(output_dir, project, recipe, name)
+        if was:
+            stale.append(f"{output_rel}/{was}" if output_rel else was)
     os.makedirs(output_dir, exist_ok=True)
     for item in written:
         with open(os.path.join(output_dir, os.path.basename(item["path"])), "w", encoding="utf-8") as f:
             json.dump(item.pop("workflow"), f, indent=2)
-    return {"template": project.get("template"), "written": written}
+    return {"template": project.get("template"), "written": written, "stale": stale}
+
+
+def _left_behind(output_dir: str, project: dict, recipe: str, name: str):
+    """The file this recipe was written to before the naming changed, if it is
+    still there and still ours. Nothing is deleted — they are workflow files in
+    his folder like any other — but a name he has been opening all day that
+    quietly stopped being regenerated has to be said out loud.
+
+    Ours is provable: a generated workflow's `id` is uuid5 over its own name,
+    so a file whose id matches the name it carries was written by this
+    generator. One he made himself carries the editor's own id and is left
+    alone."""
+    old = f"{project.get('workflow_prefix', '')}{recipe}"
+    if old == name:
+        return None
+    path = os.path.join(output_dir, f"{old}.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            was = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(was, dict):
+        return None
+    return f"{old}.json" if str(was.get("id") or "") == str(uuid.uuid5(NAMESPACE, old)) else None

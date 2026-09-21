@@ -280,6 +280,79 @@ test("two rows that flatten to one path stay two rows, where they belong",
     assert.equal(rows(node).filter((r) => r._sym.rel === shared).length, 2);
 });
 
+// --- the two groupings ---------------------------------------------------------
+
+const groupToggle = (node) =>
+    button(node, "Group by category") ?? button(node, "Group by event");
+
+test("grouped by category, the month's events collapse into one list of types",
+     async () => {
+    // "so it's easier for me to test 10 decorations for example without
+    // skipping through events that contain that type of asset".
+    const node = await taskNode();
+    await click(groupToggle(node));
+    assert.deepEqual(labels(node),
+                     [OCT, "Wallpaper · 2", "Appliance 1x2 · 1",
+                      "Food - 3 stages · 1", NOV, DEC]);
+    // No event level: a category sits directly under the month.
+    assert.deepEqual(kinds(node),
+                     ["month", "category", "category", "category", "month", "month"]);
+    assert.deepEqual(rows(node).map(depthOf), [0, 1, 1, 1, 0, 0]);
+    assert.equal(button(node, "Group by event")?.title, "Group by event",
+                 "and the button says the way back");
+});
+
+test("a category gathers its assets from every event, each saying which",
+     async () => {
+    const node = await taskNode();
+    await click(groupToggle(node));
+    await click(rowFor(node, `${OCT}/Food - 3 stages`));
+    assert.deepEqual(labels(node).filter((l) => l.includes("Cupcake")),
+                     ["Ghost Cupcake · Mini 1"]);
+});
+
+test("taking an asset from another event moves the node to that event",
+     async () => {
+    // The tree does not move under him — the category view shows every event
+    // at once — but the widgets do, or the queue would build the wrong one.
+    const node = await taskNode({ feature: FEAST });
+    await click(groupToggle(node));
+    await click(rowFor(node, `${OCT}/Food - 3 stages`));
+    await click(rowFor(node, `${OCT}/Food - 3 stages/${GHOSTS}/Ghost Cupcake`));
+    assert.equal(widget(node, "feature").value, GHOSTS);
+    assert.equal(widget(node, "asset").value, "Ghost Cupcake");
+    assert.equal(widget(node, "category").value, "", "a name decides it now");
+    assert.equal(crumb(node), `${OCT} / ${GHOSTS} / Food - 3 stages / Ghost Cupcake`);
+});
+
+test("an asset in the event the tree is already on is not a hop", async () => {
+    const node = await taskNode({ feature: FEAST });
+    await click(groupToggle(node));
+    await click(rowFor(node, `${OCT}/Wallpaper`));
+    await click(rowFor(node, `${OCT}/Wallpaper/${FEAST}/Skull Wallpaper`));
+    assert.equal(widget(node, "feature").value, FEAST);
+    assert.equal(widget(node, "asset").value, "Skull Wallpaper");
+    // Clicking it again clears it, the same as in the event view.
+    await click(rowFor(node, `${OCT}/Wallpaper/${FEAST}/Skull Wallpaper`));
+    assert.equal(widget(node, "asset").value, "");
+    assert.equal(widget(node, "category").value, "Wallpaper");
+});
+
+test("the grouping rides on a property, so a saved workflow reopens on it",
+     async () => {
+    const node = await taskNode();
+    await click(groupToggle(node));
+    assert.equal(node.properties.symbiotica_task_by_category, true);
+    assert.ok(!node.widgets.some((w) => w.name?.includes("categor")
+                                     && w.name !== "category"),
+              "a widget here would shift every saved value after it");
+    await click(groupToggle(node));
+    assert.equal(node.properties.symbiotica_task_by_category, false);
+    assert.deepEqual(labels(node),
+                     [OCT, FEAST, "Wallpaper · 2", "Appliance 1x2 · 1", GHOSTS,
+                      NOV, DEC]);
+});
+
 // --- what a click writes ------------------------------------------------------
 
 test("clicking an event moves to it and drops everything chosen in the last one",
@@ -398,6 +471,37 @@ test("the count is the event's, not the rows that happen to be open",
     assert.equal(rows(node).filter((r) => r._sym.kind === "asset").length, 0);
     assert.equal(runs(node), "runs 3");
     assert.equal(textOf(main(node).children[2]), "Pick an asset in the tree.");
+});
+
+test("picking a category shows its first asset, without picking it", async () => {
+    // "there is no point in showing an empty screen". The run is still every
+    // asset in the category — the preview moves no widget.
+    const node = await taskNode();
+    await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper`));
+    assert.equal(widget(node, "category").value, "Wallpaper");
+    assert.equal(widget(node, "asset").value, "", "a preview is not a pick");
+    assert.equal(runs(node), "runs 2", "and the run is still the category's");
+    assert.equal(crumb(node), "Wallpaper · every asset");
+    assert.match(shown(node).src,
+                 new RegExp(encodeURIComponent(`${REFS}/skull-wall-a.png`)));
+    assert.equal(promptHead(node), "client prompt · Skull Wallpaper");
+    assert.match(promptText(node), /dusty rose wallpaper/);
+});
+
+test("clicking a reference on a previewed asset is what picks it", async () => {
+    const node = await taskNode();
+    await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper`));
+    await click(tileFor(node, "skull-wall-b.png"));
+    assert.equal(widget(node, "asset").value, "Skull Wallpaper");
+    assert.equal(widget(node, "ref").value, "skull-wall-b.png");
+    assert.equal(runs(node), "runs 1");
+});
+
+test("a category with nothing under it still says so", async () => {
+    // The preview only stands in for a category that HAS an asset; the empty
+    // state is still the answer when there is nothing to stand in.
+    const node = await taskNode({ category: "Nothing Like This" });
+    assert.equal(textOf(main(node).children[2]), "No assets to show yet.");
 });
 
 // --- the reference is the pick -------------------------------------------------

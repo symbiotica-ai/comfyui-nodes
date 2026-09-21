@@ -22,7 +22,7 @@ const SLOTS = [
 ];
 
 const PROJECT = () => ({
-    template: TEMPLATE, output: "out", workflow_prefix: "dev-symtest-",
+    template: TEMPLATE,
     match_color: "purple",
     shared: { backdrop: "floor-1x1.png", preamble: "a bakery",
               grid: { width: 1024, height: 1024 } },
@@ -352,15 +352,16 @@ test("the search finds a recipe the tree would make you scroll for", async () =>
 
 // ==================================================================== pane ==
 
-test("the project row's pane is template, output and prefix over shared's values",
+test("the project row's pane is its base workflow over shared's values",
      async () => {
     // `template` is what the project is resolved by, and the only repair after
-    // a Save As — so it has to stay reachable.
+    // a Save As — so it has to stay reachable. It is the whole header: a
+    // project IS its base workflow, and there is nothing else to say about it.
     const node = await recipeNode();
     await click(rowFor(node, ":project"));
     assert.equal(headerField(node, "template").value, TEMPLATE);
-    assert.equal(headerField(node, "output").value, "out");
-    assert.equal(headerField(node, "workflow_prefix").value, "dev-symtest-");
+    assert.equal(headerField(node, "output"), undefined);
+    assert.equal(headerField(node, "workflow_prefix"), undefined);
     assert.deepEqual(cellKeys(node),
                      ["KSampler", "backdrop", "grid", "pre_flip", "preamble"]);
     assert.equal(fieldFor(node, "backdrop").value, "floor-1x1.png");
@@ -1038,6 +1039,71 @@ test("the recipe the WIRE loaded is the one a switch writes back, not the picked
     assert.deepEqual(state(node).appliance1x2, before,
                      "the recipe that was merely on screen was not written");
     assert.notEqual(state(node).appliance1x2.backdrop, "wire.png");
+});
+
+test("a recipe picked by hand keeps following the Task afterwards", async () => {
+    // Picking a row POINTS the wire at it, so the pane and the wire agree from
+    // that moment — and the pane has to go on following. Comparing the click
+    // against where the wire WAS disarmed the follow on every click, and the
+    // pane then sat on one recipe while the Task walked through the others.
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "appliance1x2"));
+    assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x2");
+    await draw(node);
+    // The Task moves on its own, the way picking an asset in its tree does.
+    task.widgets[0].value = "Appliance1x1";
+    await draw(node);
+    assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x1",
+                 "the pane followed the wire");
+});
+
+test("the sidebar offers the MONTH's categories, not the open event's", async () => {
+    // The Task's category view walks every event of the month, so an asset
+    // picked there can name a recipe from any of them. A sidebar holding one
+    // event's worth has no row for the wire to move to, and the pane is left
+    // behind on the first hop.
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    task._symEvents.push({
+        feature: "Mini 1", eventName: "Ghostly Goodies",
+        assets: [{ assetName: "Ghost Cupcake", category: "Mini Banner", canvas: "" }],
+    });
+    await draw(node);
+    assert.ok(rowFor(node, "mini-banner"), "a category from the event next door");
+});
+
+test("a wire that names no row leaves the pane, and it follows the next one",
+     async () => {
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "appliance1x2"));
+    await draw(node);
+    task.widgets[0].value = "Something Else";
+    await draw(node);
+    assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x2",
+                 "the pane stays where it is rather than following nowhere");
+    task.widgets[0].value = "Appliance1x1";
+    await draw(node);
+    assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x1",
+                 "and picks up the next name it can show");
+});
+
+test("a pick the wire could not follow leaves the pane where he put it",
+     async () => {
+    // The other half of the same rule: nothing on the Task is called `zebra`,
+    // so the wire never moved and the pane is showing his choice, not the
+    // wire's. It must not be dragged off it.
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "zebra"));
+    await draw(node);
+    task.widgets[0].value = "Appliance1x2";
+    await draw(node);
+    assert.equal(node.properties.symbiotica_recipes_pick, "zebra");
 });
 
 // =========== the order's categories, as rows before they are recipes =========

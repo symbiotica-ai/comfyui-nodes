@@ -307,12 +307,18 @@ A painted slot node is captured whole, not by its first widget
 
 ## Storing a recipe — the table, and the two sides that must agree
 
-A project is a small JSON file in `user/default/recipes/`, bound to ONE template
-workflow by path. It holds `shared` plus one block per recipe, keyed by the
-painted node's TITLE. Capture reads the canvas and stores only what differs from
+A project is a small JSON file in `user/default/recipes/`, bound to ONE base
+workflow by path and named after it. It holds `template` plus `shared` plus one
+block per recipe, keyed by the painted node's TITLE — and NOTHING else: `output`
+and `workflow_prefix` were two more knobs for one rule and are gone, ignored in
+any older file. Capture reads the canvas and stores only what differs from
 shared; load layers shared under the recipe and writes it back; `generate
-workflows` reads the TEMPLATE FILE from disk and writes one real workflow per
-recipe. The recipe is a set of DIFFERENCES against one graph, which is what lets
+workflows` reads the BASE WORKFLOW from disk and writes one real workflow per
+recipe, BESIDE the base and named `<project>-<recipe>.json` — the base is in
+the name because `appliance-1x2.json` sitting next to its source says nothing
+about which source made it. Both halves go through the same slug (`recipeSlug`
+on the canvas, `slugify` in `py/_recipes.py`, parallel and changed together):
+lowercase, dashes, no spaces. The recipe is a set of DIFFERENCES against one graph, which is what lets
 a structural change reach every recipe at once — snapshots of the whole graph
 were considered on 2026-09-21 and refused for that reason.
 
@@ -416,10 +422,15 @@ slot the table did not know about.
   `publish_action.yml`) only when asked or for a non-Modal install. Never
   leave versioned or backup `.js`/`.py` copies in the tree — ComfyUI loads
   every file under `web/`, and orphans register extensions twice.
-- Vocabulary he insists on for the Recipes node: a **project** is the file
-  (one per game, `imperia-bakery`, resolved from the open workflow), a
-  **recipe** is one asset type in it (`appliance-1x2`), **shared** is what
-  every recipe takes. Buttons are two words naming what they act on
+- Vocabulary he insists on for the Recipes node: a **project** IS its base
+  workflow — one per base, named after it (`october/base_example.json` is
+  `october-base-example`, folder included) and resolved from the open workflow
+  by path. "Project" and "base workflow" are one thing under two words, and the
+  file in `user/default/recipes/` is only where its recipes are kept
+  ("i don't really understand what the difference between project and workflow
+  is… it's not adding anything to have 2 things that are the same thing",
+  2026-09-21). A **recipe** is one asset type in it (`appliance-1x2`),
+  **shared** is what every recipe takes. Buttons are two words naming what they act on
   (`new project`, `capture recipe`). Node inputs are Comfy widgets, wirable,
   never DOM fields, and never the same thing twice. A recipe slot is a node
   painted the colour typed in the node's `match_color` input, its title the
