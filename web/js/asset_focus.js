@@ -864,6 +864,34 @@ function groupAssets(assets, feature, into = new Map()) {
     return into;
 }
 
+// Which event holds a category, for a node whose `feature` names another one.
+// The month's events in their own order, so the first that has it wins — the
+// order the tree lists them in.
+//
+// A run is ONE event: `build_event_order` picks it by `feature` and
+// `_focus_items` then narrows by `category`, so a category the held event does
+// not have is a node sitting on `runs 0` and a queue that dies naming the
+// event it looked in. Both views can now offer a category from anywhere in the
+// month, so taking one has to carry its event with it.
+//
+// "" when the node is already on an event that holds it — nothing to move —
+// or when nothing in the month does.
+export function eventForCategory(node, label) {
+    const want = String(label ?? "").trim().toLowerCase();
+    if (!want) return "";
+    const source = orderSource(node) ?? node;
+    const events = source._symEvents ?? [];
+    const holds = (event) => (event.assets ?? []).some(
+        (a) => String(a.assetName ?? "").trim()
+            && categoryRecipeOf({ category: a.category, canvas: a.canvas })
+                .toLowerCase() === want);
+    const held = featureKey(widgetOf(node, "feature")?.value);
+    const on = events.find((e) => featureKey(e.feature) === held) ?? events[0];
+    if (on && holds(on)) return "";
+    const hit = events.find(holds);
+    return hit ? eventLabel(hit) : "";
+}
+
 // The tree's levels as one flat list of rows, top to bottom, in the order the
 // ORDER gives them: months calendar-wise from the server, events and
 // categories in first-appearance order down the sheet. Never alphabetical —
@@ -1162,7 +1190,22 @@ function taskPanel(node) {
     // what that means before you queue it.
     function chooseCategory(row) {
         const held = String(widgetOf(node, "category")?.value ?? "").trim();
-        put("category", held === row.category ? "" : row.category);
+        const taking = held === row.category ? "" : row.category;
+        // The category view offers every category in the MONTH, so one of them
+        // can belong to an event the node is not on. Taking it moves the node
+        // there — the same hop an asset makes — or the node holds a narrowing
+        // its event cannot run.
+        const event = taking ? eventForCategory(node, taking) : "";
+        if (event) {
+            put("feature", event);
+            node._symFocusAssets = [];
+            node._symFocusCategories = [];
+            // ONE path into the parse: the wrapper, which re-draws when it
+            // lands. The widget's own chained callback answers without telling
+            // the panel.
+            node._symRefreshOrder?.({ explicit: true });
+        }
+        put("category", taking);
         put("asset", "");
         put("ref", "");
         render();

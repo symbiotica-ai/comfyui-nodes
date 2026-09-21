@@ -35,7 +35,10 @@ The rule everything else follows from:
 - Clicking a recipe in the sidebar puts its values on the canvas and points the
   `recipe` wire at it: the `category` widget on the node feeding that wire is
   set to the label whose slug is the recipe, and `asset` and `ref` are cleared —
-  the same act as clicking that category in the Task tree.
+  the same act as clicking that category in the Task tree. A run is ONE event,
+  and the rows are the whole month's categories, so the pick also moves
+  `feature` to an event that HOLDS that category; without it the node sits on
+  `runs 0` and the queue dies naming the event it looked in.
 - The recipe you LEAVE is written first — the one the canvas is actually on,
   which with `auto` running is not always the one on screen.
 - **The pane goes on following the wire after a pick**, because a pick POINTS
@@ -104,6 +107,10 @@ The rule everything else follows from:
 
 - A painted node that did not become a row says why, in the panel.
 - A value that could not be written says which node and why.
+- A recipe with nothing stored and nothing under it in `shared` writes nothing,
+  and says so in the status line. That is a category he has not been through
+  yet, not a broken canvas: "No recipe slots on this canvas" is for a
+  `match_color` that matches nothing.
 - `generate workflows` either writes every slot or names the one it could not,
   including group toggles.
 - A capture names what it could NOT keep: a node whose values moved since the
@@ -157,7 +164,7 @@ told the rest:
 | F6 | Unpainting the last slot left the old rows on screen | `syncSlots` guards on "the graph has no nodes", not "no slots found" |
 | F7 | A canvas with nothing painted looked identical to a broken `match_color` | The status line names which of the two it is |
 
-Counts at 2026-09-21: 449 JS, 937 Python. G1-G5 were reproduced against his
+Counts at 2026-09-21: 454 JS, 937 Python. G1-G5 were reproduced against his
 own project file and his node shapes; none has been watched on the Modal canvas.
 G6 was reproduced and fixed in a real browser on his own workflow and project
 file, on the local install.

@@ -338,6 +338,29 @@ test("an asset in the event the tree is already on is not a hop", async () => {
     assert.equal(widget(node, "category").value, "Wallpaper");
 });
 
+test("taking a category from another event moves the node to that event",
+     async () => {
+    // A run is ONE event: the queue picks it by `feature` and then narrows by
+    // `category`, so a category the held event does not have is `runs 0` and a
+    // refusal. The category view offers the whole month, so the pick carries
+    // its event.
+    const node = await taskNode({ feature: FEAST });
+    await click(groupToggle(node));
+    await click(rowFor(node, `${OCT}/Food - 3 stages`));
+    assert.equal(widget(node, "feature").value, GHOSTS);
+    assert.equal(widget(node, "category").value, "Food - 3 stages");
+    assert.equal(widget(node, "asset").value, "");
+    assert.equal(runs(node), "runs 1");
+});
+
+test("a category the held event has does not move the event", async () => {
+    const node = await taskNode({ feature: FEAST });
+    await click(groupToggle(node));
+    await click(rowFor(node, `${OCT}/Wallpaper`));
+    assert.equal(widget(node, "feature").value, FEAST);
+    assert.equal(runs(node), "runs 2");
+});
+
 test("the grouping rides on a property, so a saved workflow reopens on it",
      async () => {
     const node = await taskNode();

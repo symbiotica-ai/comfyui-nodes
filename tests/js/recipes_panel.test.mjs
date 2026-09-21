@@ -955,13 +955,15 @@ function taskChain(node, category = "All") {
         id: 8, type: "SymbioticaTask", mode: 0, title: "Task", inputs: [],
         widgets: [{ name: "category", value: category },
                   { name: "asset", value: "Gargoyle Drink Machine" },
-                  { name: "ref", value: "GargoyleDrinkMachine_2.png" }],
+                  { name: "ref", value: "GargoyleDrinkMachine_2.png" },
+                  { name: "feature", value: "QE 2 — Coven of Shadows" }],
         outputs: [{ name: "specs" }], setDirtyCanvas() {},
         _symEvents: [{
             feature: "QE 2", eventName: "Coven of Shadows",
             assets: CATEGORIES.map((c, i) => ({
                 assetName: `asset ${i}`, category: c, canvas: "" })),
         }],
+        _symRefreshOrder() {},
     };
     const specs = {
         id: 14, type: "SymbioticaTaskSpecs", mode: 0, widgets: [],
@@ -1039,6 +1041,47 @@ test("the recipe the WIRE loaded is the one a switch writes back, not the picked
     assert.deepEqual(state(node).appliance1x2, before,
                      "the recipe that was merely on screen was not written");
     assert.notEqual(state(node).appliance1x2.backdrop, "wire.png");
+});
+
+test("picking a category from another event moves the Task to that event",
+     async () => {
+    // A run is ONE event. The sidebar lists the whole month, so a pick can name
+    // a category the node's event does not hold — and the node would sit on
+    // `runs 0` with the queue dying "no 'Mini Banner' assets in 'QE 2'".
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    task._symEvents.push({
+        feature: "Mini 1", eventName: "Ghostly Goodies",
+        assets: [{ assetName: "Ghost Cupcake", category: "Mini Banner", canvas: "" }],
+    });
+    await draw(node);
+    await click(rowFor(node, "mini-banner"));
+    const w = (name) => task.widgets.find((x) => x.name === name).value;
+    assert.equal(w("category"), "Mini Banner");
+    assert.equal(w("feature"), "Mini 1 — Ghostly Goodies", "moved to the event that has it");
+    assert.equal(w("asset"), "");
+});
+
+test("a category the held event already has does not move the event", async () => {
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "appliance1x2"));
+    assert.equal(task.widgets.find((x) => x.name === "feature").value,
+                 "QE 2 — Coven of Shadows");
+});
+
+test("a recipe with nothing stored does not claim the canvas has no slots",
+     async () => {
+    // The toast is for a `match_color` that matches nothing. Firing it on a
+    // category he has not been through yet reads as "your canvas is broken" on
+    // the one click that is meant to START a recipe.
+    const node = await recipeNode({ project: { ...PROJECT(), shared: {} } });
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "food-3-stages-1x1"));
+    assert.deepEqual(toasts, []);
+    assert.match(statusText(node), /food-3-stages-1x1 holds nothing yet/);
 });
 
 test("a recipe picked by hand keeps following the Task afterwards", async () => {

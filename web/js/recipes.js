@@ -18,7 +18,8 @@ import { askForName, findSource, graphScope, slotName } from "./find_node.js";
 // The panel hides the widgets its head drives, exactly as the Task node
 // does. `hideWidget` is exported from there and imported by three other
 // panels; a second copy of it is how they drift.
-import { assetRecipeOf, hideWidget, monthCategories } from "./asset_focus.js";
+import { assetRecipeOf, eventForCategory, hideWidget,
+         monthCategories } from "./asset_focus.js";
 
 const NODE_CLASS = "SymbioticaRecipe";
 const SHARED = "shared";
@@ -1209,6 +1210,15 @@ function recipePanel(node) {
             toast("error", "Fix the cell first", String(err?.message ?? err), 8000);
             return;
         }
+        // A recipe with nothing stored and nothing under it in `shared` has
+        // nothing to write, and that is not a broken canvas: it is a category
+        // he has not been through yet. The toast is for a `match_color` that
+        // matches nothing, and firing it here reads as "your canvas is broken"
+        // on the one click that is meant to START a recipe.
+        if (!Object.keys(values).length) {
+            status(`${column} holds nothing yet — set the canvas and press capture.`, false);
+            return;
+        }
         const report = applyValuesToNodes(liveGraph()?.nodes ?? [], values, matchColor());
         if (!report.applied.length) {
             noSlotsToast(matchColor());
@@ -1473,6 +1483,25 @@ function recipePanel(node) {
         // row it offers has to be a row it can point the wire at.
         const label = monthCategories(source).find((l) => recipeSlug(l) === column);
         if (!label) return ` Nothing on ${source.title ?? source.type} is called ${column}.`;
+        // A run is ONE event, and the rows are the whole MONTH's categories —
+        // so a pick can name one the node's event does not hold. It moves to
+        // the event that does, the same hop the tree makes: without it the
+        // node sits on `runs 0` and the queue dies naming the event it looked
+        // in. Checked before the `value !== label` guard below, because the
+        // category can already be right while the event is not.
+        const event = eventForCategory(source, label);
+        if (event) {
+            const feature = source.widgets?.find((w) => w.name === "feature");
+            if (feature) {
+                // The value, never the callback: the combo's own chained one
+                // reaches the parse directly and answers without telling the
+                // panel. `_symRefreshOrder` is the one path in.
+                feature.value = event;
+                source._symFocusAssets = [];
+                source._symFocusCategories = [];
+                source._symRefreshOrder?.({ explicit: true });
+            }
+        }
         if (widget.value !== label) {
             widget.value = label;
             widget.callback?.(label, undefined, source);
@@ -1485,6 +1514,8 @@ function recipePanel(node) {
                 const w = source.widgets?.find((x) => x.name === name);
                 if (w && w.value) { w.value = ""; w.callback?.("", undefined, source); }
             }
+        }
+        if (event || widget.value === label) {
             source._symRenderFocus?.();
             source.setDirtyCanvas?.(true, true);
         }
