@@ -283,15 +283,21 @@ const GROW = "+";
 const ANY = "*";
 // What the Get Hub's picker reads when nothing is picked, and what it goes
 // back to after a pick: the widget is a button for choosing, not a value.
-const PULL = "value or group…";
+const PULL = "add value or group…";
 const NONE = "(nothing published on this canvas)";
 // A Set Hub is a GROUP: its TITLE names the set of constants it holds, and a
-// Get Hub can take the whole set in one pick. The group a Get is following
-// rides on `properties`, which serialises with the workflow and survives the
-// node being retitled by hand.
+// Get Hub can take the whole set in one pick. The groups a Get follows ride on
+// `properties`, which serialises with the workflow and survives the node being
+// retitled by hand.
+//
+// A LIST of them, because a pick ADDS: a hub carries a group AND a name off
+// another group AND a value on its own, which is how a canvas actually reads
+// -- six paths plus the one size you are testing against. Nothing a pick does
+// takes a slot away.
 const GROUP_PROP = "symbiotica_group";
-// The Set Hub the group came from. A title is what you read, but it is also
-// what he retitles: the id is what carries a following Get across a rename.
+// The Set Hubs those groups came from, in the same order. A title is what you
+// read, but it is also what he retitles: the id is what carries a following
+// Get across a rename.
 const GROUP_ID_PROP = "symbiotica_group_id";
 // The last title this node wrote for itself. A title it still carries is one
 // it may replace; anything else on the node is a title HE typed, and stays.
@@ -308,13 +314,48 @@ export function setOwnTitle(node, title) {
     return true;
 }
 
-// What a Get Hub is: the group it follows, the one name it carries, or neither.
-export function titleForGet(node) {
-    const group = String(node?.properties?.[GROUP_PROP] ?? "").trim();
-    if (group) return `Get ${group}`;
+// The groups a Get Hub follows, as `{title, id}` pairs. Two parallel lists on
+// the node, read as one here so they cannot fall out of step. A workflow saved
+// when a hub could follow only one group holds a bare string, and reads as a
+// list of one.
+export function followed(node) {
+    const props = node?.properties ?? {};
+    const asList = (v) => (Array.isArray(v) ? v : [v]);
+    const ids = asList(props[GROUP_ID_PROP]);
+    const out = [];
+    asList(props[GROUP_PROP]).forEach((raw, i) => {
+        const title = String(raw ?? "").trim();
+        const id = ids[i] ?? null;
+        if (title || id != null) out.push({ title, id });
+    });
+    return out;
+}
+
+// Both lists at once, and both gone when nothing is followed: a node carrying
+// an empty group list would read as following something.
+export function setFollowed(node, list) {
+    node.properties ??= {};
+    if (!list.length) {
+        delete node.properties[GROUP_PROP];
+        delete node.properties[GROUP_ID_PROP];
+        return;
+    }
+    node.properties[GROUP_PROP] = list.map((g) => g.title);
+    node.properties[GROUP_ID_PROP] = list.map((g) => g.id ?? null);
+}
+
+// What a Get Hub is: the groups it follows and how much it carries beside
+// them, the one name it holds, or neither. The extras can only be counted
+// against what the groups hold right now, so they are counted when the caller
+// has already resolved them and left out when it has not.
+export function titleForGet(node, groups = null) {
+    const titles = followed(node).map((g) => g.title).filter(Boolean);
     const names = (node?.outputs ?? []).map(slotName)
         .filter((n) => n && n !== GROW);
-    return names.length === 1 ? `Get ${names[0]}` : "Get Hub";
+    if (!titles.length) return names.length === 1 ? `Get ${names[0]}` : "Get Hub";
+    const held = new Set((groups ?? []).flatMap((g) => g.names.map((e) => e.name)));
+    const extra = groups ? names.filter((n) => !held.has(n)).length : 0;
+    return `Get ${titles.join(" + ")}${extra ? ` +${extra}` : ""}`;
 }
 
 // How a group reads in the picker, beside the plain names.
@@ -455,30 +496,41 @@ export function publishedGroups(graphs) {
     return out;
 }
 
-// The group a Get Hub is following, and what it holds now. Null when the node
-// follows none, or when the Set Hub it named is gone -- the slots it already
-// has stay either way; `dropDeadNames` is what takes the ones behind them.
+// The groups a Get Hub is following, and what each holds now. A group whose
+// Set Hub is gone is left out rather than dropped from the list -- the slots
+// it put here stay either way, and `dropDeadNames` is what takes the ones
+// behind them.
 //
-// The Set Hub's ID answers before its title, so retitling a group carries
+// A group's Set Hub ID answers before its title, so retitling a group carries
 // every Get following it -- the same rule as renaming a slot. The title is
-// healed on the way past, here and on the node, so the canvas never reads one
-// name while the node holds another.
-export function groupOf(node, graphs) {
-    const props = node?.properties ?? {};
-    const title = String(props[GROUP_PROP] ?? "").trim();
-    const id = props[GROUP_ID_PROP];
-    if (!title && id == null) return null;
-    const groups = publishedGroups(graphs);
-    const byId = id == null ? null
-        : groups.find((g) => String(g.node?.id) === String(id));
-    const group = byId ?? groups.find((g) => g.title === title) ?? null;
-    if (!group) return null;
-    if (group.title !== title) {
-        props[GROUP_PROP] = group.title;
-        setOwnTitle(node, `Get ${group.title}`);
+// healed on the way past, in what the node remembers and on the node itself,
+// so the canvas never reads one name while the node holds another.
+export function groupsOf(node, graphs) {
+    const following = followed(node);
+    if (!following.length) return [];
+    const published = publishedGroups(graphs);
+    const out = [];
+    let healed = !Array.isArray(node?.properties?.[GROUP_PROP]);
+    for (const want of following) {
+        const byId = want.id == null ? null
+            : published.find((g) => String(g.node?.id) === String(want.id));
+        const group = byId ?? published.find((g) => g.title === want.title) ?? null;
+        if (!group) continue;
+        if (group.title !== want.title) {
+            want.title = group.title;
+            healed = true;
+        }
+        if (group.node?.id != null && String(group.node.id) !== String(want.id)) {
+            want.id = group.node.id;
+            healed = true;
+        }
+        out.push(group);
     }
-    if (group.node?.id != null) props[GROUP_ID_PROP] = group.node.id;
-    return group;
+    if (healed) {
+        setFollowed(node, following);
+        setOwnTitle(node, titleForGet(node, out));
+    }
+    return out;
 }
 
 // The slot a name is fed through: `{graph, node, index}`, on a hub or on a
@@ -704,69 +756,50 @@ function addGetSlot(node, name) {
     assignGetSlot(node, node.outputs.length - 1, entry);
 }
 
-// A whole group, taken at once. The node BECOMES that group: picking
-// `settings-01` means the node holds settings-01 and nothing else, not
-// settings-02 with settings-01 added underneath it. Everything it was
-// carrying goes first, wires and all -- there is no slot to keep a wire on
-// once the name behind it is not in the group you asked for.
+// A whole group, taken at once and ADDED to what the node already carries.
+// Picking `settings-01` on a hub holding `paths` leaves it holding both, and
+// the node follows both from then on. A pick never removes a slot and never
+// cuts a wire: what leaves a Get Hub is what he takes off it, or a name that
+// has left the canvas.
 export function loadGroup(node, group) {
     if (!group) return;
-    node.properties ??= {};
-    node.properties[GROUP_PROP] = group.title;
-    node.properties[GROUP_ID_PROP] = group.node?.id ?? null;
-    // Everything that is not in the group goes; a name that IS in it keeps the
-    // slot it already had, and the wire on that slot with it.
-    keepOnly(node, group.names.map((e) => e.name));
-    setOwnTitle(node, titleForGet(node));
-    syncGroup(node);
+    const following = followed(node);
+    const id = group.node?.id ?? null;
+    // Already followed: the pick is a re-assert, which adds any name the group
+    // has grown since and is otherwise a no-op.
+    const has = following.some((g) => (id != null && String(g.id) === String(id))
+                                      || (!!g.title && g.title === group.title));
+    if (!has) following.push({ title: group.title, id });
+    setFollowed(node, following);
+    const groups = groupsOf(node, graphScope(node.graph, app.graph));
+    syncGroup(node, groups);
+    setOwnTitle(node, titleForGet(node, groups));
     node.setDirtyCanvas?.(true, true);
 }
 
-// One name off the picker. On a hub that follows no group this is the old
-// behaviour -- pull them one at a time -- but on one that DOES, picking a
-// single value is picking that value: the node stops following and carries it
-// alone. Its slot is kept rather than rebuilt, so a wire already on that name
-// is still there afterwards.
+// One name off the picker, added beside whatever the node holds. A hub
+// following a group goes on following it -- a single name is the other half of
+// what this picker is for: the six paths of a group, plus the one size you are
+// testing against, on one node.
 export function loadName(node, entry) {
     if (!entry) return;
-    node.properties ??= {};
-    if (!String(node.properties[GROUP_PROP] ?? "").trim()) {
-        addGetSlot(node, entry.name);
-        return;
-    }
-    delete node.properties[GROUP_PROP];
-    delete node.properties[GROUP_ID_PROP];
-    keepOnly(node, [entry.name]);
-    if (!(node.outputs ?? []).some((s) => slotName(s) === entry.name)) {
-        ensureTail(node, "out");
-        assignGetSlot(node, node.outputs.length - 1, entry);
-    }
-    setOwnTitle(node, titleForGet(node));
-    ensureTail(node, "out");
+    addGetSlot(node, entry.name);
+    const groups = groupsOf(node, graphScope(node.graph, app.graph));
+    setOwnTitle(node, titleForGet(node, groups));
     node.setDirtyCanvas?.(true, true);
-}
-
-// Everything the node carries except these names, wires and all: what it holds
-// is what was asked for, not what was asked for plus what was there before.
-function keepOnly(node, names) {
-    const keep = new Set(names);
-    for (let i = (node.outputs?.length ?? 0) - 1; i >= 0; i -= 1) {
-        const name = slotName(node.outputs[i]);
-        if (name === GROW || keep.has(name)) continue;
-        node.disconnectOutput?.(i);
-        node.removeOutput(i);
-    }
 }
 
 // What following a group means, re-asserted on every draw: the Set Hub's names
 // are all here. Asserted rather than copied once, because a group whose new
 // third name never reaches the Gets is the stale copy this node exists to
-// replace.
-export function syncGroup(node) {
+// replace. Several groups is the same rule read over the union of them, and a
+// name picked on its own is in none of them -- see the removal loop, which
+// leaves any name the canvas still publishes exactly where it is.
+export function syncGroup(node, groups = null) {
     const scope = graphScope(node.graph, app.graph);
-    const group = groupOf(node, scope);
-    if (!group) return false;
-    const wanted = new Set(group.names.map((e) => e.name));
+    const following = groups ?? groupsOf(node, scope);
+    if (!following.length) return false;
+    const wanted = new Set(following.flatMap((g) => g.names.map((e) => e.name)));
     let changed = false;
     // A name that has left the group and that nothing else publishes is
     // litter. A slot with a WIRE on it is never taken away silently, whatever
@@ -780,12 +813,13 @@ export function syncGroup(node) {
         changed = true;
     }
     const have = new Set((node.outputs ?? []).map(slotName));
-    for (const entry of group.names) {
+    for (const entry of following.flatMap((g) => g.names)) {
         if (have.has(entry.name)) continue;
         // Appended, never inserted: a wire holds on to a slot's INDEX, so
         // making room in the middle would move every wire below it.
         ensureTail(node, "out");
         assignGetSlot(node, node.outputs.length - 1, entry);
+        have.add(entry.name);
         changed = true;
     }
     return changed;
@@ -1014,9 +1048,10 @@ function assertTailOnDraw(node, kind) {
                 followWireNames(this);
                 syncNameWidgets(this);
             } else {
-                syncGroup(this);
+                const groups = groupsOf(this, graphScope(this.graph, app.graph));
+                syncGroup(this, groups);
                 dropDeadNames(this);
-                setOwnTitle(this, titleForGet(this));
+                setOwnTitle(this, titleForGet(this, groups));
             }
         }
         return onDrawForeground?.apply(this, arguments);
@@ -1239,15 +1274,18 @@ registerSymbioticaExtension(app, {
             }
 
             getExtraMenuOptions(_canvas, options) {
-                const group = String(this.properties?.[GROUP_PROP] ?? "").trim();
-                if (group) {
+                const groups = followed(this).map((g) => g.title).filter(Boolean);
+                // One row per group, because a hub can follow several: dropping
+                // all of them to stop following one is the wiring he did not
+                // ask to lose.
+                for (const title of groups) {
                     options.push({
-                        content: `Stop following "${group}"`,
+                        content: `Stop following "${title}"`,
                         callback: () => {
-                            delete this.properties[GROUP_PROP];
-                            delete this.properties[GROUP_ID_PROP];
+                            setFollowed(this, followed(this)
+                                .filter((g) => g.title !== title));
                             toast("info", "Get Hub",
-                                  `The slots stay; "${group}" no longer adds to them.`);
+                                  `The slots stay; "${title}" no longer adds to them.`);
                             this.setDirtyCanvas(true, true);
                         },
                     });
@@ -1258,16 +1296,16 @@ registerSymbioticaExtension(app, {
                         // Curating the list by hand makes it yours: a hub that
                         // kept following would put every removed slot back on
                         // the next draw, and the menu row would read as broken.
-                        const followed = group && this.properties[GROUP_PROP];
-                        if (followed) {
-                            delete this.properties[GROUP_PROP];
-                            delete this.properties[GROUP_ID_PROP];
-                        }
+                        if (groups.length) setFollowed(this, []);
                         const n = dropUnusedSlots(this, "out");
+                        const named = groups.map((t) => `"${t}"`).join(", ");
                         toast("info", "Get Hub",
                               (n ? `${n} slot${n === 1 ? "" : "s"} removed.`
                                  : "Every slot is wired.")
-                              + (followed ? ` "${group}" no longer adds to them.` : ""));
+                              + (groups.length
+                                 ? ` ${named} no longer `
+                                   + `${groups.length === 1 ? "adds" : "add"} to them.`
+                                 : ""));
                     },
                 });
                 return options;
@@ -1294,9 +1332,9 @@ registerSymbioticaExtension(app, {
                 ? "Holds many named constants. Wire an output into its empty "
                   + "slot and the slot takes that name; a Get Hub reads it. "
                   + "Its title names the GROUP a Get Hub can take whole."
-                : "Reads named constants. Pick a Set Hub's title to take its "
-                  + "whole group at once, or drag from its empty slot onto an "
-                  + "input and pick one name.";
+                : "Reads named constants. Every pick ADDS: take a Set Hub's "
+                  + "whole group by its title, then a name off another group "
+                  + "or a value on its own beside it.";
         }
     },
 });

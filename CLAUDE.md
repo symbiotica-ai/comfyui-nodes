@@ -207,21 +207,25 @@ KJNodes pairs, and it is in 1.48.7 as well as 1.52.7.
   same group and a Get reading it is titled `Get _paths`.
 - **A Set Hub is a GROUP and its TITLE is the group's name** — `settings-01`,
   `paths`, `models`. The Get Hub's picker lists the groups above the individual
-  names, and taking one loads every name on that hub at once. The group a Get
-  is following rides on `node.properties.symbiotica_group` (serialises, and
-  survives a retitle). **The picker sets what the node holds**: a group replaces
-  what was there — the node becomes that group, it does not accumulate the last
-  one plus this one — and a single value picked on a hub that FOLLOWS a group
-  switches it to that one value and stops it following. A name that survives
-  the switch keeps the slot it had, so the wire on it is not cut. On a hub
-  following nothing, a single value is added, which is the one-at-a-time pull
-  the node started as. The title says which of the three it is (`titleForGet`),
-  and only ever overwrites a title the node wrote itself. The title follows, from the stock title or from the group it
-  was showing a second ago. A title typed by hand is his and stays. A followed group is re-asserted on draw, so a name added to
-  the Set later arrives — APPENDED, never inserted, because a wire holds on to
-  a slot's INDEX. A name that leaves the group leaves the Get too, unless a
-  wire is on it: that one stays and goes red. "Remove unused slots" stops the
-  hub following, or every slot it removed would come back on the next draw.
+  names, and taking one loads every name on that hub at once. The groups a Get
+  follows ride on `node.properties.symbiotica_group` — a LIST of titles beside
+  a list of Set Hub ids, which serialises, survives a retitle, and reads a
+  workflow saved before the list as its one bare string. **Every pick ADDS**
+  (2026-09-21): a group lands beside whatever the node already holds and is
+  followed as well, a single value lands beside it and changes nothing about
+  what is followed — "i might want a group but also a few others from another
+  group or solo values". Nothing a pick does removes a slot or cuts a wire:
+  what leaves a Get Hub is what he takes off it ("Remove unused slots", the
+  frontend's own "Remove Slot") or a name that has left the canvas. The title
+  is the followed groups joined by `+`, then `+N` for whatever is carried
+  beside them (`titleForGet`), and only ever overwrites a title the node wrote
+  itself. A title typed by hand is his and stays. A followed group is
+  re-asserted on draw, so a name added to the Set later arrives — APPENDED,
+  never inserted, because a wire holds on to a slot's INDEX. A name that leaves
+  the group leaves the Get too, unless a wire is on it or something else on the
+  canvas still publishes it — a name picked on its own is exactly that, and it
+  stays. "Remove unused slots" stops the hub following every group it followed,
+  or every slot it removed would come back on the next draw.
 - A name row on the Set Hub holds no value of its own: `value` and `label` are
   own properties reading the slot it sits against, and writing `value` renames
   that slot. The frontend's widget store keys a remembered value by widget
