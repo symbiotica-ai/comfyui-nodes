@@ -445,8 +445,16 @@ def template_slots(workflow: dict, color=None, display=None) -> list[dict]:
                        if len(names) == len(widgets) else {})
             out.append({"key": key, "kind": "dict", "default": default, "widgets": len(widgets)})
         else:
+            # The first value that is a SETTING: a widget fed by a wire is left
+            # out here as it is in a capture -- the wire is the value, and
+            # seeding a project with the empty box it sits in writes that
+            # emptiness into `shared`.
+            names = promoted_names(node)
+            wired = _wired_widget_names(node)
+            free = ([v for n, v in zip(names, widgets) if n not in wired]
+                    if len(names) == len(widgets) else list(widgets))
             out.append({"key": key, "kind": "scalar",
-                        "default": widgets[0] if widgets else None, "widgets": len(widgets)})
+                        "default": free[0] if free else None, "widgets": len(widgets)})
     return out
 
 

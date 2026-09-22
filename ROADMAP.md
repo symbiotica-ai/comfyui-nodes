@@ -91,6 +91,38 @@ open. The node's contract is `docs/recipes-contract.md`.
   more) are still in his workflows folder. Generate names them in its toast and
   deletes nothing, by design — his call whether to remove them.
 
+Left open on 2026-09-22, after the `dict`/`scalar` mismatch that blocked every
+save on `bakery-base` was answered in `settableWidgets` and `cellValue`:
+
+- `cellValue`'s **toggle** and **number** branches are the same hard refusal the
+  dict branch just lost: both key off the CANVAS's view of the slot and throw
+  when the stored text disagrees, which blocks the save for the whole project.
+  A node retitled to end in `?` after `shared` was seeded is the reachable case.
+  Open: refuse the cell or take it as the first widget, like the dict branch now
+  does.
+- `dictCellUpdate` starts from `{}` when the cell it is handed does not parse,
+  so a keystroke in one sub-grid field drops whatever else the cell held. A cell
+  holding plain text now draws as a text box rather than a sub-grid, which takes
+  the reachable case away; the function still discards silently.
+- `generate workflows` refuses a captured dict when a node's DECLARED input
+  names do not line up with its `widgets_values` — `_widget_positions` returns
+  None and `generate_all` raises for the whole project, no file written. Control
+  Image was the case (2 declared names, 3 saved values) and it now captures a
+  scalar again, but any node carrying an undeclared widget in the middle of its
+  list hits it. Open: name the node in the error and skip it, or keep refusing.
+- `RGTHREE_GROUP_NODES` (`py/_recipes.py`) holds `Fast Groups Muter (rgthree)`
+  and `Fast Groups Bypasser (rgthree)`. His `flip-and-stitch` node is type
+  **`Fast Bypasser (rgthree)`** — no "Groups" — so the server calls it a scalar
+  holding null while the canvas reads its rows as group switches. Noticed in his
+  `bakery-base` workflow, never chased.
+- `cellText` runs `.replace(/,/g, ", ")` and `'":' → '": '` over the WHOLE
+  JSON string, so a comma inside a prompt value gains a space on every round
+  trip through the table. Cosmetic by intent, unverified as harmless.
+- The save that `auto` fires on opening a workflow rewrites the project file
+  whole: `output`/`workflow_prefix` are stripped and any key whose painted node
+  has been renamed or unpainted leaves the file. Correct for a save he asked
+  for; the bullet above asks whether an open should write at all.
+
 ## Set Hub / Get Hub — open threads (no issue filed yet)
 
 One node holding many named constants, replacing a canvas full of KJNodes

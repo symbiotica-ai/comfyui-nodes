@@ -388,12 +388,21 @@ export function groupSwitches(widgets) {
 // and without any fed by a wire. The wire is the value; recording the empty
 // box it sits in would write that emptiness into every recipe, and writing
 // one back is a value the canvas throws away.
+// A widget the workflow does not SAVE is not a setting: this pack's own DOM
+// panels (`serialize: false` in their options) and the Studio Library summary
+// (`widget.serialize = false`) draw what the node holds, they do not hold it.
+// Counted as settings, they made a one-value node read as many: `dict` to the
+// canvas, `scalar` to the server, and his own project file was then refused by
+// the panel with "a subgraph's values are a JSON object".
+const displayOnly = (w) => w?.serialize === false || w?.options?.serialize === false;
+
 export function settableWidgets(node) {
     const wired = new Set();
     for (const inp of node?.inputs ?? []) {
         if (inp.widget && inp.link != null) wired.add(inp.widget.name ?? inp.name);
     }
-    return (node?.widgets ?? []).filter((w) => w.type !== "button" && !wired.has(w.name));
+    return (node?.widgets ?? []).filter((w) => w.type !== "button" && !wired.has(w.name)
+                                          && !displayOnly(w));
 }
 
 export function widgetValues(node, widgets) {
@@ -439,10 +448,14 @@ export function cellValue(slot, text) {
     }
     if (slot.kind === "dict") {
         const parsed = parseJson(trimmed);
-        if (!parsed.ok || !parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)) {
-            throw new Error(`${slot.key}: a subgraph's values are a JSON object, like {"lora_name": "…"}`);
+        if (parsed.ok && parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)) {
+            return parsed.value;
         }
-        return parsed.value;
+        // Not an object, and that is not a refusal: a bare value sets the
+        // node's FIRST widget, which is what `applyValuesToNodes` and the
+        // server's `_set_value` both already do with one. Throwing here walled
+        // off every save on the project — including the values the server
+        // itself seeded — over a cell he could not see or edit.
     }
     if (trimmed.startsWith("[")) {
         const parsed = parseJson(trimmed);
@@ -809,6 +822,10 @@ const plainObject = (value) => (value && typeof value === "object"
 // a JSON object is a 1100-character prompt dict flattened on the first save.
 export function dictRow(slot, own, inherited) {
     if (objectCell(own)) return true;
+    // Text that is not an object is shown as text, whatever the slot's kind:
+    // the sub-grid has no field to put it in, so the only copy of his value
+    // would be on screen nowhere.
+    if (String(own ?? "").trim()) return false;
     if (objectCell(inherited)) return true;
     if (plainObject(slot?.default)) return true;
     return slot?.kind === "dict";

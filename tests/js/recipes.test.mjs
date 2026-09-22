@@ -54,10 +54,13 @@ test("a toggle cell is true or false and nothing else", () => {
     assert.throws(() => cellValue(slots[3], "yes"), /pre_flip/);
 });
 
-test("a dict cell is a JSON object", () => {
+test("a dict cell is a JSON object, and a bare value sets the first widget", () => {
     assert.deepEqual(cellValue(slots[4], '{"lora_name": "x"}'), { lora_name: "x" });
-    assert.throws(() => cellValue(slots[4], "x.safetensors"), /render/);
-    assert.throws(() => cellValue(slots[4], "[1]"), /render/);
+    // The server seeds a multi-widget node's slot with ONE value, and the
+    // canvas can call that same slot a dict: refusing the cell walled off
+    // every save on his project over a value the server itself wrote.
+    assert.equal(cellValue(slots[4], "x.safetensors"), "x.safetensors");
+    assert.deepEqual(cellValue(slots[4], "[1]"), [1]);
 });
 
 test("the table has a game column, one column per category, and a row per slot", () => {
@@ -621,4 +624,53 @@ test("loading a Prompts slot sets its widgets and tells the panel to re-read", (
     assert.deepEqual(node.widgets.map((w) => w.value),
                      ["", "llm-prompts", "llm-sp-chair.md", "NEW"]);
     assert.equal(refreshed, 1);
+});
+
+// ---------------------------------------------------------------------------
+// His `$$controlnet-image` on 2026-09-21: a Control Image node painted as a
+// slot, its `path` wired and its own DOM panel in `node.widgets`. The panel is
+// not a setting, and counting it made the canvas call the slot a `dict` while
+// the server called it a `scalar` — the project file the server had seeded was
+// then refused by the panel on open, and every save with it.
+import { dictRow } from "../../web/js/recipes.js";
+
+test("a node's own panel is not one of its settings", () => {
+    const node = {
+        title: "$$controlnet-image", mode: 0, color: "#323", bgcolor: "#535",
+        inputs: [{ name: "image", widget: { name: "image" }, link: null },
+                 { name: "path", widget: { name: "path" }, link: 5553 }],
+        widgets: [{ name: "image", value: "general/1x1/1x1-box.png" },
+                  { name: "path", value: "" },
+                  { name: "images_panel", value: undefined,
+                    options: { serialize: false, hideOnZoom: true } }],
+    };
+    assert.deepEqual(liveSlots({ nodes: [node] }, "purple"), [{
+        key: "$$controlnet-image", kind: "scalar", widgets: 1,
+        default: "general/1x1/1x1-box.png",
+    }]);
+});
+
+test("a display-only widget is not a setting either", () => {
+    // Studio Library draws what it holds in a `text` widget the workflow never
+    // saves (`widget.serialize = false`), beside the browse button.
+    const node = {
+        title: "path-project", mode: 0, color: "#323", bgcolor: "#535",
+        inputs: [{ name: "selection", widget: { name: "selection" }, link: null }],
+        widgets: [{ name: "selection", value: "studios/imperia/bakery" },
+                  { name: "📂 Browse studio library", type: "button" },
+                  { name: "studio_summary", value: "12 files", serialize: false }],
+    };
+    assert.deepEqual(liveSlots({ nodes: [node] }, "purple"), [{
+        key: "path-project", kind: "scalar", widgets: 1,
+        default: "studios/imperia/bakery",
+    }]);
+});
+
+test("a cell holding plain text draws as text, whatever the slot's kind", () => {
+    const slot = { key: "$$controlnet-image", kind: "dict", default: {} };
+    // The sub-grid has no field for a bare string: drawn as a dict row, the
+    // only copy of his value was on screen nowhere.
+    assert.equal(dictRow(slot, "general/1x1/1x1-box.png", ""), false);
+    assert.equal(dictRow(slot, '{"image": "x"}', ""), true);
+    assert.equal(dictRow(slot, "", ""), true);
 });

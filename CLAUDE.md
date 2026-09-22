@@ -328,6 +328,14 @@ A painted slot node is captured whole, not by its first widget
 
 - a widget fed by a wire is left out at EVERY widget count (the wire is the
   value; recording the empty box writes that emptiness into every recipe)
+- **a widget the workflow never SAVES is not a setting** and is left out with
+  the buttons: this pack's own DOM panels (`serialize: false` in the
+  `addDOMWidget` options) and the Studio Library summary (`widget.serialize =
+  false`). Counted as settings they made a one-value node read as many —
+  `dict` on the canvas, `scalar` on the server — and the panel then refused the
+  `shared` block the server itself had seeded, on `$$controlnet-image` and
+  `path-project`, which blocked every save on his `bakery-base` project
+  (2026-09-21)
 - one widget left → the value itself
 - more than one → a dict of every widget BY NAME
 - a subgraph → its promoted inputs, wired ones left out
@@ -376,6 +384,16 @@ the same thing. Each one failed silently first.
   `display` map and `py/recipe_node.py` builds it from ComfyUI's
   `NODE_DISPLAY_NAME_MAPPINGS`. Without it the server keyed by class, the value
   had no slot to land in, and the next save DELETED it from the project.
+- **A cell never refuses a value the other side wrote.** The canvas and the
+  server do not always agree on a slot's `kind` — the canvas calls any node
+  with more than one settable widget a `dict`, and `template_slots`
+  (`py/_recipes.py`) has no such branch, because from the saved file a button
+  is indistinguishable from a widget. So `cellValue` takes a bare value in a
+  dict cell as the node's FIRST widget, which is what `applyValuesToNodes` and
+  the server's `_set_value` already do with one; throwing there walled off
+  every save on the project over a cell drawn nowhere. `dictRow` draws a cell
+  holding plain text AS text for the same reason — the sub-grid has no field
+  to put it in, and the only copy of the value was on screen nowhere.
 - **`state.slots` follows the CANVAS; `state.templateSlots` is what the saved
   template file declares.** The difference between them is what `generate`
   would drop, and the status line names it — that is how a workflow he has
