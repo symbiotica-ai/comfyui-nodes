@@ -115,11 +115,12 @@ function publishedAssets(node) {
 // it. Value and serialisation are preserved, so the string still reaches
 // the Python node and a saved workflow still restores it.
 export const ALL_CATEGORIES = "All";
-// The `asset` combo cannot offer an empty label, so "no narrowing" is
-// spelled out on screen and emptied on the way to the node.
-const ALL_ASSETS = "All assets";
-// Same trick for the reference: "" means the asset's first, which is also what
-// every other asset gets in an all-assets run.
+// The `asset` combo cannot offer an empty label, so "nothing picked" is
+// spelled out on screen and emptied on the way to the node — and what the node
+// does with an empty `asset` is run the FIRST of the narrowing, never all of
+// them.
+const FIRST_ASSET = "First asset";
+// Same trick for the reference: "" means the asset's first.
 const FIRST_REF = "First reference";
 
 function comboify(node, widgetName, valuesFn) {
@@ -321,7 +322,7 @@ function focusPanel(node) {
 
     const chosen = () => {
         const value = widgetOf(node, "asset")?.value?.trim?.() || "";
-        return value === ALL_ASSETS ? "" : value;
+        return value === FIRST_ASSET ? "" : value;
     };
     // "All" is the label for no narrowing; the Python node reads an empty
     // string, and every other value passes through untouched.
@@ -585,14 +586,13 @@ function focusPanel(node) {
             + "white-space:nowrap;",
             `${assets.length} asset${assets.length === 1 ? "" : "s"}`
             + `${narrowed() ? ` · ${narrowed()}` : ""}`
-            + ` · runs ${pick ? "1" : assets.length}`));
+            + " · runs 1"));
         if (pick) {
             const clear = el("button", ghostButtonCss + "padding:1px 7px;flex:none;",
-                             "all");
+                             "first");
             clear.className = "sym-btn";
-            clear.title = assets.length === 1
-                ? "Emit the whole event instead of this one asset"
-                : `Emit all ${assets.length} assets instead of this one`;
+            clear.title = "Clear the pick — the first asset of the narrowing "
+                + "runs instead";
             clear.addEventListener("pointerdown", (e) => e.stopPropagation());
             clear.addEventListener("click", () => choose(pick));
             head.appendChild(clear);
@@ -647,9 +647,9 @@ function focusPanel(node) {
     // The panel is still the fast way to pick one, but a combo says what the
     // choices ARE without reading the list, and it is the widget a saved
     // workflow shows before anything has rendered. `""` is first and means
-    // "every asset in the narrowing", which is what the panel's `all` does.
+    // "the first asset of the narrowing" — ONE asset either way.
     const assetWidget = comboify(node, "asset", () => [
-        ALL_ASSETS,
+        FIRST_ASSET,
         ...(node._symFocusAssets?.length
             ? node._symFocusAssets : (publishedAssets(node)?.assets ?? []))
             .filter((a) => inCategory(a, narrowed()))
@@ -661,17 +661,17 @@ function focusPanel(node) {
             previous?.apply(this, arguments);
             // The combo cannot hold "" as a label, so the sentinel is spelled
             // out on screen and emptied on the way to the node.
-            if (assetWidget.value === ALL_ASSETS) assetWidget.value = "";
+            if (assetWidget.value === FIRST_ASSET) assetWidget.value = "";
             // A reference belongs to the asset it was clicked on.
             dropRef();
             render();
         };
         // What reaches the node is the empty string the sentinel stands for.
         assetWidget.serializeValue = () =>
-            (assetWidget.value === ALL_ASSETS ? "" : assetWidget.value);
+            (assetWidget.value === FIRST_ASSET ? "" : assetWidget.value);
         // A saved graph restores the empty string; show the sentinel instead
         // of a blank row.
-        if (!assetWidget.value) assetWidget.value = ALL_ASSETS;
+        if (!assetWidget.value) assetWidget.value = FIRST_ASSET;
     }
 
     // Which reference the click armed, said in words. The tile is how you pick
@@ -1185,9 +1185,10 @@ function taskPanel(node) {
         render();
     }
 
-    // A category row is the "all assets of this type" run — what the old
-    // panel's `all` button said. `runs N` in the pane header is where you read
-    // what that means before you queue it.
+    // A category row narrows the node to one asset type, and the FIRST asset
+    // of it is what a queue sends — one render, never thirty. The pane draws
+    // that asset and the header says `runs 1 of N`, so what a click costs is
+    // on screen before you queue it.
     function chooseCategory(row) {
         const held = String(widgetOf(node, "category")?.value ?? "").trim();
         const taking = held === row.category ? "" : row.category;
@@ -1316,16 +1317,32 @@ function taskPanel(node) {
         return hits.find((r) => featureKey(r.feature) === held) ?? hits[0] ?? null;
     }
 
-    // With a category picked and no asset, the pane shows the FIRST asset of
-    // that category. The run is still every asset in it — this is a PREVIEW,
-    // not a pick: no widget moves, the header goes on saying `every asset` and
-    // `runs N`, and the tree goes on highlighting the category. "there is no
-    // point in showing an empty screen".
+    // With no asset picked, the FIRST of the narrowing is what the node
+    // emits — `_focus_columns` takes `items[0]` — so the pane draws that one.
+    // No widget moves: the tree goes on highlighting the category and the
+    // header says which asset it landed on, so a category pick still reads as
+    // a category pick.
     function previewRow(rows) {
-        const narrow = String(widgetOf(node, "category")?.value ?? "").trim();
-        if (!narrow) return null;
-        return rows.find((r) => r.kind === "asset"
-            && String(r.category).toLowerCase() === narrow.toLowerCase()) ?? null;
+        const first = runList()[0];
+        if (!first) return null;
+        const held = featureKey(widgetOf(node, "feature")?.value);
+        const hits = rows.filter((r) => r.kind === "asset"
+                                     && r.label === first.assetName);
+        const found = hits.find((r) => featureKey(r.feature) === held)
+            ?? hits[0];
+        if (found) return found;
+        // Nothing narrowed and nothing open: the tree has no asset row to hand
+        // over, and the run is real either way — a node has to show what it
+        // holds. The record is mapped off the same parse the rows come from.
+        const event = state.events.find((e) => featureKey(e.feature) === held)
+            ?? state.events[0];
+        const feature = event ? eventLabel(event) : "";
+        const asset = [...groupAssets([first], feature).values()][0]?.[0];
+        return asset
+            ? { kind: "asset", label: asset.name, asset, feature,
+                month: state.month || (state.months[0] ?? ""),
+                category: categoryRecipeOf(first) }
+            : null;
     }
 
     // What the node would emit right now: the open event's named assets,
@@ -1348,18 +1365,20 @@ function taskPanel(node) {
 
     function drawPane(rows) {
         const row = selectedRow(rows);
-        // The first asset of the picked category stands in when none is
-        // chosen. Everything below draws `show`; everything that says what the
-        // node HOLDS still reads off `row`.
+        // The asset the node will emit: the one picked, or the first of the
+        // narrowing. Everything below draws `show`; `row` is still what says
+        // whether he PICKED it.
         const show = row ?? previewRow(rows);
         const inRun = runList();
         const narrow = String(widgetOf(node, "category")?.value ?? "").trim();
-        // Say what the node will actually emit, not just what is listed.
+        // ONE asset per queue. `of N` is how many the narrowing holds — what
+        // he is stepping through, not what one queue sends.
         runs.textContent = inRun.length
-            ? `runs ${row ? 1 : inRun.length}` : "";
-        crumb.textContent = row
-            ? `${row.month} / ${row.feature} / ${row.category} / ${row.label}`
-            : (narrow ? `${narrow} · every asset` : "every asset in the event");
+            ? (row ? "runs 1" : `runs 1 of ${inRun.length}`) : "";
+        crumb.textContent = show
+            ? `${show.month} / ${show.feature} / ${show.category} / ${show.label}`
+              + (row ? "" : " · first")
+            : (narrow ? `${narrow} · no assets` : "no assets");
 
         strip.replaceChildren();
         shown.style.display = "none";
@@ -1393,8 +1412,8 @@ function taskPanel(node) {
                 src: () => imageFullUrl(path),
             }));
         }
-        // On a preview the prompt belongs to ONE asset while the header above
-        // says `every asset`, so it says which one.
+        // The prompt belongs to the asset the run will take, and names it
+        // when nothing was picked — the crumb above says `· first` there.
         promptHead.textContent = `client prompt${row ? "" : ` · ${show.label}`}`
             + `${show.asset?.canvas ? ` · ${show.asset.canvas}` : ""}`;
         const text = promptFor(show);

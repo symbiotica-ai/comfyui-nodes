@@ -311,15 +311,25 @@ slash-joined key, and his sheet holds names with slashes in them.
   hops through `chooseFound` when the event differs, and `chooseCategory` hops
   through `eventForCategory`. Both are the same rule: the queue builds ONE
   event, so a pick from the month has to say which.
-- **Picking a category draws its first asset** (`previewRow`), rather than
-  "Pick an asset in the tree." on a node listing twenty. It is a PREVIEW, not
-  a pick: no widget moves, `runs N` is still the category's count, and the
-  prompt header names the asset so it is not read as the category's. Clicking
-  a reference tile is what turns it into a pick.
-- `runList` is what the node would EMIT — the held event's assets narrowed by
-  `category` — and is read off the parse, never off the rows on screen: a
-  category has to be open to have asset rows, and counting those read `runs`
-  as nothing beside a tree full of categories.
+- **ONE asset per queue, whatever is picked.** `_focus_columns` takes
+  `items[0]` when `asset` is empty — "there should be only one asset at once
+  so i don't send 30 requests to nano banana when i don't manually select one
+  single asset from the Task list or if i click on a category in recipes"
+  (2026-09-22). Both of those clear `asset` on purpose, and every output is a
+  list, so a category click used to fan the whole graph out over thirty
+  assets. The guarantee is in PYTHON, not on the canvas: a fresh node, a wired
+  order the canvas cannot parse and a reopened workflow all arrive with
+  `asset` empty.
+- **The pane draws the asset that will run** (`previewRow`): the picked one,
+  or the first of the narrowing — built off the parse when the tree has no row
+  for it, because a collapsed category still runs. No widget moves for it, so
+  the node goes on holding the CATEGORY and stepping through them is one click
+  each. The crumb marks the un-picked one `· first` and the header reads
+  `runs 1 of N`, N being what the narrowing holds.
+- `runList` is the narrowing — the held event's assets narrowed by `category`,
+  the list `_focus_items` builds — and is read off the parse, never off the
+  rows on screen: a category has to be open to have asset rows, and counting
+  those read `runs` as nothing beside a tree full of categories.
 
 ## What a Recipes slot captures
 

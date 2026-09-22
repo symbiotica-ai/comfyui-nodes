@@ -68,16 +68,20 @@ class TestOneAssetsWholeRecord:
             out = run(nodes_mod, order=ORDER, asset=item["assetName"])
             assert out.args[3] == [expected[index]]
 
-    def test_no_choice_means_the_whole_event(self, nodes_mod):
-        """A button that reads "all" and emits one asset is lying about what
-        the node is going to do."""
+    def test_no_choice_means_the_first_asset_not_all_of_them(self, nodes_mod):
+        """"there should be only one asset at once so i don't send 30 requests
+        to nano banana when i don't manually select one single asset". Every
+        output is a list, so emitting the event fanned the whole graph out —
+        and clicking a category in the tree or a row in the Recipes sidebar
+        both CLEAR `asset`, which made thirty renders one click away."""
         out = run(nodes_mod, order=ORDER)
-        assert out.args[0] == ["Frankencrisps", "Frankenstein Pops", "Bunting"]
+        assert out.args[0] == ["Frankencrisps"]
 
-    def test_choosing_nothing_still_files_each_asset_under_its_own_path(
+    def test_choosing_nothing_files_that_first_asset_under_its_own_path(
             self, nodes_mod):
         out = run(nodes_mod, order=ORDER)
-        assert out.args[3][2] == "October/Mini 3 — Franken-Feast/Decoration/Bunting"
+        assert out.args[3] == ["October/Mini 3 — Franken-Feast/"
+                               "Food - 3 stages/Frankencrisps"]
 
     def test_a_category_narrows_what_can_be_chosen(self, nodes_mod):
         out = run(nodes_mod, order=ORDER, category="Decoration")
@@ -96,11 +100,11 @@ class TestTheFocusedOrder:
         assert orders[0]["feature"] == ORDER["feature"]
         assert orders[0]["month"] == ORDER["month"]
 
-    def test_no_choice_fans_one_order_out_per_asset(self, nodes_mod):
+    def test_no_choice_is_one_order_for_the_first_asset(self, nodes_mod):
         out = run(nodes_mod, order=ORDER)
         orders = out.args[4]
         assert [o["assets"][0]["assetName"] for o in orders] == \
-            ["Frankencrisps", "Frankenstein Pops", "Bunting"]
+            ["Frankencrisps"]
 
     def test_the_incoming_order_is_not_mutated(self, nodes_mod):
         run(nodes_mod, order=ORDER, asset="Bunting")
@@ -296,10 +300,10 @@ class TestTheClickedReference:
 
     def test_a_file_the_asset_does_not_have_falls_back_to_its_first(
             self, nodes_mod, refs):
-        """An all-assets run carries ONE filename past every asset in the
-        event, and it belongs to whichever one he clicked."""
-        out = run(nodes_mod, order=refs, ref="b.png")
-        assert out.args[9] == ["b.png", "c.png", ""]
+        """A filename belongs to ONE asset, and a `ref` left behind from
+        another names nothing here — `b.png` is Frankencrisps'."""
+        out = run(nodes_mod, order=refs, asset="Frankenstein Pops", ref="b.png")
+        assert out.args[9] == ["c.png"]
 
     def test_an_asset_with_no_references_is_not_a_refusal(self, nodes_mod, refs):
         """Asset Focus names and files assets whether or not the client sent
@@ -472,5 +476,16 @@ class TestCategoryByTiles:
         assert out.args[-3:] == (["Crate Icon 200x200"], [200], [200])
 
     def test_the_recipe_label_narrows_to_one_canvas_and_the_plain_name_keeps_both(self, nodes_mod):
-        assert run(nodes_mod, order=self.ORDER, category="Appliance 1x2").args[0] == ["Tall Oven"]
-        assert run(nodes_mod, order=self.ORDER, category="Appliance").args[0] == ["Short Oven", "Tall Oven"]
+        # ONE asset comes out of the node either way, so the narrowing is read
+        # where it is built: the recipe label takes one canvas, the plain
+        # category keeps both — and the first of it is what runs.
+        def narrowed(category):
+            return [a["assetName"]
+                    for a in nodes_mod._focus_items(self.ORDER, category)[0]]
+
+        assert narrowed("Appliance 1x2") == ["Tall Oven"]
+        assert narrowed("Appliance") == ["Short Oven", "Tall Oven"]
+        assert run(nodes_mod, order=self.ORDER,
+                   category="Appliance 1x2").args[0] == ["Tall Oven"]
+        assert run(nodes_mod, order=self.ORDER,
+                   category="Appliance").args[0] == ["Short Oven"]

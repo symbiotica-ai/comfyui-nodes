@@ -350,7 +350,7 @@ test("taking a category from another event moves the node to that event",
     assert.equal(widget(node, "feature").value, GHOSTS);
     assert.equal(widget(node, "category").value, "Food - 3 stages");
     assert.equal(widget(node, "asset").value, "");
-    assert.equal(runs(node), "runs 1");
+    assert.equal(runs(node), "runs 1 of 1");
 });
 
 test("a category the held event has does not move the event", async () => {
@@ -358,7 +358,7 @@ test("a category the held event has does not move the event", async () => {
     await click(groupToggle(node));
     await click(rowFor(node, `${OCT}/Wallpaper`));
     assert.equal(widget(node, "feature").value, FEAST);
-    assert.equal(runs(node), "runs 2");
+    assert.equal(runs(node), "runs 1 of 2");
 });
 
 test("the grouping rides on a property, so a saved workflow reopens on it",
@@ -394,15 +394,18 @@ test("clicking an event moves to it and drops everything chosen in the last one"
                      [OCT, FEAST, GHOSTS, "Food - 3 stages · 1", NOV, DEC]);
 });
 
-test("clicking a category is the 'all assets of this type' run", async () => {
+test("clicking a category runs its FIRST asset, not all of them", async () => {
     // The label it writes is the RECIPE — the category split by its canvas —
-    // because that is the name of the workflow that builds them.
+    // because that is the name of the workflow that builds them. And ONE
+    // asset is what a queue sends: "there should be only one asset at once so
+    // i don't send 30 requests to nano banana".
     const node = await taskNode({ asset: "Skull Wallpaper" });
     await click(rowFor(node, `${OCT}/${FEAST}/Appliance 1x2`));
     assert.equal(widget(node, "category").value, "Appliance 1x2");
     assert.equal(widget(node, "asset").value, "");
-    assert.equal(runs(node), "runs 1");
-    assert.equal(crumb(node), "Appliance 1x2 · every asset");
+    assert.equal(runs(node), "runs 1 of 1");
+    assert.equal(crumb(node),
+                 `${OCT} / ${FEAST} / Appliance 1x2 / Tall Oven · first`);
 });
 
 test("clicking an asset clears the narrowing rather than setting it", async () => {
@@ -430,7 +433,7 @@ test("clicking the chosen asset again falls back to its category, not to nothing
     assert.equal(widget(node, "asset").value, "");
     assert.equal(widget(node, "category").value, "Wallpaper");
     assert.ok(rowFor(node, rel), "the row clicked went off the screen");
-    assert.equal(runs(node), "runs 2");
+    assert.equal(runs(node), "runs 1 of 2");
 });
 
 test("moving to another asset drops the reference that belonged to the last one",
@@ -475,13 +478,17 @@ test("an asset the client sent nothing for says so rather than drawing nothing",
     assert.equal(promptText(node), "no prompt on this row");
 });
 
-test("with nothing picked the pane claims no reference", async () => {
-    // The whole event is what runs, and no one file is being sent — a lit tile
-    // or an image in the frame would name art `ref_image` is not carrying.
+test("with nothing picked the pane draws the asset that will run", async () => {
+    // Nothing picked is not nothing queued: the event's FIRST asset is what
+    // goes, with its first reference on `ref_image`. An empty frame there hid
+    // the one asset the queue was about to send.
     const node = await taskNode();
-    assert.equal(crumb(node), "every asset in the event");
-    assert.equal(tiles(node).length, 0);
-    assert.equal(shown(node).style.display, "none");
+    assert.equal(crumb(node),
+                 `${OCT} / ${FEAST} / Wallpaper / Skull Wallpaper · first`);
+    assert.deepEqual(tiles(node).map((t) => t.title.split(" — ")[0]),
+                     ["skull-wall-a.png", "skull-wall-b.png"]);
+    assert.match(shown(node).src,
+                 new RegExp(encodeURIComponent(`${REFS}/skull-wall-a.png`)));
 });
 
 test("the count is the event's, not the rows that happen to be open",
@@ -492,19 +499,24 @@ test("the count is the event's, not the rows that happen to be open",
     // categories — a node that looks like it failed to read the folder.
     const node = await taskNode();
     assert.equal(rows(node).filter((r) => r._sym.kind === "asset").length, 0);
-    assert.equal(runs(node), "runs 3");
-    assert.equal(textOf(main(node).children[2]), "Pick an asset in the tree.");
+    assert.equal(runs(node), "runs 1 of 3");
+    // And the pane draws the first of those three, built off the parse rather
+    // than off a row the tree has not opened.
+    assert.equal(promptHead(node), "client prompt · Skull Wallpaper");
 });
 
-test("picking a category shows its first asset, without picking it", async () => {
-    // "there is no point in showing an empty screen". The run is still every
-    // asset in the category — the preview moves no widget.
+test("picking a category shows the asset it will run, without picking it",
+     async () => {
+    // "there is no point in showing an empty screen". The first asset of the
+    // category is what the queue sends, and no widget moves for it — the node
+    // goes on holding the CATEGORY, which is what stepping through them needs.
     const node = await taskNode();
     await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper`));
     assert.equal(widget(node, "category").value, "Wallpaper");
-    assert.equal(widget(node, "asset").value, "", "a preview is not a pick");
-    assert.equal(runs(node), "runs 2", "and the run is still the category's");
-    assert.equal(crumb(node), "Wallpaper · every asset");
+    assert.equal(widget(node, "asset").value, "", "the preview is not a pick");
+    assert.equal(runs(node), "runs 1 of 2", "one of the category's two");
+    assert.equal(crumb(node),
+                 `${OCT} / ${FEAST} / Wallpaper / Skull Wallpaper · first`);
     assert.match(shown(node).src,
                  new RegExp(encodeURIComponent(`${REFS}/skull-wall-a.png`)));
     assert.equal(promptHead(node), "client prompt · Skull Wallpaper");

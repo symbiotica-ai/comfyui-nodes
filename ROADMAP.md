@@ -122,6 +122,11 @@ save on `bakery-base` was answered in `settableWidgets` and `cellValue`:
   whole: `output`/`workflow_prefix` are stripped and any key whose painted node
   has been renamed or unpainted leaves the file. Correct for a save he asked
   for; the bullet above asks whether an open should write at all.
+- A queue is ONE asset now, so there is no way left to run a whole category in
+  one go. The Asset Focus panel's `all` button is relabelled `first` and only
+  clears the pick. Open: whether a deliberate batch belongs back on the node —
+  it would have to be an explicit act (its own input), never an empty `asset`,
+  which is what a category click and a Recipes sidebar pick both leave behind.
 
 ## Set Hub / Get Hub — open threads (no issue filed yet)
 

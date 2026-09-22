@@ -66,9 +66,10 @@ class TestTheBrowsersSockets:
         schema = nodes_mod.SymbioticaTask.GET_SCHEMA()
         assert [o.display_name for o in schema.outputs] == ["specs"]
 
-    def test_it_is_a_list_so_a_whole_event_still_fans_out(self, nodes_mod):
+    def test_specs_is_a_list_of_one(self, nodes_mod):
         """Same rule as Asset Focus: a list of one runs downstream exactly
-        once, so choosing no asset can fan out over the event instead."""
+        once, so there is nothing left to index — and it is a list of ONE
+        however the node is set, picked asset or not."""
         schema = nodes_mod.SymbioticaTask.GET_SCHEMA()
         assert [o.display_name for o in schema.outputs
                 if getattr(o, "is_output_list", False)] == ["specs"]
@@ -192,8 +193,8 @@ class TestTheClickedReferenceTravels:
         """`refPick` is what this run actually drew. An asset that does not
         have the clicked file falls back to its first, and the wire has to
         carry THAT or the next node draws a different picture."""
-        out = task(nodes_mod, event, ref="b.png")
-        assert [o["refPick"] for o in out.args[0]] == ["b.png", "c.png", ""]
+        out = task(nodes_mod, event, asset="Frankenstein Pops", ref="b.png")
+        assert [o["refPick"] for o in out.args[0]] == ["c.png"]
 
     def test_asset_focus_fed_a_specs_wire_uses_the_pick_on_it(
             self, nodes_mod, event):
@@ -211,23 +212,25 @@ class TestTheClickedReferenceTravels:
 
 
 class TestChoosingNoAsset:
-    def test_one_specs_wire_per_asset(self, nodes_mod):
-        """"all" has to mean all here too, or the browser and the node it
-        feeds disagree about what was queued."""
+    def test_one_specs_wire_and_it_is_the_events_first_asset(self, nodes_mod):
+        """"there should be only one asset at once so i don't send 30 requests
+        to nano banana when i don't manually select one single asset from the
+        Task list" — the tree CLEARS `asset` on a category click, and every
+        one of those clicks used to be the whole category queued."""
         out = task(nodes_mod, ORDER)
         assert [o["assets"][0]["assetName"] for o in out.args[0]] == \
-            ["Frankencrisps", "Frankenstein Pops", "Bunting"]
+            ["Frankencrisps"]
 
-    def test_the_event_beside_them_is_still_one_dict(self, nodes_mod):
-        """One specs wire per asset, and every one of them carries the SAME
-        whole event — the fan-out is over the assets, never over the event. A
-        list there would fan the Order Tracker out once per asset in it."""
+    def test_the_event_beside_it_is_still_one_dict(self, nodes_mod):
+        """The specs wire carries the WHOLE event beside the one asset, as one
+        dict — a list there would fan the Order Tracker out once per asset in
+        it."""
         specs = task(nodes_mod, ORDER).args[0]
         events = [fan_out(nodes_mod, one).args[5] for one in specs]
         assert all(isinstance(e, dict) for e in events)
         assert {tuple(a["assetName"] for a in e["assets"]) for e in events} == \
             {tuple(a["assetName"] for a in ORDER["assets"])}
-        assert len(specs) == 3
+        assert len(specs) == 1
 
 
 class TestRefusals:

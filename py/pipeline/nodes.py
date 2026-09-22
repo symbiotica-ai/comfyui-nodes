@@ -218,16 +218,15 @@ def _focus_reference(order, asset_record, asset_name, wanted_file):
     filename, as the tensors Asset Focus hands out.
 
     Which one is `wanted_file` if this asset has it and its FIRST otherwise:
-    the name comes off a thumbnail he clicked on one asset, and an "all" run
-    passes the same string by every other asset in the event.
+    the name comes off a thumbnail he clicked on one asset, and one left
+    behind from another names nothing here.
 
     Nothing to send — no art in the order, no references folder, a file the
     order names and the disk has lost — is a one-pixel plate and an EMPTY name,
     never a raise. Two reasons: the outputs are index-aligned lists, so a
-    dropped entry would pair every later asset with the wrong picture; and this
-    lane is optional. Asset Focus names, files and fans out assets whether or
-    not any art arrived, and refusing would take that down over a reference
-    nobody wired. The empty `ref_name` is what says there was none — the panel
+    dropped entry would leave the others one short; and this lane is optional.
+    Asset Focus names and files an asset whether or not any art arrived, and
+    refusing would take that down over a reference nobody wired. The empty `ref_name` is what says there was none — the panel
     shows the same thing by drawing no thumbnail.
     """
     from PIL import Image
@@ -335,17 +334,24 @@ def _focus_push(cls, order, items, raw):
 
 
 def _focus_columns(order, items, raw, asset="", ref=""):
-    """The thirteen columns Asset Focus emits, for one chosen asset or for the
-    whole narrowed event. The ONE place they are built, so Task Specs cannot
-    drift from the node it stands in for."""
+    """The thirteen columns Asset Focus emits for ONE asset — the one named,
+    or the first of the narrowing. The ONE place they are built, so Task Specs
+    cannot drift from the node it stands in for."""
     # A reference the wire already chose. `refPick` is written by the node that
     # made the pick, so a second node never has to ask which thumbnail he
     # clicked — "being asked the same question again is the click he wanted
     # gone". A `ref` of this node's own still wins: it is the later answer.
     ref = str(ref or "").strip() or str((order or {}).get("refPick", "") or "")
 
+    # ONE asset per queue, always: the one named, or the FIRST of the
+    # narrowing. Every output is a list, so emitting the whole narrowing fanned
+    # the graph out once per asset — and clicking a category in the Task tree
+    # or a row in the Recipes sidebar both CLEAR `asset`, which is thirty
+    # renders and thirty API calls off one click. The first is the asset the
+    # panel already draws under a picked category, so the pane and the queue
+    # now say the same thing.
     wanted = str(asset or "").strip()
-    chosen = list(enumerate(items))
+    picked = items[:1]
     if wanted:
         names = [a["assetName"] for a in items]
         if wanted not in names:
@@ -356,12 +362,7 @@ def _focus_columns(order, items, raw, asset="", ref=""):
                 f"no asset called {wanted!r} in "
                 f"{order.get('feature', '')!r} — it holds: "
                 f"{', '.join(names)}")
-        index = names.index(wanted)
-        chosen = [(index, items[index])]
-    # No choice means the whole event, which is what the panel's "all"
-    # says: a button that reads "all" and emits one asset is lying about
-    # what the node is going to do.
-    picked = [item for _, item in chosen]
+        picked = [items[names.index(wanted)]]
 
     # The reference he clicked, resolved here rather than on a second
     # node: clicking the thumbnail already said which one, and being asked
@@ -417,18 +418,18 @@ class SymbioticaAssetFocus(io.ComfyNode):
                         "client prompt, save path, its canvas, and the client "
                         "reference you clicked. Set project_path and press "
                         "Read folder to fill the month and event pickers "
-                        "without queueing. Choose no asset and it emits the "
-                        "whole event instead, so the same node covers both "
-                        "the one-asset iteration loop and a run over "
-                        "everything.",
+                        "without queueing. ONE asset per queue: choose none "
+                        "and it emits the first of the narrowing, which is "
+                        "the one the panel draws.",
             inputs=[
                 # Optional since this node can make its own: month, feature,
                 # category and asset are one selection, and splitting it across
                 # two nodes meant picking half of it in each.
                 Order.Input("order", optional=True),
                 io.String.Input("category", default="",
-                                tooltip="Narrow the choice to one asset type, "
-                                        "or leave empty for every type."),
+                                tooltip="Narrow the choice to one asset type. "
+                                        "Empty is the whole event, and the "
+                                        "first asset of it is what runs."),
                 io.String.Input("asset", default="",
                                 tooltip="Which asset, by name. Set by clicking "
                                         "it on the node; typed names work too. "
@@ -453,14 +454,11 @@ class SymbioticaAssetFocus(io.ComfyNode):
                                 tooltip="Which of the asset's client "
                                         "references to emit, by filename. Set "
                                         "by clicking a thumbnail on the node. "
-                                        "Empty means the first, which is also "
-                                        "what every OTHER asset gets in an "
-                                        "all-assets run."),
+                                        "Empty means the first."),
             ],
-            # Lists, but normally of one. A single-element list behaves exactly
-            # like a scalar downstream — it runs once — so choosing an asset
-            # leaves nothing to index. Choosing none emits every asset instead,
-            # and downstream fans out over the whole event.
+            # Lists of ONE. A single-element list behaves exactly like a
+            # scalar downstream — it runs once — so there is nothing to index,
+            # and no pick of his can fan the graph out over a whole category.
             outputs=[
                 io.String.Output(display_name="asset_name", is_output_list=True),
                 io.String.Output(display_name="category", is_output_list=True),
@@ -590,8 +588,9 @@ class SymbioticaTask(io.ComfyNode):
                         "whole pick — `ref_image` carries it. `specs` is the "
                         "rest of the record on one wire; put a Task Specs on "
                         "the end of it for the name, the save path, the "
-                        "canvas size and the category recipe. Choose no asset "
-                        "and it emits the whole event instead.",
+                        "canvas size and the category recipe. ONE asset per "
+                        "queue: choose none and it emits the first of the "
+                        "narrowing.",
             # `project_path` is the only input. Asset Focus carries an `order`
             # socket so one of them can feed another; this node reads the
             # folder and that is the whole of it — a socket for an order it
@@ -607,8 +606,7 @@ class SymbioticaTask(io.ComfyNode):
                                      "Task Specs on the end of it for the "
                                      "name, the prompt, the save path, the "
                                      "reference art and the canvas size. One "
-                                     "of these per focused asset, so "
-                                     "downstream runs once per asset."),
+                                     "asset, so downstream runs once."),
             ],
             hidden=[io.Hidden.unique_id],
             # Queueable on its own: the panel's list of choices only exists
@@ -660,8 +658,8 @@ class SymbioticaTaskSpecs(io.ComfyNode):
             inputs=[Order.Input("specs",
                                 tooltip="A Task's `specs` output — or any "
                                         "order. Fed a whole event rather than "
-                                        "one asset, every output fans out "
-                                        "over it.")],
+                                        "one asset, the first of it is what "
+                                        "comes out.")],
             outputs=copy.deepcopy(base.outputs),
         )
 

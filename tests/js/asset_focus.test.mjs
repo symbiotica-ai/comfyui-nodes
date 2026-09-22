@@ -79,12 +79,14 @@ test("the chosen asset is the one drawn as selected", async () => {
                              ["Bunting", true]]);
 });
 
-test("the header says how many the node will emit", async () => {
-    // "all" emits every listed asset now, so the count has to be visible.
+test("the header says ONE asset runs, picked or not", async () => {
+    // No pick emits the FIRST of the narrowing, never all of it — the count
+    // beside it is what the narrowing holds, not what a queue sends.
     const none = await focusNode({ asset: "" });
-    assert.match(listOf(none).children[0].children[0].textContent, /runs 3/);
+    assert.match(listOf(none).children[0].children[0].textContent,
+                 /3 assets · runs 1$/);
     const one = await focusNode({ asset: "Bunting" });
-    assert.match(listOf(one).children[0].children[0].textContent, /runs 1/);
+    assert.match(listOf(one).children[0].children[0].textContent, /runs 1$/);
 });
 
 test("the category being narrowed to is shown", async () => {
@@ -595,30 +597,30 @@ test("asset is a dropdown of what the narrowing holds", async () => {
     const w = widgetOf(node, "asset");
     assert.equal(w.type, "combo");
     assert.deepEqual(w.options.values(),
-                     ["All assets", "Frankencrisps", "Frankenstein Pops",
+                     ["First asset", "Frankencrisps", "Frankenstein Pops",
                       "Bunting"]);
 });
 
 test("the asset dropdown follows the category", async () => {
     const node = await focusNode({ category: "Decoration" });
     assert.deepEqual(widgetOf(node, "asset").options.values(),
-                     ["All assets", "Bunting"]);
+                     ["First asset", "Bunting"]);
 });
 
-test("the All-assets sentinel reaches the node as an empty string", async () => {
-    // A combo cannot offer an empty label, and the node reads "" as "every
-    // asset in the narrowing".
+test("the First-asset sentinel reaches the node as an empty string", async () => {
+    // A combo cannot offer an empty label, and the node reads "" as "the
+    // first asset of the narrowing".
     const node = await focusNode();
     const w = widgetOf(node, "asset");
-    assert.equal(w.value, "All assets");
+    assert.equal(w.value, "First asset");
     assert.equal(w.serializeValue(), "");
 });
 
-test("choosing All assets clears the pick rather than naming it", async () => {
+test("choosing First asset clears the pick rather than naming it", async () => {
     const node = await focusNode({ asset: "Bunting" });
     const w = widgetOf(node, "asset");
-    w.value = "All assets";
-    w.callback("All assets");
+    w.value = "First asset";
+    w.callback("First asset");
     for (let i = 0; i < 5; i++) await tick();
     assert.equal(w.serializeValue(), "");
     // Every asset is listed again, none drawn as chosen.

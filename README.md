@@ -186,8 +186,8 @@ watch or edit what that asset needs.
   category plus its canvas in tiles, that canvas in pixels, and the client
   reference you clicked (image, mask, filename). `order` is the incoming order
   narrowed to the focused asset; `event_order` is the whole event, unnarrowed,
-  for the Order Tracker. Pick nothing and it emits every asset in the event, so
-  the same node covers the one-asset loop and a run over everything.
+  for the Order Tracker. ONE asset per queue: pick nothing and it emits the
+  first of the narrowing, which is the one the panel draws.
 - **Symbiotica Order Tracker** — the order as a board: one slot per asset it
   asks for, filled with the approved render or left empty, with a count and a
   percent for the event. It is a picker pointed at every asset at once — the
