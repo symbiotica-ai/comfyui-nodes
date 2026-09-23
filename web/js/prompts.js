@@ -250,16 +250,29 @@ function setupPrompts(node) {
     // has one.
     const dot = el("span", "flex:none;width:6px;height:6px;border-radius:50%;"
         + `background:${HUB.accent};display:none;`);
-    const saveBtn = el("button",
-        ghostButtonCss + "padding:2px 8px;flex:none;font-size:11px;", "save");
-    saveBtn.className = "sym-btn";
-    saveBtn.title = "Save this file (⌘S)";
-    saveBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
-    saveBtn.addEventListener("click", (e) => { e.stopPropagation(); void save(); });
+    // A button that is off does nothing, whatever reaches it: `disabled`
+    // stops a real click, and the guard stops one fired any other way.
+    const headButton = (label, title, onClick) => {
+        const b = el("button",
+            ghostButtonCss + "padding:2px 8px;flex:none;font-size:11px;", label);
+        b.className = "sym-btn";
+        b.title = title;
+        b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (!b.disabled) void onClick();
+        });
+        return b;
+    };
+    const discardBtn = headButton("discard",
+        "Discard your edits and show the file as it is on disk", () => discard());
+    const saveAsBtn = headButton("save as",
+        "Save as a new file; this one stays as it is on disk", () => saveAs());
+    const saveBtn = headButton("save", "Save this file (⌘S)", () => save());
     const mainHead = el("div", "display:flex;align-items:center;gap:6px;"
         + `padding:3px 6px;flex:none;background:${HUB.surface2};`
         + `border-bottom:1px solid ${HUB.hairline};`);
-    mainHead.append(dot, crumb, saveBtn);
+    mainHead.append(dot, crumb, discardBtn, saveAsBtn, saveBtn);
 
     const area = el("textarea", "flex:1;min-height:0;width:100%;"
         + "box-sizing:border-box;resize:none;border:0;outline:none;"
@@ -347,10 +360,24 @@ function setupPrompts(node) {
         return out.length ? out : [emptyState("no prompt files here")];
     }
 
+    // What the head offers is what the file's state allows. `save` and
+    // `discard` only mean something while the editor differs from disk, and
+    // `save` is then the one filled control on the panel. `save as` works on
+    // a clean file too: it is how one prompt becomes the start of the next.
+    const enable = (b, on) => {
+        b.disabled = !on;
+        b.style.opacity = on ? "" : "0.4";
+        b.style.cursor = on ? "pointer" : "default";
+    };
     function paintDirty() {
-        const has = !!fileRel() && dirty();
+        const open = !!fileRel();
+        const has = open && dirty();
         dot.style.display = has ? "" : "none";
-        saveBtn.style.color = has ? HUB.ink : HUB.inkSubtle;
+        enable(discardBtn, has);
+        enable(saveAsBtn, open);
+        enable(saveBtn, has);
+        saveBtn.style.background = has ? HUB.accent : "transparent";
+        saveBtn.style.color = has ? HUB.onAccent : HUB.inkSubtle;
         saveBtn.style.borderColor = has ? HUB.accent : HUB.hairline;
     }
 
@@ -519,6 +546,58 @@ function setupPrompts(node) {
                 state.files = [...(state.files ?? []), rel].sort();
             }
             toast("success", "Saved", `${rel} — ${res.chars} chars`);
+            announce();
+        } catch (err) {
+            toast("error", "Prompts", String(err.message || err));
+        }
+        repaint();
+    }
+
+    // Back to the file as it is on disk -- read again rather than the copy
+    // taken at load, because a panel mid-edit is the one that skipped the
+    // re-read when another panel saved the same file.
+    async function discard() {
+        const rel = fileRel();
+        if (!rel || !dirty()) return;
+        if (!(await askConfirm(`Discard your edits to ${rel}?`))) return;
+        textW.value = state.loaded;
+        await load();
+    }
+
+    // The editor written to a NEW file beside this one, which the node then
+    // shows; the file it came from stays as it is on disk. A name that is
+    // taken is asked about, never replaced quietly.
+    async function saveAs() {
+        const from = fileRel();
+        if (!state.path || !from) {
+            toast("warn", "Prompts", "Pick a file first.");
+            return;
+        }
+        const folder = dirOf(from);
+        const base = baseOf(from);
+        const ext = base.match(/\.(md|txt)$/i)?.[0] ?? "";
+        const stem = ext ? base.slice(0, -ext.length) : base;
+        const typed = await askText(`Save as, inside ${folder || "the path"}:`,
+                                    `${stem}-copy${ext || ".md"}`);
+        const name = fileName(typed);
+        if (!name) return;
+        const rel = joinRel(folder, name);
+        if (rel === from) { await save(); return; }
+        if ((state.files ?? []).includes(rel)
+            && !(await askConfirm(`${rel} already exists. Replace it?`))) return;
+        try {
+            const body = text();
+            await postJson("/symbiotica/prompts-write",
+                           { folder: state.path, name: rel, text: body });
+            if (!(state.files ?? []).includes(rel)) {
+                state.files = [...(state.files ?? []), rel].sort();
+            }
+            folderW.value = dirOf(rel) || ROOT;
+            fileW.value = baseOf(rel);
+            state.loaded = body;
+            state.cursor = null;
+            openAncestors(rel);
+            toast("success", "Saved as", rel);
             announce();
         } catch (err) {
             toast("error", "Prompts", String(err.message || err));

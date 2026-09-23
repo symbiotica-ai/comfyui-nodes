@@ -18,6 +18,8 @@ const TREE = {
 // had just been told to change.
 function router(seen, tree = TREE) {
     let state = { folders: [...tree.folders], files: [...tree.files] };
+    // A file read after it was written answers with what was written.
+    const written = {};
     const add = (key, name) => {
         if (!state[key].includes(name)) {
             state = { ...state, [key]: [...state[key], name].sort() };
@@ -31,10 +33,12 @@ function router(seen, tree = TREE) {
         if (route.startsWith("/symbiotica/prompts-read")) {
             const name = new URLSearchParams(route.split("?")[1]).get("name");
             return { ok: true, status: 200,
-                     body: { ok: true, text: `TEXT OF ${name}` } };
+                     body: { ok: true, text: written[name] ?? `TEXT OF ${name}` } };
         }
         if (route.startsWith("/symbiotica/prompts-write")) {
-            add("files", JSON.parse(init.body).name);
+            const { name, text } = JSON.parse(init.body);
+            written[name] = text;
+            add("files", name);
             return { ok: true, status: 200, body: { ok: true, chars: 7 } };
         }
         if (route.startsWith("/symbiotica/prompts-rename")) {
@@ -268,6 +272,77 @@ test("⌘S in the editor saves, without reaching the canvas", async () => {
     assert.deepEqual(posted(seen, "prompts-write"),
                      [{ folder: "/p/bakery/prompts", name: "_rules/01-refs.md",
                         text: "SAVED BY KEY" }]);
+});
+
+const SAVE = "Save this file (⌘S)";
+const DISCARD = "Discard your edits and show the file as it is on disk";
+const SAVE_AS = "Save as a new file; this one stays as it is on disk";
+
+test("save and discard are off until the editor differs from disk", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    answer();
+    const state = () => [SAVE, DISCARD, SAVE_AS].map((t) => button(node, t).disabled);
+    // A clean file can only be saved under another name.
+    assert.deepEqual(state(), [true, true, false]);
+    await click(button(node, SAVE));
+    assert.deepEqual(posted(seen, "prompts-write"), []);
+    await type(node, "AN EDIT");
+    assert.deepEqual(state(), [false, false, false]);
+    // Typed back to what is on disk, there is nothing to save again.
+    await type(node, "TEXT OF _rules/01-refs.md");
+    assert.deepEqual(state(), [true, true, false]);
+});
+
+test("discard puts the file back as it is on disk", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    answer({ confirm: false });
+    await type(node, "AN EDIT");
+    // A no keeps the edit.
+    await click(button(node, DISCARD));
+    assert.equal(widget(node, "text").value, "AN EDIT");
+    answer();
+    await click(button(node, DISCARD));
+    assert.equal(widget(node, "text").value, "TEXT OF _rules/01-refs.md");
+    assert.equal(editor(node).value, "TEXT OF _rules/01-refs.md");
+    assert.equal(button(node, SAVE).disabled, true);
+    assert.deepEqual(posted(seen, "prompts-write"), []);
+});
+
+test("save as writes the edit to a new file and leaves the old one alone",
+     async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    answer({ text: "01-refs-v2" });
+    await type(node, "A VARIANT");
+    await click(button(node, SAVE_AS));
+    assert.deepEqual(posted(seen, "prompts-write"),
+                     [{ folder: "/p/bakery/prompts", name: "_rules/01-refs-v2.md",
+                        text: "A VARIANT" }]);
+    assert.equal(widget(node, "folder").value, "_rules");
+    assert.equal(widget(node, "file").value, "01-refs-v2.md");
+    assert.equal(widget(node, "text").value, "A VARIANT");
+    assert.ok(tree(node).includes("_rules/01-refs-v2.md"));
+    // The new file holds what the editor shows: nothing left to save.
+    assert.equal(button(node, SAVE).disabled, true);
+    // The one it came from was never written, so it is as it was on disk.
+    await click(rowFor(node, "_rules/01-refs.md"));
+    assert.equal(widget(node, "text").value, "TEXT OF _rules/01-refs.md");
+});
+
+test("save as onto a name that is taken asks first", async () => {
+    const seen = [];
+    const node = await promptsNode(seen);
+    await type(node, "A VARIANT");
+    app.extensionManager = {
+        dialog: { prompt: async () => "03-light", confirm: async () => false },
+        toast: { add() {} },
+    };
+    await click(button(node, SAVE_AS));
+    assert.deepEqual(posted(seen, "prompts-write"), []);
+    assert.equal(widget(node, "file").value, "01-refs.md");
+    assert.equal(widget(node, "text").value, "A VARIANT");
 });
 
 test("new file lands in the folder last clicked, and opens", async () => {
