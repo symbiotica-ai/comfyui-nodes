@@ -473,6 +473,14 @@ the same thing. Each one failed silently first.
 - After a save, that one recipe's workflow file is rewritten two seconds later
   (`/symbiotica/recipes/generate` takes an optional `recipe`), so the file on
   disk is the recipe rather than whatever `generate workflows` last wrote.
+- **Linked recipes are one set of values under several names** (2026-09-23):
+  "decoration 1x1, 2x2, 3x3 etc have the same functionality and will have the
+  same recipe". The project file keeps `links` (a list of name lists) AND a
+  whole block per name, so the server generates each one as it is and knows
+  nothing of links. What keeps the blocks equal is the canvas: every write to
+  a linked column goes through `mirrorLinked` (inside `captureColumn`, and
+  `touched(column)` for the pane's cells). A new path that writes cells has
+  to go through it too, or one name drifts from the others in silence.
 - **A cell's text is JSON spaced BETWEEN its tokens, never inside a string**
   (`spacedJson`, behind `cellText`). A `replace(/,/g, ", ")` over the whole
   text spaced the commas inside string values too, so every save of a dict

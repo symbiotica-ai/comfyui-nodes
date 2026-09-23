@@ -534,7 +534,8 @@ export function projectToTable(project, slots) {
     // The base workflow is the whole header. `output` and `workflow_prefix`
     // were two more knobs for one rule — beside the base, named after it —
     // and are gone; a value left in an old file is ignored on both sides.
-    return { header: { template: project?.template ?? "" }, columns, rows };
+    return { header: { template: project?.template ?? "" }, columns, rows,
+             links: cleanLinks(project?.links, columns) };
 }
 
 // `offered` names the columns that are only there because the ORDER holds that
@@ -564,13 +565,19 @@ export function tableToProject(base, table, slots, offered = null) {
     }
     out.shared = columnValues[SHARED] ?? {};
     const held = new Set(Object.keys(base?.recipes ?? {}));
+    // A linked category is a recipe even while its values are all shared's:
+    // it is a workflow `generate` has to write.
+    const linked = new Set((table.links ?? []).flat());
     out.recipes = {};
     for (const column of table.columns) {
         if (column === SHARED) continue;
         const values = columnValues[column];
-        if (offered?.has(column) && !held.has(column) && !Object.keys(values).length) continue;
+        if (offered?.has(column) && !held.has(column) && !linked.has(column)
+            && !Object.keys(values).length) continue;
         out.recipes[column] = values;
     }
+    const links = cleanLinks(table.links, Object.keys(out.recipes));
+    if (links.length) out.links = links; else delete out.links;
     return out;
 }
 
@@ -694,7 +701,76 @@ export function captureColumn(table, slots, column, values) {
         const text = cellText(values[row.key]);
         row.cells[column] = column !== SHARED && text === (row.cells[SHARED] ?? "") ? "" : text;
     }
+    mirrorLinked(table, column);
     return table;
+}
+
+// ----------------------------------------------------------------- links --
+// LINKED recipes hold the same values: decoration-1x1, -2x2 and -4x4 are one
+// recipe under three names, and `generate workflows` still writes a workflow
+// for each name. The file keeps every name's block whole, so the server
+// generates from them as they are and knows nothing about links; the groups
+// ride beside them as `links`, a list of name lists. What keeps the blocks
+// equal is the canvas: every write to a linked column goes to the others in
+// the same step (`mirrorLinked`).
+
+// The names linked with `name`, itself included, or null.
+export function linkGroup(table, name) {
+    return (table?.links ?? []).find((group) => group.includes(name)) ?? null;
+}
+
+// Only what can still be a link: names the table has, each in one group, in
+// groups of two or more. A recipe removed or renamed away leaves its group
+// here, rather than staying on as a name nothing answers to.
+export function cleanLinks(links, columns) {
+    const have = new Set(columns ?? []);
+    const seen = new Set();
+    const out = [];
+    for (const group of Array.isArray(links) ? links : []) {
+        const names = [...new Set((Array.isArray(group) ? group : []).map(String))]
+            .filter((n) => n !== SHARED && have.has(n) && !seen.has(n));
+        if (names.length < 2) continue;
+        for (const n of names) seen.add(n);
+        out.push(names);
+    }
+    return out;
+}
+
+// One column's cells onto every other name linked with it. Every path that
+// writes a recipe's cells -- a capture, auto's save, a keystroke in the pane --
+// ends here, so no linked recipe is ever a step behind the others.
+export function mirrorLinked(table, column) {
+    const others = (linkGroup(table, column) ?? [])
+        .filter((name) => name !== column && table.columns.includes(name));
+    for (const row of table.rows) {
+        for (const name of others) row.cells[name] = row.cells[column] ?? "";
+    }
+    return others;
+}
+
+// Tick `name` into the group of `from`: it leaves any group it was in and
+// takes from's cells. The recipe you link FROM is the one whose values win.
+export function linkRecipe(table, from, name) {
+    if (!from || !name || from === name || from === SHARED || name === SHARED) return false;
+    ensureColumns(table, [name]);
+    const links = (table.links ?? []).map((group) => group.filter((n) => n !== name));
+    let group = links.find((g) => g.includes(from));
+    if (!group) { group = [from]; links.push(group); }
+    group.push(name);
+    table.links = links.filter((g) => g.length > 1);
+    mirrorLinked(table, from);
+    return true;
+}
+
+// Untick: the name leaves its group and keeps the values it holds, as its own
+// from then on. A group left with one name is no group.
+export function unlinkRecipe(table, name) {
+    table.links = (table.links ?? []).map((group) => group.filter((n) => n !== name))
+        .filter((group) => group.length > 1);
+}
+
+export function renameLinked(table, from, to) {
+    table.links = (table.links ?? []).map((group) => group.map((n) => (n === from ? to : n)));
 }
 
 // One column as the generator would see it: shared with the column's own
@@ -918,7 +994,13 @@ function recipePanel(node) {
     const storedColumns = () => new Set(Object.keys(state.project?.recipes ?? {}));
     const untouched = (column, stored = storedColumns()) =>
         column !== SHARED && state.offered.has(column)
-        && !stored.has(column) && !setCount(column);
+        && !stored.has(column) && !setCount(column)
+        && !linkGroup(state.table, column);
+    // The recipe whose values the sidebar is ticking other recipes into, while
+    // the link icon is pressed, and the rows ticked so far. Null and empty the
+    // rest of the time. Nothing is linked until the `link` button is pressed.
+    let linking = null;
+    let ticks = new Set();
     // The recipes that EXIST, which is what `auto` decides against: the wire
     // landing on a category with nothing stored must still capture the canvas
     // into it rather than load shared over what he painted.
@@ -944,6 +1026,13 @@ function recipePanel(node) {
     }
 
     // --- the shell ---------------------------------------------------------
+    // The link icon puts a tick box on every recipe row; `link` shows once the
+    // ticks differ from what is linked, and pressing it links them.
+    const linkIcon = iconButton("link", "", () => toggleLinking(), { px: 12 });
+    const linkGo = stopCanvas(el("button", wordButtonCss + "margin-right:3px;", "link"));
+    linkGo.className = "sym-btn";
+    linkGo.style.display = "none";
+    linkGo.addEventListener("click", (e) => { e.stopPropagation(); applyLinks(); });
     const shell = sidebarShell(node, {
         sideProp: RECIPE_SIDE, shutProp: RECIPE_SHUT, sideDefault: 180,
         repaint: () => renderAll(),
@@ -953,9 +1042,11 @@ function recipePanel(node) {
         search: {
             placeholder: "Search recipes…",
             list: () => state.table?.columns ?? [],
-            onPick: (name) => choose(name),
+            onPick: (name) => (linking ? toggleLink(name) : choose(name)),
         },
         headButtons: [
+            linkGo,
+            linkIcon,
             iconButton("newFile", "Start a project from the open workflow",
                        () => startNew()),
         ],
@@ -1083,7 +1174,7 @@ function recipePanel(node) {
         if (!name) {
             state.name = null; state.project = null; state.slots = [];
             state.templateSlots = []; state.table = null; state.dirty = false;
-            state.offered = new Set(); categorySig = null;
+            state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
             renderFull();
             status(path ? "No project has this workflow as its template. Press new project." : "Save the workflow first.", false);
             return;
@@ -1109,7 +1200,7 @@ function recipePanel(node) {
             slotSig = null;
             // The offers belong to the table they were folded into; the sweep
             // on the next draw puts them back against this one.
-            state.offered = new Set(); categorySig = null;
+            state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
             auto.last = { name: null, sig: null };
             takeShot();
             active = "";
@@ -1154,18 +1245,23 @@ function recipePanel(node) {
     // what is on disk is the recipe rather than whatever generate last wrote.
     // Debounced, and only the recipe that moved: auto saves a second after a
     // value changes, and one 250KB workflow per keystroke is churn, not a file.
-    const rebuild = { timer: null, name: null };
+    // A linked recipe moves with its group, so every linked name's file is
+    // rewritten with it.
+    const rebuild = { timer: null, names: new Set() };
     function rebuildWorkflow(column) {
         if (!state.name || !column || column === SHARED) return;
-        rebuild.name = column;
+        for (const name of linkGroup(state.table, column) ?? [column]) rebuild.names.add(name);
         if (rebuild.timer) return;
         rebuild.timer = setTimeout(async () => {
             rebuild.timer = null;
-            const recipe = rebuild.name;
-            try {
-                await postJson("/symbiotica/recipes/generate", { name: state.name, recipe });
-            } catch (err) {
-                status(`${recipe}: its workflow was not written — ${String(err?.message ?? err)}`, false);
+            const names = [...rebuild.names];
+            rebuild.names.clear();
+            for (const recipe of names) {
+                try {
+                    await postJson("/symbiotica/recipes/generate", { name: state.name, recipe });
+                } catch (err) {
+                    status(`${recipe}: its workflow was not written — ${String(err?.message ?? err)}`, false);
+                }
             }
         }, 2000);
     }
@@ -1208,7 +1304,7 @@ function recipePanel(node) {
             state.slots = []; state.templateSlots = [];
             state.table = null;
             state.dirty = false;
-            state.offered = new Set(); categorySig = null;
+            state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
             resolvedFor = undefined;
             renderFull();
             toast("info", `Deleted project "${name}"`, "Its generated workflows are still in the workflows folder.");
@@ -1229,7 +1325,7 @@ function recipePanel(node) {
             state.table = projectToTable(project, slots);
             state.dirty = false;
             slotSig = null;
-            state.offered = new Set(); categorySig = null;
+            state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
             active = ""; autoSelected = SHARED;
             pickRow(SHARED);
             resolvedFor = template;
@@ -1469,7 +1565,9 @@ function recipePanel(node) {
     }
 
     function syncActive() {
-        if (!state.table) return;
+        // While ticking, the pane stays on the recipe being linked; the wire
+        // is still there when `done` is pressed.
+        if (!state.table || linking) return;
         const next = activeColumn();
         if (next === active) return;
         // A wire that moves while he is typing must not take the pane with
@@ -1665,6 +1763,7 @@ function recipePanel(node) {
         if (at < 0) return;
         columns.splice(at, 1);
         for (const row of rows) delete row.cells[column];
+        unlinkRecipe(state.table, column);
         if (autoSelected === column) autoSelected = null;
         pickRow(SHARED);
         state.dirty = true;
@@ -1687,6 +1786,7 @@ function recipePanel(node) {
         columns.splice(0, columns.length, SHARED,
                        ...sortedRecipes(columns.filter((c) => c !== SHARED)));
         for (const row of rows) { row.cells[next] = row.cells[column]; delete row.cells[column]; }
+        renameLinked(state.table, column, next);
         if (autoSelected === column) autoSelected = next;
         pickRow(next);
         nameField.value = next;
@@ -1709,6 +1809,66 @@ function recipePanel(node) {
         e.stopPropagation();
         newRecipe();
     });
+    // The link icon: tick boxes on, starting from what the picked recipe is
+    // linked with now; pressed again, they go without linking anything.
+    function toggleLinking() {
+        if (linking) {
+            linking = null;
+            ticks = new Set();
+            renderAll();
+            return;
+        }
+        const column = columnOf(picked());
+        if (!state.table) return;
+        // Linking FROM shared, the project row or a category with nothing
+        // stored would hand its emptiness to every recipe ticked.
+        if (picked() === PROJECT_ROW || column === SHARED || untouched(column)) {
+            status("Pick the recipe whose values the others take, then press the link icon.", false);
+            return;
+        }
+        linking = column;
+        ticks = new Set((linkGroup(state.table, column) ?? []).filter((n) => n !== column));
+        renderAll();
+    }
+
+    // A click on a sidebar row while the tick boxes are on. Nothing is linked
+    // until `link` is pressed.
+    function toggleLink(name) {
+        if (!linking || !state.table || name === linking || name === SHARED
+            || !state.table.columns.includes(name)) return;
+        if (ticks.has(name)) ticks.delete(name); else ticks.add(name);
+        renderTree();
+        drawStatus();
+        refit();
+    }
+
+    // The ticks as they would change what is linked: some to add, some to take out.
+    const linkedNow = () => new Set((linkGroup(state.table, linking) ?? [])
+        .filter((n) => n !== linking));
+    const ticksChanged = () => {
+        const now = linkedNow();
+        return ticks.size !== now.size || [...ticks].some((n) => !now.has(n));
+    };
+
+    // `link`: the ticked recipes take the picked one's values and are linked
+    // with it; one unticked leaves, keeping its values. Saved at once, and
+    // every linked recipe's workflow is rewritten.
+    async function applyLinks() {
+        const from = linking;
+        if (!from || !state.table) return;
+        const now = linkedNow();
+        for (const name of now) if (!ticks.has(name)) unlinkRecipe(state.table, name);
+        for (const name of ticks) if (!now.has(name)) linkRecipe(state.table, from, name);
+        linking = null;
+        ticks = new Set();
+        state.dirty = true;
+        renderAll();
+        if (!(await save())) return;
+        rebuildWorkflow(from);
+        const group = linkGroup(state.table, from);
+        status(group ? `Linked ${group.length}: ${group.join(", ")}.`
+                     : `${from} is not linked to anything.`, false);
+    }
     stopCanvas(saveButton).addEventListener("click", (e) => { e.stopPropagation(); save(); });
     stopCanvas(generateButton).addEventListener("click", (e) => { e.stopPropagation(); generate(); });
     stopCanvas(deleteButton).addEventListener("click", (e) => { e.stopPropagation(); remove(); });
@@ -1721,8 +1881,10 @@ function recipePanel(node) {
 
     // An edit changes a count and the status line, and nothing else. Rebuilding
     // the pane here is what took the caret out mid-word. `drawHead` writes no
-    // field that has the caret in it.
-    function touched() {
+    // field that has the caret in it. A cell edited in a linked recipe is
+    // edited in every recipe linked with it.
+    function touched(column = null) {
+        if (column && state.table) mirrorLinked(state.table, column);
         state.dirty = true;
         renderTree();
         drawHead();
@@ -1745,14 +1907,18 @@ function recipePanel(node) {
             for (const column of state.table.columns) {
                 const shared = column === SHARED;
                 const empty = untouched(column, stored);
+                const linked = shared ? null
+                    : linkGroup(state.table, column)?.filter((n) => n !== column) ?? null;
                 rows.push({
                     kind: shared ? "shared" : "recipe", rel: column, depth: 1,
                     label: column, count: setCount(column),
-                    unit: shared ? "values" : "own", empty,
+                    unit: shared ? "values" : "own", empty, linked,
                     hint: shared ? "What every recipe takes unless it sets its own."
                         : empty ? `${column}: a category in the order, with nothing `
                             + "stored for it yet. Pick it, set the canvas, and it is a recipe."
-                        : `${column}: only what differs from shared is stored.`,
+                        : `${column}: only what differs from shared is stored.`
+                          + (linked ? ` Linked with ${linked.join(", ")}: they hold the `
+                              + "same values, and an edit to one is an edit to all." : ""),
                 });
             }
         }
@@ -1782,29 +1948,48 @@ function recipePanel(node) {
                 ? "No project has this workflow as its template."
                 : "Save the workflow first."));
         }
-        const held = picked();
+        const held = linking ?? picked();
+        // While the link icon is pressed every other recipe row is a tick box
+        // and a click ticks it; the project and shared rows cannot be linked.
+        linkIcon.style.color = linking ? HUB.selInk : HUB.inkSubtle;
+        linkIcon.title = linking
+            ? "Stop linking, and link nothing"
+            : "Link recipes: tick the ones that take this recipe's values. Linked "
+              + "recipes hold the same values, an edit to one is an edit to all, and "
+              + "generate still writes a workflow for each.";
+        linkGo.style.display = linking && ticksChanged() ? "" : "none";
+        linkGo.title = linking ? `Link the ticked recipes with ${linking}: they take its values.` : "";
         for (const row of rows) {
-            const dim = row.kind === "other" || row.kind === "caption";
+            const tickable = !!linking && row.kind === "recipe" && row.rel !== linking;
+            const ticked = tickable && ticks.has(row.rel);
+            const dim = row.kind === "other" || row.kind === "caption"
+                || (!!linking && row.kind !== "recipe");
             const on = !dim && row.rel === held;
+            const mark = (name) => iconLead(name, { px: 11,
+                color: on || ticked ? HUB.selInk : HUB.inkTertiary });
             const line = treeRow({
                 kind: row.kind, rel: row.rel, depth: row.depth,
                 tone: on ? HUB.selBg : "",
                 // A category with nothing stored says so with a mark rather
                 // than only a `· 0`: the list is the order's categories now,
                 // and which of them you have been through is the one thing
-                // you read it for.
-                lead: row.empty
-                    ? iconLead("newFile", { px: 11, color: on ? HUB.selInk : HUB.inkTertiary })
+                // you read it for. A linked recipe carries a chain.
+                lead: tickable ? mark(ticked ? "ticked" : "unticked")
+                    : row.empty ? mark("newFile")
+                    : row.linked ? mark("link")
                     : undefined,
                 labelColour: on ? HUB.selInk
-                    : dim || row.empty ? HUB.inkTertiary
+                    : dim || (row.empty && !ticked) ? HUB.inkTertiary
                     : `var(--input-text, ${HUB.ink})`,
                 // The count rides in the label: `treeRow` hides its `actions`
                 // until the pointer is on the row, and a badge you have to
                 // hover for is a badge nobody reads.
                 label: row.count === undefined ? row.label
                     : `${row.label} · ${row.count}`,
-                onClick: dim ? undefined : () => choose(row.rel),
+                onClick: dim ? undefined
+                    : tickable ? () => toggleLink(row.rel)
+                    : linking ? undefined
+                    : () => choose(row.rel),
             });
             if (row.hint) line.title = row.hint;
             tree.appendChild(line);
@@ -1834,8 +2019,12 @@ function recipePanel(node) {
         captureButton.style.display = have ? "" : "none";
         newButton.style.display = have ? "" : "none";
         headerBox.style.display = have && isProject ? "" : "none";
+        // How many recipes the link holds, this one included: three chains in
+        // the sidebar read "3 linked".
+        const linked = isRecipe ? linkGroup(state.table, column) : null;
         countBadge.textContent = have
-            ? `${setCount(column)} ${isShared || isProject ? "values" : "own"}` : "";
+            ? `${setCount(column)} ${isShared || isProject ? "values" : "own"}`
+              + (linked ? ` · ${linked.length} linked` : "") : "";
 
         if (!have) {
             crumb.textContent = "no project";
@@ -1886,7 +2075,7 @@ function recipePanel(node) {
 
         const wipe = iconButton("clear", "Clear — take the inherited value", () => {
             row.cells[column] = "";
-            touched();
+            touched(column);
             fill();
         }, { px: 11 });
         tools.appendChild(wipe);
@@ -1950,7 +2139,7 @@ function recipePanel(node) {
                     field.addEventListener("blur", () => { if (focused === field) focused = null; });
                     field.addEventListener("input", () => {
                         row.cells[column] = dictCellUpdate(row.cells[column], name, field.value);
-                        touched();
+                        touched(column);
                         arm();
                     });
                     fields.push({ el: field, read });
@@ -1970,7 +2159,7 @@ function recipePanel(node) {
                 cell.placeholder = at.placeholder;
                 cell.addEventListener("input", () => {
                     row.cells[column] = cell.value;
-                    touched();
+                    touched(column);
                     arm();
                 });
                 cell.addEventListener("focus", () => {
@@ -2107,6 +2296,11 @@ function recipePanel(node) {
 
     function drawStatus() {
         if (!state.table) return;
+        if (linking) {
+            status(`Linking ${linking}: tick the recipes that take its values, then press link`
+                + (ticks.size ? ` (${ticks.size + 1} linked).` : "."), false);
+            return;
+        }
         const { columns, rows } = state.table;
         // The categories the order holds are rows, not recipes: counted apart,
         // so "3 recipes" still means three blocks in the file.

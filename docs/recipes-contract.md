@@ -71,9 +71,28 @@ The rule everything else follows from:
   named `<project>-<recipe>.json`, both halves lowercase with dashes. A file
   called `appliance-1x2.json` next to its source says nothing about which
   source made it.
-- A project holds its base, `shared` and its recipes. Nothing else: `output`
-  and `workflow_prefix` were a second and third knob for one rule, and a value
-  left in an older file is ignored and dropped on the next save.
+- A project holds its base, `shared`, its recipes and which of them are
+  linked (`links`). Nothing else: `output` and `workflow_prefix` were a second
+  and third knob for one rule, and a value left in an older file is ignored
+  and dropped on the next save.
+
+## 3c. Linked recipes hold the same values
+
+- The chain icon in the sidebar's head puts a tick box on every recipe row,
+  with the picked recipe's links already ticked. Once the ticks differ from
+  what is linked, a `link` button shows beside it. Pressing it links the
+  ticked recipes with the picked one: they take its values, and the project
+  is saved. The icon pressed again leaves without linking anything.
+- The head counts every recipe in the link, itself included: three chains in
+  the sidebar read `3 linked`.
+- From then on an edit to one is an edit to all: a capture, auto's save and a
+  keystroke in the pane each write every linked name.
+- The file keeps a whole block per linked name, so `generate workflows` writes
+  one workflow per name without knowing links exist. `links` is a list of name
+  lists beside them.
+- Unticking keeps the values the recipe holds, as its own from then on.
+- A category with nothing stored can be ticked, and is then a recipe the file
+  holds. `shared` and the project row cannot be linked.
 - Opening a generated workflow finds no project, which is right: it is an
   output, not a source.
 - A file this project wrote under an older naming rule is NAMED in the generate

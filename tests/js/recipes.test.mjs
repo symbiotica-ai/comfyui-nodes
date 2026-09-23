@@ -708,3 +708,78 @@ test("a cell holding plain text draws as text, whatever the slot's kind", () => 
     assert.equal(dictRow(slot, '{"image": "x"}', ""), true);
     assert.equal(dictRow(slot, "", ""), true);
 });
+
+// ===================================================================== links ==
+import { cleanLinks, linkGroup, linkRecipe, unlinkRecipe } from "../../web/js/recipes.js";
+
+const cellsOf = (table, column) =>
+    Object.fromEntries(table.rows.map((row) => [row.key, row.cells[column]]));
+
+test("a recipe ticked into a link takes the linked one's values, and each keeps a block", () => {
+    // decoration-1x1, -2x2 and -4x4 are one recipe under three names: the file
+    // keeps a whole block per name, so generate writes a workflow for each.
+    const r = project();
+    const table = projectToTable(r, slots);
+    linkRecipe(table, "appliance1x2", "appliance1x1");
+    assert.deepEqual(cellsOf(table, "appliance1x1"), cellsOf(table, "appliance1x2"));
+    const out = tableToProject(r, table, slots);
+    assert.deepEqual(out.recipes.appliance1x1, r.recipes.appliance1x2);
+    assert.deepEqual(out.recipes.appliance1x2, r.recipes.appliance1x2);
+    assert.deepEqual(out.links, [["appliance1x2", "appliance1x1"]]);
+});
+
+test("a capture into one linked recipe is a capture into all of them", () => {
+    const table = projectToTable(project(), slots);
+    linkRecipe(table, "appliance1x2", "appliance1x1");
+    linkRecipe(table, "appliance1x2", "chair");
+    captureColumn(table, slots, "chair", { control_image: "chair.png", strength: 0.9 });
+    for (const name of ["appliance1x1", "appliance1x2"]) {
+        assert.equal(table.rows.find((x) => x.key === "control_image").cells[name], "chair.png");
+        assert.equal(table.rows.find((x) => x.key === "strength").cells[name], "0.9");
+    }
+});
+
+test("unticking keeps the values it holds, and a group of one is no group", () => {
+    const r = project();
+    const table = projectToTable(r, slots);
+    linkRecipe(table, "appliance1x2", "appliance1x1");
+    unlinkRecipe(table, "appliance1x1");
+    assert.deepEqual(table.links, []);
+    const out = tableToProject(r, table, slots);
+    assert.deepEqual(out.recipes.appliance1x1, r.recipes.appliance1x2, "the copy stays");
+    assert.equal("links" in out, false);
+    captureColumn(table, slots, "appliance1x2", { control_image: "z.png" });
+    assert.equal(table.rows.find((x) => x.key === "control_image").cells.appliance1x1, "b.png",
+                 "and an edit to the other no longer reaches it");
+});
+
+test("a recipe ticked into another group leaves the one it was in", () => {
+    const table = projectToTable(project(), slots);
+    linkRecipe(table, "appliance1x1", "chair");
+    linkRecipe(table, "appliance1x2", "chair");
+    assert.deepEqual(table.links, [["appliance1x2", "chair"]]);
+    assert.equal(linkGroup(table, "appliance1x1"), null);
+});
+
+test("the links come back from the file, less any name the file no longer holds", () => {
+    const r = { ...project(), links: [["appliance1x1", "appliance1x2", "gone"]] };
+    assert.deepEqual(projectToTable(r, slots).links, [["appliance1x1", "appliance1x2"]]);
+    assert.deepEqual(projectToTable({ ...project(), links: [["appliance1x1", "gone"]] }, slots).links, []);
+    assert.deepEqual(cleanLinks([["a", "b"], ["b", "c"], ["shared", "c"]], ["a", "b", "c", "shared"]),
+                     [["a", "b"]], "a name sits in one group, and shared in none");
+    const table = projectToTable(r, slots);
+    assert.deepEqual(tableToProject(r, table, slots).links, [["appliance1x1", "appliance1x2"]]);
+});
+
+test("a category linked while it holds only shared's values is still written", () => {
+    // Its workflow is one generate has to write, so an empty block is not an
+    // offer that never took a value.
+    const r = { ...project(), recipes: { appliance1x1: {} } };
+    const table = projectToTable(r, slots);
+    table.columns.push("chair");
+    for (const row of table.rows) row.cells.chair = "";
+    linkRecipe(table, "appliance1x1", "chair");
+    const out = tableToProject(r, table, slots, new Set(["chair"]));
+    assert.deepEqual(out.recipes.chair, {});
+    assert.deepEqual(out.links, [["appliance1x1", "chair"]]);
+});

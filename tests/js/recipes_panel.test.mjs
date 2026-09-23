@@ -1263,3 +1263,167 @@ function state(node) {
     const posts = posted.filter((p) => p.project);
     return posts.length ? posts.at(-1).project.recipes : PROJECT().recipes;
 }
+
+// ======================================================== linked recipes ====
+
+// appliance1x1 is linked to appliance1x2, so the file holds the same block
+// under both names.
+const SHAPE = () => ({ backdrop: "floor-1x2.png", pre_flip: true,
+                       grid: { width: 1024, height: 2048 } });
+const LINKED = () => ({
+    ...PROJECT(),
+    recipes: { appliance1x2: SHAPE(), appliance1x1: SHAPE(), zebra: {} },
+    links: [["appliance1x2", "appliance1x1"]],
+});
+const lastProject = () => posted.filter((p) => p.project).at(-1)?.project;
+// The chain in the sidebar's head. Its title says which way it goes.
+const linkIcon = (node) => descendants(panel(node)).find((e) =>
+    /^(Link recipes:|Stop linking)/.test(String(e.title)));
+
+test("the link icon puts tick boxes on the recipes, and link links the ticked ones",
+     async () => {
+    const node = await recipeNode();
+    const backdrop = () =>
+        app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value;
+    await click(rowFor(node, "appliance1x2"));
+    await click(linkIcon(node));
+    assert.match(statusText(node), /^Linking appliance1x2: tick the recipes/);
+    assert.equal(rowFor(node, "appliance1x1").children.length, 2, "a tick box");
+    assert.equal(rowFor(node, "appliance1x2").children.length, 1,
+                 "none on the recipe being linked");
+    assert.equal(rowFor(node, "shared")._listeners?.click, undefined,
+                 "shared takes no tick");
+    assert.equal(word(node, "link").style.display, "none", "no link button before a tick");
+    await click(rowFor(node, "appliance1x1"));
+    await click(rowFor(node, "zebra"));
+    assert.equal(word(node, "link").style.display, "", "a tick shows it");
+    assert.equal(backdrop(), "floor-1x2.png", "a tick puts nothing on the canvas");
+    assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x2", "and picks nothing");
+    assert.deepEqual(posted.filter((p) => p.project), [], "and links nothing yet");
+    assert.match(statusText(node), /\(3 linked\)\.$/);
+    await click(word(node, "link"));
+    const project = lastProject();
+    assert.deepEqual(project.links, [["appliance1x2", "appliance1x1", "zebra"]]);
+    assert.deepEqual(project.recipes.appliance1x1, project.recipes.appliance1x2);
+    assert.deepEqual(project.recipes.zebra, project.recipes.appliance1x2);
+    assert.equal(project.recipes.appliance1x2.backdrop, "floor-1x2.png",
+                 "the picked recipe keeps its own");
+    assert.equal(rowFor(node, "zebra").children.length, 2, "a chain on every linked row");
+    assert.match(rowFor(node, "zebra").title, /Linked with appliance1x2, appliance1x1/);
+    assert.equal(word(node, "link").style.display, "none", "and the tick boxes are gone");
+    assert.equal(statusText(node), "Linked 3: appliance1x2, appliance1x1, zebra.");
+});
+
+test("pressing the link icon again leaves without linking anything", async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "appliance1x2"));
+    await click(linkIcon(node));
+    await click(rowFor(node, "appliance1x1"));
+    await click(linkIcon(node));
+    assert.equal(rowFor(node, "appliance1x1").children.length, 1, "no box, no chain");
+    assert.equal(word(node, "link").style.display, "none");
+    assert.deepEqual(posted.filter((p) => p.project), []);
+});
+
+test("the head counts every recipe in the link, itself included", async () => {
+    // Three chains in the sidebar read "3 linked", not the two others.
+    const node = await recipeNode({ project: { ...LINKED(),
+        recipes: { appliance1x2: SHAPE(), appliance1x1: SHAPE(), zebra: SHAPE() },
+        links: [["appliance1x2", "appliance1x1", "zebra"]] } });
+    await click(rowFor(node, "appliance1x1"));
+    assert.ok(descendants(panel(node)).some((e) => e.textContent === "3 own · 3 linked"));
+});
+
+test("an edit to one linked recipe is an edit to all of them", async () => {
+    const node = await recipeNode({ project: LINKED() });
+    await click(rowFor(node, "appliance1x1"));
+    await type(fieldFor(node, "backdrop"), "desk.png");
+    await click(word(node, "save project"));
+    const project = lastProject();
+    assert.equal(project.recipes.appliance1x1.backdrop, "desk.png");
+    assert.equal(project.recipes.appliance1x2.backdrop, "desk.png");
+    assert.equal(project.recipes.zebra.backdrop, undefined, "one not linked is left alone");
+});
+
+test("auto saving a linked recipe saves every one of them", async () => {
+    const node = await recipeNode({ project: LINKED() });
+    widget(node, "auto").value = true;
+    widget(node, "auto").callback(true);
+    widget(node, "recipe").value = "appliance1x1";
+    await draw(node);
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "gargoyle.png";
+    await draw(node);
+    await new Promise((r) => setTimeout(r, 1200));
+    await settle();
+    const project = lastProject();
+    assert.equal(project.recipes.appliance1x1.backdrop, "gargoyle.png");
+    assert.equal(project.recipes.appliance1x2.backdrop, "gargoyle.png");
+});
+
+test("a save rewrites the workflow of every name linked to the recipe", async () => {
+    // The earlier tests' own rewrites are still pending, 2 s after their saves.
+    for (const n of made) {
+        if (n._symRebuild?.timer) { clearTimeout(n._symRebuild.timer); n._symRebuild.timer = null; }
+    }
+    const node = await recipeNode({ project: LINKED() });
+    await click(rowFor(node, "appliance1x2"));
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "x.png";
+    await click(word(node, "capture"));
+    await click(word(node, "save project"));
+    await new Promise((r) => setTimeout(r, 2200));
+    await settle();
+    assert.deepEqual(posted.filter((p) => p.generate).map((p) => p.generate.recipe).sort(),
+                     ["appliance1x1", "appliance1x2"]);
+});
+
+test("unticking a linked recipe and pressing link ends its link, keeping its values",
+     async () => {
+    const node = await recipeNode({ project: LINKED() });
+    await click(rowFor(node, "appliance1x2"));
+    await click(linkIcon(node));
+    assert.equal(word(node, "link").style.display, "none", "what is linked starts ticked");
+    await click(rowFor(node, "appliance1x1"));
+    await click(word(node, "link"));
+    const project = lastProject();
+    assert.equal("links" in project, false);
+    assert.equal(project.recipes.appliance1x1.backdrop, "floor-1x2.png");
+    assert.equal(rowFor(node, "appliance1x1").children.length, 1, "no chain");
+});
+
+test("a category with nothing stored can be ticked, and is then a recipe",
+     async () => {
+    const node = await recipeNode();
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "appliance1x2"));
+    await click(linkIcon(node));
+    await click(rowFor(node, "food-3-stages-1x1"));
+    await click(word(node, "link"));
+    const project = lastProject();
+    assert.deepEqual(project.recipes["food-3-stages-1x1"], project.recipes.appliance1x2);
+    assert.deepEqual(project.links, [["appliance1x2", "food-3-stages-1x1"]]);
+});
+
+test("shared, the project row and an empty category cannot be linked from", async () => {
+    const node = await recipeNode();
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    for (const rel of ["shared", ":project", "food-3-stages-1x1"]) {
+        await click(rowFor(node, rel));
+        await click(linkIcon(node));
+        assert.equal(rowFor(node, "appliance1x1").children.length, 1, `${rel}: no tick boxes`);
+        assert.match(statusText(node), /^Pick the recipe whose values the others take/);
+    }
+});
+
+test("renaming a linked recipe keeps it linked", async () => {
+    const node = await recipeNode({ project: LINKED() });
+    await click(rowFor(node, "appliance1x1"));
+    const name = descendants(panel(node))
+        .find((e) => String(e.title).startsWith("Recipe:"));
+    name.value = "desk-1x1";
+    fire(name, "change", {});
+    await settle();
+    await click(word(node, "save project"));
+    assert.deepEqual(lastProject().links, [["appliance1x2", "desk-1x1"]]);
+});
