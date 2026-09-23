@@ -299,6 +299,10 @@ const GROUP_PROP = "symbiotica_group";
 // read, but it is also what he retitles: the id is what carries a following
 // Get across a rename.
 const GROUP_ID_PROP = "symbiotica_group_id";
+// A Get Hub told to pull everything: every name the canvas publishes, off Set
+// Hubs and KJNodes Set nodes alike, followed the way a group is -- so a name
+// published after the pick arrives too, and the hub stays fully loaded.
+const ALL_PROP = "symbiotica_all";
 // The last title this node wrote for itself. A title it still carries is one
 // it may replace; anything else on the node is a title HE typed, and stays.
 const TITLE_PROP = "symbiotica_title";
@@ -344,11 +348,23 @@ export function setFollowed(node, list) {
     node.properties[GROUP_ID_PROP] = list.map((g) => g.id ?? null);
 }
 
-// What a Get Hub is: the groups it follows and how much it carries beside
-// them, the one name it holds, or neither. The extras can only be counted
-// against what the groups hold right now, so they are counted when the caller
-// has already resolved them and left out when it has not.
+export function followsAll(node) {
+    return node?.properties?.[ALL_PROP] === true;
+}
+
+// Gone rather than `false` when off, like the group lists.
+export function setFollowsAll(node, on) {
+    node.properties ??= {};
+    if (on) node.properties[ALL_PROP] = true;
+    else delete node.properties[ALL_PROP];
+}
+
+// What a Get Hub is: everything, the groups it follows and how much it carries
+// beside them, the one name it holds, or neither. The extras can only be
+// counted against what the groups hold right now, so they are counted when the
+// caller has already resolved them and left out when it has not.
 export function titleForGet(node, groups = null) {
+    if (followsAll(node)) return "Get all";
     const titles = followed(node).map((g) => g.title).filter(Boolean);
     const names = (node?.outputs ?? []).map(slotName)
         .filter((n) => n && n !== GROW);
@@ -361,6 +377,9 @@ export function titleForGet(node, groups = null) {
 // How a group reads in the picker, beside the plain names.
 const groupLabel = (group) => `${group.title}  ·  ${group.names.length} `
     + `name${group.names.length === 1 ? "" : "s"}`;
+// The row above every group: all of them, and every plain Set node too.
+export const allLabel = (count) => `pull all  ·  ${count} `
+    + `name${count === 1 ? "" : "s"}`;
 // The dot on a Get slot pointing at a name that is gone. This pack's danger
 // colour, from hub_theme.
 const DEAD = "#f2777a";
@@ -789,17 +808,31 @@ export function loadName(node, entry) {
     node.setDirtyCanvas?.(true, true);
 }
 
+// Every name the canvas publishes, added beside whatever the node holds and
+// followed from then on. The groups it already follows stay followed, so
+// stopping the pull leaves the node where it was before it.
+export function loadAll(node) {
+    setFollowsAll(node, true);
+    const groups = groupsOf(node, graphScope(node.graph, app.graph));
+    syncGroup(node, groups);
+    setOwnTitle(node, titleForGet(node, groups));
+    node.setDirtyCanvas?.(true, true);
+}
+
 // What following a group means, re-asserted on every draw: the Set Hub's names
 // are all here. Asserted rather than copied once, because a group whose new
 // third name never reaches the Gets is the stale copy this node exists to
 // replace. Several groups is the same rule read over the union of them, and a
 // name picked on its own is in none of them -- see the removal loop, which
-// leaves any name the canvas still publishes exactly where it is.
+// leaves any name the canvas still publishes exactly where it is. Pulling all
+// is the same rule again, read over every name in scope.
 export function syncGroup(node, groups = null) {
     const scope = graphScope(node.graph, app.graph);
     const following = groups ?? groupsOf(node, scope);
-    if (!following.length) return false;
-    const wanted = new Set(following.flatMap((g) => g.names.map((e) => e.name)));
+    const entries = following.flatMap((g) => g.names);
+    if (followsAll(node)) entries.push(...publishedNames(scope));
+    if (!entries.length) return false;
+    const wanted = new Set(entries.map((e) => e.name));
     let changed = false;
     // A name that has left the group and that nothing else publishes is
     // litter. A slot with a WIRE on it is never taken away silently, whatever
@@ -813,7 +846,7 @@ export function syncGroup(node, groups = null) {
         changed = true;
     }
     const have = new Set((node.outputs ?? []).map(slotName));
-    for (const entry of following.flatMap((g) => g.names)) {
+    for (const entry of entries) {
         if (have.has(entry.name)) continue;
         // Appended, never inserted: a wire holds on to a slot's INDEX, so
         // making room in the middle would move every wire below it.
@@ -1169,14 +1202,18 @@ registerSymbioticaExtension(app, {
                 //
                 // The groups come first: a Set Hub holding six paths is one
                 // pick here, and pulling its names one at a time is the work
-                // this node exists to save.
+                // this node exists to save. Above them, one pick for all of it.
                 const options = {};
                 Object.defineProperty(options, "values", {
                     get: () => {
                         const scope = graphScope(this.graph, app.graph);
-                        const rows = publishedGroups(scope)
-                            .map((group) => ({ label: groupLabel(group), group }));
-                        for (const entry of publishedNames(scope)) {
+                        const names = publishedNames(scope);
+                        const rows = names.length
+                            ? [{ label: allLabel(names.length), all: true }] : [];
+                        for (const group of publishedGroups(scope)) {
+                            rows.push({ label: groupLabel(group), group });
+                        }
+                        for (const entry of names) {
                             rows.push({ label: entry.name, entry });
                         }
                         // Kept for the callback: a row is picked by the label
@@ -1192,7 +1229,8 @@ registerSymbioticaExtension(app, {
                     if (!value || value === PULL || value === NONE) return;
                     const row = (this._symPullRows ?? [])
                         .find((r) => r.label === value);
-                    if (row?.group) loadGroup(this, row.group);
+                    if (row?.all) loadAll(this);
+                    else if (row?.group) loadGroup(this, row.group);
                     else if (row?.entry) loadName(this, row.entry);
                     else addGetSlot(this, String(value));
                 }, options);
@@ -1275,6 +1313,18 @@ registerSymbioticaExtension(app, {
 
             getExtraMenuOptions(_canvas, options) {
                 const groups = followed(this).map((g) => g.title).filter(Boolean);
+                const all = followsAll(this);
+                if (all) {
+                    options.push({
+                        content: "Stop pulling all",
+                        callback: () => {
+                            setFollowsAll(this, false);
+                            toast("info", "Get Hub",
+                                  "The slots stay; new names no longer arrive.");
+                            this.setDirtyCanvas(true, true);
+                        },
+                    });
+                }
                 // One row per group, because a hub can follow several: dropping
                 // all of them to stop following one is the wiring he did not
                 // ask to lose.
@@ -1297,14 +1347,16 @@ registerSymbioticaExtension(app, {
                         // kept following would put every removed slot back on
                         // the next draw, and the menu row would read as broken.
                         if (groups.length) setFollowed(this, []);
+                        if (all) setFollowsAll(this, false);
                         const n = dropUnusedSlots(this, "out");
-                        const named = groups.map((t) => `"${t}"`).join(", ");
+                        const stopped = [...groups.map((t) => `"${t}"`),
+                                         ...(all ? ["pull all"] : [])];
                         toast("info", "Get Hub",
                               (n ? `${n} slot${n === 1 ? "" : "s"} removed.`
                                  : "Every slot is wired.")
-                              + (groups.length
-                                 ? ` ${named} no longer `
-                                   + `${groups.length === 1 ? "adds" : "add"} to them.`
+                              + (stopped.length
+                                 ? ` ${stopped.join(", ")} no longer `
+                                   + `${stopped.length === 1 ? "adds" : "add"} to them.`
                                  : ""));
                     },
                 });

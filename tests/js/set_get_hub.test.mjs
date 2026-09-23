@@ -451,6 +451,65 @@ test("a value picked on a hub that follows a group lands beside the group",
     assert.equal(titleForGet(solo), "Get Hub");
 });
 
+test("pull all loads every name on the canvas and goes on following it",
+     async () => {
+    const { loadAll, loadGroup, syncGroup, setFollowsAll, publishedGroups,
+            titleForGet, groupsOf, allLabel } =
+        await import("../../web/js/find_node.js");
+    const hub = setHub([["asset_name", "STRING", 1], ["sprite_width", "INT", 2]]);
+    hub.id = 5;
+    hub.title = "task-specs";
+    const paths = setHub([["path_project", "STRING", 3]]);
+    paths.id = 6;
+    paths.title = "paths";
+    // A KJNodes Set node is in "all" as much as a hub slot is.
+    const reference = setNode("$$reference", "IMAGE", 4);
+    const graph = { nodes: [hub, paths, reference] };
+    const get = slotHolder([], []);
+    get.type = "SymbioticaGetHub";
+    get.graph = graph;
+    get.disconnectOutput = () => {};
+    graph.nodes.push(get);
+
+    // It adds beside what the node holds: a group picked first stays where it
+    // is, with its wire, and everything else lands under it.
+    loadGroup(get, publishedGroups([graph])[1]);
+    get.outputs[0].links = [21];
+    loadAll(get);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["path_project", "asset_name", "sprite_width",
+                      "$$reference", "+"]);
+    assert.deepEqual(get.outputs[0].links, [21]);
+    assert.equal(get.outputs[3].type, "IMAGE");
+    assert.equal(get.properties.symbiotica_all, true);
+    assert.equal(get.title, "Get all");
+    assert.equal(allLabel(4), "pull all  ·  4 names");
+
+    // A name published after the pick arrives on the next draw, at the END.
+    graph.nodes.push(setNode("%%seed-base-image", "INT", 7));
+    hub.inputs.splice(2, 0,
+        { name: "category", label: "category", type: "STRING", link: 8 });
+    assert.equal(syncGroup(get), true);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["path_project", "asset_name", "sprite_width",
+                      "$$reference", "category", "%%seed-base-image", "+"]);
+    assert.equal(syncGroup(get), false);
+    // Pulling all again is a re-assert, not a second copy.
+    loadAll(get);
+    assert.equal(get.outputs.length, 7);
+
+    // Stopping the pull keeps every slot and stops new ones arriving; the
+    // group picked before it is still followed, and the title says so again.
+    setFollowsAll(get, false);
+    assert.equal(get.properties.symbiotica_all, undefined);
+    graph.nodes.push(setNode("$$sketch", "IMAGE", 9));
+    syncGroup(get);
+    assert.deepEqual(get.outputs.map((s) => s.label ?? s.name),
+                     ["path_project", "asset_name", "sprite_width",
+                      "$$reference", "category", "%%seed-base-image", "+"]);
+    assert.equal(titleForGet(get, groupsOf(get, [graph])), "Get paths +5");
+});
+
 test("a Get Hub follows no group until it is told to", async () => {
     const { groupsOf, syncGroup } = await import("../../web/js/find_node.js");
     const get = slotHolder([], []);
