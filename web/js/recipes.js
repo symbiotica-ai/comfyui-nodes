@@ -824,8 +824,10 @@ export function applyValuesToNodes(nodes, values, color) {
         }
         // A panel node reads its widgets once and caches what it found; the
         // Prompts node would show the previous file's text under the loaded
-        // recipe's file name until something asked it to look again.
+        // recipe's file name until something asked it to look again, and the
+        // Control Image node went on drawing the previous image.
         node._symRefreshPrompts?.();
+        node._symRefreshImages?.();
         seen.add(key);
         if (!applied.includes(key)) applied.push(key);
     }
@@ -889,6 +891,8 @@ const RECIPE_PICK = "symbiotica_recipes_pick";
 // dash.
 const PROJECT_ROW = ":project";
 const LABEL_W = 150;
+// How often the panel's watch runs while the node is not being drawn.
+const WATCH_MS = 250;
 
 const inputCss = "box-sizing:border-box;min-width:0;padding:3px 5px;"
     + `font:11px ${HUB.mono};background:var(--comfy-input-bg, transparent);`
@@ -1594,14 +1598,41 @@ function recipePanel(node) {
 
     node._symAuto = auto;
     node._symRebuild = rebuild;
-    const onDrawForeground = node.onDrawForeground;
-    node.onDrawForeground = function () {
+    function watchTick() {
         resolveProject();
         syncSlots();
         syncCategories();
         syncActive();
         autoTick();
+    }
+    let drawnAt = 0;
+    const onDrawForeground = node.onDrawForeground;
+    node.onDrawForeground = function () {
+        drawnAt = performance.now();
+        watchTick();
         return onDrawForeground?.apply(this, arguments);
+    };
+    // The same watch while this node is OFF SCREEN. LiteGraph draws only the
+    // nodes in view, so a category clicked in Task with the Recipes node
+    // scrolled away loaded nothing: the wire moved and the Control Image and
+    // Prompts nodes beside the Task sat on the old recipe until this node came
+    // back into view. A node the graph no longer holds -- a workflow switched
+    // away from, an undo -- stops its own watch.
+    let joined = false;
+    const watch = setInterval(() => {
+        if (node.graph?.getNodeById?.(node.id) !== node) {
+            if (joined) clearInterval(watch);
+            return;
+        }
+        joined = true;
+        if (performance.now() - drawnAt < WATCH_MS) return;
+        if ((node.graph.rootGraph ?? node.graph) !== liveGraph()) return;
+        watchTick();
+    }, WATCH_MS);
+    const onRemoved = node.onRemoved;
+    node.onRemoved = function () {
+        clearInterval(watch);
+        return onRemoved?.apply(this, arguments);
     };
 
     // --- what a click does -------------------------------------------------

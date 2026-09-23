@@ -498,13 +498,17 @@ the same thing. Each one failed silently first.
   slot added a space after each comma of the Prompts text. His project held
   eleven, and every recipe load put them on the Prompts node, which then read
   as edited (2026-09-23).
-- **`auto` compares slot values by NAME** (`slotSignature`), and it runs only
-  while the Recipes node is DRAWN — its `onDrawForeground`. Clicking, dragging
+- **`auto` compares slot values by NAME** (`slotSignature`). Clicking, dragging
   or resizing any node moves it to the end of `graph._nodes`, the order
   `liveSlotValues` reads in; a signature in that order made every click an
-  edit, and each one saved the project and rewrote the recipe's workflow. An
-  edit made with the Recipes node off screen is saved the next time it is on
-  screen, not when it is made.
+  edit, and each one saved the project and rewrote the recipe's workflow.
+- **The watch runs whether the Recipes node is on screen or not**
+  (2026-09-23): its `onDrawForeground` while drawn, a 250 ms interval while
+  not. Draw-only, a Task category clicked with the Recipes node scrolled away
+  loaded nothing, and the Control Image and Prompts nodes sat on the old
+  recipe. A recipe load refreshes BOTH file panels (`_symRefreshPrompts`,
+  `_symRefreshImages` in `applyValuesToNodes`), and Prompts re-reads the file
+  it was switched to (`state.read`) so the switch does not read as unsaved.
 
 ## Asset Recipe — Asset Focus plus wired widget values
 

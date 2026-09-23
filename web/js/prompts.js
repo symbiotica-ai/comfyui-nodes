@@ -201,7 +201,7 @@ function setupPrompts(node) {
     // when loaded (the edit is the difference), the file it is showing, which
     // folders are open, and which row was last clicked.
     const state = { path: "", folders: null, files: null, error: "",
-                    loaded: "", everLoaded: false,
+                    loaded: "", read: "", everLoaded: false,
                     open: new Set(), cursor: null };
     const text = () => (typeof textW.value === "string" ? textW.value : "");
     const dirty = () => text() !== state.loaded;
@@ -412,6 +412,7 @@ function setupPrompts(node) {
         if (!state.path || !rel) return;
         if (!(state.files ?? []).includes(rel)) {
             state.loaded = "";
+            state.read = rel;
             if (!keep) textW.value = "";
             repaint();
             return;
@@ -421,6 +422,7 @@ function setupPrompts(node) {
                 `/symbiotica/prompts-read?folder=${encodeURIComponent(state.path)}`
                 + `&name=${encodeURIComponent(rel)}`);
             state.loaded = body;
+            state.read = rel;
             // A workflow restored with an edit that never reached disk keeps
             // the edit; anything else shows the file.
             if (!keep || keep === body) textW.value = body;
@@ -483,7 +485,16 @@ function setupPrompts(node) {
         }
         // The open file is visible in the tree without hunting for it.
         openAncestors(fileRel());
-        if (!(dirty() && !changed && state.everLoaded)) await load({ keep });
+        // A file put on the node from outside -- a recipe loaded onto the
+        // canvas -- arrives with its own text. The baseline is re-read from
+        // THAT file and the text stays as it arrived: measured against the
+        // previous file's body, every switch read as an unsaved edit and the
+        // next pick in the tree asked to discard it.
+        if (state.everLoaded && !changed && fileRel() !== state.read) {
+            await load({ keep: text() });
+        } else if (!(dirty() && !changed && state.everLoaded)) {
+            await load({ keep });
+        }
         state.everLoaded = true;
         repaint();
     }
@@ -524,6 +535,7 @@ function setupPrompts(node) {
         state.files = (state.files ?? []).map(move).sort();
         state.open = new Set([...state.open].map(move));
         if (state.cursor) state.cursor = move(state.cursor);
+        if (state.read) state.read = move(state.read);
         const open = fileRel();
         if (open && move(open) !== open) {
             folderW.value = dirOf(move(open)) || ROOT;
@@ -595,6 +607,7 @@ function setupPrompts(node) {
             folderW.value = dirOf(rel) || ROOT;
             fileW.value = baseOf(rel);
             state.loaded = body;
+            state.read = rel;
             state.cursor = null;
             openAncestors(rel);
             toast("success", "Saved as", rel);

@@ -122,6 +122,8 @@ after(() => {
     for (const n of made) {
         if (n._symAuto?.timer) clearTimeout(n._symAuto.timer);
         if (n._symRebuild?.timer) clearTimeout(n._symRebuild.timer);
+        // The off-screen watch is an interval; removing the node stops it.
+        n.onRemoved?.();
     }
 });
 
