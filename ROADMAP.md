@@ -130,9 +130,6 @@ save on `bakery-base` was answered in `settableWidgets` and `cellValue`:
   **`Fast Bypasser (rgthree)`** — no "Groups" — so the server calls it a scalar
   holding null while the canvas reads its rows as group switches. Noticed in his
   `bakery-base` workflow, never chased.
-- `cellText` runs `.replace(/,/g, ", ")` and `'":' → '": '` over the WHOLE
-  JSON string, so a comma inside a prompt value gains a space on every round
-  trip through the table. Cosmetic by intent, unverified as harmless.
 - The save that `auto` fires on opening a workflow rewrites the project file
   whole: `output`/`workflow_prefix` are stripped and any key whose painted node
   has been renamed or unpainted leaves the file. Correct for a save he asked
@@ -142,6 +139,25 @@ save on `bakery-base` was answered in `settableWidgets` and `cellValue`:
   clears the pick. Open: whether a deliberate batch belongs back on the node —
   it would have to be an explicit act (its own input), never an empty `asset`,
   which is what a category click and a Recipes sidebar pick both leave behind.
+
+Left open on 2026-09-23, after recipes could be linked (`704b6fd`):
+
+- `generate` refuses 13 of the 19 recipes in his local project, all four
+  decorations among them. `displayOnly` (`web/js/recipes.js`, since `a37f820`)
+  drops every widget with `options.serialize === false`, and the frontend
+  creates `control_after_generate` with that flag. The workflow still saves it,
+  so each KSampler is captured one widget short and `_widget_positions` cannot
+  place six names in seven values. The error in the status line says "capture
+  again", which reproduces it. A linked group fails together, and auto's next
+  capture spreads the short block to every name. The likely fix: drop only the
+  pack's own DOM panels (they carry `element`), then capture each recipe once.
+  Told him on 2026-09-23. Not fixed and no answer yet.
+- 12 recipes in his local project store `Control Image` as a JSON string,
+  `{"image": "general/1x2/1x2-box-dots.png", "images_panel": ""}`, left from
+  when the node captured as a dict. A load puts that string on the `image`
+  widget, and the panel then asks `local-image` for a path with JSON in it (403
+  on the spare). Linking copies whatever the open recipe holds. Open: repair
+  the cells to the bare path, or leave them for a capture to overwrite.
 
 ## Set Hub / Get Hub — open threads (no issue filed yet)
 

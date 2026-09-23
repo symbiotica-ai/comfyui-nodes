@@ -361,7 +361,11 @@ A painted slot node is captured whole, not by its first widget
   `dict` on the canvas, `scalar` on the server — and the panel then refused the
   `shared` block the server itself had seeded, on `$$controlnet-image` and
   `path-project`, which blocked every save on his `bakery-base` project
-  (2026-09-21)
+  (2026-09-21). OPEN BREAK: `displayOnly` reads `options.serialize === false`,
+  and the frontend creates the KSampler's `control_after_generate` with that
+  flag although the workflow DOES save it. So every KSampler captured since
+  `a37f820` (2026-09-22) is one widget short, and `generate` refuses it. See
+  ROADMAP.
 - one widget left → the value itself
 - more than one → a dict of every widget BY NAME
 - a subgraph → its promoted inputs, wired ones left out
@@ -376,7 +380,8 @@ A painted slot node is captured whole, not by its first widget
 
 A project is a small JSON file in `user/default/recipes/`, bound to ONE base
 workflow by path and named after it. It holds `template` plus `shared` plus one
-block per recipe, keyed by the painted node's TITLE — and NOTHING else: `output`
+block per recipe, keyed by the painted node's TITLE, plus `links` (below) — and
+NOTHING else: `output`
 and `workflow_prefix` were two more knobs for one rule and are gone, ignored in
 any older file. Capture reads the canvas and stores only what differs from
 shared; load layers shared under the recipe and writes it back; `generate
@@ -480,7 +485,13 @@ the same thing. Each one failed silently first.
   nothing of links. What keeps the blocks equal is the canvas: every write to
   a linked column goes through `mirrorLinked` (inside `captureColumn`, and
   `touched(column)` for the pane's cells). A new path that writes cells has
-  to go through it too, or one name drifts from the others in silence.
+  to go through it too, or one name drifts from the others in silence. The
+  control is where he put it: a chain ICON in the sidebar head beside the
+  new-project icon, tick boxes that change nothing, and a `link` button that
+  shows only once the ticks differ from what is linked. The first version, a
+  word button in the pane head that linked on every tick, was refused. The head
+  counts the whole group, the open recipe included: three chains read
+  `3 linked`.
 - **A cell's text is JSON spaced BETWEEN its tokens, never inside a string**
   (`spacedJson`, behind `cellText`). A `replace(/,/g, ", ")` over the whole
   text spaced the commas inside string values too, so every save of a dict
