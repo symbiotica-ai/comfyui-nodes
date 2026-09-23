@@ -35,6 +35,26 @@ test("a cell shows a string as itself and anything else as JSON", () => {
     assert.equal(cellText(undefined), "");
 });
 
+test("a text inside a node's values comes back from its cell exactly as it went in",
+     () => {
+    // His Prompts node, a dict slot. The spacing between tokens is the cell's,
+    // and the commas and colons inside the text are the text's: every trip
+    // through the table used to put one more space after each comma.
+    const prompts = { kind: "dict", key: "Prompts (Symbiotica)" };
+    const held = { folder: "image-model-prompts", file: "nano2-pre-chair.md",
+                   text: 'Draw ONE chair, four times, once per slot,x\n"TASK": 1,000' };
+    assert.equal(cellText({ a: "x, y", b: [1, 2] }), '{"a": "x, y", "b": [1, 2]}');
+    let value = held;
+    for (let trip = 0; trip < 11; trip += 1) value = cellValue(prompts, cellText(value));
+    assert.deepEqual(value, held);
+    // And through the whole table, which is the path a save takes.
+    const table = projectToTable({ template: "t.json", shared: {},
+                                   recipes: { "decoration-2x2": { [prompts.key]: held } } },
+                                 [{ ...prompts, default: {} }]);
+    const back = tableToProject({}, table, [{ ...prompts, default: {} }]);
+    assert.deepEqual(back.recipes["decoration-2x2"][prompts.key], held);
+});
+
 test("an empty cell is an absent key, not an empty value", () => {
     assert.equal(cellValue(slots[0], ""), undefined);
     assert.equal(cellValue(slots[0], "   "), undefined);
@@ -346,6 +366,20 @@ test("a node the resolver does not understand yields null, never a guess", () =>
     const target = { id: 2, type: "SymbioticaRecipe", inputs: [{ name: "recipe", link: 10, widget: { name: "recipe" } }], widgets: [{ name: "recipe", value: "" }] };
     const graph = graphOf([llm, target], { 10: { origin_id: 1, origin_slot: 0 } });
     assert.equal(resolveText(graph, target, "recipe"), null);
+});
+
+test("a node brought to the front is not an edit", async () => {
+    const { slotSignature } = await import("../../web/js/recipes.js");
+    // Clicking or resizing a node moves it to the end of the canvas's list,
+    // which is the order the slot values are read in. Same values, same
+    // answer -- or auto saves the recipe on every click.
+    const before = { KSampler: { seed: 2 }, "Prompts (Symbiotica)": { text: "a, b" },
+                     "Control Image": "door.png" };
+    const after = { KSampler: { seed: 2 }, "Control Image": "door.png",
+                    "Prompts (Symbiotica)": { text: "a, b" } };
+    assert.equal(slotSignature(before), slotSignature(after));
+    assert.notEqual(slotSignature(before),
+                    slotSignature({ ...after, "Control Image": "wall.png" }));
 });
 
 test("auto adopts the canvas it opens on instead of writing the recipe over it", () => {

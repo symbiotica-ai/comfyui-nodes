@@ -277,6 +277,15 @@ export function autoAdopt(last, next, columns) {
     return last.name === null && !!next && columns.includes(next);
 }
 
+// What auto compares to tell an edit from nothing, keyed by slot NAME and never
+// by where a node sits in the canvas's list. Clicking, dragging or resizing a
+// node brings it to the front of that list, and a signature in node order read
+// every one of those as an edit and saved the recipe.
+export function slotSignature(values) {
+    return JSON.stringify(Object.keys(values ?? {}).sort()
+        .map((key) => [key, values[key]]));
+}
+
 export function autoDecision(prev, next, columns) {
     const actions = [];
     if (prev.name && prev.changed) actions.push(`save:${prev.name}`);
@@ -423,7 +432,24 @@ export function widgetValues(node, widgets) {
 export function cellText(value) {
     if (value === undefined || value === null) return "";
     if (typeof value === "string") return value;
-    return JSON.stringify(value).replace(/,/g, ", ").replace(/":/g, '": ');
+    return spacedJson(value);
+}
+
+// JSON with a space after each comma and colon BETWEEN its tokens, never
+// inside a string. A replace over the whole text spaced the commas inside the
+// strings too, so every trip through the table put one more space after each
+// comma of a Prompts text -- eleven, by the time his recipes were read.
+function spacedJson(value) {
+    const skip = (v) => v === undefined || typeof v === "function";
+    if (Array.isArray(value)) {
+        return `[${value.map((v) => (skip(v) ? "null" : spacedJson(v))).join(", ")}]`;
+    }
+    if (value && typeof value === "object") {
+        const parts = Object.entries(value).filter(([, v]) => !skip(v))
+            .map(([k, v]) => `${JSON.stringify(k)}: ${spacedJson(v)}`);
+        return `{${parts.join(", ")}}`;
+    }
+    return JSON.stringify(value);
 }
 
 function parseJson(text) {
@@ -1255,7 +1281,6 @@ function recipePanel(node) {
     // the canvas into one, auto or not, so a switch by hand knows what it is
     // leaving behind.
     const auto = { last: { name: null, sig: null }, timer: null, busy: false, on: false };
-    const slotSignature = (values) => JSON.stringify(values);
 
     // What every node on the canvas held the last time a recipe was put on it
     // or read off it, by node id. A node that has moved since and carries no
