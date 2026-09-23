@@ -11,8 +11,11 @@ the canvas (a new widget's name, a value he has to type):
   register at all
 - **Nothing to do.** — tests, docs, a commit
 
-Run `./push.sh` before that line. Never restart his ComfyUI yourself — ask with
-the AskUserQuestion button, every time, however urgent it feels.
+His local Comfy serves this working tree, so he looks at a change there first:
+`./push.sh` and the git push wait until he says push — "build in local comfy
+first, test functionality, then I look at it in local comfy then if all is well
+we push to git and modal" (2026-09-23). Never restart his ComfyUI yourself —
+ask with the AskUserQuestion button, every time, however urgent it feels.
 
 No summary of what changed, no "why this fixes your case" after the artifact,
 no post-mortem of what failed before, no rationale paragraph at the end. Answer
@@ -135,10 +138,15 @@ holding the node.
   what Python reads and what a saved workflow restores — removing one shifts
   every value after it. Prompts' `text` is a DOM widget, so its element is
   hidden too (`hideTextWidget`).
-- Prompts edits in its own `<textarea>`; ⌘S saves. Control Image draws a
-  thumbnail per row from `pick-thumb` (6 ms and 4 KB each, `Cache-Control`
-  600 s, `loading="lazy"`, and rows exist only for folders you expanded) and
-  the pick full size from `local-image`.
+- Prompts edits in its own `<textarea>`, and its head carries `discard`,
+  `save as` and `save` (⌘S). `save` and `discard` are off until the text
+  differs from the file as last read (`state.loaded`), and `save` fills coral
+  then; `save as` writes the text to a new name beside the file and opens it,
+  never writing the one it came from. A recipe load that puts other text on
+  the node shows here as unsaved, because against the file it is.
+- Control Image draws a thumbnail per row from `pick-thumb` (6 ms and 4 KB
+  each, `Cache-Control` 600 s, `loading="lazy"`, and rows exist only for
+  folders you expanded) and the pick full size from `local-image`.
 - A name is drawn with `font-feature-settings:'calt' 0` — Inter renders `1x1`
   as `1×1`, which is not what the folder is called.
 - Files dragged from the desktop onto the tree upload into the folder they
@@ -226,6 +234,14 @@ KJNodes pairs, and it is in 1.48.7 as well as 1.52.7.
   canvas still publishes it — a name picked on its own is exactly that, and it
   stays. "Remove unused slots" stops the hub following every group it followed,
   or every slot it removed would come back on the next draw.
+- **`pull all · N names`** sits above the groups in the picker (2026-09-23):
+  every name in scope — the node's own graph and the root, off Set Hubs and KJ
+  `SetNode`s alike — added beside what the node holds and FOLLOWED the way a
+  group is, so a name published later is appended on the next draw (`syncGroup`
+  reads the union). It rides on `node.properties.symbiotica_all`, `true` or
+  absent, and `titleForGet` answers `Get all` while it is on. "Stop pulling
+  all" keeps the slots and ends the follow; "Remove unused slots" ends it too,
+  for the same reason it ends the groups.
 - A name row on the Set Hub holds no value of its own: `value` and `label` are
   own properties reading the slot it sits against, and writing `value` renames
   that slot. The frontend's widget store keys a remembered value by widget
@@ -457,6 +473,19 @@ the same thing. Each one failed silently first.
 - After a save, that one recipe's workflow file is rewritten two seconds later
   (`/symbiotica/recipes/generate` takes an optional `recipe`), so the file on
   disk is the recipe rather than whatever `generate workflows` last wrote.
+- **A cell's text is JSON spaced BETWEEN its tokens, never inside a string**
+  (`spacedJson`, behind `cellText`). A `replace(/,/g, ", ")` over the whole
+  text spaced the commas inside string values too, so every save of a dict
+  slot added a space after each comma of the Prompts text. His project held
+  eleven, and every recipe load put them on the Prompts node, which then read
+  as edited (2026-09-23).
+- **`auto` compares slot values by NAME** (`slotSignature`), and it runs only
+  while the Recipes node is DRAWN — its `onDrawForeground`. Clicking, dragging
+  or resizing any node moves it to the end of `graph._nodes`, the order
+  `liveSlotValues` reads in; a signature in that order made every click an
+  edit, and each one saved the project and rewrote the recipe's workflow. An
+  edit made with the Recipes node off screen is saved the next time it is on
+  screen, not when it is made.
 
 ## Asset Recipe — Asset Focus plus wired widget values
 

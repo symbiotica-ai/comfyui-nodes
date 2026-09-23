@@ -54,6 +54,12 @@ Left open on 2026-09-19. One line each, the decision still open.
   Tracker`, `Symbiotica Studio Library`, `Control Image`, `Module`, `Recipes`,
   `Split Prompts`, `Load Text File`, `Load Text List`. Offered and not taken;
   a node already on a canvas keeps the title it was saved with either way.
+- The Arrange section at the end of `web/js/find_node.js` (Arrange workflow,
+  Restore previous layout, Stack and align), `tests/js/arrange.test.mjs` and
+  `specs/arrange-workflow*` are uncommitted. They were built on 2026-09-21, and
+  `./push.sh` has shipped them to Modal with the working tree ever since. Its
+  38 tests pass. Open: commit it as it is, or finish it first; either way,
+  stage `find_node.js` by hunk, because other work lands in that file too.
 - `chore/internal-pack-cleanup` holds four commits that are not on main — the
   category-tree lock, the 82-node cull, the module-merge docs. Left alone when
   the branches were collapsed to `main` on 2026-09-19; merge or delete.
@@ -64,6 +70,15 @@ Left open on 2026-09-21, after the Task tree gained a category grouping and the
 Recipes sidebar gained a row per category. One line each, the decision still
 open. The node's contract is `docs/recipes-contract.md`.
 
+- His local project `user/default/recipes/_node-asset-focus-rework.json` still
+  stores the Prompts text with 6 to 11 spaces after each comma in 18 recipes,
+  the damage from the `cellText` bug fixed on 2026-09-23. Collapsing `, +` to
+  `, ` gives exactly `image-model-prompts/nano2-pre-chair.md` for every one.
+  The base workflow's Prompts widget holds 7, and the generated workflows
+  beside it hold the same. A one-off repair was offered (backup kept, then a
+  reload, since an open tab saves its in-memory table back); no answer yet.
+  Modal's projects are unchecked, and `bakery-base-arrange-test.json`, pulled
+  from there, holds 2 and 6.
 - With `auto` on, picking a recipe `pointWireAt` cannot name — one from
   `new recipe`, which no category is named after — still LOADS it, and the next
   draw reads the old name off the wire and loads that back over it. The status
@@ -133,7 +148,16 @@ save on `bakery-base` was answered in `settableWidgets` and `cellValue`:
 One node holding many named constants, replacing a canvas full of KJNodes
 Set/Get pairs. Both are frontend-only virtual nodes in `web/js/find_node.js`
 (a NEW web file never reaches the Modal sandbox, which is why they live in that
-file rather than their own). Nothing is pushed: local tree only.
+file rather than their own).
+
+- Both hubs' right-click menus list every row twice. `getExtraMenuOptions`
+  returns the `options` array it pushed into, and frontend 1.52.7 prepends a
+  returned array to that same array (`t = n.concat(t)`). Offered on
+  2026-09-23, not taken: stop returning it.
+- The Get Hub picker's ◀ ▶ arrows pick row 0, because the prompt it rests on
+  is not in the list. Since 2026-09-23 row 0 is `pull all`, so one stray arrow
+  click loads every name on the canvas. Noticed, not raised with him. Open:
+  make the arrows inert on `pull`, or leave it.
 
 - Groups are built: a Set Hub's title names the set it holds and a Get Hub
   takes the whole set in one pick, then follows it. What is NOT built is the
@@ -183,6 +207,10 @@ file rather than their own). Nothing is pushed: local tree only.
 - `pick-thumb` is asked for `THUMB_PX * 2`; on a 3x display the rows are
   softer than they could be. Untouched deliberately — one more request size to
   cache per image.
+- `write_file` (`py/pipeline/prompt_store.py`) adds a final newline to every
+  save, and the panel re-reads the file after one, so the editor gains a last
+  line break and typing at the end starts a new line. Noticed on 2026-09-23,
+  not chased.
 
 ## Recipes and Asset Focus — open threads (no issue filed yet)
 

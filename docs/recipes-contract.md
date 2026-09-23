@@ -141,6 +141,13 @@ told the rest:
 
 ---
 
+## Known breaks, against the above — fixed 2026-09-23
+
+| # | Break | Fix |
+|---|---|---|
+| H1 | Every save put one more space after each comma inside a dict slot's strings: `cellText` spaced its JSON with a replace over the whole text. His project stored the Prompts text with 6 to 11, and a recipe load put them on the Prompts node, which then read as edited | the spacing goes between tokens only (`spacedJson`) |
+| H2 | Clicking or resizing any node saved the recipe: that moves the node to the end of `graph._nodes`, and auto's signature listed the slot values in that order | `slotSignature` keys the values by slot name |
+
 ## Known breaks, against the above — fixed 2026-09-21
 
 | # | Break | Fix |
