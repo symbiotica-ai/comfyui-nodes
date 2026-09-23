@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFont
@@ -57,7 +59,13 @@ class NSQwenResolution:
                     ],
                     {"default": "1:1 (Square)"},
                 ),
-            }
+            },
+            "optional": {
+                "image": (
+                    "IMAGE",
+                    {"tooltip": "When wired, the output is the Qwen resolution closest to this image's aspect ratio, and the dropdown is ignored."},
+                ),
+            },
         }
 
     RETURN_TYPES = ("INT", "INT", "STRING", "IMAGE")
@@ -129,7 +137,7 @@ class NSQwenResolution:
         # Convert to tensor using the helper function
         return pil2tensor(image)
 
-    def get_dimensions(self, resolution):
+    def get_dimensions(self, resolution, image=None):
         # Map from aspect ratio to actual dimensions
         resolution_map = {
             "1:1 (Square)": (1328, 1328),
@@ -140,6 +148,14 @@ class NSQwenResolution:
             "3:2 (Classic Landscape)": (1584, 1056),
             "2:3 (Classic Portrait)": (1056, 1584),
         }
+
+        # A wired image picks the resolution whose aspect ratio is closest to its own
+        if image is not None:
+            image_ratio = image.shape[2] / image.shape[1]
+            resolution = min(
+                resolution_map,
+                key=lambda name: abs(math.log(resolution_map[name][0] / resolution_map[name][1] / image_ratio)),
+            )
 
         # Get dimensions from the map
         width, height = resolution_map[resolution]
