@@ -20,6 +20,7 @@ import { askForName, findSource, graphScope, slotName } from "./find_node.js";
 // panels; a second copy of it is how they drift.
 import { assetRecipeOf, eventForCategory, hideWidget,
          monthCategories } from "./asset_focus.js";
+import { SAVED_EVT as PROMPT_SAVED } from "./prompts.js";
 
 const NODE_CLASS = "SymbioticaRecipe";
 const SHARED = "shared";
@@ -703,6 +704,30 @@ export function captureColumn(table, slots, column, values) {
     }
     mirrorLinked(table, column);
     return table;
+}
+
+// A prompt file saved on the canvas. A cell holding that file's text as it
+// WAS held a copy of the file, not a text of its own, and takes the saved one:
+// left behind, every recipe on the file loaded the old text over the new file
+// and lit discard on the Prompts node. A text that differs from what the file
+// held is his own and stays. Answers the columns that moved.
+export function followPromptFile(table, rel, before, after) {
+    const moved = new Set();
+    for (const row of table?.rows ?? []) {
+        for (const column of table.columns) {
+            const parsed = parseJson(String(row.cells[column] ?? "").trim());
+            const value = parsed.ok ? parsed.value : null;
+            if (!value || typeof value !== "object" || Array.isArray(value)
+                || value.text !== before) continue;
+            const folder = String(value.folder ?? "").trim().replace(/^\/+|\/+$/g, "");
+            const file = String(value.file ?? "").trim();
+            if ((folder ? `${folder}/${file}` : file) !== rel) continue;
+            row.cells[column] = cellText({ ...value, text: after });
+            moved.add(column);
+        }
+    }
+    for (const column of moved) mirrorLinked(table, column);
+    return [...moved];
 }
 
 // ----------------------------------------------------------------- links --
@@ -1618,10 +1643,38 @@ function recipePanel(node) {
     // Prompts nodes beside the Task sat on the old recipe until this node came
     // back into view. A node the graph no longer holds -- a workflow switched
     // away from, an undo -- stops its own watch.
+    // A Prompts save reaches the recipes holding a copy of that file, and they
+    // are written at once: a copy left behind is the old text loaded over the
+    // new file on the next switch to it. Only while this node is on the canvas:
+    // one left behind by a workflow switch holds a table that is not current.
+    async function followPromptSave({ path, name, before } = {}) {
+        if (node.graph?.getNodeById?.(node.id) !== node) return;
+        if (!state.table || !path || !name || typeof before !== "string" || !before) return;
+        let after;
+        try {
+            ({ text: after } = await getJson("/symbiotica/prompts-read"
+                + `?folder=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`));
+        } catch {
+            return;
+        }
+        if (typeof after !== "string" || after === before || !state.table) return;
+        const moved = followPromptFile(state.table, name, before, after);
+        if (!moved.length) return;
+        for (const column of moved) rebuildWorkflow(column);
+        state.dirty = true;
+        renderAll();
+        await save();
+    }
+    const onPromptSaved = (event) => { void followPromptSave(event?.detail); };
+    window.addEventListener(PROMPT_SAVED, onPromptSaved);
+
     let joined = false;
     const watch = setInterval(() => {
         if (node.graph?.getNodeById?.(node.id) !== node) {
-            if (joined) clearInterval(watch);
+            if (joined) {
+                clearInterval(watch);
+                window.removeEventListener(PROMPT_SAVED, onPromptSaved);
+            }
             return;
         }
         joined = true;
@@ -1629,9 +1682,11 @@ function recipePanel(node) {
         if ((node.graph.rootGraph ?? node.graph) !== liveGraph()) return;
         watchTick();
     }, WATCH_MS);
+
     const onRemoved = node.onRemoved;
     node.onRemoved = function () {
         clearInterval(watch);
+        window.removeEventListener(PROMPT_SAVED, onPromptSaved);
         return onRemoved?.apply(this, arguments);
     };
 

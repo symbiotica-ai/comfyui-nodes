@@ -5,6 +5,7 @@ import { after, test } from "node:test";
 
 import { app, calls, create, fire, reset, setResponder, tick } from "./comfy_stub.mjs";
 import "../../web/js/recipes.js";
+import { SAVED_EVT as PROMPT_SAVED } from "../../web/js/prompts.js";
 
 const TEMPLATE = "symtest-fixture.json";
 const WORKFLOW = `workflows/${TEMPLATE}`;
@@ -47,7 +48,7 @@ const toasts = [];
 const asked = { answer: null };
 
 function router({ project = PROJECT(), slots = SLOTS, projects = OTHERS,
-                  saveFails = false } = {}) {
+                  saveFails = false, prompt = null } = {}) {
     return (route, _n, init) => {
         const body = init?.body ? JSON.parse(init.body) : null;
         if (route === "/symbiotica/recipes") return { ok: true, body: { projects } };
@@ -69,6 +70,10 @@ function router({ project = PROJECT(), slots = SLOTS, projects = OTHERS,
         }
         if (route.startsWith("/symbiotica/recipes/")) {
             return { ok: true, body: { project, slots } };
+        }
+        // The prompt file as it is on disk after a Prompts node saved it.
+        if (route.startsWith("/symbiotica/prompts-read") && prompt !== null) {
+            return { ok: true, body: { ok: true, text: prompt } };
         }
         return { ok: false, status: 404, body: { error: "no route" } };
     };
@@ -1428,4 +1433,54 @@ test("renaming a linked recipe keeps it linked", async () => {
     await settle();
     await click(word(node, "save project"));
     assert.deepEqual(lastProject().links, [["appliance1x2", "desk-1x1"]]);
+});
+
+// ===================== a prompt saved on the canvas ==========================
+
+test("a prompt saved on the canvas is written into the recipes that held its old text",
+     async () => {
+    // Every recipe on one prompt file held its own copy of the text, so a save
+    // left them all on the old one: each switch loaded it back over the new
+    // file and lit discard on the Prompts node.
+    const key = "Prompts (Symbiotica)";
+    const held = (text) => ({ folder: "image-model-prompts", file: "nano2-pre-chair.md", text });
+    const project = PROJECT();
+    project.recipes.appliance1x2[key] = held("Draw ONE chair, four times");
+    project.recipes.zebra[key] = held("Draw ONE chair, four times");
+    project.recipes.appliance1x1[key] = held("a text of his own");
+    const prompts = painted(key, [["folder", "image-model-prompts"],
+                                  ["file", "nano2-pre-chair.md"],
+                                  ["text", "Draw ONE chair, four times"]]);
+    const node = await recipeNode({ project, nodes: [...CANVAS(), prompts],
+                                    prompt: "Draw ONE chair, four times, tuned\n",
+                                    slots: [...SLOTS, { key, kind: "dict", default: {},
+                                                        widgets: 3 }] });
+    // On its canvas: the graph that holds it answers for it.
+    node.graph = { getNodeById: (id) => (id === node.id ? node : null) };
+    window.dispatchEvent(new CustomEvent(PROMPT_SAVED, { detail: {
+        path: "/p/prompt-templates", name: "image-model-prompts/nano2-pre-chair.md",
+        before: "Draw ONE chair, four times" } }));
+    await settle();
+    const saved = lastProject();
+    assert.equal(saved.recipes.appliance1x2[key].text, "Draw ONE chair, four times, tuned\n");
+    assert.equal(saved.recipes.zebra[key].text, "Draw ONE chair, four times, tuned\n");
+    assert.equal(saved.recipes.appliance1x1[key].text, "a text of his own");
+    assert.equal(saved.recipes.appliance1x2.backdrop, "floor-1x2.png", "nothing else moved");
+});
+
+test("a Recipes node no longer on the canvas does not write on a prompt save",
+     async () => {
+    // A workflow switched away from leaves its node behind, holding a table
+    // that is not the current one.
+    const key = "Prompts (Symbiotica)";
+    const project = PROJECT();
+    project.recipes.zebra[key] = { folder: "", file: "a.md", text: "old" };
+    const node = await recipeNode({ project, prompt: "new\n",
+                                    slots: [...SLOTS, { key, kind: "dict", default: {},
+                                                        widgets: 3 }] });
+    node.graph = { getNodeById: () => null };
+    window.dispatchEvent(new CustomEvent(PROMPT_SAVED, { detail: {
+        path: "/p", name: "a.md", before: "old" } }));
+    await settle();
+    assert.equal(lastProject(), undefined);
 });

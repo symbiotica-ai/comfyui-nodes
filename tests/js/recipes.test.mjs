@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import "./comfy_stub.mjs";
-import { cellText, cellValue, generateSummary, projectToTable, tableToProject } from "../../web/js/recipes.js";
+import { cellText, cellValue, followPromptFile, generateSummary, projectToTable,
+         tableToProject } from "../../web/js/recipes.js";
 
 const slots = [
     { key: "control_image", kind: "scalar", default: "old.png", widgets: 2 },
@@ -53,6 +54,43 @@ test("a text inside a node's values comes back from its cell exactly as it went 
                                  [{ ...prompts, default: {} }]);
     const back = tableToProject({}, table, [{ ...prompts, default: {} }]);
     assert.deepEqual(back.recipes["decoration-2x2"][prompts.key], held);
+});
+
+test("a saved prompt reaches every recipe that held the file's old text, and no other",
+     () => {
+    // Sixteen of his recipes hold nano2-pre-chair.md's text. Saved once, each
+    // of them loaded the old text over the new file and lit discard.
+    const key = "Prompts (Symbiotica)";
+    const slot = { key, kind: "dict", default: {} };
+    const on = (folder, file, text) => ({ [key]: { folder, file, text } });
+    const nano = (text) => on("image-model-prompts", "nano2-pre-chair.md", text);
+    const table = projectToTable({ template: "t.json", shared: {}, recipes: {
+        "chair-1x1": nano("Draw ONE chair, four times"),
+        "table-1x1": nano("Draw ONE chair, four times"),
+        "door-1x1": nano("a door of his own"),
+        "appliance-1x1": on("image-model-prompts", "qwen-pre-isometric.md",
+                            "Draw ONE chair, four times"),
+        "floor-1x1": on("/", "nano2-pre-chair.md", "Draw ONE chair, four times"),
+        "decoration-1x1": nano("Draw ONE chair, four times"),
+        "decoration-2x2": nano("Draw ONE chair, four times"),
+    }, links: [["decoration-1x1", "decoration-2x2"]] }, [slot]);
+    const moved = followPromptFile(table, "image-model-prompts/nano2-pre-chair.md",
+                                   "Draw ONE chair, four times",
+                                   "Draw ONE chair, four times, tuned\n");
+    assert.deepEqual(moved.sort(),
+                     ["chair-1x1", "decoration-1x1", "decoration-2x2", "table-1x1"]);
+    const back = tableToProject({}, table, [slot]).recipes;
+    assert.deepEqual(back["chair-1x1"][key],
+                     nano("Draw ONE chair, four times, tuned\n")[key]);
+    assert.equal(back["decoration-2x2"][key].text, "Draw ONE chair, four times, tuned\n");
+    assert.equal(back["door-1x1"][key].text, "a door of his own", "his own text stays");
+    assert.equal(back["appliance-1x1"][key].text, "Draw ONE chair, four times",
+                 "another file's recipe stays");
+    assert.equal(back["floor-1x1"][key].text, "Draw ONE chair, four times",
+                 "the same name in the root is another file");
+    // The root's own file is named by its bare name.
+    assert.deepEqual(followPromptFile(table, "nano2-pre-chair.md",
+                                      "Draw ONE chair, four times", "root\n"), ["floor-1x1"]);
 });
 
 test("an empty cell is an absent key, not an empty value", () => {

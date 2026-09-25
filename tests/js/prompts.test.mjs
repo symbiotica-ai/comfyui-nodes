@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { app, create, emit, fire, link, reset, setResponder, tick } from "./comfy_stub.mjs";
-import "../../web/js/prompts.js";
+import { SAVED_EVT } from "../../web/js/prompts.js";
 
 const TREE = {
     folders: ["_image", "_rules", "_rules/old"],
@@ -254,6 +254,21 @@ test("save posts the text to the file on screen", async () => {
     assert.deepEqual(posted(seen, "prompts-write"),
                      [{ folder: "/p/bakery/prompts", name: "_rules/01-refs.md",
                         text: "NEW TEXT" }]);
+});
+
+test("save says which file it wrote and what the file held before", async () => {
+    // A recipe holding the file's old text holds a copy of the file, and the
+    // Recipes node moves it to the saved text on hearing this.
+    const node = await promptsNode([]);
+    answer();
+    const heard = [];
+    const hear = (event) => heard.push(event.detail);
+    window.addEventListener(SAVED_EVT, hear);
+    await type(node, "NEW TEXT");
+    await click(button(node, "Save this file (⌘S)"));
+    window.removeEventListener(SAVED_EVT, hear);
+    assert.deepEqual(heard, [{ path: "/p/bakery/prompts", name: "_rules/01-refs.md",
+                               before: "TEXT OF _rules/01-refs.md" }]);
 });
 
 test("⌘S in the editor saves, without reaching the canvas", async () => {

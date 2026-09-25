@@ -17,8 +17,9 @@ const LOAD_NODE = "SymbioticaPromptLoad";
 
 // One node's save is every other node's stale view: two Prompts nodes on the
 // same file must agree after either saves. Saves are announced on the window
-// and every panel that is not mid-edit re-reads.
-const SAVED_EVT = "symbiotica-prompts-saved";
+// and every panel that is not mid-edit re-reads. A recipe holding a copy of
+// the file hears it too (`recipes.js`).
+export const SAVED_EVT = "symbiotica-prompts-saved";
 
 // The path itself, in the folder dropdown. A combo cannot show "", and a
 // slash is what a folder called nothing looks like.
@@ -508,8 +509,8 @@ function setupPrompts(node) {
         queueMicrotask(() => { queued = false; refresh(); });
     };
 
-    const announce = () =>
-        window.dispatchEvent(new CustomEvent(SAVED_EVT, { detail: { path: state.path } }));
+    const announce = (saved = {}) => window.dispatchEvent(
+        new CustomEvent(SAVED_EVT, { detail: { path: state.path, ...saved } }));
 
     // Leaving an unsaved edit is asked about, whatever the click was.
     async function mayLeave() {
@@ -551,6 +552,9 @@ function setupPrompts(node) {
         }
         try {
             const body = text();
+            // The file as it was on disk: a recipe still holding exactly that
+            // held a copy of the file, and moves to what is saved now.
+            const before = state.read === rel ? state.loaded : null;
             const res = await postJson("/symbiotica/prompts-write",
                                        { folder: state.path, name: rel, text: body });
             state.loaded = body;
@@ -558,7 +562,7 @@ function setupPrompts(node) {
                 state.files = [...(state.files ?? []), rel].sort();
             }
             toast("success", "Saved", `${rel} — ${res.chars} chars`);
-            announce();
+            announce({ name: rel, before });
         } catch (err) {
             toast("error", "Prompts", String(err.message || err));
         }
