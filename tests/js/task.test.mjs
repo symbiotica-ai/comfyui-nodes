@@ -16,10 +16,10 @@ const [OCT, NOV, DEC] = MONTHS;
 const FEAST = "Mini 3 — Franken-Feast";
 const GHOSTS = "Mini 1 — Ghostly Goodies";
 
-// Down the sheet, not down the alphabet, at every level: Mini 3 is the event
-// at the top of the October order, Wallpaper is the first category in it, and
-// Skull Wallpaper is the first row of that category. Sorted, all three would
-// come out the other way round.
+// Out of alphabetical order at every level: Mini 3 is the event at the top of
+// the October order, Wallpaper is the first category in it, and Skull
+// Wallpaper is the first row of that category. The tree sorts the categories
+// alone, so Appliance leads and the other two keep the sheet's order.
 const EVENTS = [
     { feature: "Mini 3", eventName: "Franken-Feast", assets: [
         { assetName: "Skull Wallpaper", category: "Wallpaper",
@@ -228,27 +228,31 @@ test("the sidebar's width and its fold ride on properties, not on widgets",
 
 // --- the tree ----------------------------------------------------------------
 
-test("the tree reads down the sheet, not down the alphabet", async () => {
-    // Months as the server gave them, events and categories in the order they
-    // first appear in the order — sorted, this list comes out backwards at
-    // every one of the three levels.
+test("categories read A-Z, months and events keep the calendar's and the sheet's",
+     async () => {
+    // "order alphabetically" (2026-09-23): the sheet mentions Wallpaper first
+    // and the tree draws Appliance first. Months as the server gave them and
+    // events in the order the sheet lists them — sorted, both come out
+    // backwards.
     const node = await taskNode();
     assert.deepEqual(labels(node),
-                     [OCT, FEAST, "Wallpaper · 2", "Appliance 1x2 · 1",
+                     [OCT, FEAST, "Appliance 1x2 · 1", "Wallpaper · 2",
                       GHOSTS, NOV, DEC]);
 });
 
 test("the tree is four levels, each one indented under the last", async () => {
     const node = await taskNode();
     await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper`));
+    // Skull before Bone: assets keep the sheet's order, the order a category
+    // pick runs them in.
     assert.deepEqual(labels(node),
-                     [OCT, FEAST, "Wallpaper · 2", "Skull Wallpaper",
-                      "Bone Wallpaper", "Appliance 1x2 · 1", GHOSTS, NOV, DEC]);
+                     [OCT, FEAST, "Appliance 1x2 · 1", "Wallpaper · 2",
+                      "Skull Wallpaper", "Bone Wallpaper", GHOSTS, NOV, DEC]);
     assert.deepEqual(kinds(node),
-                     ["month", "feature", "category", "asset", "asset",
-                      "category", "feature", "month", "month"]);
+                     ["month", "feature", "category", "category", "asset",
+                      "asset", "feature", "month", "month"]);
     assert.deepEqual(rows(node).map(depthOf),
-                     [0, 1, 2, 3, 3, 2, 1, 0, 0]);
+                     [0, 1, 2, 2, 3, 3, 1, 0, 0]);
 });
 
 test("the sheet's unnamed padding rows are not assets", async () => {
@@ -292,8 +296,8 @@ test("grouped by category, the month's events collapse into one list of types",
     const node = await taskNode();
     await click(groupToggle(node));
     assert.deepEqual(labels(node),
-                     [OCT, "Wallpaper · 2", "Appliance 1x2 · 1",
-                      "Food - 3 stages · 1", NOV, DEC]);
+                     [OCT, "Appliance 1x2 · 1", "Food - 3 stages · 1",
+                      "Wallpaper · 2", NOV, DEC]);
     // No event level: a category sits directly under the month.
     assert.deepEqual(kinds(node),
                      ["month", "category", "category", "category", "month", "month"]);
@@ -372,7 +376,7 @@ test("the grouping rides on a property, so a saved workflow reopens on it",
     await click(groupToggle(node));
     assert.equal(node.properties.symbiotica_task_by_category, false);
     assert.deepEqual(labels(node),
-                     [OCT, FEAST, "Wallpaper · 2", "Appliance 1x2 · 1", GHOSTS,
+                     [OCT, FEAST, "Appliance 1x2 · 1", "Wallpaper · 2", GHOSTS,
                       NOV, DEC]);
 });
 

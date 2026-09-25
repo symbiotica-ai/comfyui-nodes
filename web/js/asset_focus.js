@@ -892,10 +892,12 @@ export function eventForCategory(node, label) {
     return hit ? eventLabel(hit) : "";
 }
 
-// The tree's levels as one flat list of rows, top to bottom, in the order the
-// ORDER gives them: months calendar-wise from the server, events and
-// categories in first-appearance order down the sheet. Never alphabetical —
-// `walkTree` sorts, and the sheet's order is the order he reads.
+// The tree's levels as one flat list of rows, top to bottom: months
+// calendar-wise from the server, events in the order the sheet lists them, and
+// categories A-Z — "order alphabetically" (2026-09-23), over twenty types in
+// the order the sheet first mentions them, where the category dropdown and the
+// Recipes sidebar already list them A-Z. Assets keep the sheet's order, the
+// order a category pick runs them in (`_focus_columns` takes `items[0]`).
 //
 // TWO groupings of the same month. By EVENT is the sheet's own shape: month,
 // event, category, asset. By CATEGORY drops the event level and gathers every
@@ -904,10 +906,11 @@ export function eventForCategory(node, label) {
 // type of asset". An asset row there says which event it came from, because
 // taking it moves the node to that event.
 //
-// Rows are built here rather than by `walkTree` for a second reason: that
-// function derives parentage from a slash-joined key, and his sheet holds
-// names with slashes in them and two rows that flatten to the same key. A row
-// is its own object; nothing is looked up by its path.
+// Rows are built here rather than by `walkTree`, which sorts every level —
+// the calendar's months with the rest — and derives parentage from a
+// slash-joined key: his sheet holds names with slashes in them and two rows
+// that flatten to the same key. A row is its own object; nothing is looked up
+// by its path.
 function taskRows(node, state) {
     const rows = [];
     const byCategory = !!node.properties?.[TASK_GROUP];
@@ -917,7 +920,9 @@ function taskRows(node, state) {
     // One category level, drawn the same in both groupings. `depth` is on the
     // row because the category view has no event level to count.
     const pushCategories = (groups, m, depth, relOf) => {
-        for (const [recipe, members] of groups) {
+        const sorted = [...groups].sort(([a], [b]) => a.localeCompare(
+            b, undefined, { sensitivity: "base" }));
+        for (const [recipe, members] of sorted) {
             const holdsPick = members.some((a) => a.name === chosen);
             const openCat = holdsPick
                 || recipe.toLowerCase() === pick.toLowerCase();
