@@ -54,12 +54,6 @@ Left open on 2026-09-19. One line each, the decision still open.
   Tracker`, `Symbiotica Studio Library`, `Control Image`, `Module`, `Recipes`,
   `Split Prompts`, `Load Text File`, `Load Text List`. Offered and not taken;
   a node already on a canvas keeps the title it was saved with either way.
-- The Arrange section at the end of `web/js/find_node.js` (Arrange workflow,
-  Restore previous layout, Stack and align), `tests/js/arrange.test.mjs` and
-  `specs/arrange-workflow*` are uncommitted. They were built on 2026-09-21, and
-  `./push.sh` has shipped them to Modal with the working tree ever since. Its
-  38 tests pass. Open: commit it as it is, or finish it first; either way,
-  stage `find_node.js` by hunk, because other work lands in that file too.
 - `chore/internal-pack-cleanup` holds four commits that are not on main — the
   category-tree lock, the 82-node cull, the module-merge docs. Left alone when
   the branches were collapsed to `main` on 2026-09-19; merge or delete.
@@ -70,15 +64,14 @@ Left open on 2026-09-21, after the Task tree gained a category grouping and the
 Recipes sidebar gained a row per category. One line each, the decision still
 open. The node's contract is `docs/recipes-contract.md`.
 
-- His local project `user/default/recipes/_node-asset-focus-rework.json` still
-  stores the Prompts text with 6 to 11 spaces after each comma in 18 recipes,
-  the damage from the `cellText` bug fixed on 2026-09-23. Collapsing `, +` to
-  `, ` gives exactly `image-model-prompts/nano2-pre-chair.md` for every one.
-  The base workflow's Prompts widget holds 7, and the generated workflows
-  beside it hold the same. A one-off repair was offered (backup kept, then a
-  reload, since an open tab saves its in-memory table back); no answer yet.
-  Modal's projects are unchecked, and `bakery-base-arrange-test.json`, pulled
-  from there, holds 2 and 6.
+- Modal's projects still store the Prompts text with extra spaces after each
+  comma, the damage from the `cellText` bug fixed on 2026-09-23: 13 cells in
+  `bakery-base` (2 to 10 spaces) and 18 in `imperia-bakery` (4 to 11). His
+  local `_node-asset-focus-rework.json` was repaired the same day (13 recipes,
+  each text now exactly the file it names; the old file is kept beside it as
+  `.json.bak-2026-09-23`). The repair only rewrites a text whose collapsed
+  form equals its file on disk, and an open tab saves its in-memory table
+  back, so the tab has to be reloaded right after.
 - With `auto` on, picking a recipe `pointWireAt` cannot name — one from
   `new recipe`, which no category is named after — still LOADS it, and the next
   draw reads the old name off the wire and loads that back over it. The status
@@ -158,6 +151,28 @@ Left open on 2026-09-23, after recipes could be linked (`704b6fd`):
   widget, and the panel then asks `local-image` for a path with JSON in it (403
   on the spare). Linking copies whatever the open recipe holds. Open: repair
   the cells to the bare path, or leave them for a capture to overwrite.
+
+Left open on 2026-09-23, after the Task tree's categories went A-Z:
+
+- Assets under a category still follow the sheet, because the top one is what
+  a category click runs. Sorting them too was offered; no answer yet. Sorting
+  only the tree would put `· first` on a row that is not the top one, so it
+  means sorting the run order with it (`_focus_items` in Python, `runList` on
+  the canvas).
+
+## Arrange workflow — open threads (no issue filed yet)
+
+Left open on 2026-09-25, when Arrange was committed as it stood. One line each.
+
+- His three Fast Groups nodes (4110 `render-engine`, 3818 `edit-sketch`, 4282
+  `save-high` in `bakery-base-arrange-test.json`) still sort by `position`
+  with an empty `customSortAlphabet`. The spec's 5-minute first step, pinning
+  their rows to names, was never done, so `shelfPack` is the only guard.
+- Subgraph interiors are not arranged. The spec prices it at a 1h pass over
+  `graph.subgraphs`. His 17 definitions hold no groups, so each would lay out
+  as one block.
+- Nothing records whether he has run it on his real base workflow, or only
+  on the `bakery-base-arrange-test.json` copy.
 
 ## Set Hub / Get Hub — open threads (no issue filed yet)
 

@@ -132,9 +132,12 @@ The rule everything else follows from:
   `match_color` that matches nothing.
 - `generate workflows` either writes every slot or names the one it could not,
   including group toggles.
-- A capture names what it could NOT keep: a node whose values moved since the
-  last load or capture and that carries no paint is listed, rather than
-  vanishing.
+- A capture names only the recipe it wrote (`Captured <recipe>.`). Unpainted
+  nodes that changed since the last load are no longer listed: that list went
+  with the one-line status on 2026-09-23.
+- The status line is one short line. What does not fit (the server's reason a
+  workflow was not written, the slots a load could not place) is its hover
+  title.
 - Values the SAVED template has no slot for are named in the status line. That
   is a workflow painted and not saved, and generate would otherwise render the
   template's own value at full price.

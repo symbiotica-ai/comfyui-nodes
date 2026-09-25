@@ -249,6 +249,35 @@ KJNodes pairs, and it is in 1.48.7 as well as 1.52.7.
   holds — two rows called `STRING` were handed ONE state between them and drew
   the same name twice. Nothing to write back means nothing to drift.
 
+## Arrange workflow, Stack and align — one press moves his canvas
+
+The end of `web/js/find_node.js`, as its own `registerSymbioticaExtension`
+spec (`symbiotica.arrange`): a keybinding clash refuses the whole spec it
+arrives in, and it must not take the finder and the hubs down with it. Its rows
+sit at the top of the canvas menu, labelled `(Symbiotica)` because pysssss's
+two group-blind Arrange rows are in the same menu. The plan and his canvas's
+numbers: `specs/arrange-workflow.html`.
+
+- **Arrange workflow** (Ctrl+Shift+9) lays nodes out INSIDE the groups he drew
+  and moves the boxes to make room. It never re-clusters and never renames:
+  rgthree's `matchTitle` is a substring match, so an invented title can join an
+  `always one` family and change what renders. `checkArrange` finding any
+  problem means nothing moves.
+- **A group move must keep rgthree's row order.** Fast Groups Muter/Bypasser
+  order their rows by group POSITION (`floor(y/30)`, then `floor(x/30)`).
+  `shelfPack` puts the boxes on shelves in today's row order, so the rows read
+  back identical by construction.
+- **Its edges hop Set/Get pairs** (`arrangeEdges`). Read off `graph.links`
+  alone, his root graph is 21 islands instead of 8.
+- **It writes his workflow.** Autosave has the new layout on disk about a
+  second after the press. The way back is `graph.extra.symbiotica_arrange_undo`,
+  which saves with the workflow: `Restore previous layout` shows only while it
+  exists and deletes it on use, and a press that moves nothing leaves it alone.
+  The whole move is one Ctrl+Z step (`commit`).
+- **Stack and align** (Shift+A, and the selection toolbox) lines up the
+  selection, else a selected group's nodes, else the group under the pointer.
+  Pinned nodes stay put.
+
 ## A value that arrives on a wire
 
 He wires almost everything through KJNodes **Set/Get** nodes. A GetNode's only
@@ -322,6 +351,10 @@ slash-joined key, and his sheet holds names with slashes in them.
   events that contain that type of asset" (2026-09-21). The grouping rides on
   `node.properties[TASK_GROUP]`, like the sidebar width and the fold: a widget
   would shift the saved values of every workflow already holding the node.
+- **Categories are A-Z in both groupings** ("order alphabetically",
+  2026-09-23), the order the category dropdown and the Recipes sidebar use.
+  Months stay calendar-wise and events in sheet order. Assets stay in sheet
+  order because that is the run order: `· first` is `items[0]`.
 - **A row carries its event, and taking one moves the node there.** In the
   category view an asset row is labelled `<name> · <event>`, `chooseAsset`
   hops through `chooseFound` when the event differs, and `chooseCategory` hops
@@ -498,6 +531,14 @@ the same thing. Each one failed silently first.
   slot added a space after each comma of the Prompts text. His project held
   eleven, and every recipe load put them on the Prompts node, which then read
   as edited (2026-09-23).
+- **A prompt saved on the canvas reaches every recipe holding the file's old
+  text** (`followPromptFile`, 2026-09-23). A recipe stores its own copy of the
+  Prompts text, so one save left the other recipes on that file with the old
+  text: each switch loaded it back over the new file and lit discard. The
+  Prompts save announces the file and what it held (`SAVED_EVT`, exported
+  from `prompts.js`), and the Recipes panel moves every cell holding exactly
+  that text and saves. A text that differs from the old file is his own and
+  stays.
 - **`auto` compares slot values by NAME** (`slotSignature`). Clicking, dragging
   or resizing any node moves it to the end of `graph._nodes`, the order
   `liveSlotValues` reads in; a signature in that order made every click an
