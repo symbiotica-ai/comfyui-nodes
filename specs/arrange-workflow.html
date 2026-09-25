@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Arrange workflow</title>
+<style>
+:root{--bg:#f6f5f2;--ink:#1c1c1a;--mute:#6b6a66;--line:#d9d7d1;--acc:#2a5d9f;--acc2:#e8eef7;--ok:#2f7d4f;--warn:#a8541f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,Inter,Segoe UI,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:26px;margin:0 0 8px}
+h2{font-size:17px;margin:34px 0 8px;letter-spacing:.02em;text-transform:uppercase;color:var(--mute)}
+h3{font-size:16px;margin:18px 0 4px}
+ul.terse{margin:0;padding-left:18px}
+ul.terse li{margin:2px 0}
+p.chain{font-family:ui-monospace,Menlo,monospace;font-size:13.5px;background:var(--acc2);padding:10px 12px;border-left:3px solid var(--acc);margin:8px 0 14px}
+figure{margin:12px 0}
+figure img{width:100%;border:1px solid var(--line);border-radius:6px;display:block}
+figcaption{font-size:12.5px;color:var(--mute);margin-top:4px}
+.stage{padding:10px 0 4px;border-top:1px solid var(--line)}
+details.meta summary{cursor:pointer;color:var(--mute);font-size:13px}
+dl{display:grid;grid-template-columns:110px 1fr;gap:2px 10px;font-size:13px;margin:6px 0 0}
+dt{color:var(--mute)}dd{margin:0;font-family:ui-monospace,Menlo,monospace}
+table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0}
+th,td{text-align:left;vertical-align:top;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--mute);font-weight:600;font-size:12.5px;text-transform:uppercase}
+details{margin:6px 0}
+details summary{cursor:pointer}
+#handoff ul{padding-left:18px;font-size:14px}
+code{font-family:ui-monospace,Menlo,monospace;font-size:13px;background:#ecebe6;padding:0 4px;border-radius:3px}
+a{color:var(--acc)}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;background:var(--ok);color:#fff;margin-left:6px;vertical-align:middle}
+.tag.later{background:var(--mute)}
+.tag.side{background:var(--acc)}
+p.note{font-size:14px;margin:8px 0;padding:8px 10px;border-left:3px solid var(--warn);background:#f6efe8}
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <h1>Arrange workflow</h1>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-09-21T18:39:55Z</dd>
+        <dt>modified</dt>     <dd>2026-09-21T18:39:55Z</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>claude-opus-5</dd>
+        <dt>session id</dt>   <dd>25b05ed4-ec28-4c92-b799-0a8308ce43ae</dd>
+        <dt>back refs</dt>    <dd>web/js/find_node.js, CLAUDE.md, user/default/workflows/bakery-base-arrange-test.json</dd>
+        <dt>forward refs</dt> <dd>web/js/find_node.js, tests/js/arrange.test.mjs, tests/js/comfy_stub.mjs</dd>
+      </dl>
+    </details>
+  </header>
+
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <ul class="terse">
+      <li>One right-click and the canvas tidies itself: nodes stacked by flow inside the groups you already drew, boxes grown to fit.</li>
+      <li>Your groups are the answer — 104 of 119 nodes already sit in exactly one, none in two. Nothing re-clusters, nothing renames.</li>
+      <li>The rgthree bypasser rows cannot move, because the first pass never moves a group.</li>
+      <li>No model in the loop. Same click, same result, every time.</li>
+    </ul>
+  </section>
+
+  <section id="flow">
+    <h2>Flow</h2>
+    <p class="chain">measure the canvas &gt; hop the Set/Get wires &gt; tidy inside each group &gt; regrow the boxes &gt; check, then commit &gt; pack the boxes into shelves</p>
+    <figure>
+      <img src="arrange-workflow/flow.png" alt="Measure, resolve, tidy, regrow, commit, then pack">
+      <figcaption>Measure, resolve, tidy, regrow, check, commit. Packing is a second click.</figcaption>
+    </figure>
+    <p class="note"><b>Expect this:</b> the boxes get bigger. Group boxes go from 10 to roughly 26 million px² — your canvas is 23.7% full today, and tidy means the boxes finally match what is inside them.</p>
+  </section>
+
+  <section id="stages">
+    <h2>Stages</h2>
+
+    <div class="stage">
+      <h3>1. Measure the canvas</h3>
+      <ul class="terse">
+        <li><b>In</b> the graph on screen.</li>
+        <li><b>Does</b> asks every node for its drawn footprint, not its stored size — that is the only way the 34 collapsed Set/Get read as title bars instead of full boxes. Then freezes two facts: which node belongs to which group, and the order the Fast Groups rows are in right now.</li>
+        <li><b>Out</b> a rectangle per node, a membership map, a row-order fingerprint.</li>
+        <li><b>Why here</b> both frozen facts are what the result gets graded against at the end. Measured after, they would just agree with whatever happened.</li>
+      </ul>
+    </div>
+
+    <div class="stage">
+      <h3>2. Hop the Set/Get wires</h3>
+      <ul class="terse">
+        <li><b>In</b> the links table, plus every Set node, Get node and hub slot name.</li>
+        <li><b>Does</b> builds the real edge list. A Get is joined to the Set that publishes its name, and a hub's slot to the hub slot that reads it — per slot, so one hub stands in for twenty pairs.</li>
+        <li><b>Out</b> one edge list where the graph is 8 islands instead of 21.</li>
+        <li><b>Why here</b> every existing tool skips this and sees your Set/Get as unconnected litter. It is the whole reason none of them work on your canvas.</li>
+      </ul>
+    </div>
+
+    <div class="stage">
+      <h3>3. Tidy inside each group</h3>
+      <ul class="terse">
+        <li><b>In</b> one group's members and the edges between them.</li>
+        <li><b>Does</b> sorts them into columns by how far down the flow they sit, orders each column to un-cross the wires, and seeds that order from where they are today so the result still reads as your workflow. Previews go to a rail down the right edge at their producer's height.</li>
+        <li><b>Out</b> a position per node, snapped to your 100px grid.</li>
+        <li><b>Why here</b> 96 of your 128 wires stay inside one group and only 2 cross. Almost all the mess is intra-group, so almost all the fix is too.</li>
+      </ul>
+      <figure>
+        <img src="arrange-workflow/group.png" alt="Three columns of nodes by flow order, preview rail at the right edge">
+        <figcaption>Columns by flow order, previews on a rail at the right edge.</figcaption>
+      </figure>
+    </div>
+
+    <div class="stage">
+      <h3>4. Regrow the boxes</h3>
+      <ul class="terse">
+        <li><b>In</b> the new node positions.</li>
+        <li><b>Does</b> each box keeps its top-left corner exactly where it is and grows right and down until it holds its members. The corner is never written.</li>
+        <li><b>Out</b> 13 boxes that fit, in the 13 places they already were.</li>
+        <li><b>Why here</b> rgthree reads its row order straight off group position. Leaving the corner alone is not a guard against reshuffling your bypassers — it makes reshuffling impossible.</li>
+      </ul>
+    </div>
+
+    <div class="stage">
+      <h3>5. Check, then commit</h3>
+      <ul class="terse">
+        <li><b>In</b> the whole proposed layout, still as numbers. Nothing has moved yet.</li>
+        <li><b>Does</b> four tests against the frozen facts: no node overlaps another, no node changed group, no box swallows another box, row order identical. All pass and it writes in one undo step. One fails and you get a message and an untouched canvas.</li>
+        <li><b>Out</b> the arranged graph, plus a snapshot of where everything was, saved inside the workflow.</li>
+        <li><b>Why here</b> autosave writes a second after the click and undo here reloads the whole graph, which tears down every panel this pack draws. Its own Restore row is the safe way back.</li>
+      </ul>
+    </div>
+
+    <div class="stage">
+      <h3>6. Pack the boxes into shelves <span class="tag later">second click</span></h3>
+      <ul class="terse">
+        <li><b>In</b> the 13 tidied boxes and their frozen row order.</li>
+        <li><b>Does</b> lays them left to right on shelves, every box on a shelf sharing one top edge, a new shelf when the row runs long. Shelf by shelf, in the order the rows are in today.</li>
+        <li><b>Out</b> a canvas with no gaps between groups and the same bypasser rows.</li>
+        <li><b>Why here</b> shelves are the one packing shape where rgthree reads the order back unchanged by construction. Any solver that places boxes freely reshuffles the rows you click.</li>
+      </ul>
+      <figure>
+        <img src="arrange-workflow/shelves.png" alt="Boxes packed into two shelves, numbered in reading order">
+        <figcaption>Shelves keep reading order, so the bypasser rows keep theirs.</figcaption>
+      </figure>
+    </div>
+
+    <div class="stage">
+      <h3>7. Stack and align, by hand <span class="tag side">separate key</span></h3>
+      <ul class="terse">
+        <li><b>In</b> whatever you have selected.</li>
+        <li><b>Does</b> reads which way the selection is spread, lines up that leading edge, makes the widths match the widest, spaces them evenly, everything on your grid. Skips collapsed nodes when matching widths.</li>
+        <li><b>Out</b> a clean stack, in one undo step.</li>
+        <li><b>Why here</b> independent of the chain above. It ships first because it is small and it is the thing you reach for a hundred times a day.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="check">
+    <h2>Check</h2>
+    <ul class="terse">
+      <li>Measure the canvas: the 34 collapsed Set/Get report as title bars, not full boxes.</li>
+      <li>Hop the Set/Get wires: the edge list joins into 8 islands, not 21.</li>
+      <li>Tidy inside each group: 105 overlapping pairs go to 0, and the 33 nodes hanging outside their box are inside it.</li>
+      <li>Regrow the boxes: every group corner is at the same coordinate as before the click.</li>
+      <li>Check, then commit: run it twice — the second run moves nothing. One Ctrl+Z, or the Restore row, puts the old layout back.</li>
+      <li>Pack the boxes into shelves: the three Fast Groups nodes list their rows in the same order as before.</li>
+      <li>Stack and align: every coordinate lands on 100, nothing overlaps, pinned nodes did not move.</li>
+    </ul>
+  </section>
+
+  <section id="handoff">
+    <details>
+      <summary>Handoff notes for implementation</summary>
+      <ul>
+        <li><b>Do this first, 5 minutes, independent of the build</b> — set <code>sort</code> to <code>custom alphabet</code> on his three Fast Groups nodes (4110 <code>render-engine</code>, 3818 <code>edit-sketch</code>, 4282 <code>save-high</code>) and fill <code>customSortAlphabet</code> with today's order. Pins rows to names permanently and makes every later group move safe.</li>
+        <li><b>Where it lives</b> — all of it in <code>web/js/find_node.js</code> (1340 lines), as a <b>second</b> <code>registerSymbioticaExtension</code> spec: a keybinding collision hard-refuses a whole spec, and it must not take Find node / Set Hub / Get Hub down with it. A new <code>web/js</code> file never reaches the Modal sandbox. That file already owns <code>slotName</code> (414), <code>getLink</code> (420, module-private — needs <code>export</code>), <code>graphScope</code> (432), <code>everyGraph</code> (439), <code>publishedNames</code> (454), <code>findSource</code> (538), <code>prependCanvasMenuItem</code> (224) and the pack's only command+keybinding (240–251).</li>
+        <li><b>Menu rows</b> — <code>Tidy groups (Symbiotica)</code> ctrl+shift+9, <code>Pack groups (Symbiotica)</code>, <code>Restore previous layout (Symbiotica)</code>, plus <code>Tidy this group</code> on the group menu via the same <code>PATCHED</code>-marker monkeypatch. Labels carry <code>(Symbiotica)</code> because pysssss's <code>graphArrange.js</code> already puts <b>Arrange (float left/right)</b> on that menu and both are group-blind — one click flattens all 13 groups.</li>
+        <li><b>Footprints</b> — <code>node.updateArea(ctx)</code> with a 2d context, then read <code>node.boundingRect</code>. Per-frame cache, not a getter: read it after a <code>pos</code> write and you get the stale box. Only path that gets collapsed nodes right (~210×30, not the 300×100 in <code>size</code>).</li>
+        <li><b>Membership</b> — <code>recomputeInsideNodes()</code> once, then record node → group <b>by group id, not index</b> (it sorts <code>graph.groups</code> in place). Membership is <code>containsCentre</code>, so 40px of drift silently moves a node between groups — and 36 of his nodes are muted or bypassed, so drift changes what runs. That is why membership diff is a hard check.</li>
+        <li><b>Layout core</b> — longest-path layering (Kahn) with greedy back-edge reversal as a guard, sink-pull pass, barycenter ordering 8 sweeps <b>seeded from current Y</b> (what makes it idempotent and recognisable), one median straightening pass. 40px within a layer, column advance = layer max width + 120. Gets pinned to layer 0, Sets to the last layer. Preview rail takes the 16 PreviewImage + 7 Image Comparer + 5 PreviewAny — 50 of the 105 overlapping pairs involve one.</li>
+        <li><b>Ungrouped nodes, in order</b> — (1) Fast Groups Muter/Bypasser never joins a group, by type not geometry (3818 sits flush at the y where <code>edit-sketch</code> starts, so an overlap test misses it); keeps its offset against the group it sits over. (2) Set/Get hop places the hub orphans. (3) unanimous neighbours join that group, split neighbours sit between the two — that is <code>Any Switch 3814</code>. (4) the rest form a head block above the first shelf, current relative order kept.</li>
+        <li><b>Never written</b> — <code>node.size</code> (22 DOM panels; Recipe 900×1000, Task 900×800, Set task-specs 300×800 — writing panel heights is this repo's most expensive bug class), <code>mode</code>, titles, <code>properties</code>, widget values, <code>flags.collapsed</code>, link ids. Refuse to run for 500ms after a graph load so panels have settled. Pinned nodes and groups skipped by our own test — the <code>pos</code> setter has no pinned check, contrary to what every layout tool assumes.</li>
+        <li><b>Writes</b> — <code>node.pos = [x,y]</code> via the setter, never <code>node.move()</code> (returns early under <code>vueNodesMode</code>), bracketed in <code>emitBeforeChange()</code>/<code>emitAfterChange()</code> in try/finally, then <code>setDirtyCanvas(true, true)</code>. Undo snapshot <code>{id → pos}</code> + <code>{group → pos+size}</code> into <code>graph.extra.symbiotica_arrange_undo</code>, which serialises with the workflow (<code>Comfy.Workflow.AutoSave</code> is <code>"after delay"</code> in his settings).</li>
+        <li><b>Stack and align</b> — command <code>Symbiotica.StackAndAlign</code> on shift+A, <code>targetElementId: "graph-canvas"</code> so it does not fire from a textarea, plus <code>getSelectionToolboxCommands</code> for the toolbox button. Grid read at call time via <code>app.canvas.graph.getSnapToGridSize()</code> (his: 100, <code>pysssss.SnapToGrid: true</code>), falsy → skip rounding. Write with <code>node.setPos</code>. He already has edge-align on shift+arrows from comfyui-easy-use (<code>EasyUse.Hotkeys.AlignSelectedNodes</code>) — this adds the stack, which nothing has.</li>
+        <li><b>Tests</b> — <code>tests/js/comfy_stub.mjs</code> has no <code>LGraphGroup</code>, <code>updateArea</code> or <code>boundingRect</code> (0 hits); all three needed. New <code>tests/js/arrange.test.mjs</code> with fixtures cut from <code>bakery-base-arrange-test.json</code>; tests do not ship so a new file there is free. Never <code>assert.equal</code> two stub DOM elements.</li>
+        <li><b>Verification</b> — spare ComfyUI on 8189 with his real file, playwright. 105 overlaps → 0, membership diff 0, rgthree rows read off the live nodes, Restore, second run moves nothing. Local frontend is 1.52.7; his Modal editor saved this file on 1.53.6, so no version-pinned API.</li>
+        <li><b>Rejected</b> — <a href="https://github.com/phazei/ComfyUI-Enhancement-Utils">phazei/ComfyUI-Enhancement-Utils</a> (closest fit: dagre/ELK, lays out in groups, resizes boxes, skips pinned groups) builds edges from <code>graph.links</code> only, and its group pass is dagre over group blocks so row order comes out of a solver; faking Set/Get links into <code>graph.links</code> mutates his graph, because KJNodes' <code>onConnectionsChange</code> renames slots on connect. <code>phineas-pta/comfyui-auto-nodes-layout</code> tells you to delete your groups first; <code>shootthesound/comfyui-CleanFreak</code> calls <code>deleteAllGroups()</code>; ComfyUI-Align / NodeAligner / NodeAlign are selection align, not layout. No ComfyUI-Manager on his local install anyway. <b>Haiku rejected</b> — the semantics are already in his groups, the one ambiguous node resolves deterministically, and the one job a model is good at (naming groups) is forbidden: rgthree's <code>matchTitle</code> is a case-insensitive substring regex, so an invented title can silently join a <code>toggleRestriction: "always one"</code> family and change what executes.</li>
+        <li><b>Effort</b> — Phase A (stages 1–5) 14h, Phase B (stage 6) 9h, stack and align 8.5h. Subgraph interiors are a later 1h pass over <code>graph.subgraphs</code> with <code>everyGraph</code>; his 17 definitions hold 0 groups, so each degenerates to one block.</li>
+        <li><b>Reported, not fixed</b> — <code>Image Comparer 4392</code> overlaps <code>render-final</code> without being in it, so bypassing that group leaves it running. One line in the toast.</li>
+      </ul>
+    </details>
+  </section>
+
+  <section id="amendments">
+    <h2>Amendments</h2>
+  </section>
+
+</main>
+</body>
+</html>

@@ -1390,3 +1390,892 @@ registerSymbioticaExtension(app, {
         }
     },
 });
+
+// ================================================================ Arrange ==
+
+// Why this exists: his canvas is 119 nodes in 13 groups he drew himself, and
+// the mess is not the grouping — 104 of those nodes are already in exactly one
+// group, none in two, and 96 of the 128 wires never leave the group they start
+// in. The mess is geometry: 91 pairs of nodes overlapping each other, 32 nodes
+// hanging outside the box they belong to, and boxes too small to hold what is
+// in them. So this lays out INSIDE the groups he has and never re-clusters,
+// never renames.
+//
+// It moves the boxes too, and that was not the first plan. Keeping every box
+// where it was and only tidying its insides is safer on paper, and it was
+// tried against his real file first: a group laid out properly needs MORE room
+// than one whose nodes overlap, his groups sit tens of pixels apart, so nine
+// of the thirteen had to be skipped to stop a grown box covering its
+// neighbour's nodes. A tidy that declines two thirds of the canvas is not a
+// tidy. Moving the boxes is what makes the room.
+//
+// Which runs straight into rgthree. Its Fast Groups Muter/Bypasser reads its
+// row order off group POSITION — `floor(y/30)` then `floor(x/30)` — so moving
+// groups reshuffles the rows he clicks, and two of his three carry
+// `toggleRestriction: "always one"`, where the wrong row is a different
+// render. `shelfPack` is the answer: boxes go onto shelves, left to right,
+// every box on a shelf sharing one top edge, in the order the rows are in now.
+// Shelf-mates then share `floor(y/30)` with ascending x, and a later shelf is
+// strictly greater, so the order reads back identical BY CONSTRUCTION rather
+// than by a check that hopes.
+//
+// And the reason this is not an install. Every tool that already does layout
+// for ComfyUI — phazei's Enhancement-Utils, and pysssss's own two Arrange rows
+// sitting in this very menu — builds its edge list from `graph.links`, where
+// his Set/Get pairs do not appear. That reads his root graph as 21
+// disconnected islands instead of 8 and gutters half of it. `arrangeEdges`
+// hops the pair, which is the one piece none of them can be handed.
+
+const ARRANGE_ID = "Symbiotica.ArrangeWorkflow";
+const RESTORE_ID = "Symbiotica.RestoreLayout";
+const STACK_ID = "Symbiotica.StackAndAlign";
+const ARRANGE_LABEL = "Arrange workflow (Symbiotica)";
+const RESTORE_LABEL = "Restore previous layout (Symbiotica)";
+const STACK_LABEL = "Stack and align (Symbiotica)";
+
+// `(Symbiotica)` rides in the label because pysssss's Custom Scripts already
+// puts "Arrange (float left)" and "Arrange (float right)" on this same menu,
+// and both of those are group-blind: one click flattens all 13 of his groups.
+// A row that cannot be told apart from that one is a trap, not a feature.
+const ARRANGE_COMBO = { key: "9", ctrl: true, alt: false, shift: true };
+// Shift+A, not a bare letter: the keybinding store keys the full modifier set,
+// so this does not collide with anything bound to `a`.
+const STACK_COMBO = { key: "a", ctrl: false, alt: false, shift: true };
+
+// Where the undo snapshot lives. `graph.extra` serialises with the workflow,
+// which is the point: `Comfy.Workflow.AutoSave` is "after delay" on his
+// install, so the new layout is on disk about a second after the click, and
+// the frontend's own undo at this scale is a full `loadGraphData` that tears
+// down and rebuilds every DOM panel this pack draws.
+const UNDO_KEY = "symbiotica_arrange_undo";
+
+const LAYER_GAP = 120;   // between one column of nodes and the next
+const ROW_GAP = 40;      // between two nodes stacked in the same column
+const RAIL_GAP = 60;     // between the last column and the preview rail
+const BOX_PAD = 30;      // inside a group box, left/right/bottom
+const TITLE_PAD = 60;    // the group's title bar, above its contents
+const SHELF_GAP_X = 200; // between two boxes on a shelf
+const SHELF_GAP_Y = 250; // between one shelf and the next
+
+// Nodes that end a branch and are read, not wired onward. Parked on a rail
+// down the right edge of their group at their producer's height instead of
+// taking a column of their own: 50 of the 105 overlapping pairs on his canvas
+// involve one of these.
+const PREVIEW_TYPES = new Set([
+    "PreviewImage", "PreviewAny", "SaveImage", "PreviewVideo", "PreviewAudio",
+    "SaveAnimatedWEBP", "SaveAnimatedPNG", "Image Comparer (rgthree)",
+    "ShowText|pysssss", "PreviewMask", "SaveVideo", "PreviewText",
+]);
+
+// Never laid out into a group, decided by TYPE and not by geometry. His
+// bypasser 3818 sits at y −5830..−5700 and `edit-sketch` starts at exactly
+// −5700 — flush, so `containsCentre` adopts it, and it would be laid out into
+// the group it is the control panel FOR. It still RIDES with that group when
+// the box moves, at the offset it has now.
+const NEVER_GROUPED = new Set([
+    "Fast Groups Muter (rgthree)", "Fast Groups Bypasser (rgthree)",
+    "Fast Bypasser (rgthree)", "Fast Muter (rgthree)", "Note", "MarkdownNote",
+]);
+
+// ---------------------------------------------------------------- geometry --
+
+export function snapValue(value, grid) {
+    return grid > 0 ? Math.round(value / grid) * grid : value;
+}
+
+function snapUp(value, grid) {
+    return grid > 0 ? Math.ceil(value / grid) * grid : value;
+}
+
+function overlaps(a, b) {
+    return a.x < b.x + b.w && b.x < a.x + a.w
+        && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+// What the node actually occupies on screen, which is not `pos` and `size`.
+// `boundingRect` includes the title bar and is the only thing that reads a
+// COLLAPSED node right — 34 of his 119 are collapsed Set/Get, drawn as a title
+// bar of about 210×30 while `size` still says 300×100. It is a per-frame cache
+// rather than a getter, so `updateArea` has to run first, and reading it back
+// after a `pos` write hands you the stale box.
+export function measureNode(node, ctx) {
+    try { node.updateArea?.(ctx); } catch { /* stub canvas, fall through */ }
+    const pos = node.pos ?? [0, 0];
+    const rect = node.boundingRect;
+    if (rect && rect.length >= 4 && (rect[2] > 0 || rect[3] > 0)) {
+        return {
+            id: node.id, node,
+            x: rect[0], y: rect[1], w: rect[2], h: rect[3],
+            // Kept so a placement can be written back through `pos`, which
+            // points at the body's top-left, not the box's.
+            ox: pos[0] - rect[0], oy: pos[1] - rect[1],
+        };
+    }
+    const size = node.size ?? [200, 100];
+    const title = node.constructor?.title_height ?? 30;
+    const collapsed = !!node.flags?.collapsed;
+    return {
+        id: node.id, node,
+        x: pos[0], y: pos[1] - title,
+        w: collapsed ? 80 : size[0],
+        h: (collapsed ? 0 : size[1]) + title,
+        ox: 0, oy: title,
+    };
+}
+
+// --------------------------------------------------------------- the edges --
+
+function realEdges(graph) {
+    const out = [];
+    for (const node of nodesOf(graph)) {
+        for (const input of node.inputs ?? []) {
+            const link = getLink(graph, input.link);
+            if (!link || link.origin_id == null) continue;
+            out.push([link.origin_id, node.id]);
+        }
+    }
+    return out;
+}
+
+// The wires that are not in the links table: a Get reading a name a Set
+// publishes. `findSource` already resolves both shapes — KJNodes' SetNode,
+// whose name is its widget, and this pack's Set Hub, whose names are its input
+// SLOT LABELS, one per Get Hub output. Only pairs that are both on this graph
+// become an edge; a Set on the root feeding a Get inside a subgraph is a real
+// dependency but not one this layout can express.
+export function arrangeEdges(graph, root) {
+    const out = realEdges(graph);
+    const scope = graphScope(graph, root);
+    const here = new Set(nodesOf(graph).map((n) => n.id));
+    const link = (source, node) => {
+        const from = source?.node;
+        if (!from || from.id == null || !here.has(from.id)) return;
+        if (from.id === node.id) return;
+        out.push([from.id, node.id]);
+    };
+    for (const node of nodesOf(graph)) {
+        const type = String(node.type ?? "");
+        if (type === GET_HUB) {
+            for (const slot of node.outputs ?? []) {
+                const name = slotName(slot);
+                if (!name || name === GROW) continue;
+                link(findSource(scope, name), node);
+            }
+        } else if (type === "GetNode") {
+            const name = String(node.widgets?.[0]?.value ?? "").trim();
+            if (name) link(findSource(scope, name), node);
+        }
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------- layering --
+
+// Longest-path layering. A node sits one column to the right of everything
+// that feeds it. Kahn rather than a recursive walk because a subgraph can hold
+// a cycle: whatever does not resolve is parked in a column of its own on the
+// right instead of hanging the layout.
+export function assignLayers(ids, edges) {
+    const present = new Set(ids);
+    const next = new Map();
+    const indeg = new Map();
+    const layer = new Map();
+    for (const id of ids) { next.set(id, []); indeg.set(id, 0); layer.set(id, 0); }
+    const seen = new Set();
+    for (const [from, to] of edges) {
+        if (from === to || !present.has(from) || !present.has(to)) continue;
+        const key = `${from}\u0000${to}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        next.get(from).push(to);
+        indeg.set(to, indeg.get(to) + 1);
+    }
+    const queue = ids.filter((id) => indeg.get(id) === 0);
+    for (let head = 0; head < queue.length; head++) {
+        const id = queue[head];
+        for (const to of next.get(id)) {
+            layer.set(to, Math.max(layer.get(to), layer.get(id) + 1));
+            indeg.set(to, indeg.get(to) - 1);
+            if (indeg.get(to) === 0) queue.push(to);
+        }
+    }
+    const resolved = new Set(queue);
+    let last = 0;
+    for (const id of resolved) last = Math.max(last, layer.get(id));
+    for (const id of ids) if (!resolved.has(id)) layer.set(id, last + 1);
+    return layer;
+}
+
+// Barycenter ordering, SEEDED FROM WHERE THE NODES ARE NOW. That seed is what
+// makes the result recognisable as his workflow rather than a fresh drawing of
+// the same graph, and what makes a second press move nothing.
+export function orderLayers(layerOf, edges, seedY, sweeps = 8) {
+    let last = 0;
+    for (const v of layerOf.values()) last = Math.max(last, v);
+    const layers = [];
+    for (let i = 0; i <= last; i++) layers.push([]);
+    for (const [id, layer] of layerOf) layers[layer].push(id);
+    const seed = (id) => seedY.get(id) ?? 0;
+    for (const layer of layers) {
+        layer.sort((a, b) => seed(a) - seed(b) || String(a).localeCompare(String(b)));
+    }
+
+    const up = new Map();
+    const down = new Map();
+    for (const [from, to] of edges) {
+        if (!layerOf.has(from) || !layerOf.has(to)) continue;
+        if (!up.has(to)) up.set(to, []);
+        if (!down.has(from)) down.set(from, []);
+        up.get(to).push(from);
+        down.get(from).push(to);
+    }
+
+    for (let sweep = 0; sweep < sweeps; sweep++) {
+        const forward = sweep % 2 === 0;
+        const order = forward
+            ? layers.map((_, i) => i).slice(1)
+            : layers.map((_, i) => i).slice(0, -1).reverse();
+        for (const i of order) {
+            const ref = new Map();
+            layers[forward ? i - 1 : i + 1].forEach((id, k) => ref.set(id, k));
+            const rank = new Map();
+            layers[i].forEach((id, k) => rank.set(id, k));
+            const bary = new Map();
+            for (const id of layers[i]) {
+                const near = (forward ? up.get(id) : down.get(id)) ?? [];
+                const ranks = near.map((n) => ref.get(n)).filter((v) => v != null);
+                // A node with nothing in the neighbouring column keeps the
+                // place it has. Sorting it to 0 drags every loose node to the
+                // top of every column.
+                bary.set(id, ranks.length
+                    ? ranks.reduce((a, b) => a + b, 0) / ranks.length
+                    : rank.get(id));
+            }
+            layers[i].sort((a, b) => bary.get(a) - bary.get(b)
+                || rank.get(a) - rank.get(b));
+        }
+    }
+    return layers;
+}
+
+// ------------------------------------------------------------ the layout ----
+
+// Lays one group's nodes out relative to (0,0) and answers where each one goes
+// plus how big its box has to be. Pure over plain boxes, so the tests never
+// need a canvas.
+export function tidyLayout(boxes, edges, opts = {}) {
+    const {
+        layerGap = LAYER_GAP, rowGap = ROW_GAP, railGap = RAIL_GAP, grid = 0,
+    } = opts;
+    const places = new Map();
+    if (!boxes.length) return { places, width: 0, height: 0 };
+
+    const byId = new Map(boxes.map((b) => [b.id, b]));
+    const feeds = new Set();
+    for (const [from, to] of edges) {
+        if (byId.has(from) && byId.has(to)) feeds.add(from);
+    }
+    // A preview earns the rail only if nothing downstream reads it. One wired
+    // onward is a node in the flow like any other.
+    const rail = boxes.filter((b) => b.preview && !feeds.has(b.id));
+    const railIds = new Set(rail.map((b) => b.id));
+    const flow = boxes.filter((b) => !railIds.has(b.id));
+
+    if (!flow.length) {
+        let y = 0;
+        for (const b of rail) {
+            places.set(b.id, { x: 0, y });
+            y += snapUp(b.h + rowGap, grid);
+        }
+        return {
+            places,
+            width: Math.max(0, ...rail.map((b) => b.w)),
+            height: Math.max(0, y - rowGap),
+        };
+    }
+
+    const ids = flow.map((b) => b.id);
+    const inner = edges.filter(([f, t]) => !railIds.has(f) && !railIds.has(t));
+    const layerOf = assignLayers(ids, inner);
+    const seedY = new Map(flow.map((b) => [b.id, b.y]));
+    const layers = orderLayers(layerOf, inner, seedY);
+
+    const colH = layers.map((layer) => layer.reduce(
+        (sum, id) => sum + byId.get(id).h + rowGap, 0) - rowGap);
+    const tallest = Math.max(0, ...colH);
+
+    let x = 0;
+    layers.forEach((layer, i) => {
+        // Columns centred against each other: a two-node column beside a
+        // ten-node one reads as part of the same flow rather than as a
+        // fragment stuck to the top.
+        let y = snapValue((tallest - colH[i]) / 2, grid);
+        for (const id of layer) {
+            places.set(id, { x, y });
+            // A WHOLE number of grid steps, never the raw gap. At his grid of
+            // 100 a 40 px gutter rounds away and the two nodes it separated
+            // end up touching — which the overlap check then refuses, so the
+            // press did nothing at all on the one canvas it was written for.
+            y += snapUp(byId.get(id).h + rowGap, grid);
+        }
+        x += snapUp(Math.max(0, ...layer.map((id) => byId.get(id).w)) + layerGap, grid);
+    });
+
+    let width = Math.max(0, ...flow.map((b) => places.get(b.id).x + b.w));
+    let height = Math.max(0, ...flow.map((b) => places.get(b.id).y + b.h));
+
+    if (rail.length) {
+        // Each preview sits at the height of whatever feeds it, and slides
+        // down only as far as the one above it forces.
+        const producerY = (id) => {
+            for (const [from, to] of edges) {
+                if (to === id && places.has(from)) return places.get(from).y;
+            }
+            return Number.MAX_SAFE_INTEGER;
+        };
+        const ordered = rail
+            .map((b) => ({ b, at: producerY(b.id) }))
+            .sort((p, q) => p.at - q.at || String(p.b.id).localeCompare(String(q.b.id)));
+        const railX = snapUp(width + railGap, grid);
+        let floor = 0;
+        for (const { b, at } of ordered) {
+            const y = snapValue(
+                Math.max(floor, at === Number.MAX_SAFE_INTEGER ? floor : at), grid);
+            places.set(b.id, { x: railX, y });
+            floor = y + snapUp(b.h + rowGap, grid);
+            width = Math.max(width, railX + b.w);
+            height = Math.max(height, y + b.h);
+        }
+    }
+    return { places, width, height };
+}
+
+// ------------------------------------------------------------ the shelves ---
+
+// Boxes onto shelves, IN THE ORDER THEY ARRIVE, which is the order rgthree
+// reads them in now. Left to right, every box on a shelf sharing one top edge,
+// a new shelf once the row runs past `maxWidth`.
+//
+// This is the whole guarantee, and it is arithmetic rather than a check that
+// hopes: shelf-mates share a `y` so their `floor(y/30)` is equal and their `x`
+// ascends; a later shelf starts at least `SHELF_GAP_Y` lower, which is more
+// than 30, so its `floor(y/30)` is strictly greater. Read back through
+// rgthree's own key the order is the one that went in.
+export function shelfPack(items, opts = {}) {
+    const { gapX = SHELF_GAP_X, gapY = SHELF_GAP_Y, grid = 0 } = opts;
+    const widest = Math.max(0, ...items.map((i) => i.w));
+    const area = items.reduce((sum, i) => sum + i.w * i.h, 0);
+    // Wide enough that the shelves read as a row of stages, not a tower, and
+    // derived from the boxes alone so a second press packs the same way.
+    const maxWidth = Math.max(widest, Math.round(Math.sqrt(area) * 1.6));
+    const out = [];
+    let x = 0;
+    let y = 0;
+    let shelf = 0;
+    for (const item of items) {
+        if (x > 0 && x + item.w > maxWidth) {
+            x = 0;
+            y += snapUp(shelf + gapY, grid || 1);
+            shelf = 0;
+        }
+        out.push({ key: item.key, x, y, w: item.w, h: item.h });
+        x += snapUp(item.w + gapX, grid || 1);
+        shelf = Math.max(shelf, item.h);
+    }
+    return out;
+}
+
+// --------------------------------------------------------------- the plan ---
+
+// rgthree's own sort key, so the order a pack has to preserve is read the way
+// the node that cares about it reads it.
+function rowKey(group) {
+    return [Math.floor(group.pos[1] / 30), Math.floor(group.pos[0] / 30)];
+}
+
+export function rowOrder(groups) {
+    return [...groups]
+        .map((group) => ({ group, key: rowKey(group) }))
+        .sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1])
+        .map((row) => row.group);
+}
+
+// Everything the press would do, as numbers, with nothing written. The checks
+// run on this, and a refusal leaves the canvas untouched — there is no
+// half-moved graph to undo.
+export function planArrange(graph, root, opts = {}) {
+    const { ctx = null, grid = 0, pack = true } = opts;
+    const groups = [...(graph?.groups ?? graph?._groups ?? [])];
+    const boxes = new Map();
+    for (const node of nodesOf(graph)) boxes.set(node.id, measureNode(node, ctx));
+    const edges = arrangeEdges(graph, root ?? graph);
+
+    // Membership is frozen HERE and used as an input from here on.
+    // `recomputeInsideNodes` sorts `graph.groups` in place, so a group is
+    // remembered by identity, never by index.
+    const owner = new Map();
+    for (const group of groups) {
+        try { group.recomputeInsideNodes?.(); } catch { /* older shapes */ }
+        for (const node of group.nodes ?? group._nodes ?? []) {
+            if (boxes.has(node.id)) owner.set(node.id, group);
+        }
+    }
+
+    // Each group laid out against its own origin, and how big that makes it.
+    const inner = new Map();
+    for (const group of groups) {
+        const held = (group.nodes ?? group._nodes ?? [])
+            .filter((n) => n && boxes.has(n.id));
+        const members = held.filter((node) => !node.pinned
+            && !NEVER_GROUPED.has(String(node.type ?? "")));
+        const input = members.map((node) => ({
+            ...boxes.get(node.id),
+            preview: PREVIEW_TYPES.has(String(node.type ?? "")),
+        }));
+        const laid = group.pinned || members.length < 2
+            ? { places: new Map(), width: 0, height: 0 }
+            : tidyLayout(input, edges, { grid });
+
+        // A node this pass does not lay out — the group muter sitting over the
+        // box, a Note — gets a strip of its own down the LEFT of the group
+        // rather than the offset it happens to have now. Keeping the offset
+        // was tried against his file: the layout moves out from under it and
+        // his `Fast Bypasser` 4343 came to rest on top of two nodes.
+        const riders = held.filter((node) => !laid.places.has(node.id));
+        const strip = Math.max(0, ...riders.map((n) => boxes.get(n.id).w));
+        const shift = strip ? snapUp(strip + LAYER_GAP, grid) : 0;
+        const pad = snapUp(BOX_PAD, grid);
+        const head = snapUp(TITLE_PAD, grid);
+        const rides = [];
+        let at = head;
+        for (const node of riders) {
+            const box = boxes.get(node.id);
+            rides.push({ node, box, dx: pad, dy: at });
+            at += snapUp(box.h + ROW_GAP, grid);
+        }
+        let right = shift + laid.width + pad;
+        let bottom = Math.max(at, laid.height + head);
+        // Measured off the SNAPPED placements, so rounding a node onto the
+        // grid can never end past the box's edge.
+        for (const box of input) {
+            const place = laid.places.get(box.id);
+            if (!place) continue;
+            right = Math.max(right, pad + shift + place.x + box.w);
+            bottom = Math.max(bottom, head + place.y + box.h);
+        }
+        inner.set(group, {
+            laid, input, rides, shift, pad, head,
+            size: [Math.max(140, snapUp(right + pad, grid)),
+                   Math.max(80, snapUp(bottom + pad, grid))],
+        });
+    }
+
+    // The boxes onto shelves, in the order rgthree reads them now. A pinned
+    // group is not packed — it keeps its place, and its row key with it.
+    const ordered = rowOrder(groups);
+    const movable = ordered.filter((group) => !group.pinned);
+    const anchor = [Math.min(...groups.map((g) => g.pos[0])),
+                    Math.min(...groups.map((g) => g.pos[1]))];
+    const packed = new Map();
+    if (pack && movable.length) {
+        const shelved = shelfPack(
+            movable.map((group) => ({ key: group, ...boxOf(inner, group) })),
+            { grid });
+        for (const slot of shelved) {
+            packed.set(slot.key, [snapValue(anchor[0] + slot.x, grid),
+                                  snapValue(anchor[1] + slot.y, grid)]);
+        }
+    }
+    const originOf = (group) => packed.get(group) ?? [group.pos[0], group.pos[1]];
+
+    const moves = [];
+    const resized = [];
+    for (const group of groups) {
+        const cell = inner.get(group);
+        const [gx, gy] = originOf(group);
+        for (const box of cell.input) {
+            const at = cell.laid.places.get(box.id);
+            if (!at) continue;
+            moves.push(place(box.node, box.id, group, box,
+                             gx + cell.pad + cell.shift + at.x,
+                             gy + cell.head + at.y, grid));
+        }
+        for (const ride of cell.rides) {
+            moves.push(place(ride.node, ride.node.id, group, ride.box,
+                             gx + ride.dx, gy + ride.dy, grid, true));
+        }
+        resized.push({ group, pos: [gx, gy], size: cell.size });
+    }
+
+    // The nodes in no group at all — his control head, a stray Get, the Seed,
+    // a Note — move as ONE BLOCK to a band above the first shelf, keeping the
+    // positions they have relative to each other. They cannot be left where
+    // they are: a box that packs onto that spot would adopt them, and
+    // membership is what his group togglers switch.
+    const loose = [...boxes.values()].filter((b) => !owner.has(b.id));
+    if (loose.length && resized.length) {
+        const top = Math.min(...resized.map((r) => r.pos[1]));
+        const left = Math.min(...resized.map((r) => r.pos[0]));
+        const was = {
+            x: Math.min(...loose.map((b) => b.x)),
+            y: Math.min(...loose.map((b) => b.y)),
+            bottom: Math.max(...loose.map((b) => b.y + b.h)),
+        };
+        const dx = left - was.x;
+        const dy = top - SHELF_GAP_Y - was.bottom;
+        for (const box of loose) {
+            moves.push(place(box.node, box.id, null, box,
+                             box.x + dx, box.y + dy, grid, true));
+        }
+    }
+
+    const touched = moves.filter((m) => m.px !== m.box.x + m.box.ox
+        || m.py !== m.box.y + m.box.oy).length;
+    return { moves, resized, owner, boxes, edges, touched,
+             groups: groups.length };
+}
+
+// One placement. The node's POS is what lands on the grid, not its bounding
+// box: pos sits below the title bar, so snapping the box leaves pos at an
+// offset — and every one of the 119 positions in his file is a multiple of
+// 100. `x`/`y` stay the bounding coordinates, which is what the checks read.
+function place(node, id, group, box, atX, atY, grid, riding = false) {
+    const px = snapValue(atX + box.ox, grid);
+    const py = snapValue(atY + box.oy, grid);
+    return { node, id, group, box, riding,
+             px, py, x: px - box.ox, y: py - box.oy };
+}
+
+function boxOf(inner, group) {
+    const size = inner.get(group)?.size ?? group.size;
+    return { w: size[0], h: size[1] };
+}
+
+// Four questions asked of the plan rather than of the canvas.
+export function checkArrange(plan) {
+    const problems = [];
+    const warnings = [];
+
+    const placed = plan.moves.map((m) => ({
+        id: m.id, x: m.x, y: m.y, w: m.box.w, h: m.box.h, group: m.group,
+    }));
+    let collisions = 0;
+    for (let i = 0; i < placed.length; i++) {
+        for (let j = i + 1; j < placed.length; j++) {
+            if (placed[i].group && placed[i].group === placed[j].group
+                && overlaps(placed[i], placed[j])) collisions++;
+        }
+    }
+    if (collisions) problems.push(`${collisions} nodes would still overlap`);
+
+    // Membership is `containsCentre` and 36 of his nodes are muted or
+    // bypassed, so a node drifting between groups changes what runs.
+    const boxes = plan.resized.map(({ group, pos, size }) => ({
+        group, x: pos[0], y: pos[1], w: size[0], h: size[1],
+    }));
+    // Every node, not just the ones that move: a node standing still while a
+    // box packs on top of it changes group just as surely.
+    const moved = new Map(plan.moves.map((m) => [m.id, m]));
+    for (const [id, box] of plan.boxes ?? []) {
+        const move = moved.get(id);
+        const cx = (move ? move.x : box.x) + box.w / 2;
+        const cy = (move ? move.y : box.y) + box.h / 2;
+        const holder = boxes.find(({ x, y, w, h }) =>
+            cx > x && cx < x + w && cy > y && cy < y + h);
+        const was = plan.owner.get(id) ?? null;
+        if ((holder?.group ?? null) !== was) {
+            problems.push(`node ${id} would change group`);
+            break;
+        }
+    }
+
+    for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+            if (overlaps(boxes[i], boxes[j])) {
+                problems.push(`"${boxes[i].group.title}" would sit on `
+                    + `"${boxes[j].group.title}"`);
+                break;
+            }
+        }
+        if (problems.length) break;
+    }
+
+    // The one rgthree cares about, checked as rgthree reads it.
+    const before = plan.resized.map(({ group }) => group);
+    const after = [...plan.resized]
+        .sort((a, b) => Math.floor(a.pos[1] / 30) - Math.floor(b.pos[1] / 30)
+            || Math.floor(a.pos[0] / 30) - Math.floor(b.pos[0] / 30))
+        .map(({ group }) => group);
+    const was = rowOrder(before);
+    if (was.length !== after.length || was.some((g, i) => g !== after[i])) {
+        problems.push("the group toggler rows would be reordered");
+    }
+    return { problems, warnings };
+}
+
+// ------------------------------------------------------------ stack + align --
+
+// One selection, one key. The axis comes from the selection's OWN spread, so
+// there is nothing to choose: nodes strung out down the canvas stack into a
+// column, nodes strung out across it into a row.
+export function stackPlan(boxes, opts = {}) {
+    const { grid = 0, gutter = ROW_GAP } = opts;
+    const places = new Map();
+    const widths = new Map();
+    const live = boxes.filter((b) => !b.pinned);
+    if (live.length < 2) return { places, widths, axis: null };
+
+    const cx = live.map((b) => b.x + b.w / 2);
+    const cy = live.map((b) => b.y + b.h / 2);
+    const column = (Math.max(...cy) - Math.min(...cy))
+        >= (Math.max(...cx) - Math.min(...cx));
+
+    const order = [...live].sort(column
+        ? (a, b) => a.y - b.y || a.x - b.x
+        : (a, b) => a.x - b.x || a.y - b.y);
+
+    // Placements come out in POS coordinates, snapped there. `pos` sits below
+    // the title bar, so snapping the bounding box leaves pos at an offset —
+    // and pos is what his canvas keeps on the grid.
+    const put = (box, x, y) => places.set(box.id, {
+        x: snapValue(x + (box.ox ?? 0), grid) - (box.ox ?? 0),
+        y: snapValue(y + (box.oy ?? 0), grid) - (box.oy ?? 0),
+    });
+
+    if (column) {
+        const x = snapValue(Math.min(...live.map((b) => b.x)), grid);
+        // Width matched to the widest, but never onto a collapsed node (its
+        // drawn width is its title) and never onto a node carrying a DOM
+        // panel — writing a panel's box is this repo's most expensive bug.
+        const fixed = live.filter((b) => !b.collapsed && !b.panel);
+        const wide = fixed.length ? snapUp(Math.max(...fixed.map((b) => b.w)), grid) : 0;
+        let y = snapValue(Math.min(...live.map((b) => b.y)), grid);
+        for (const box of order) {
+            put(box, x, y);
+            const w = box.collapsed || box.panel ? box.w : wide;
+            if (w && w !== box.w) widths.set(box.id, w);
+            y += snapUp(box.h + gutter, grid);
+        }
+    } else {
+        const y = snapValue(Math.min(...live.map((b) => b.y)), grid);
+        let x = snapValue(Math.min(...live.map((b) => b.x)), grid);
+        for (const box of order) {
+            put(box, x, y);
+            x += snapUp(box.w + gutter, grid);
+        }
+    }
+    return { places, widths, axis: column ? "column" : "row" };
+}
+
+// ------------------------------------------------------------ the commands --
+
+function canvasCtx() {
+    try { return app.canvas?.canvas?.getContext?.("2d") ?? null; } catch { return null; }
+}
+
+function gridSize(graph) {
+    try {
+        const size = graph?.getSnapToGridSize?.() ?? app.graph?.getSnapToGridSize?.();
+        return Number.isFinite(size) && size > 0 ? size : 0;
+    } catch { return 0; }
+}
+
+function rootGraph() {
+    return app.graph?.rootGraph ?? app.graph ?? null;
+}
+
+// One undo step for the whole move. The bracket is what makes the frontend's
+// Ctrl+Z see a single change rather than two hundred.
+function commit(graph, write) {
+    const canvas = app.canvas;
+    try {
+        canvas?.emitBeforeChange?.();
+        graph?.beforeChange?.();
+        write();
+    } finally {
+        graph?.afterChange?.();
+        canvas?.emitAfterChange?.();
+        canvas?.setDirty?.(true, true);
+        canvas?.setDirtyCanvas?.(true, true);
+    }
+}
+
+function snapshot(graph, plan) {
+    graph.extra ??= {};
+    graph.extra[UNDO_KEY] = {
+        nodes: plan.moves.map((m) => [m.id, m.node.pos[0], m.node.pos[1]]),
+        // By group ID, never by index: `recomputeInsideNodes` sorts
+        // `graph.groups` in place, so the index a snapshot was taken at is not
+        // the index it would be read back at.
+        groups: plan.resized.map(({ group }) => [
+            group.id, group.pos[0], group.pos[1], group.size[0], group.size[1],
+        ]),
+    };
+}
+
+function runArrange() {
+    const graph = app.canvas?.graph ?? app.graph;
+    if (!graph) return;
+    const grid = gridSize(graph);
+    const plan = planArrange(graph, rootGraph(), { ctx: canvasCtx(), grid });
+    if (!plan.groups) {
+        toast("warn", ARRANGE_LABEL, "This graph has no groups to arrange.");
+        return;
+    }
+    const { problems } = checkArrange(plan);
+    if (problems.length) {
+        toast("error", ARRANGE_LABEL,
+              `Nothing moved — ${problems.slice(0, 2).join("; ")}.`);
+        return;
+    }
+    if (!plan.touched) {
+        toast("info", ARRANGE_LABEL, "Already arranged — nothing moved.");
+        return;
+    }
+    commit(graph, () => {
+        // Only when something actually moves. A second press that changes
+        // nothing must not overwrite the snapshot with the arranged layout,
+        // or the way back is gone.
+        snapshot(graph, plan);
+        for (const { group, pos, size } of plan.resized) {
+            group.pos = pos;
+            group.size = size;
+        }
+        for (const move of plan.moves) move.node.pos = [move.px, move.py];
+        for (const group of graph.groups ?? []) group.recomputeInsideNodes?.();
+    });
+    toast("success", ARRANGE_LABEL,
+          `${plan.groups} groups · ${plan.touched} nodes moved`, 6000);
+}
+
+function runRestore() {
+    const graph = app.canvas?.graph ?? app.graph;
+    const saved = graph?.extra?.[UNDO_KEY];
+    if (!saved?.nodes?.length) {
+        toast("warn", RESTORE_LABEL, "Nothing to restore on this graph.");
+        return;
+    }
+    const groups = graph.groups ?? graph._groups ?? [];
+    commit(graph, () => {
+        for (const [id, x, y, w, h] of saved.groups ?? []) {
+            const group = groups.find((g) => g.id === id);
+            if (!group) continue;
+            group.pos = [x, y];
+            group.size = [w, h];
+        }
+        for (const [id, x, y] of saved.nodes) {
+            const node = graph.getNodeById?.(id) ?? graph.getNodeById?.(Number(id));
+            if (node) node.pos = [x, y];
+        }
+        for (const group of groups) group.recomputeInsideNodes?.();
+        delete graph.extra[UNDO_KEY];
+    });
+    toast("success", RESTORE_LABEL, `${saved.nodes.length} nodes put back.`);
+}
+
+// What the key acts on, in order: what is selected, then the nodes of a
+// selected group, then the group under the pointer.
+function stackTarget(graph) {
+    const canvas = app.canvas;
+    const selected = Object.values(canvas?.selected_nodes ?? {});
+    if (selected.length >= 2) return selected;
+    const items = [...(canvas?.selectedItems ?? [])];
+    const group = items.find((item) => item?.recomputeInsideNodes);
+    if (group) {
+        group.recomputeInsideNodes();
+        return [...(group.nodes ?? [])];
+    }
+    const at = canvas?.graph_mouse;
+    const under = at ? graph?.getGroupOnPos?.(at[0], at[1]) : null;
+    if (under) {
+        under.recomputeInsideNodes?.();
+        return [...(under.nodes ?? [])];
+    }
+    return selected;
+}
+
+function runStack() {
+    const graph = app.canvas?.graph ?? app.graph;
+    if (!graph) return;
+    const nodes = stackTarget(graph);
+    if (nodes.length < 2) {
+        toast("warn", STACK_LABEL, "Select two or more nodes, or point at a group.");
+        return;
+    }
+    const ctx = canvasCtx();
+    const grid = gridSize(graph);
+    const boxes = nodes.map((node) => ({
+        ...measureNode(node, ctx),
+        pinned: !!node.pinned,
+        collapsed: !!node.flags?.collapsed,
+        panel: !!node.widgets?.some?.((w) => w?.element),
+    }));
+    const { places, widths, axis } = stackPlan(boxes, { grid });
+    if (!places.size) {
+        toast("warn", STACK_LABEL, "Nothing to stack — every node is pinned.");
+        return;
+    }
+    commit(graph, () => {
+        for (const box of boxes) {
+            const at = places.get(box.id);
+            if (!at) continue;
+            const width = widths.get(box.id);
+            if (width) box.node.size = [width, box.node.size[1]];
+            box.node.pos = [at.x + box.ox, at.y + box.oy];
+        }
+        for (const group of graph.groups ?? []) group.recomputeInsideNodes?.();
+    });
+    toast("success", STACK_LABEL, `${places.size} nodes in a ${axis}.`);
+}
+
+// A second marker and a second patch: this menu section must not ride on the
+// finder's, or removing one would silently take the other's rows away.
+const ARRANGE_PATCHED = "symbioticaArrange";
+
+function prependArrangeMenu(canvasClass) {
+    const proto = canvasClass?.prototype;
+    const original = proto?.getCanvasMenuOptions;
+    if (typeof original !== "function" || original[ARRANGE_PATCHED]) return false;
+    function withArrange() {
+        const options = original.apply(this, arguments) ?? [];
+        const graph = this.graph ?? app.graph;
+        const rows = [{
+            content: `${ARRANGE_LABEL} (${comboLabel(ARRANGE_COMBO)})`,
+            callback: runArrange,
+        }, {
+            content: `${STACK_LABEL} (${comboLabel(STACK_COMBO)})`,
+            callback: runStack,
+        }];
+        if (graph?.extra?.[UNDO_KEY]?.nodes?.length) {
+            rows.push({ content: RESTORE_LABEL, callback: runRestore });
+        }
+        options.unshift(...rows);
+        return options;
+    }
+    withArrange[ARRANGE_PATCHED] = true;
+    proto.getCanvasMenuOptions = withArrange;
+    return true;
+}
+
+// Its OWN extension spec, not three more commands on the finder's. A
+// keybinding collision hard-refuses the whole spec it arrives in, and a clash
+// on Shift+A with some pack installed later must not take "Find node by ID"
+// and both hubs off the canvas with it.
+registerSymbioticaExtension(app, {
+    name: "symbiotica.arrange",
+    setup() { prependArrangeMenu(globalThis.LGraphCanvas); },
+    commands: [
+        { id: ARRANGE_ID, label: ARRANGE_LABEL, icon: "pi pi-th-large",
+          function: runArrange },
+        { id: STACK_ID, label: STACK_LABEL, icon: "pi pi-bars", function: runStack },
+        { id: RESTORE_ID, label: RESTORE_LABEL, icon: "pi pi-undo",
+          function: runRestore },
+    ],
+    keybindings: [
+        { commandId: ARRANGE_ID, combo: ARRANGE_COMBO },
+        { commandId: STACK_ID, combo: STACK_COMBO },
+    ],
+    // The same button beside the frontend's own Arrange when two or more
+    // things are selected.
+    getSelectionToolboxCommands() { return [STACK_ID]; },
+});
