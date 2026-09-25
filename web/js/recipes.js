@@ -1038,13 +1038,16 @@ function recipePanel(node) {
         return (state.table?.columns ?? []).filter((c) => !untouched(c, stored));
     };
 
-    function status(text, subtle = true) {
+    // Short on the line; the whole reason, when there is one, on hover.
+    function status(text, subtle = true, detail = "") {
         statusLine.textContent = text;
+        statusLine.title = detail;
         statusLine.style.color = subtle ? HUB.inkSubtle : HUB.ink;
     }
 
     const statusLine = el("div", `flex:1;min-width:0;${ONE_LINE}`
-        + `padding:3px 8px;color:${HUB.inkSubtle};`);
+        + `padding:3px 8px;color:${HUB.inkSubtle};`
+        + "font-variant-ligatures:none;font-feature-settings:'calt' 0;");
 
     function collect() {
         const project = tableToProject(state.project, state.table, state.slots,
@@ -1196,7 +1199,7 @@ function recipePanel(node) {
             projects = await listProjects();
             name = projectForWorkflow(projects, path);
         } catch (err) {
-            status(`Could not list projects: ${String(err?.message ?? err)}`, false);
+            status("Could not list projects.", false, String(err?.message ?? err));
             return;
         }
         state.projects = projects;
@@ -1205,7 +1208,7 @@ function recipePanel(node) {
             state.templateSlots = []; state.table = null; state.dirty = false;
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
             renderFull();
-            status(path ? "No project has this workflow as its template. Press new project." : "Save the workflow first.", false);
+            status(path ? "No project for this workflow. Press new project." : "Save the workflow first.", false);
             return;
         }
         if (name !== state.name) await load(name); else renderAll();
@@ -1231,7 +1234,6 @@ function recipePanel(node) {
             // on the next draw puts them back against this one.
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
             auto.last = { name: null, sig: null };
-            takeShot();
             active = "";
             // The row he was on, if the project still has it. A selection that
             // names nothing goes back to shared.
@@ -1261,7 +1263,7 @@ function recipePanel(node) {
             await postJson("/symbiotica/recipes/save", { name: state.name, project });
             state.project = project;
             state.dirty = false;
-            status(`Saved ${state.name}.`);
+            status("Saved.");
             rebuildWorkflow(auto.last.name);
             return true;
         } catch (err) {
@@ -1289,7 +1291,13 @@ function recipePanel(node) {
                 try {
                     await postJson("/symbiotica/recipes/generate", { name: state.name, recipe });
                 } catch (err) {
-                    status(`${recipe}: its workflow was not written — ${String(err?.message ?? err)}`, false);
+                    // The server names the slot first (`<key>: ...`), and the
+                    // slot is all the line has room for.
+                    const reason = String(err?.message ?? err);
+                    const slot = [...(state.templateSlots ?? []), ...state.slots]
+                        .map((s) => s.key).find((key) => reason.startsWith(`${key}:`));
+                    status(`${recipe}: workflow not written${slot ? ` · ${slot}` : ""}`,
+                           false, reason);
                 }
             }
         }, 2000);
@@ -1305,7 +1313,8 @@ function recipePanel(node) {
             const report = await postJson("/symbiotica/recipes/generate", { name: state.name });
             const { summary, detail } = generateSummary(report);
             toast("success", summary, detail, 10000);
-            status(summary);
+            const n = report?.written?.length ?? 0;
+            status(`Wrote ${n} workflow${n === 1 ? "" : "s"}.`);
         } catch (err) {
             toast("error", "Generate failed", String(err?.message ?? err));
         } finally {
@@ -1320,7 +1329,7 @@ function recipePanel(node) {
         if (!state.name) { toast("warn", "Nothing to delete", "No project for this workflow."); return; }
         if (armed !== state.name) {
             armed = state.name;
-            status(`Press delete project again to remove "${state.name}". Its generated workflows stay.`, false);
+            status("Press delete project again to confirm.", false);
             setTimeout(() => { if (armed === state.name) { armed = null; status(""); } }, 6000);
             return;
         }
@@ -1384,7 +1393,7 @@ function recipePanel(node) {
         // matches nothing, and firing it here reads as "your canvas is broken"
         // on the one click that is meant to START a recipe.
         if (!Object.keys(values).length) {
-            status(`${column} holds nothing yet — set the canvas and press capture.`, false);
+            status(`${column}: nothing captured yet.`, false);
             return;
         }
         const report = applyValuesToNodes(liveGraph()?.nodes ?? [], values, matchColor());
@@ -1394,9 +1403,8 @@ function recipePanel(node) {
         }
         liveGraph()?.setDirtyCanvas?.(true, true);
         auto.last = { name: column, sig: slotSignature(liveSlotValues(liveGraph(), matchColor())) };
-        takeShot();
-        const missing = report.missing.length ? ` Not on this canvas: ${report.missing.join(", ")}.` : "";
-        status(`Loaded ${column} onto the canvas (${report.applied.length} slots).${missing}`, false);
+        const missing = report.missing.length ? ` ${report.missing.length} not on this canvas.` : "";
+        status(`Loaded ${column}.${missing}`, false, report.missing.join(", "));
     }
 
     // ------------------------------------------------------------ auto --
@@ -1406,40 +1414,6 @@ function recipePanel(node) {
     // the canvas into one, auto or not, so a switch by hand knows what it is
     // leaving behind.
     const auto = { last: { name: null, sig: null }, timer: null, busy: false, on: false };
-
-    // What every node on the canvas held the last time a recipe was put on it
-    // or read off it, by node id. A node that has moved since and carries no
-    // paint is a change with nowhere to go, and the panel says so rather than
-    // letting it vanish.
-    let canvasShot = new Map();
-    function shotOf(graph) {
-        const shot = new Map();
-        for (const node of graph?.nodes ?? []) {
-            const widgets = settableWidgets(node);
-            if (!widgets.length) continue;
-            shot.set(node.id, JSON.stringify(widgets.map((w) => w.value)));
-        }
-        return shot;
-    }
-    function takeShot() { canvasShot = shotOf(liveGraph()); }
-
-    // The nodes whose values moved since that snapshot and that no recipe can
-    // hold, newest first. `slotKey` answers null for anything unpainted.
-    function strayChanges() {
-        const matches = colorMatcher(matchColor());
-        const out = [];
-        for (const node of liveGraph()?.nodes ?? []) {
-            if (slotKey(node, matches)) continue;
-            const was = canvasShot.get(node.id);
-            if (was === undefined) continue;
-            const widgets = settableWidgets(node);
-            if (!widgets.length) continue;
-            if (JSON.stringify(widgets.map((w) => w.value)) !== was) {
-                out.push(String(node.title ?? node.type ?? node.id));
-            }
-        }
-        return out;
-    }
 
     // What the SAVED template has no slot for: the keys generate would drop.
     // The slot list comes off the template FILE, so this is also how a
@@ -1506,7 +1480,6 @@ function recipePanel(node) {
                 } else if (verb === "load") {
                     loadColumn(name);
                     auto.last = { name, sig: slotSignature(liveSlotValues(liveGraph(), matchColor())) };
-                    status(`auto: loaded ${name} onto the canvas`, false);
                 }
             }
         } finally {
@@ -1708,7 +1681,7 @@ function recipePanel(node) {
         // The MONTH's list, which is the one the sidebar's rows come from: a
         // row it offers has to be a row it can point the wire at.
         const label = monthCategories(source).find((l) => recipeSlug(l) === column);
-        if (!label) return ` Nothing on ${source.title ?? source.type} is called ${column}.`;
+        if (!label) return `${source.title ?? source.type} has no such category`;
         // A run is ONE event, and the rows are the whole MONTH's categories —
         // so a pick can name one the node's event does not hold. It moves to
         // the event that does, the same hop the tree makes: without it the
@@ -1783,25 +1756,20 @@ function recipePanel(node) {
         // Task walked through the others. What matters is whether the wire
         // names this row now: if it does, the two agree and the pane keeps up.
         if (activeColumn() === column) autoSelected = row;
-        if (note) status(statusLine.textContent + note, false);
+        if (note) status(`${statusLine.textContent.replace(/\.$/, "")} · ${note}`,
+                         false, statusLine.title);
     }
 
     function captureInto(column) {
         const values = liveSlotValues(liveGraph(), matchColor());
         const found = Object.keys(values).length;
         if (!found) { noSlotsToast(matchColor()); return; }
-        // Read BEFORE the snapshot moves: a node he changed and never painted
-        // is a value going nowhere, and the capture is the moment to say so.
-        const stray = strayChanges();
         captureColumn(state.table, state.slots, column, values);
         state.dirty = true;
         auto.last = { name: column, sig: slotSignature(values) };
-        takeShot();
         if (picked() !== PROJECT_ROW) pickRow(column);
         renderAll();
-        const kept = `Captured ${found} slots from the canvas into ${column}.`;
-        status(stray.length
-            ? `${kept} Not painted, so not kept: ${stray.join(", ")}.` : kept, false);
+        status(`Captured ${column}.`, false);
     }
 
     // The canvas WAS that column. If its slots have moved since, write them
@@ -1815,7 +1783,6 @@ function recipePanel(node) {
         captureColumn(state.table, state.slots, column, values);
         state.dirty = true;
         auto.last = { name: column, sig: slotSignature(values) };
-        takeShot();
         save();
     }
 
@@ -1836,7 +1803,7 @@ function recipePanel(node) {
         saveLeaving(columnOf(picked()));
         captureInto(name);
         if (picked() !== name) { pickRow(name); autoSelected = null; renderFull(); }
-        if (await save()) status(`Created ${name} from this canvas.`, false);
+        if (await save()) status(`Created ${name}.`, false);
     }
 
     // In memory until save, exactly as the old `×` was: the file still holds
@@ -1854,7 +1821,7 @@ function recipePanel(node) {
         pickRow(SHARED);
         state.dirty = true;
         renderFull();
-        status(`Removed ${column}. Press save project to write it.`, false);
+        status(`Removed ${column} (unsaved).`, false);
     }
 
     function renameRecipe() {
@@ -1909,7 +1876,7 @@ function recipePanel(node) {
         // Linking FROM shared, the project row or a category with nothing
         // stored would hand its emptiness to every recipe ticked.
         if (picked() === PROJECT_ROW || column === SHARED || untouched(column)) {
-            status("Pick the recipe whose values the others take, then press the link icon.", false);
+            status("Pick a recipe to link from.", false);
             return;
         }
         linking = column;
@@ -1952,8 +1919,7 @@ function recipePanel(node) {
         if (!(await save())) return;
         rebuildWorkflow(from);
         const group = linkGroup(state.table, from);
-        status(group ? `Linked ${group.length}: ${group.join(", ")}.`
-                     : `${from} is not linked to anything.`, false);
+        status(group ? `Linked ${group.length} recipes.` : `${from} unlinked.`, false);
     }
     stopCanvas(saveButton).addEventListener("click", (e) => { e.stopPropagation(); save(); });
     stopCanvas(generateButton).addEventListener("click", (e) => { e.stopPropagation(); generate(); });
@@ -2304,9 +2270,9 @@ function recipePanel(node) {
     // a colour and a canvas with nothing painted look the same.
     function paintProblem() {
         const color = matchColor();
-        if (!color) return "match_color is empty — type a colour, then paint the nodes a recipe should set.";
-        if (!colorMatcher(color)) return `match_color is "${color}", which is not a colour. Use a palette name or a hex.`;
-        if (!state.table?.rows?.length) return `Nothing on this canvas is painted ${color}. Paint a node and it becomes a row.`;
+        if (!color) return "match_color is empty.";
+        if (!colorMatcher(color)) return `match_color "${color}" is not a colour.`;
+        if (!state.table?.rows?.length) return `Nothing on this canvas is painted ${color}.`;
         return "";
     }
 
@@ -2383,35 +2349,26 @@ function recipePanel(node) {
     function drawStatus() {
         if (!state.table) return;
         if (linking) {
-            status(`Linking ${linking}: tick the recipes that take its values, then press link`
-                + (ticks.size ? ` (${ticks.size + 1} linked).` : "."), false);
+            status(`Tick the recipes to link with ${linking}.`, false);
             return;
         }
-        const { columns, rows } = state.table;
+        const { rows } = state.table;
         // The categories the order holds are rows, not recipes: counted apart,
         // so "3 recipes" still means three blocks in the file.
         const real = realColumns().filter((c) => c !== SHARED);
-        const waiting = columns.length - 1 - real.length;
         const activeNote = !active ? ""
-            : real.includes(active) ? ` · on ${active}` : ` · ${active} has no recipe yet`;
-        const emptyNote = waiting
-            ? ` · ${waiting} ${waiting === 1 ? "category" : "categories"} empty` : "";
+            : real.includes(active) ? ` · on ${active}` : ` · on ${active} (empty)`;
         const paint = paintProblem();
         const stranded = strandedKeys();
+        // First, so the ellipsis never takes it: it is the one line here that
+        // loses data if he does not act on it.
         const note = stranded.length
-            ? ` The saved template has no slot for ${stranded.join(", ")} — save the workflow,`
-              + " or generate drops them."
-            : "";
+            ? `Save the workflow, or generate drops ${stranded.join(", ")}.` : "";
         if (paint) status(paint, false);
-        else status(state.dirty ? `Unsaved edits.${activeNote}${note}`
-            : `${state.name}: ${real.length} recipes, ${rows.length} slots.`
-              + `${activeNote}${emptyNote}${note}`,
-            !stranded.length);
-        if (!state.dirty && !real.length) {
-            status(columns.length === 1
-                ? "No recipes yet. Set the canvas, name a recipe, press Capture."
-                : "No recipes yet. Pick a category, set the canvas, press capture.");
-        }
+        else if (note) status(note, false, note);
+        else status(state.dirty ? `Unsaved edits${activeNote}`
+            : `${real.length} recipes · ${rows.length} slots${activeNote}`);
+        if (!state.dirty && !real.length) status("No recipes yet.");
     }
 
     // The tree and the pane are separate paths on purpose: a slot-list change

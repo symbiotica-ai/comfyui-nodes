@@ -48,7 +48,7 @@ const toasts = [];
 const asked = { answer: null };
 
 function router({ project = PROJECT(), slots = SLOTS, projects = OTHERS,
-                  saveFails = false, prompt = null } = {}) {
+                  saveFails = false, generateFails = null, prompt = null } = {}) {
     return (route, _n, init) => {
         const body = init?.body ? JSON.parse(init.body) : null;
         if (route === "/symbiotica/recipes") return { ok: true, body: { projects } };
@@ -60,7 +60,9 @@ function router({ project = PROJECT(), slots = SLOTS, projects = OTHERS,
         }
         if (route === "/symbiotica/recipes/generate") {
             posted.push({ generate: body });
-            return { ok: true, body: { template: TEMPLATE, written: [] } };
+            return generateFails
+                ? { ok: false, status: 400, body: { error: generateFails } }
+                : { ok: true, body: { template: TEMPLATE, written: [] } };
         }
         if (route === "/symbiotica/recipes/new") {
             posted.push({ "new": body });
@@ -325,7 +327,7 @@ test("picking a recipe shows it AND pulls its values onto the canvas",
     assert.equal(fieldFor(node, "backdrop").value, "floor-1x2.png");
     assert.equal(widget(node, "recipe").value, "");
     assert.equal(backdropNode(), "floor-1x2.png");
-    assert.match(statusText(node), /^Loaded appliance1x2 onto the canvas/);
+    assert.match(statusText(node), /^Loaded appliance1x2\./);
     // The second one, which is where the bug is: switching again must show the
     // OTHER recipe's cells, not the first one's — and pull them too.
     await click(rowFor(node, "appliance1x1"));
@@ -561,7 +563,7 @@ test("load puts the selected recipe onto the canvas and says how many slots",
     const flip = app.graph.nodes.find((n) => n.title === "pre_flip?");
     assert.equal(backdrop.widgets[0].value, "floor-1x2.png");
     assert.equal(flip.mode, 0);
-    assert.match(statusText(node), /Loaded appliance1x2 onto the canvas/);
+    assert.match(statusText(node), /Loaded appliance1x2\./);
 });
 
 test("renaming a recipe carries its cells, re-sorts, and refuses a name taken",
@@ -746,9 +748,9 @@ test("the status line survives every re-render", async () => {
 
 test("the pane says the project's shape when nothing is wrong", async () => {
     const node = await recipeNode();
-    assert.equal(statusText(node), "symtest-fixture: 3 recipes, 5 slots.");
+    assert.equal(statusText(node), "3 recipes · 5 slots");
     await type(fieldFor(node, "preamble"), "edited");
-    assert.match(statusText(node), /^Unsaved edits\./);
+    assert.match(statusText(node), /^Unsaved edits/);
 });
 
 // ================================================== a caret that goes missing ==
@@ -835,7 +837,7 @@ test("new recipe asks for a name and writes the canvas into it", async () => {
     assert.ok("cashiers-desk-1x1" in project.recipes, "the recipe reached the server");
     assert.equal(node.properties.symbiotica_recipes_pick, "cashiers-desk-1x1");
     assert.ok(labels(node).some((l) => l.startsWith("cashiers-desk-1x1 ·")));
-    assert.equal(statusText(node), "Created cashiers-desk-1x1 from this canvas.");
+    assert.equal(statusText(node), "Created cashiers-desk-1x1.");
 });
 
 test("new recipe refuses a name a recipe already has", async () => {
@@ -876,26 +878,18 @@ test("a row that has not moved is not written on the way past", async () => {
     assert.deepEqual(posted.filter((p) => p.project), []);
 });
 
-// ===================== what the capture could not keep ======================
+// ===================== what the capture says ================================
 
-test("capture names the nodes that changed and carry no paint", async () => {
+test("capture says only what it captured into, never the unpainted nodes", async () => {
     const node = await recipeNode();
     const stray = { title: "CLIP Text Encode", mode: 0, inputs: [],
                     widgets: [{ name: "text", value: "a bakery" }] };
     app.graph.nodes = [...app.graph.nodes, stray];
     app.graph._nodes = app.graph.nodes;
-    await click(rowFor(node, "appliance1x2"));      // baseline
+    await click(rowFor(node, "appliance1x2"));
     stray.widgets[0].value = "a gargoyle";          // changed, never painted
     await click(word(node, "capture"));
-    assert.match(statusText(node), /Not painted, so not kept: CLIP Text Encode\./);
-});
-
-test("a painted node that changed is kept, and named nowhere", async () => {
-    const node = await recipeNode();
-    await click(rowFor(node, "appliance1x2"));
-    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "x.png";
-    await click(word(node, "capture"));
-    assert.doesNotMatch(statusText(node), /Not painted/);
+    assert.equal(statusText(node), "Captured appliance1x2.");
 });
 
 // ===================== what the saved template has no slot for ==============
@@ -908,7 +902,7 @@ test("the status names the keys the saved template would drop", async () => {
     project.recipes.appliance1x2["Control Image"] = "1x2-box-dots.png";
     const node = await recipeNode({ project });
     assert.match(statusText(node),
-                 /The saved template has no slot for Control Image — save the workflow/);
+                 /^Save the workflow, or generate drops Control Image\.$/);
 });
 
 test("nothing stranded, nothing said", async () => {
@@ -932,6 +926,20 @@ test("a save rewrites that recipe's workflow, once the typing stops", async () =
     const wrote = posted.filter((p) => p.generate).at(-1);
     assert.equal(wrote.generate.recipe, "appliance1x2", "only the recipe that moved");
     assert.equal(wrote.generate.name, "symtest-fixture");
+});
+
+test("a workflow not written names its slot, and keeps the reason for hover", async () => {
+    const reason = "grid: node 7 holds 3 widget values but the template declares 2";
+    const node = await recipeNode({ generateFails: reason });
+    await click(rowFor(node, "appliance1x2"));
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "x.png";
+    await click(word(node, "capture"));
+    await click(word(node, "save project"));
+    await new Promise((r) => setTimeout(r, 2200));
+    await settle();
+    const line = main(node).children[main(node).children.length - 1].children[0];
+    assert.equal(line.textContent, "appliance1x2: workflow not written · grid");
+    assert.equal(line.title, reason);
 });
 
 test("shared is not a workflow, so saving it writes none", async () => {
@@ -1028,7 +1036,7 @@ test("a recipe no category is named after says so and still loads", async () => 
     const task = taskChain(node, "Appliance1x1");
     await click(rowFor(node, "zebra"));
     assert.equal(task.widgets[0].value, "Appliance1x1", "nothing was guessed at");
-    assert.match(statusText(node), /Nothing on Task is called zebra\./);
+    assert.match(statusText(node), /^Loaded zebra · Task has no such category$/);
 });
 
 test("the recipe the WIRE loaded is the one a switch writes back, not the picked one",
@@ -1088,7 +1096,7 @@ test("a recipe with nothing stored does not claim the canvas has no slots",
     await draw(node);
     await click(rowFor(node, "food-3-stages-1x1"));
     assert.deepEqual(toasts, []);
-    assert.match(statusText(node), /food-3-stages-1x1 holds nothing yet/);
+    assert.match(statusText(node), /food-3-stages-1x1: nothing captured yet/);
 });
 
 test("a recipe picked by hand keeps following the Task afterwards", async () => {
@@ -1173,9 +1181,8 @@ test("every category the order holds is a row, stored or not", async () => {
     // file holds, `food-3-stages-1x1` is a category nothing is stored for.
     assert.equal(rowFor(node, "food-3-stages-1x1").children.length, 2, "a lead");
     assert.equal(rowFor(node, "zebra").children.length, 1, "no lead");
-    assert.equal(statusText(node),
-                 "symtest-fixture: 3 recipes, 5 slots. \u00b7 on appliance1x1"
-                 + " \u00b7 1 category empty");
+    assert.equal(statusText(node), "3 recipes \u00b7 5 slots \u00b7 on appliance1x1",
+                 "an empty category is counted in the sidebar, not on the line");
 });
 
 test("an empty category is not written to the file, and an empty recipe is",
@@ -1294,7 +1301,7 @@ test("the link icon puts tick boxes on the recipes, and link links the ticked on
         app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value;
     await click(rowFor(node, "appliance1x2"));
     await click(linkIcon(node));
-    assert.match(statusText(node), /^Linking appliance1x2: tick the recipes/);
+    assert.equal(statusText(node), "Tick the recipes to link with appliance1x2.");
     assert.equal(rowFor(node, "appliance1x1").children.length, 2, "a tick box");
     assert.equal(rowFor(node, "appliance1x2").children.length, 1,
                  "none on the recipe being linked");
@@ -1307,7 +1314,6 @@ test("the link icon puts tick boxes on the recipes, and link links the ticked on
     assert.equal(backdrop(), "floor-1x2.png", "a tick puts nothing on the canvas");
     assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x2", "and picks nothing");
     assert.deepEqual(posted.filter((p) => p.project), [], "and links nothing yet");
-    assert.match(statusText(node), /\(3 linked\)\.$/);
     await click(word(node, "link"));
     const project = lastProject();
     assert.deepEqual(project.links, [["appliance1x2", "appliance1x1", "zebra"]]);
@@ -1318,7 +1324,7 @@ test("the link icon puts tick boxes on the recipes, and link links the ticked on
     assert.equal(rowFor(node, "zebra").children.length, 2, "a chain on every linked row");
     assert.match(rowFor(node, "zebra").title, /Linked with appliance1x2, appliance1x1/);
     assert.equal(word(node, "link").style.display, "none", "and the tick boxes are gone");
-    assert.equal(statusText(node), "Linked 3: appliance1x2, appliance1x1, zebra.");
+    assert.equal(statusText(node), "Linked 3 recipes.");
 });
 
 test("pressing the link icon again leaves without linking anything", async () => {
@@ -1419,7 +1425,7 @@ test("shared, the project row and an empty category cannot be linked from", asyn
         await click(rowFor(node, rel));
         await click(linkIcon(node));
         assert.equal(rowFor(node, "appliance1x1").children.length, 1, `${rel}: no tick boxes`);
-        assert.match(statusText(node), /^Pick the recipe whose values the others take/);
+        assert.equal(statusText(node), "Pick a recipe to link from.");
     }
 });
 
