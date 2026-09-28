@@ -407,7 +407,7 @@ A painted slot node is captured whole, not by its first widget
   they are one widget; loading calls `widget.toggle(bool)`, because assigning
   `.value` is inert and the group never moves.
 - a key in the project file with no slot on the canvas is not a row: it leaves
-  the table on sight and the file on the next `save project`.
+  the table on sight and the file on the next save.
 
 ## Storing a recipe — the table, and the two sides that must agree
 
@@ -516,6 +516,23 @@ the same thing. Each one failed silently first.
 - After a save, that one recipe's workflow file is rewritten two seconds later
   (`/symbiotica/recipes/generate` takes an optional `recipe`), so the file on
   disk is the recipe rather than whatever `export workflows` last wrote.
+- **One control per act, and no project buttons** (2026-09-28): "load does
+  not make any sense… capture and save, what is the difference?… the project
+  is the literal workflow we are in". The pane head is the recipe's name and
+  its `save`, which reads a canvas edit in before writing. Clicking the row
+  on screen again puts it back over a canvas edit. `new recipe` is an icon in
+  the sidebar head, and delete is a trash on the row's hover, asked once and
+  written at once (the project row's deletes the project). Rename, delete, link
+  and the base-workflow field write at once, so nothing waits for a
+  `save project`. No counts: `2 own` and `· 3` were refused as noise. A
+  workflow with no project gets one when it opens (`/recipes/new` with `dry`,
+  written on its first save). The Recipes node carries the project it was on
+  in `node.properties.symbiotica_project`, so a Save As COPIES that project to
+  the new workflow and a rename MOVES it (the old base gone from disk — asked
+  twice, the Volume sync lies for a second). The frontend loads a Save As
+  copy as a temporary workflow and writes it after, so `resolveProject` waits
+  while `isTemporary`. A workflow inside a project's export folder starts
+  nothing.
 - **Linked recipes are one set of values under several names** (2026-09-23):
   "decoration 1x1, 2x2, 3x3 etc have the same functionality and will have the
   same recipe". The project file keeps `links` (a list of name lists) AND a
@@ -525,7 +542,7 @@ the same thing. Each one failed silently first.
   `touched(column)` for the pane's cells). A new path that writes cells has
   to go through it too, or one name drifts from the others in silence. The
   control is where he put it: a chain ICON in the sidebar head beside the
-  new-project icon, tick boxes that change nothing, and a `link` button that
+  new-recipe icon, tick boxes that change nothing, and a `link` button that
   shows only once the ticks differ from what is linked. The first version, a
   word button in the pane head that linked on every tick, was refused. The head
   counts the whole group, the open recipe included: three chains read
@@ -624,7 +641,7 @@ slot the table did not know about.
   is… it's not adding anything to have 2 things that are the same thing",
   2026-09-21). A **recipe** is one asset type in it (`appliance-1x2`),
   **shared** is what every recipe takes. Buttons are two words naming what they act on
-  (`new project`, `capture recipe`). Node inputs are Comfy widgets, wirable,
+  (`export workflows`, `export all`). Node inputs are Comfy widgets, wirable,
   never DOM fields, and never the same thing twice. A recipe slot is a node
   painted the colour typed in the node's `match_color` input, its title the
   slot name — a node never retitled goes under its type's name, so PAINTING is

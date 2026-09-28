@@ -86,6 +86,10 @@ if PromptServer is not None:
             project = read_project(projects_dir(), request.match_info["name"])
             if project is None:
                 return web.json_response({"error": "no such project"}, status=404)
+            # `raw`: the file alone. A workflow renamed has taken its base
+            # away, and its recipes still have to be read to move them.
+            if request.query.get("raw"):
+                return web.json_response({"project": project})
             slots = template_slots(read_template(_workflows_dir(), project.get("template")),
                                    project.get("match_color"), _display_names())
         except RecipeError as e:
@@ -100,7 +104,11 @@ if PromptServer is not None:
                                         body.get("match_color"))
             if read_project(projects_dir(), name) is not None:
                 return web.json_response({"error": f"project {name!r} exists — pick it instead"}, status=409)
-            write_project(projects_dir(), name, project)
+            # `dry`: the project a workflow starts with, answered and not
+            # written — the canvas writes it on its first save, so opening a
+            # workflow leaves no file behind.
+            if not body.get("dry"):
+                write_project(projects_dir(), name, project)
             slots = template_slots(read_template(_workflows_dir(), project["template"]),
                                    project.get("match_color"), _display_names())
         except RecipeError as e:

@@ -44,13 +44,24 @@ const OTHERS = [
 // sent rather than on the fact that it posted something.
 const posted = [];
 const toasts = [];
+// The projects a DELETE was sent for.
+const deleted = [];
 // What the name dialog answers when `new recipe` asks.
 const asked = { answer: null };
 
 function router({ project = PROJECT(), slots = SLOTS, projects = OTHERS,
-                  saveFails = false, generateFails = null, prompt = null } = {}) {
+                  saveFails = false, generateFails = null, prompt = null,
+                  baseGone = false } = {}) {
     return (route, _n, init) => {
         const body = init?.body ? JSON.parse(init.body) : null;
+        // Whether a workflow file is on disk: a rename leaves the old one gone.
+        if (route.startsWith("/userdata/")) {
+            return baseGone ? { ok: false, status: 404, body: {} } : { ok: true, body: {} };
+        }
+        if (init?.method === "DELETE" && route.startsWith("/symbiotica/recipes/")) {
+            deleted.push(decodeURIComponent(route.slice("/symbiotica/recipes/".length)));
+            return { ok: true, body: {} };
+        }
         if (route === "/symbiotica/recipes") return { ok: true, body: { projects } };
         if (route === "/symbiotica/recipes/save") {
             posted.push(body);
@@ -66,8 +77,10 @@ function router({ project = PROJECT(), slots = SLOTS, projects = OTHERS,
         }
         if (route === "/symbiotica/recipes/new") {
             posted.push({ "new": body });
-            return { ok: true, body: { name: "symtest-fixture",
-                                       project: { ...PROJECT(), recipes: {} },
+            // Named after its base workflow, folder included.
+            const template = String(body.template).replace(/^workflows\//, "");
+            return { ok: true, body: { name: template.replace(/\.json$/, "").replace(/\//g, "-"),
+                                       project: { ...PROJECT(), template, recipes: {} },
                                        slots } };
         }
         if (route.startsWith("/symbiotica/recipes/")) {
@@ -97,16 +110,24 @@ const CANVAS = () => [
 ];
 
 async function recipeNode({ nodes = CANVAS(), path = WORKFLOW,
-                            draw = true, ...opts } = {}) {
+                            draw = true, properties = {}, temporary = false,
+                            ...opts } = {}) {
+    // A save rewrites its workflow 2 s later; one left pending by an earlier
+    // test lands in this one's `posted`.
+    for (const n of made) {
+        if (n._symRebuild?.timer) { clearTimeout(n._symRebuild.timer); n._symRebuild.timer = null; }
+    }
     reset();
     posted.length = 0;
     toasts.length = 0;
+    deleted.length = 0;
     app.graph.nodes = nodes;
     app.graph._nodes = nodes;
     app.extensionManager = {
-        workflow: { activeWorkflow: path ? { path } : null },
+        workflow: { activeWorkflow: path ? { path, isTemporary: temporary } : null },
         toast: { add: (t) => toasts.push(t) },
-        dialog: { prompt: async () => asked.answer },
+        dialog: { prompt: async () => asked.answer,
+                  confirm: async () => asked.confirm ?? true },
     };
     setResponder(router(opts));
     const node = await create("SymbioticaRecipe",
@@ -115,6 +136,8 @@ async function recipeNode({ nodes = CANVAS(), path = WORKFLOW,
     // the widget is the same read one hop shorter, and it is what lets a test
     // move the wire.
     node.inputs = [{ name: "recipe", widget: { name: "recipe" }, link: null }];
+    // What a saved workflow restores onto the node before it is drawn.
+    node.properties = { ...(node.properties ?? {}), ...properties };
     await node.onNodeCreated?.call(node);
     await settle();
     if (draw) { node.onDrawForeground?.(); await settle(); }
@@ -156,6 +179,11 @@ const labels = (node) => rows(node).map(labelOf);
 const main = (node) => part(node, "main");
 const button = (node, title) =>
     descendants(panel(node)).find((e) => e.title === title);
+// The trash a row shows on hover.
+const newRecipeIcon = (node) => descendants(panel(node))
+    .find((e) => String(e.title).startsWith("New recipe:"));
+const trashOn = (node, rel) =>
+    [...(rowFor(node, rel)?.children ?? [])].find((c) => /^Delete/.test(String(c.title)));
 const word = (node, text) =>
     descendants(panel(node)).find((e) => e.textContent === text
         && String(e.style.cssText).includes("cursor:pointer"));
@@ -294,12 +322,10 @@ test("the sidebar is the project, shared pinned, then the recipes sorted",
     const node = await recipeNode();
     assert.deepEqual(labels(node), [
         "symtest-fixture",
-        "shared · 3", "appliance1x1 · 1", "appliance1x2 · 3", "zebra · 0",
+        "shared", "appliance1x1", "appliance1x2", "zebra",
         "other projects",
         "imperia-bakery — open recipe-test/bakery-template-test.json",
     ]);
-    // The count is the recipe's OWN cells, not its resolved total:
-    // appliance1x1 overrides one value and takes the other two from shared.
     assert.deepEqual(rows(node).map((r) => r._sym.kind), [
         "project", "shared", "recipe", "recipe", "recipe", "caption", "other"]);
 });
@@ -376,7 +402,8 @@ test("the project row's pane is its base workflow over shared's values",
     assert.equal(fieldFor(node, "backdrop").value, "floor-1x1.png");
     // Typed into, they reach the saved project.
     await type(headerField(node, "template"), "moved/elsewhere.json");
-    await click(word(node, "save project"));
+    fire(headerField(node, "template"), "change", {});
+    await settle();
     assert.equal(posted.at(-1).project.template, "moved/elsewhere.json");
 });
 
@@ -415,7 +442,7 @@ test("a row can be cleared back to what it inherits", async () => {
     assert.equal(fieldFor(node, "backdrop").value, "");
     assert.equal(fieldFor(node, "backdrop").placeholder, "floor-1x1.png");
     assert.equal(wipe.style.visibility, "hidden");
-    await click(word(node, "save project"));
+    await click(saveRecipe(node));
     assert.equal("backdrop" in posted.at(-1).project.recipes.appliance1x2, false);
 });
 
@@ -433,7 +460,7 @@ test("a cell that holds an object gets the sub-grid, whatever the slot's kind sa
     assert.equal(fieldFor(node, "grid", "height").value, "2048");
     // One widget at a time, inside the JSON cell.
     await type(fieldFor(node, "grid", "height"), "3072");
-    await click(word(node, "save project"));
+    await click(saveRecipe(node));
     assert.deepEqual(posted.at(-1).project.recipes.appliance1x2.grid,
                      { width: 1024, height: 3072 });
     // And a scalar that really is one keeps its text box.
@@ -476,7 +503,7 @@ test("painting a node while typing keeps the caret and still grows the row",
     assert.deepEqual(cellKeys(node),
                      ["KSampler", "backdrop", "grid", "lighting", "pre_flip",
                       "preamble"]);
-    assert.equal(labels(node).includes("shared · 3"), true);
+    assert.equal(labels(node).includes("shared"), true);
 });
 
 test("unpainting a node takes its row away and leaves the others alone",
@@ -506,7 +533,7 @@ test("the rows are read from the ROOT graph, not from the subgraph on screen",
     try {
         await draw(node);
         assert.deepEqual(cellKeys(node), before);
-        await click(word(node, "save project"));
+        await node._symRecipe.save();
         assert.deepEqual(Object.keys(posted.at(-1).project.shared).sort(),
                          ["backdrop", "grid", "preamble"]);
     } finally {
@@ -525,13 +552,13 @@ test("a cell that does not parse still lets a newly painted node become a row",
     await draw(node);
     assert.ok(cellKeys(node).includes("lighting"));
     // And the save names the row and the column it could not read.
-    await click(word(node, "save project"));
+    await click(saveRecipe(node));
     assert.equal(posted.length, 0, "a bad cell was written to the file");
 });
 
 // ============================================================ what it writes ==
 
-test("capture writes only what differs from shared, into the selected recipe",
+test("save takes the canvas into the recipe on screen, only what differs from shared",
      async () => {
     const node = await recipeNode();
     await click(rowFor(node, "appliance1x1"));
@@ -543,27 +570,36 @@ test("capture writes only what differs from shared, into the selected recipe",
         painted("KSampler", [["seed", 1], ["steps", 20]]),
     ];
     await draw(node);
-    await click(word(node, "capture"));
-    assert.equal(fieldFor(node, "backdrop").value, "desk.png");
-    // preamble and grid are the shared values, so the recipe keeps nothing.
-    assert.equal(fieldFor(node, "preamble").value, "");
-    assert.equal(fieldFor(node, "grid", "width").value, "");
-    // A second capture is the one that used to double up.
-    await click(word(node, "capture"));
+    await click(saveRecipe(node));
+    const kept = lastProject().recipes.appliance1x1;
+    assert.equal(kept.backdrop, "desk.png");
+    assert.ok(!("preamble" in kept) && !("grid" in kept),
+              "preamble and grid are shared's, so the recipe keeps nothing of them");
     assert.equal(fieldFor(node, "backdrop").value, "desk.png");
     assert.equal(fieldFor(node, "preamble").value, "");
 });
 
-test("load puts the selected recipe onto the canvas and says how many slots",
-     async () => {
+test("the pane head is the name and its save, nothing else", async () => {
     const node = await recipeNode();
     await click(rowFor(node, "appliance1x2"));
-    await click(word(node, "load"));
+    for (const gone of ["load", "capture", "new recipe", "save project", "delete project"]) {
+        assert.equal(word(node, gone), undefined, `${gone} is still drawn`);
+    }
+    assert.ok(!descendants(panel(node)).some((e) => /^\d+ (own|values)/.test(String(e.textContent))),
+              "the count is still drawn");
+});
+
+test("clicking the recipe on screen again puts it back over a canvas edit", async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "appliance1x2"));
     const backdrop = app.graph.nodes.find((n) => n.title === "backdrop");
-    const flip = app.graph.nodes.find((n) => n.title === "pre_flip?");
+    backdrop.widgets[0].value = "gargoyle.png";
+    await draw(node);
+    await click(rowFor(node, "appliance1x2"));
     assert.equal(backdrop.widgets[0].value, "floor-1x2.png");
-    assert.equal(flip.mode, 0);
+    assert.equal(app.graph.nodes.find((n) => n.title === "pre_flip?").mode, 0);
     assert.match(statusText(node), /Loaded appliance1x2\./);
+    assert.deepEqual(posted.filter((p) => p.project), [], "nothing written");
 });
 
 // A recipe row leads with its state dot (a chain beside it when linked);
@@ -594,7 +630,6 @@ test("a recipe edited on the canvas carries the unsaved dot, and its save takes 
     assert.ok(!hasDot(rowFor(node, "appliance1x1")));
     assert.equal(saveRecipe(node).disabled, false);
     assert.match(saveRecipe(node).style.background, /#f86145/);
-    assert.equal(word(node, "save project").style.background, undefined);
     assert.match(statusText(node), /appliance1x2: edited on the canvas, not saved/);
     await click(saveRecipe(node));
     assert.equal(posted.at(-1).project.recipes.appliance1x2.backdrop, "floor-2x2.png");
@@ -640,10 +675,11 @@ test("renaming a recipe carries its cells, re-sorts, and refuses a name taken",
     fire(name, "change", {});
     await settle();
     assert.deepEqual(labels(node).slice(1, 5),
-                     ["shared · 3", "appliance1x1 · 1", "cashiers-desk-1x1 · 3",
-                      "zebra · 0"]);
+                     ["shared", "appliance1x1", "cashiers-desk-1x1", "zebra"]);
     assert.equal(node.properties.symbiotica_recipes_pick, "cashiers-desk-1x1");
     assert.equal(fieldFor(node, "backdrop").value, "floor-1x2.png");
+    assert.deepEqual(Object.keys(lastProject().recipes).sort(),
+                     ["appliance1x1", "cashiers-desk-1x1", "zebra"], "written at once");
 
     name.value = "appliance1x1";
     fire(name, "change", {});
@@ -652,29 +688,45 @@ test("renaming a recipe carries its cells, re-sorts, and refuses a name taken",
     assert.equal(name.value, "cashiers-desk-1x1");
 });
 
-test("removing a recipe takes it out in memory until save", async () => {
+test("a recipe row's trash asks, then deletes it from the file", async () => {
     const node = await recipeNode();
     await click(rowFor(node, "zebra"));
-    await click(resetIcon(node));
+    asked.confirm = false;
+    await click(trashOn(node, "zebra"));
+    asked.confirm = undefined;
+    assert.ok(rowFor(node, "zebra"), "a No deleted it");
+    assert.deepEqual(posted, []);
+    await click(trashOn(node, "zebra"));
     assert.equal(rowFor(node, "zebra"), undefined);
     assert.equal(node.properties.symbiotica_recipes_pick, "shared");
-    await click(word(node, "save project"));
-    assert.deepEqual(Object.keys(posted.at(-1).project.recipes),
-                     ["appliance1x1", "appliance1x2"]);
+    assert.deepEqual(Object.keys(lastProject().recipes).sort(), ["appliance1x1", "appliance1x2"]);
 });
 
-test("delete project takes two presses", async () => {
+test("a recipe not on screen is deleted without moving the pane", async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "appliance1x2"));
+    await click(trashOn(node, "zebra"));
+    assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x2");
+    assert.equal("zebra" in lastProject().recipes, false);
+});
+
+test("the project row's trash asks before it deletes the project", async () => {
     // An icon with no confirm deletes a 22 KB project on one mis-click.
     const node = await recipeNode();
-    const button2 = word(node, "delete project");
-    await click(button2);
-    assert.match(statusText(node), /Press delete project again/);
-    assert.ok(!calls.some((c) => c.startsWith("/symbiotica/recipes/symtest-fixture")
-                                 && c !== "/symbiotica/recipes/symtest-fixture"));
-    const before = calls.length;
-    await click(button2);
-    assert.ok(calls.length > before, "the second press deleted nothing");
+    const gone = () => calls.some((c) => c === "/symbiotica/recipes/symtest-fixture"
+                                         && toasts.some((t) => /^Deleted/.test(t.summary)));
+    asked.confirm = false;
+    await click(trashOn(node, ":project"));
+    asked.confirm = undefined;
+    assert.ok(!gone(), "a No deleted it");
+    await click(trashOn(node, ":project"));
     assert.equal(toasts.at(-1).summary, 'Deleted project "symtest-fixture"');
+});
+
+test("the sidebar's head starts a new recipe, and holds no new project", async () => {
+    const node = await recipeNode();
+    assert.ok(button(node, "New recipe: the canvas as it stands, under a name you give"));
+    assert.equal(button(node, "Start a project from the open workflow"), undefined);
 });
 
 test("generate saves first, because the route re-reads the project from disk",
@@ -823,21 +875,61 @@ test("each empty names which empty it is", async () => {
     assert.match(pane(), /Nothing on this canvas is painted purple/);
 });
 
-test("a workflow no project is the template of says so, in the tree and the pane",
+test("a workflow with no project starts one, and writes it on its first save",
      async () => {
     const node = await recipeNode({ projects: [OTHERS[1]] });
-    assert.match(emptyText(part(node, "tree")),
-                 /No project has this workflow as its template/);
-    assert.match(statusText(node), /Press new project/);
+    assert.deepEqual(posted.map((p) => p.new?.dry), [true], "asked for, not written");
+    assert.deepEqual(labels(node).slice(0, 2), ["symtest-fixture", "shared"]);
     // And the other project is still named, with the workflow to open for it.
-    assert.deepEqual(labels(node),
-                     ["other projects",
-                      "imperia-bakery — open recipe-test/bakery-template-test.json"]);
-    // `capture recipe` has to SAY there is no project rather than do nothing.
-    widget(node, "recipe").value = "chair";
-    widget(node, "capture recipe").callback();
-    await settle();
-    assert.equal(toasts.at(-1).summary, "No project for this workflow");
+    assert.ok(labels(node).includes("imperia-bakery — open recipe-test/bakery-template-test.json"));
+    assert.equal(trashOn(node, ":project"), undefined, "nothing on disk to delete");
+    assert.equal(node.properties.symbiotica_project, "symtest-fixture");
+    await type(fieldFor(node, "preamble"), "a cafe");
+    await click(saveRecipe(node));
+    assert.equal(lastProject().shared.preamble, "a cafe");
+    assert.equal(posted.at(-1).name, "symtest-fixture");
+});
+
+test("a Save As carries the recipes to the copy, and leaves the base its own",
+     async () => {
+    // The node names the project it was on; the workflow it is in now has
+    // none. The base is still on disk, so this is a copy.
+    const node = await recipeNode({ path: "workflows/copy.json", draw: false,
+                                    properties: { symbiotica_project: "symtest-fixture" } });
+    await draw(node);
+    const writes = posted.filter((p) => p.project);
+    assert.equal(posted[0].new.dry, false);
+    assert.equal(writes[0].project.recipes.appliance1x2.backdrop, "floor-1x2.png");
+    assert.deepEqual(deleted, [], "the base's project was deleted");
+    assert.equal(toasts.at(-1).summary, "Recipes copied from symtest-fixture");
+});
+
+test("a Save As waits for the copy to be written before it carries anything",
+     async () => {
+    // The frontend loads the copy as a temporary workflow and saves it after.
+    const node = await recipeNode({ path: "workflows/copy2.json", temporary: true,
+                                    properties: { symbiotica_project: "symtest-fixture" } });
+    assert.deepEqual(posted, [], "a temporary workflow started a project");
+    assert.match(statusText(node), /Save the workflow first/);
+    app.extensionManager.workflow.activeWorkflow.isTemporary = false;
+    await draw(node);
+    assert.equal(posted.filter((p) => p.project).at(0)?.name, "copy2");
+    assert.equal(toasts.at(-1).summary, "Recipes copied from symtest-fixture");
+});
+
+test("a workflow renamed takes its recipes with it", async () => {
+    const node = await recipeNode({ path: "workflows/renamed.json", draw: false, baseGone: true,
+                                    properties: { symbiotica_project: "symtest-fixture" } });
+    await new Promise((r) => setTimeout(r, 1700));
+    await draw(node);
+    assert.deepEqual(deleted, ["symtest-fixture"]);
+    assert.equal(toasts.at(-1).summary, "Recipes moved from symtest-fixture");
+});
+
+test("a workflow an export wrote starts no project of its own", async () => {
+    await recipeNode({ path: "workflows/symtest-fixture/symtest-fixture-zebra.json",
+                       projects: OTHERS.slice(0, 1) });
+    assert.deepEqual(posted, []);
 });
 
 test("an unsaved workflow is told to save, not shown an empty table", async () => {
@@ -926,37 +1018,24 @@ test("the name field shows the slug it was given, not the words typed in",
     assert.equal(node.properties.symbiotica_recipes_pick, "cashiers-desk-1x1");
 });
 
-test("the head's count follows an edit, the way the tree's does", async () => {
-    // A node has to show what it holds: a badge that says "1 own" over a recipe
-    // with two is a badge that has to be checked against the tree to be read.
-    const node = await recipeNode();
-    await click(rowFor(node, "appliance1x1"));
-    const badge = descendants(panel(node))
-        .find((e) => /^\d+ (values|own)$/.test(String(e.textContent ?? "")));
-    assert.equal(badge.textContent, "1 own");
-    await type(fieldFor(node, "preamble"), "a desk");
-    assert.equal(badge.textContent, "2 own");
-    assert.ok(labels(node).includes("appliance1x1 · 2"));
-});
-
 // ========================= new recipe, and leaving one ======================
 
 test("new recipe asks for a name and writes the canvas into it", async () => {
     const node = await recipeNode();
     asked.answer = "Cashier's Desk 1x1";
-    await click(word(node, "new recipe"));
+    await click(newRecipeIcon(node));
     await settle();
     const project = posted.filter((p) => p.project).at(-1).project;
     assert.ok("cashiers-desk-1x1" in project.recipes, "the recipe reached the server");
     assert.equal(node.properties.symbiotica_recipes_pick, "cashiers-desk-1x1");
-    assert.ok(labels(node).some((l) => l.startsWith("cashiers-desk-1x1 ·")));
+    assert.ok(labels(node).includes("cashiers-desk-1x1"));
     assert.equal(statusText(node), "Created cashiers-desk-1x1.");
 });
 
 test("new recipe refuses a name a recipe already has", async () => {
     const node = await recipeNode();
     asked.answer = "appliance1x2";
-    await click(word(node, "new recipe"));
+    await click(newRecipeIcon(node));
     await settle();
     assert.equal(posted.filter((p) => p.project).length, 0);
     assert.match(toasts.at(-1).summary, /already a recipe/);
@@ -965,7 +1044,7 @@ test("new recipe refuses a name a recipe already has", async () => {
 test("an empty name leaves the project alone", async () => {
     const node = await recipeNode();
     asked.answer = "";
-    await click(word(node, "new recipe"));
+    await click(newRecipeIcon(node));
     await settle();
     assert.equal(posted.filter((p) => p.project).length, 0);
 });
@@ -1032,20 +1111,6 @@ test("a row that has not moved is not written on the way past", async () => {
     assert.deepEqual(posted.filter((p) => p.project), []);
 });
 
-// ===================== what the capture says ================================
-
-test("capture says only what it captured into, never the unpainted nodes", async () => {
-    const node = await recipeNode();
-    const stray = { title: "CLIP Text Encode", mode: 0, inputs: [],
-                    widgets: [{ name: "text", value: "a bakery" }] };
-    app.graph.nodes = [...app.graph.nodes, stray];
-    app.graph._nodes = app.graph.nodes;
-    await click(rowFor(node, "appliance1x2"));
-    stray.widgets[0].value = "a gargoyle";          // changed, never painted
-    await click(word(node, "capture"));
-    assert.equal(statusText(node), "Captured appliance1x2.");
-});
-
 // ===================== what the saved template has no slot for ==============
 
 test("the status names the keys the saved template would drop", async () => {
@@ -1070,8 +1135,8 @@ test("a save rewrites that recipe's workflow, once the typing stops", async () =
     const node = await recipeNode();
     await click(rowFor(node, "appliance1x2"));
     app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "x.png";
-    await click(word(node, "capture"));
-    await click(word(node, "save project"));
+    await draw(node);
+    await click(saveRecipe(node));
     await settle();
     assert.deepEqual(posted.filter((p) => p.generate), [],
                      "not one workflow written per keystroke");
@@ -1087,8 +1152,8 @@ test("a workflow not written names its slot, and keeps the reason for hover", as
     const node = await recipeNode({ generateFails: reason });
     await click(rowFor(node, "appliance1x2"));
     app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "x.png";
-    await click(word(node, "capture"));
-    await click(word(node, "save project"));
+    await draw(node);
+    await click(saveRecipe(node));
     await new Promise((r) => setTimeout(r, 2200));
     await settle();
     const line = main(node).children[main(node).children.length - 1].children[0];
@@ -1099,8 +1164,10 @@ test("a workflow not written names its slot, and keeps the reason for hover", as
 test("shared is not a workflow, so saving it writes none", async () => {
     const node = await recipeNode();
     await click(rowFor(node, "shared"));
-    await click(word(node, "capture"));
-    await click(word(node, "save project"));
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "x.png";
+    await draw(node);
+    await click(saveRecipe(node));
+    assert.equal(lastProject().shared.backdrop, "x.png", "shared was not saved");
     await new Promise((r) => setTimeout(r, 2200));
     await settle();
     assert.deepEqual(posted.filter((p) => p.generate), []);
@@ -1326,8 +1393,7 @@ test("every category the order holds is a row, stored or not", async () => {
     await draw(node);
     assert.deepEqual(labels(node), [
         "symtest-fixture",
-        "shared \u00b7 3", "appliance1x1 \u00b7 1", "appliance1x2 \u00b7 3",
-        "food-3-stages-1x1 \u00b7 0", "zebra \u00b7 0",
+        "shared", "appliance1x1", "appliance1x2", "food-3-stages-1x1", "zebra",
         "other projects",
         "imperia-bakery \u2014 open recipe-test/bakery-template-test.json",
     ]);
@@ -1344,7 +1410,7 @@ test("an empty category is not written to the file, and an empty recipe is",
     const node = await recipeNode();
     taskChain(node, "Appliance1x1");
     await draw(node);
-    await click(word(node, "save project"));
+    await node._symRecipe.save();
     const written = posted.filter((p) => p.project).at(-1).project.recipes;
     assert.deepEqual(Object.keys(written).sort(),
                      ["appliance1x1", "appliance1x2", "zebra"],
@@ -1368,8 +1434,8 @@ test("capturing into an empty category is what makes it a recipe", async () => {
     await draw(node);
     await click(rowFor(node, "food-3-stages-1x1"));
     app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "floor-food.png";
-    await click(word(node, "capture"));
-    await click(word(node, "save project"));
+    await draw(node);
+    await click(saveRecipe(node));
     const written = posted.filter((p) => p.project).at(-1).project.recipes;
     assert.equal(written["food-3-stages-1x1"]?.backdrop, "floor-food.png");
     assert.equal(stateOf(rowFor(node, "food-3-stages-1x1")), "saved",
@@ -1426,21 +1492,17 @@ test("an empty category leaves when the order stops naming it; a captured one st
     assert.ok(rowFor(node, "zebra"));
 });
 
-const resetIcon = (node) => descendants(panel(node)).find((e) =>
-    /^Reset this recipe/.test(String(e.title)));
-
-test("reset turns a captured category red, and save leaves it out of the file",
+test("deleting a captured category turns it red and takes it out of the file",
      async () => {
     const node = await recipeNode();
     taskChain(node, "Appliance1x1");
     await draw(node);
     await click(rowFor(node, "appliance1x1"));
     assert.equal(stateOf(rowFor(node, "appliance1x1")), "saved");
-    await click(resetIcon(node));
+    await click(trashOn(node, "appliance1x1"));
     assert.equal(stateOf(rowFor(node, "appliance1x1")), "empty", "red at once");
+    assert.equal(trashOn(node, "appliance1x1"), undefined, "nothing left to delete");
     assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x1", "still picked");
-    assert.match(statusText(node), /Reset appliance1x1/);
-    await click(word(node, "save project"));
     assert.equal("appliance1x1" in lastProject().recipes, false, "left out of the file");
     await draw(node);
     assert.equal(stateOf(rowFor(node, "appliance1x1")), "empty", "and red after the save");
@@ -1518,14 +1580,14 @@ test("the head counts every recipe in the link, itself included", async () => {
         recipes: { appliance1x2: SHAPE(), appliance1x1: SHAPE(), zebra: SHAPE() },
         links: [["appliance1x2", "appliance1x1", "zebra"]] } });
     await click(rowFor(node, "appliance1x1"));
-    assert.ok(descendants(panel(node)).some((e) => e.textContent === "3 own · 3 linked"));
+    assert.ok(descendants(panel(node)).some((e) => e.textContent === "3 linked"));
 });
 
 test("an edit to one linked recipe is an edit to all of them", async () => {
     const node = await recipeNode({ project: LINKED() });
     await click(rowFor(node, "appliance1x1"));
     await type(fieldFor(node, "backdrop"), "desk.png");
-    await click(word(node, "save project"));
+    await click(saveRecipe(node));
     const project = lastProject();
     assert.equal(project.recipes.appliance1x1.backdrop, "desk.png");
     assert.equal(project.recipes.appliance1x2.backdrop, "desk.png");
@@ -1555,8 +1617,8 @@ test("a save rewrites the workflow of every name linked to the recipe", async ()
     const node = await recipeNode({ project: LINKED() });
     await click(rowFor(node, "appliance1x2"));
     app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "x.png";
-    await click(word(node, "capture"));
-    await click(word(node, "save project"));
+    await draw(node);
+    await click(saveRecipe(node));
     await new Promise((r) => setTimeout(r, 2200));
     await settle();
     assert.deepEqual(posted.filter((p) => p.generate).map((p) => p.generate.recipe).sort(),
@@ -1611,7 +1673,6 @@ test("renaming a linked recipe keeps it linked", async () => {
     name.value = "desk-1x1";
     fire(name, "change", {});
     await settle();
-    await click(word(node, "save project"));
     assert.deepEqual(lastProject().links, [["appliance1x2", "desk-1x1"]]);
 });
 
