@@ -542,7 +542,7 @@ export function projectToTable(project, slots) {
 // `offered` names the columns that are only there because the ORDER holds that
 // category. One of those is written the moment it has a value and not before:
 // an empty block per category would put seventeen recipes in the file and have
-// `generate workflows` render a workflow for each at full price. A recipe the
+// `export workflows` render a workflow for each at full price. A recipe the
 // file already holds is never dropped, empty or not — an empty one is his.
 export function tableToProject(base, table, slots, offered = null) {
     const byKey = Object.fromEntries(slots.map((s) => [s.key, s]));
@@ -732,7 +732,7 @@ export function followPromptFile(table, rel, before, after) {
 
 // ----------------------------------------------------------------- links --
 // LINKED recipes hold the same values: decoration-1x1, -2x2 and -4x4 are one
-// recipe under three names, and `generate workflows` still writes a workflow
+// recipe under three names, and `export workflows` still writes a workflow
 // for each name. The file keeps every name's block whole, so the server
 // generates from them as they are and knows nothing about links; the groups
 // ride beside them as `links`, a list of name lists. What keeps the blocks
@@ -868,6 +868,25 @@ export function projectForWorkflow(projects, workflowPath) {
     if (rel.startsWith(WORKFLOWS_PREFIX)) rel = rel.slice(WORKFLOWS_PREFIX.length);
     const hit = (projects ?? []).find((p) => String(p.template ?? "").replace(/^\/+/, "") === rel);
     return hit ? hit.name : null;
+}
+
+// A workflow as ComfyUI's Export (API) writes it, built in a graph of its own
+// so the open canvas never changes. Cleared after, which runs every node's
+// onRemoved: the panels those nodes built go with them. The clear waits two
+// frames, because pysssss' Show Text builds its text box on the frame after
+// configure, and one built after the clear stayed on the page for good.
+const nextFrame = () => new Promise((done) => requestAnimationFrame(() => done()));
+export async function apiPrompt(workflow) {
+    const live = app.rootGraph ?? app.graph;
+    const graph = new live.constructor();
+    try {
+        graph.configure(structuredClone(workflow));
+        return (await app.graphToPrompt(graph)).output;
+    } finally {
+        await nextFrame();
+        await nextFrame();
+        graph.clear();
+    }
 }
 
 export function generateSummary(report) {
@@ -1122,14 +1141,15 @@ function recipePanel(node) {
         + "one you arrive at.";
     autoWrap.append(autoBox, el("span", "", "auto"));
     const saveButton = el("button", wordButtonCss, "save project");
-    const generateButton = el("button", wordButtonCss, "generate workflows");
+    const generateButton = el("button", wordButtonCss, "export workflows");
+    const apiButton = el("button", wordButtonCss, "export api workflows");
     const deleteButton = el("button", wordButtonCss, "delete project");
-    for (const b of [saveButton, generateButton, deleteButton]) b.className = "sym-btn";
+    for (const b of [saveButton, generateButton, apiButton, deleteButton]) b.className = "sym-btn";
     const actionBar = el("div", "display:flex;align-items:center;gap:6px;"
         + `padding:3px 6px;flex:none;background:${HUB.surface2};`
         + `border-bottom:1px solid ${HUB.hairline};`);
     actionBar.append(autoWrap, el("div", "flex:1;"), saveButton, generateButton,
-                     deleteButton);
+                     apiButton, deleteButton);
 
     // The project's own field — its base workflow — shown under the project
     // row only.
@@ -1316,7 +1336,34 @@ function recipePanel(node) {
             const n = report?.written?.length ?? 0;
             status(`Wrote ${n} workflow${n === 1 ? "" : "s"}.`);
         } catch (err) {
-            toast("error", "Generate failed", String(err?.message ?? err));
+            toast("error", "Export failed", String(err?.message ?? err));
+        } finally {
+            busy = false;
+        }
+    }
+
+    // The same workflows, each run through ComfyUI's own Export (API) and
+    // written beside it with `-api`. The server builds them without writing;
+    // the conversion needs the frontend, which is where the converter is.
+    async function exportApi() {
+        if (busy) return;
+        busy = true;
+        try {
+            if (!(await save())) return;
+            const report = await postJson("/symbiotica/recipes/generate", { name: state.name, api: true });
+            const paths = [];
+            for (const item of report?.written ?? []) {
+                const prompt = await apiPrompt(item.workflow);
+                const { path } = await postJson("/symbiotica/recipes/write-api",
+                                                { name: state.name, recipe: item.recipe, prompt });
+                paths.push(path);
+            }
+            const n = paths.length;
+            toast("success", `Wrote ${n} API workflow${n === 1 ? "" : "s"}`,
+                  paths.join(", ") || "The project has no recipes.", 10000);
+            status(`Wrote ${n} API workflow${n === 1 ? "" : "s"}.`);
+        } catch (err) {
+            toast("error", "API export failed", String(err?.message ?? err));
         } finally {
             busy = false;
         }
@@ -1923,6 +1970,7 @@ function recipePanel(node) {
     }
     stopCanvas(saveButton).addEventListener("click", (e) => { e.stopPropagation(); save(); });
     stopCanvas(generateButton).addEventListener("click", (e) => { e.stopPropagation(); generate(); });
+    stopCanvas(apiButton).addEventListener("click", (e) => { e.stopPropagation(); exportApi(); });
     stopCanvas(deleteButton).addEventListener("click", (e) => { e.stopPropagation(); remove(); });
     autoBox.addEventListener("change", () => {
         const widget = node.widgets?.find((w) => w.name === "auto");
@@ -2008,7 +2056,7 @@ function recipePanel(node) {
             ? "Stop linking, and link nothing"
             : "Link recipes: tick the ones that take this recipe's values. Linked "
               + "recipes hold the same values, an edit to one is an edit to all, and "
-              + "generate still writes a workflow for each.";
+              + "export still writes a workflow for each.";
         linkGo.style.display = linking && ticksChanged() ? "" : "none";
         linkGo.title = linking ? `Link the ticked recipes with ${linking}: they take its values.` : "";
         for (const row of rows) {
@@ -2363,7 +2411,7 @@ function recipePanel(node) {
         // First, so the ellipsis never takes it: it is the one line here that
         // loses data if he does not act on it.
         const note = stranded.length
-            ? `Save the workflow, or generate drops ${stranded.join(", ")}.` : "";
+            ? `Save the workflow, or export drops ${stranded.join(", ")}.` : "";
         if (paint) status(paint, false);
         else if (note) status(note, false, note);
         else status(state.dirty ? `Unsaved edits${activeNote}`
@@ -2390,7 +2438,7 @@ function recipePanel(node) {
         refit();
     }
 
-    node._symRecipe = { load, save, generate, startNew, remove, resolveProject,
+    node._symRecipe = { load, save, generate, exportApi, startNew, remove, resolveProject,
                         render: renderFull, choose };
     renderFull();
     resolveProject();
@@ -2419,7 +2467,7 @@ function setupRecipeNode(node) {
         node._symCapture(column);
     });
     button("save project", () => node._symRecipe?.save());
-    button("generate workflows", () => node._symRecipe?.generate());
+    button("export workflows", () => node._symRecipe?.generate());
     button("delete project", () => node._symRecipe?.remove());
     // Every widget the panel's head drives is hidden but PRESENT: a saved
     // workflow restores widget values BY POSITION, and dropping one would land
@@ -2427,7 +2475,7 @@ function setupRecipeNode(node) {
     // visible — they are what the panel cannot tell you.
     hideWidget(autoToggle);
     for (const name of ["new project", "capture recipe", "save project",
-                        "generate workflows", "delete project"]) {
+                        "export workflows", "delete project"]) {
         hideWidget(node.widgets?.find((w) => w.name === name));
     }
     recipePanel(node);

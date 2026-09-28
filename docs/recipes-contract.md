@@ -67,7 +67,7 @@ The rule everything else follows from:
   name in different folders would otherwise share one recipe table. A project is
   resolved by its `template`, never by its name, so a file named some other way
   goes on working.
-- `generate workflows` writes one real workflow per recipe BESIDE the base,
+- `export workflows` writes one real workflow per recipe BESIDE the base,
   named `<project>-<recipe>.json`, both halves lowercase with dashes. A file
   called `appliance-1x2.json` next to its source says nothing about which
   source made it.
@@ -87,7 +87,7 @@ The rule everything else follows from:
   the sidebar read `3 linked`.
 - From then on an edit to one is an edit to all: a capture, auto's save and a
   keystroke in the pane each write every linked name.
-- The file keeps a whole block per linked name, so `generate workflows` writes
+- The file keeps a whole block per linked name, so `export workflows` writes
   one workflow per name without knowing links exist. `links` is a list of name
   lists beside them.
 - Unticking keeps the values the recipe holds, as its own from then on.
@@ -130,7 +130,7 @@ The rule everything else follows from:
   and says so in the status line. That is a category he has not been through
   yet, not a broken canvas: "No recipe slots on this canvas" is for a
   `match_color` that matches nothing.
-- `generate workflows` either writes every slot or names the one it could not,
+- `export workflows` either writes every slot or names the one it could not,
   including group toggles.
 - A capture names only the recipe it wrote (`Captured <recipe>.`). Unpainted
   nodes that changed since the last load are no longer listed: that list went

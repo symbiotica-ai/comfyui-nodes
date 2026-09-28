@@ -514,7 +514,7 @@ the same thing. Each one failed silently first.
   still typing the next one, and a rebuild there is the caret gone.
 - After a save, that one recipe's workflow file is rewritten two seconds later
   (`/symbiotica/recipes/generate` takes an optional `recipe`), so the file on
-  disk is the recipe rather than whatever `generate workflows` last wrote.
+  disk is the recipe rather than whatever `export workflows` last wrote.
 - **Linked recipes are one set of values under several names** (2026-09-23):
   "decoration 1x1, 2x2, 3x3 etc have the same functionality and will have the
   same recipe". The project file keeps `links` (a list of name lists) AND a

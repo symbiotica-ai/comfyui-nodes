@@ -4,7 +4,7 @@ import os
 
 from ._recipes import (RECIPES_DIRNAME, RecipeError, delete_project, generate_all,
                        list_projects, new_project, projects_dir, read_project,
-                       read_template, template_slots, write_project)
+                       read_template, template_slots, write_api, write_project)
 
 
 class SymbioticaRecipe:
@@ -134,7 +134,20 @@ if PromptServer is not None:
             if project is None:
                 return web.json_response({"error": "no such project"}, status=404)
             report = generate_all(_workflows_dir(), project, _display_names(),
-                                  body.get("recipe") or None)
+                                  body.get("recipe") or None, write=not body.get("api"))
         except RecipeError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(report)
+
+    @routes.post("/symbiotica/recipes/write-api")
+    async def projects_write_api(request):
+        body = await request.json()
+        try:
+            project = read_project(projects_dir(), body.get("name") or "")
+            if project is None:
+                return web.json_response({"error": "no such project"}, status=404)
+            path = write_api(_workflows_dir(), project, body.get("recipe") or "",
+                             body.get("prompt"))
+        except RecipeError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        return web.json_response({"path": path})

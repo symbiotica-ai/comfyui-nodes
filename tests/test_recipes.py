@@ -392,7 +392,7 @@ class TestPromoteStringInput:
             promote_string_input(workflow_with_instance(), "render", 2, "p", "recipe:p", pos=[0, 0])
 
 
-from _recipes import NAMESPACE, generate_all, list_projects, read_project
+from _recipes import NAMESPACE, generate_all, list_projects, read_project, write_api
 
 
 def write_json(path, data):
@@ -433,6 +433,29 @@ class TestRecipeLibrary:
 
 # What `generate` names a workflow from `recipe-test/bakery-template.json`.
 GEN = "recipe-test-bakery-template"
+
+
+class TestExportApi:
+    def test_the_api_pass_hands_the_workflows_back_and_writes_nothing(self, library):
+        r = read_project(library["recipes"], "imperia-bakery")
+        report = generate_all(library["workflows"], r, write=False)
+        assert [w["recipe"] for w in report["written"]] == ["appliance1x1", "appliance1x2"]
+        assert all(w["workflow"]["nodes"] for w in report["written"])
+        assert os.listdir(os.path.join(library["workflows"], "recipe-test")) == ["bakery-template.json"]
+
+    def test_the_api_file_sits_beside_the_workflow_with_api_in_its_name(self, library):
+        r = read_project(library["recipes"], "imperia-bakery")
+        path = write_api(library["workflows"], r, "appliance1x2", {"1": {"class_type": "X", "inputs": {}}})
+        assert path == f"recipe-test/{GEN}-appliance1x2-api.json"
+        with open(os.path.join(library["workflows"], path), encoding="utf-8") as f:
+            assert json.load(f) == {"1": {"class_type": "X", "inputs": {}}}
+
+    def test_an_unknown_recipe_or_an_empty_prompt_is_refused(self, library):
+        r = read_project(library["recipes"], "imperia-bakery")
+        with pytest.raises(RecipeError):
+            write_api(library["workflows"], r, "nope", {"1": {}})
+        with pytest.raises(RecipeError):
+            write_api(library["workflows"], r, "appliance1x2", {})
 
 
 class TestGenerateAll:

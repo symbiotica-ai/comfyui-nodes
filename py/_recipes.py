@@ -628,11 +628,13 @@ def list_projects(dir_: str) -> list[dict]:
     return out
 
 
-def generate_all(workflows_dir: str, project: dict, display=None, only=None) -> dict:
+def generate_all(workflows_dir: str, project: dict, display=None, only=None,
+                 write=True) -> dict:
     """Every recipe of one project, written BESIDE its base workflow — the
     base is the source and its outputs sit next to it. Every workflow is
     generated before any is written, so a bad row leaves the folder as it
-    was."""
+    was. `write=False` writes nothing and hands each workflow back: the API
+    export converts them on the canvas, where ComfyUI's own converter is."""
     template = read_template(workflows_dir, project.get("template"))
     output_rel = os.path.dirname(_template_rel(project.get("template")))
     output_dir = _under(workflows_dir, output_rel, "output folder") if output_rel else workflows_dir
@@ -650,11 +652,29 @@ def generate_all(workflows_dir: str, project: dict, display=None, only=None) -> 
         was = _left_behind(output_dir, project, recipe, name)
         if was:
             stale.append(f"{output_rel}/{was}" if output_rel else was)
+    if not write:
+        return {"template": project.get("template"), "written": written, "stale": []}
     os.makedirs(output_dir, exist_ok=True)
     for item in written:
         with open(os.path.join(output_dir, os.path.basename(item["path"])), "w", encoding="utf-8") as f:
             json.dump(item.pop("workflow"), f, indent=2)
     return {"template": project.get("template"), "written": written, "stale": stale}
+
+
+def write_api(workflows_dir: str, project: dict, recipe: str, prompt) -> str:
+    """One recipe's API-format prompt, beside its workflow and named after it
+    with `-api`: `october-base-example-appliance-1x2-api.json`."""
+    if recipe not in (project.get("recipes") or {}):
+        raise RecipeError(f"project has no recipe {recipe!r}")
+    if not isinstance(prompt, dict) or not prompt:
+        raise RecipeError(f"{recipe}: the API export is empty")
+    output_rel = os.path.dirname(_template_rel(project.get("template")))
+    output_dir = _under(workflows_dir, output_rel, "output folder") if output_rel else workflows_dir
+    filename = f"{workflow_name(project, recipe)}-api.json"
+    os.makedirs(output_dir, exist_ok=True)
+    with open(os.path.join(output_dir, filename), "w", encoding="utf-8") as f:
+        json.dump(prompt, f, indent=2)
+    return f"{output_rel}/{filename}" if output_rel else filename
 
 
 def _left_behind(output_dir: str, project: dict, recipe: str, name: str):

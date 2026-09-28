@@ -199,7 +199,7 @@ test("all eight widgets are still on the node, in order, before and after a rend
     // A saved workflow restores widget values BY POSITION. Drop the buttons
     // and `auto`'s false lands on `match_color`.
     const order = ["recipe", "match_color", "auto", "new project",
-                   "capture recipe", "save project", "generate workflows",
+                   "capture recipe", "save project", "export workflows",
                    "delete project", "recipe_panel"];
     const node = await recipeNode();
     assert.deepEqual(node.widgets.map((w) => w.name), order);
@@ -209,7 +209,7 @@ test("all eight widgets are still on the node, in order, before and after a rend
     // The ones the head drives are hidden, not removed; `recipe` and
     // `match_color` stay visible — the panel cannot tell you either.
     for (const name of ["auto", "new project", "capture recipe", "save project",
-                        "generate workflows", "delete project"]) {
+                        "export workflows", "delete project"]) {
         assert.equal(widget(node, name).hidden, true, `${name} is still drawn`);
     }
     assert.equal(widget(node, "recipe").hidden, undefined);
@@ -221,7 +221,7 @@ test("the buttons still write one null each into the saved values", async () => 
     // options flag is inert, and the pair is not a tidy-up waiting to happen.
     const node = await recipeNode();
     for (const name of ["new project", "capture recipe", "save project",
-                        "generate workflows", "delete project"]) {
+                        "export workflows", "delete project"]) {
         const w = widget(node, name);
         assert.equal(w.options.serialize, false);
         assert.equal(w.serializeValue(), undefined);
@@ -618,14 +618,14 @@ test("generate saves first, because the route re-reads the project from disk",
     const node = await recipeNode();
     await click(rowFor(node, "shared"));
     await type(fieldFor(node, "preamble"), "a changed bakery");
-    await click(word(node, "generate workflows"));
+    await click(word(node, "export workflows"));
     assert.equal(posted[0].project.shared.preamble, "a changed bakery");
     assert.ok(posted[1].generate, "generate ran without a save");
 });
 
 test("a failed save stops generate", async () => {
     const node = await recipeNode({ saveFails: true });
-    await click(word(node, "generate workflows"));
+    await click(word(node, "export workflows"));
     assert.equal(posted.filter((p) => p.generate).length, 0);
     assert.equal(toasts.at(-1).summary, "Save failed");
 });
@@ -902,7 +902,7 @@ test("the status names the keys the saved template would drop", async () => {
     project.recipes.appliance1x2["Control Image"] = "1x2-box-dots.png";
     const node = await recipeNode({ project });
     assert.match(statusText(node),
-                 /^Save the workflow, or generate drops Control Image\.$/);
+                 /^Save the workflow, or export drops Control Image\.$/);
 });
 
 test("nothing stranded, nothing said", async () => {
