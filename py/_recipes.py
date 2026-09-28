@@ -160,13 +160,38 @@ def is_group_switch(node: dict) -> bool:
     return node.get("type") in RGTHREE_GROUP_NODES
 
 
-def _in_group(node: dict, bounding) -> bool:
-    """rgthree decides membership by the node's CENTRE, not its corner, so a
-    node overhanging a frame's edge belongs where the canvas shows it."""
-    if not isinstance(bounding, (list, tuple)) or len(bounding) < 4:
-        return False
+# LiteGraph's NODE_TITLE_HEIGHT and NODE_COLLAPSED_WIDTH, and the node types
+# whose `title_mode` is NO_TITLE. `title_mode` is not saved with the workflow,
+# so it is known here by type.
+TITLE_HEIGHT = 30
+COLLAPSED_WIDTH = 80
+NO_TITLE_TYPES = {"Reroute (rgthree)", "Label (rgthree)", "ReroutePrimitive|pysssss"}
+
+
+def _canvas_rect(node: dict) -> tuple[float, float, float, float]:
+    """The rect the canvas measures a node by (`LGraphNode.measure`): the
+    title bar is part of it. A collapsed node is its title bar alone, as wide
+    as its title text, which the canvas measures in its font -- estimated here
+    at 7 px a character, so only a collapsed node on a left or right edge can
+    read differently."""
     x, y = _pos(node)
     w, h = _size(node)
+    title_h = 0 if node.get("type") in NO_TITLE_TYPES else TITLE_HEIGHT
+    if (node.get("flags") or {}).get("collapsed"):
+        title = str(node.get("title") or node.get("type") or "")
+        return x, y - title_h, min(w, len(title) * 7 + TITLE_HEIGHT * 2) or COLLAPSED_WIDTH, TITLE_HEIGHT
+    return x, y - title_h, w, h + title_h
+
+
+def _in_group(node: dict, bounding) -> bool:
+    """rgthree mutes what the canvas holds in `group._children`: every node
+    whose CENTRE, title bar included, is inside the frame
+    (`recomputeInsideNodes`). Leaving the title bar out put the centre 15 px
+    low, and a node on a frame's top edge was muted by generate while the
+    canvas left it live (2026-09-28)."""
+    if not isinstance(bounding, (list, tuple)) or len(bounding) < 4:
+        return False
+    x, y, w, h = _canvas_rect(node)
     cx, cy = x + w / 2, y + h / 2
     bx, by, bw, bh = (float(v) for v in bounding[:4])
     return bx <= cx < bx + bw and by <= cy < by + bh

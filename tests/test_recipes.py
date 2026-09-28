@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from _recipes import (RecipeError, apply_recipe, generate, promote_string_input,
+from _recipes import (RecipeError, _in_group, apply_recipe, generate, promote_string_input,
                       recipe_slots,
                       recipe_slots, workflow_name)
 
@@ -640,6 +640,68 @@ class TestGroupSwitchSlots:
         wf = muter_template()
         with pytest.raises(RecipeError, match="on or off"):
             apply_recipe(wf, {"engine": {"render-engine-nano2": "yes"}}, "purple")
+
+
+class TestGroupMembershipIsTheCanvas:
+    """A node is in a group when the centre of the rect the canvas measures it
+    by -- title bar included, a collapsed node its title bar alone -- is inside
+    the frame (`recomputeInsideNodes`, frontend 1.52.7). The two nodes below are
+    the ones generate muted in bakery-v2 on 2026-09-28, at their real pos, size
+    and frames; the canvas counts both OUTSIDE."""
+
+    def test_the_collapsed_get_on_the_save_group_top_edge_is_outside_it(self):
+        node = {"id": 4412, "type": "SymbioticaGetHub", "title": "Get $$render-final",
+                "pos": [-900, -3600], "size": [300, 100], "flags": {"collapsed": True}}
+        assert not _in_group(node, [-900, -3550, 900, 500])
+
+    def test_the_collapsed_get_all_above_the_nano2_group_is_outside_it(self):
+        node = {"id": 4382, "type": "SymbioticaGetHub", "title": "Get all",
+                "pos": [100, -6550], "size": [300, 600], "flags": {"collapsed": True}}
+        assert not _in_group(node, [150, -6500, 900, 1250])
+
+    def test_generate_leaves_those_two_live_when_their_groups_go_off(self):
+        wf = {"nodes": [
+            {"id": 1, "type": "Fast Groups Bypasser (rgthree)", "title": "groups",
+             "color": "#323", "bgcolor": "#535", "pos": [5000, 0], "size": [200, 60]},
+            {"id": 4412, "type": "SymbioticaGetHub", "title": "Get $$render-final",
+             "pos": [-900, -3600], "size": [300, 100], "flags": {"collapsed": True}, "mode": 0},
+            {"id": 4382, "type": "SymbioticaGetHub", "title": "Get all",
+             "pos": [100, -6550], "size": [300, 600], "flags": {"collapsed": True}, "mode": 0},
+            {"id": 7, "type": "SaveImage", "pos": [-800, -3400], "size": [300, 100], "mode": 0},
+        ], "groups": [
+            {"title": "save-high-res-1x1", "bounding": [-900, -3550, 900, 500]},
+            {"title": "render-engine-nano2-base", "bounding": [150, -6500, 900, 1250]},
+        ]}
+        apply_recipe(wf, {"groups": {"save-high-res-1x1": False}}, "purple")
+        assert by_id(wf, 4412)["mode"] == 0
+        assert by_id(wf, 4382)["mode"] == 0
+        assert by_id(wf, 7)["mode"] == 4
+
+    def test_an_expanded_node_counts_its_title_bar(self):
+        # Centre of pos/size is ON the top edge; with the 30 px title it is 15 above.
+        node = {"type": "KSampler", "pos": [0, -50], "size": [100, 100]}
+        assert not _in_group(node, [0, 0, 500, 500])
+        node["pos"] = [0, -20]
+        assert _in_group(node, [0, 0, 500, 500])
+
+    def test_a_node_that_draws_no_title_is_measured_without_one(self):
+        node = {"type": "Reroute (rgthree)", "pos": [0, -50], "size": [100, 100]}
+        assert _in_group(node, [0, 0, 500, 500])
+
+    def test_the_left_and_top_edges_are_inside_the_right_and_bottom_are_not(self):
+        # Centre at (50, 50) once the title bar is counted.
+        node = {"type": "KSampler", "pos": [0, 30], "size": [100, 70]}
+        assert _in_group(node, [50, 50, 100, 100])
+        assert not _in_group(node, [-50, -50, 100, 100])
+
+    def test_a_collapsed_node_width_is_estimated_from_its_title(self):
+        # The canvas measures the title in its font; 7 px a character is the
+        # estimate, so only a collapsed node on a LEFT or RIGHT edge can read
+        # differently from the canvas. Here: 3 chars -> 21 + 60 = 81 wide.
+        node = {"type": "SetNode", "title": "abc", "pos": [0, 30], "size": [300, 100],
+                "flags": {"collapsed": True}}
+        assert _in_group(node, [40, 0, 100, 100])
+        assert not _in_group(node, [41, 0, 100, 100])
 
 
 class TestReadTemplate:
