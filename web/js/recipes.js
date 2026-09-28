@@ -28,23 +28,35 @@ const WORKFLOWS_PREFIX = "workflows/";
 
 // ---------------------------------------------------------------- server --
 
-async function getJson(path) {
-    const res = await api.fetchApi(path);
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
-    return body;
+// On Modal the recipes and workflows sit on a shared Volume, and every
+// /userdata request syncs it: for up to 1.3 s (measured 2026-09-28) the files
+// on it read as missing, so a project that is there answers "no such
+// project" and a base workflow "is not in the workflows directory". An
+// export fires enough /userdata requests to land in one of those gaps, so a
+// read or an overwrite is asked again for about five seconds before it counts.
+const SYNC_GAP_RETRIES = [250, 500, 1000, 1500, 2000];
+export const syncGap = (status, error) => status === 404 || status >= 500
+    || (status === 400 && /is not in the workflows directory/.test(String(error ?? "")));
+
+async function askJson(path, init) {
+    for (let i = 0; ; i++) {
+        const res = await api.fetchApi(path, init);
+        const body = await res.json().catch(() => ({}));
+        if (res.ok) return body;
+        if (i >= SYNC_GAP_RETRIES.length || !syncGap(res.status, body?.error)) {
+            throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+        }
+        await new Promise((r) => setTimeout(r, SYNC_GAP_RETRIES[i]));
+    }
 }
 
-async function postJson(path, payload) {
-    const res = await api.fetchApi(path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload ?? {}),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
-    return body;
-}
+const getJson = (path) => askJson(path);
+
+const postJson = (path, payload) => askJson(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+});
 
 async function deleteJson(path) {
     const res = await api.fetchApi(path, { method: "DELETE" });
@@ -870,23 +882,43 @@ export function projectForWorkflow(projects, workflowPath) {
     return hit ? hit.name : null;
 }
 
-// A workflow as ComfyUI's Export (API) writes it, built in a graph of its own
-// so the open canvas never changes. Cleared after, which runs every node's
-// onRemoved: the panels those nodes built go with them. The clear waits two
-// frames, because pysssss' Show Text builds its text box on the frame after
-// configure, and one built after the clear stayed on the page for good.
-const nextFrame = () => new Promise((done) => requestAnimationFrame(() => done()));
-export async function apiPrompt(workflow) {
-    const live = app.rootGraph ?? app.graph;
-    const graph = new live.constructor();
+// Each workflow as ComfyUI's Export (API) writes it, handed to `each` with
+// its prompt. It goes ON the canvas, in a temporary tab of its own, which is
+// what the platform's "Export (API) to engine/" does too: built in a graph off
+// the canvas, every subgraph node came out with no class_type, because the
+// frontend registers a subgraph's node type only for a graph it loads itself.
+// The tab that was open is loaded back after, unsaved edits and all, and the
+// temporary tabs are closed.
+export async function apiPrompts(items, each) {
+    const store = app.extensionManager?.workflow;
+    const home = store?.activeWorkflow;
+    if (!home) throw new Error("no workflow is open");
+    const temps = [];
     try {
-        graph.configure(structuredClone(workflow));
-        return (await app.graphToPrompt(graph)).output;
+        for (const item of items) {
+            const temp = store.createNewTemporary(`${item.recipe}.json`, item.workflow);
+            temps.push(temp);
+            await app.loadGraphData(structuredClone(item.workflow), true, true, temp);
+            await each(item, (await app.graphToPrompt()).output);
+        }
     } finally {
-        await nextFrame();
-        await nextFrame();
-        graph.clear();
+        if (temps.length) {
+            await app.loadGraphData(home.activeState ?? JSON.parse(home.content), true, true, home);
+            for (const temp of temps) await store.closeWorkflow(temp);
+        }
     }
+}
+
+// The engine/ stem a workflow name becomes, or null when it cannot be one
+// file: the rule of the platform's "Export (API) to engine/", whose route
+// (`/platform/export-api`, Modal canvases only) refuses anything else.
+// `×` is how the bakery graphs spell a grid size; the file gets an x.
+const ENGINE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+export function engineName(raw) {
+    if (typeof raw !== "string") return null;
+    const stem = raw.trim().split("/").pop()
+        .replace(/\.api\.json$/i, "").replace(/\.json$/i, "").replace(/×/g, "x");
+    return ENGINE_NAME.test(stem) ? stem : null;
 }
 
 export function generateSummary(report) {
@@ -909,7 +941,7 @@ export function generateSummary(report) {
     // regenerated has to be said out loud.
     const stale = report?.stale ?? [];
     const left = stale.length
-        ? ` Left from the old naming and no longer written: ${stale.join(", ")}.`
+        ? ` Left beside the base and no longer written: ${stale.join(", ")}.`
           + " Delete them, or they go on holding the graph they froze with."
         : "";
     return { summary, detail: detail + note + left };
@@ -993,8 +1025,9 @@ function recipePanel(node) {
     // before anything is stored in them. They are table columns like any
     // other; what makes them different is that an empty one never reaches the
     // file, and `auto` does not count one as a recipe that exists.
+    // `edits` is the recipes whose cells changed since the last save.
     const state = { name: null, project: null, slots: [], table: null,
-                    dirty: false, projects: [], offered: new Set() };
+                    dirty: false, edits: new Set(), projects: [], offered: new Set() };
     // The colour that marks a slot: typed on the node, or wired like the name.
     const matchColor = () => {
         const wired = textValue(node, "match_color");
@@ -1119,16 +1152,25 @@ function recipePanel(node) {
     // The same act as picking an asset in Task, without the wire: name it, and
     // the canvas as it stands becomes that recipe.
     const newButton = el("button", wordButtonCss, "new recipe");
-    const dropButton = iconButton("remove", "Remove this recipe",
+    const dropButton = iconButton("remove", "Reset this recipe: forget what it "
+                                  + "captured. A category the order holds stays, red.",
                                   () => dropRecipe(), { px: 12, hover: HUB.danger });
+    // The recipe's own save, as on Prompts: off until the recipe on screen has
+    // something unsaved, and the one filled control then.
+    const saveRecipeButton = el("button", wordButtonCss, "save");
     loadButton.className = "sym-btn";
     captureButton.className = "sym-btn";
+    saveRecipeButton.className = "sym-btn";
     newButton.className = "sym-btn";
     const mainHead = el("div", "display:flex;align-items:center;gap:6px;"
         + `padding:3px 6px;flex:none;background:${HUB.surface2};`
         + `border-bottom:1px solid ${HUB.hairline};`);
-    mainHead.append(crumb, nameField, countBadge, newButton, loadButton,
-                    captureButton, dropButton);
+    // The unsaved dot, as on Prompts: beside the name of the recipe that has one.
+    const unsavedDot = () => el("span", "flex:none;width:6px;height:6px;"
+        + `border-radius:50%;background:${HUB.accent};`);
+    const headDot = unsavedDot();
+    mainHead.append(headDot, crumb, nameField, countBadge, newButton, loadButton,
+                    captureButton, saveRecipeButton, dropButton);
 
     // The project's own actions, under the row's. `auto` is a control here
     // rather than a widget on the node body — the widget stays, hidden, and
@@ -1141,15 +1183,52 @@ function recipePanel(node) {
         + "one you arrive at.";
     autoWrap.append(autoBox, el("span", "", "auto"));
     const saveButton = el("button", wordButtonCss, "save project");
-    const generateButton = el("button", wordButtonCss, "export workflows");
-    const apiButton = el("button", wordButtonCss, "export api workflows");
+    // Three exports, each opening its two scopes, and one that runs all three
+    // for every recipe.
+    const menus = [];
+    function exportMenu(key, label, run) {
+        const wrap = el("div", "position:relative;flex:0 0 auto;");
+        const head = el("button", wordButtonCss, `${label} \u25be`);
+        head.className = "sym-btn";
+        head._symPart = `export:${key}`;
+        const menu = el("div", "position:absolute;right:0;top:100%;z-index:10;"
+            + "display:none;flex-direction:column;gap:2px;padding:3px;"
+            + `background:${HUB.surface2};border:1px solid ${HUB.hairlineStrong};`
+            + `border-radius:${HUB.radius.sm};`);
+        const close = () => { menu.style.display = "none"; };
+        const item = (text, all) => {
+            const b = el("button", wordButtonCss + "text-align:left;white-space:nowrap;", text);
+            b.className = "sym-btn";
+            b._symPart = `export:${key}:${all ? "all" : "current"}`;
+            stopCanvas(b).addEventListener("click", (e) => { e.stopPropagation(); close(); run(all); });
+            return b;
+        };
+        menu.append(item("export current", false), item("export all", true));
+        stopCanvas(head).addEventListener("click", (e) => {
+            e.stopPropagation();
+            const open = menu.style.display === "none";
+            for (const m of menus) m.style.display = "none";
+            if (open) menu.style.display = "flex";
+        });
+        wrap.addEventListener("pointerleave", close);
+        menus.push(menu);
+        wrap.append(head, menu);
+        return wrap;
+    }
+    const generateMenu = exportMenu("workflows", "export workflows",
+                                    (all) => generate(all ? null : currentRecipe()));
+    const apiMenu = exportMenu("api", "export api",
+                               (all) => exportApi(all ? null : currentRecipe()));
+    const engineMenu = exportMenu("engine", "export engine", (all) => exportEngine(all));
+    const exportAllButton = el("button", wordButtonCss, "export all");
+    exportAllButton._symPart = "export:everything";
     const deleteButton = el("button", wordButtonCss, "delete project");
-    for (const b of [saveButton, generateButton, apiButton, deleteButton]) b.className = "sym-btn";
+    for (const b of [saveButton, exportAllButton, deleteButton]) b.className = "sym-btn";
     const actionBar = el("div", "display:flex;align-items:center;gap:6px;"
         + `padding:3px 6px;flex:none;background:${HUB.surface2};`
         + `border-bottom:1px solid ${HUB.hairline};`);
-    actionBar.append(autoWrap, el("div", "flex:1;"), saveButton, generateButton,
-                     apiButton, deleteButton);
+    actionBar.append(autoWrap, el("div", "flex:1;"), saveButton, generateMenu,
+                     apiMenu, engineMenu, exportAllButton, deleteButton);
 
     // The project's own field — its base workflow — shown under the project
     // row only.
@@ -1225,7 +1304,7 @@ function recipePanel(node) {
         state.projects = projects;
         if (!name) {
             state.name = null; state.project = null; state.slots = [];
-            state.templateSlots = []; state.table = null; state.dirty = false;
+            state.templateSlots = []; state.table = null; state.dirty = false; state.edits.clear();
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
             renderFull();
             status(path ? "No project for this workflow. Press new project." : "Save the workflow first.", false);
@@ -1248,7 +1327,7 @@ function recipePanel(node) {
             // workflow he has painted but not saved would lose on generate.
             state.templateSlots = slots;
             state.table = projectToTable(project, slots);
-            state.dirty = false;
+            state.dirty = false; state.edits.clear();
             slotSig = null;
             // The offers belong to the table they were folded into; the sweep
             // on the next draw puts them back against this one.
@@ -1282,8 +1361,9 @@ function recipePanel(node) {
         try {
             await postJson("/symbiotica/recipes/save", { name: state.name, project });
             state.project = project;
-            state.dirty = false;
+            state.dirty = false; state.edits.clear();
             status("Saved.");
+            paintUnsaved(true);
             rebuildWorkflow(auto.last.name);
             return true;
         } catch (err) {
@@ -1323,50 +1403,116 @@ function recipePanel(node) {
         }, 2000);
     }
 
-    async function generate() {
+    // The recipe on screen, for an export's `current`: undefined, with a
+    // warning, while the pane is on shared or the project row.
+    function currentRecipe() {
+        const recipe = columnOf(picked());
+        if (recipe && recipe !== SHARED) return recipe;
+        toast("warn", "Pick a recipe first", "export current sends the recipe on screen.");
+        return undefined;
+    }
+
+    // Every export saves first: the routes re-read the project FROM DISK, so
+    // an unsaved edit would export the last saved values without saying so.
+    async function runExport(failed, work) {
         if (busy) return;
         busy = true;
         try {
-            // The route re-reads the project FROM DISK, so an unsaved edit
-            // would generate the last saved values without saying so.
             if (!(await save())) return;
-            const report = await postJson("/symbiotica/recipes/generate", { name: state.name });
-            const { summary, detail } = generateSummary(report);
-            toast("success", summary, detail, 10000);
-            const n = report?.written?.length ?? 0;
-            status(`Wrote ${n} workflow${n === 1 ? "" : "s"}.`);
+            await work();
         } catch (err) {
-            toast("error", "Export failed", String(err?.message ?? err));
+            toast("error", failed, String(err?.message ?? err));
         } finally {
             busy = false;
         }
     }
+    const one = (recipe) => (recipe ? { recipe } : {});
+
+    // The workflows, one per recipe (or the one named), in the folder beside
+    // the base.
+    const writeWorkflows = (recipe) =>
+        postJson("/symbiotica/recipes/generate", { name: state.name, ...one(recipe) });
 
     // The same workflows, each run through ComfyUI's own Export (API) and
-    // written beside it with `-api`. The server builds them without writing;
+    // written in the project folder's `api/` with `-api`. The server builds them without writing;
     // the conversion needs the frontend, which is where the converter is.
-    async function exportApi() {
-        if (busy) return;
-        busy = true;
-        try {
-            if (!(await save())) return;
-            const report = await postJson("/symbiotica/recipes/generate", { name: state.name, api: true });
-            const paths = [];
-            for (const item of report?.written ?? []) {
-                const prompt = await apiPrompt(item.workflow);
-                const { path } = await postJson("/symbiotica/recipes/write-api",
-                                                { name: state.name, recipe: item.recipe, prompt });
-                paths.push(path);
-            }
-            const n = paths.length;
-            toast("success", `Wrote ${n} API workflow${n === 1 ? "" : "s"}`,
-                  paths.join(", ") || "The project has no recipes.", 10000);
-            status(`Wrote ${n} API workflow${n === 1 ? "" : "s"}.`);
-        } catch (err) {
-            toast("error", "API export failed", String(err?.message ?? err));
-        } finally {
-            busy = false;
+    async function writeApi(recipe) {
+        const report = await postJson("/symbiotica/recipes/generate",
+                                      { name: state.name, api: true, ...one(recipe) });
+        const paths = [];
+        const name = state.name;
+        await apiPrompts(report?.written ?? [], async (item, prompt) => {
+            const { path } = await postJson("/symbiotica/recipes/write-api",
+                                            { name, recipe: item.recipe, prompt });
+            paths.push(path);
+        });
+        return paths;
+    }
+
+    // The same API workflows, sent where the platform's "Export (API) to
+    // engine/" sends them: the studio's engine/<name>.api.json, which the
+    // hub's pin editor lists, each under its workflow's name.
+    async function sendEngine(recipe) {
+        const report = await postJson("/symbiotica/recipes/generate",
+                                      { name: state.name, api: true, recipe: recipe ?? null });
+        const paths = [];
+        const items = report?.written ?? [];
+        for (const item of items) {
+            if (!engineName(item.path)) throw new Error(`${item.recipe}: use one plain filename: letters, digits, . _ -`);
         }
+        await apiPrompts(items, async (item, prompt) => {
+            const { path } = await postJson("/platform/export-api",
+                                            { name: engineName(item.path), prompt });
+            paths.push(path);
+        });
+        return paths;
+    }
+
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+    async function generate(recipe = null) {
+        if (recipe === undefined) return;
+        await runExport("Export failed", async () => {
+            const report = await writeWorkflows(recipe);
+            const { summary, detail } = generateSummary(report);
+            toast("success", summary, detail, 10000);
+            status(`Wrote ${plural(report?.written?.length ?? 0, "workflow")}.`);
+        });
+    }
+
+    async function exportApi(recipe = null) {
+        if (recipe === undefined) return;
+        await runExport("API export failed", async () => {
+            const paths = await writeApi(recipe);
+            toast("success", `Wrote ${plural(paths.length, "API workflow")}`,
+                  paths.join(", ") || "The project has no recipes.", 10000);
+            status(`Wrote ${plural(paths.length, "API workflow")}.`);
+        });
+    }
+
+    async function exportEngine(all) {
+        const recipe = all ? null : currentRecipe();
+        if (recipe === undefined) return;
+        await runExport("Engine export failed", async () => {
+            const paths = await sendEngine(recipe);
+            toast("success", `Exported ${plural(paths.length, "API workflow")} to engine/`,
+                  paths.join(", ") || "The project has no recipes.", 10000);
+            status(`Exported ${paths.length} to engine/.`);
+        });
+    }
+
+    // All three, for every recipe.
+    async function exportAll() {
+        await runExport("Export all failed", async () => {
+            const report = await writeWorkflows(null);
+            const api = await writeApi(null);
+            const engine = await sendEngine(null);
+            const n = report?.written?.length ?? 0;
+            toast("success", `Exported ${plural(n, "recipe")}`,
+                  `${plural(n, "workflow")}, ${plural(api.length, "API workflow")}, `
+                  + `${engine.length} to engine/. ${generateSummary(report).detail}`, 10000);
+            status(`Exported ${plural(n, "recipe")}: workflows, api, engine.`);
+        });
     }
 
     // Two presses within a few seconds, so a stray click cannot remove a
@@ -1388,7 +1534,7 @@ function recipePanel(node) {
             state.project = null;
             state.slots = []; state.templateSlots = [];
             state.table = null;
-            state.dirty = false;
+            state.dirty = false; state.edits.clear();
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
             resolvedFor = undefined;
             renderFull();
@@ -1408,7 +1554,7 @@ function recipePanel(node) {
             state.slots = slots;
             state.templateSlots = slots;
             state.table = projectToTable(project, slots);
-            state.dirty = false;
+            state.dirty = false; state.edits.clear();
             slotSig = null;
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
             active = ""; autoSelected = SHARED;
@@ -1649,6 +1795,7 @@ function recipePanel(node) {
         syncCategories();
         syncActive();
         autoTick();
+        paintUnsaved();
     }
     let drawnAt = 0;
     const onDrawForeground = node.onDrawForeground;
@@ -1813,6 +1960,7 @@ function recipePanel(node) {
         if (!found) { noSlotsToast(matchColor()); return; }
         captureColumn(state.table, state.slots, column, values);
         state.dirty = true;
+        state.edits.add(column);
         auto.last = { name: column, sig: slotSignature(values) };
         if (picked() !== PROJECT_ROW) pickRow(column);
         renderAll();
@@ -1829,8 +1977,121 @@ function recipePanel(node) {
         if (slotSignature(values) === auto.last.sig) return;
         captureColumn(state.table, state.slots, column, values);
         state.dirty = true;
+        state.edits.add(column);
         auto.last = { name: column, sig: slotSignature(values) };
-        save();
+        // Auto saves the recipe it leaves. Without it the edit stays in the
+        // table, unsaved and marked, until that recipe's `save`: a switch by
+        // hand writes nothing.
+        if (auto.on) save();
+    }
+
+    // The recipe the canvas is on, when its slots have moved since that recipe
+    // was put there or captured: an edit on the canvas no recipe holds yet.
+    // Auto writes it a second later; without auto it waits for `save project`.
+    // A workflow just opened has put no recipe on the canvas yet, so the
+    // recipe on screen stands in, with the canvas as it was when that recipe
+    // came on screen: what moves after that is the edit.
+    let opened = null;
+    function canvasEdit() {
+        if (!state.table) return null;
+        const values = liveSlotValues(liveGraph(), matchColor());
+        if (!Object.keys(values).length) return null;
+        const sig = slotSignature(values);
+        const name = auto.last.name;
+        if (name) {
+            if (auto.last.sig === null) return null;
+            return sig === auto.last.sig ? null : name;
+        }
+        if (picked() === PROJECT_ROW) return null;
+        const column = columnOf(picked());
+        if (opened?.column !== column) opened = { column, sig };
+        return sig === opened.sig ? null : column;
+    }
+    const unsaved = (column, edit) =>
+        edit === column || (state.dirty && state.edits.has(column));
+
+    // The recipe's `save` takes the canvas edit into it first: the dot is on
+    // that recipe, and saving is what takes it off. Not over cells typed into
+    // it in the pane since: those are his, and a capture would write the
+    // canvas over them.
+    async function saveRecipe() {
+        const column = columnOf(picked());
+        const edit = canvasEdit();
+        if (!unsaved(column, edit)) return;
+        if (edit === column && !state.edits.has(column)) {
+            const values = liveSlotValues(liveGraph(), matchColor());
+            captureColumn(state.table, state.slots, edit, values);
+            state.dirty = true;
+            auto.last = { name: edit, sig: slotSignature(values) };
+        }
+        await saveColumns(column === SHARED ? [SHARED]
+            : linkGroup(state.table, column) ?? [column]);
+    }
+
+    // One recipe's save: the project as last written, with only these blocks
+    // taken from the table. Another recipe's unsaved edits stay unsaved.
+    async function saveColumns(columns) {
+        if (!state.name) return false;
+        let full;
+        try {
+            full = collect();
+        } catch (err) {
+            toast("error", "Fix the cell first", String(err?.message ?? err), 8000);
+            return false;
+        }
+        const disk = state.project ?? {};
+        const project = { ...structuredClone(disk), recipes: { ...(disk.recipes ?? {}) } };
+        if (full.match_color) project.match_color = full.match_color;
+        for (const c of columns) {
+            if (c === SHARED) project.shared = full.shared ?? {};
+            else if (full.recipes?.[c]) project.recipes[c] = full.recipes[c];
+            else delete project.recipes[c];
+        }
+        try {
+            await postJson("/symbiotica/recipes/save", { name: state.name, project });
+        } catch (err) {
+            toast("error", "Save failed", String(err?.message ?? err));
+            return false;
+        }
+        state.project = project;
+        for (const c of columns) state.edits.delete(c);
+        state.dirty = JSON.stringify(full) !== JSON.stringify(project);
+        status(`Saved ${columns.join(", ")}.`);
+        for (const c of columns) rebuildWorkflow(c);
+        paintUnsaved(true);
+        return true;
+    }
+
+    // As on Prompts: the recipe on screen carries the dot while it has
+    // something unsaved, and its `save` is then the one filled control.
+    function paintSave(edit) {
+        const column = columnOf(picked());
+        const on = !!state.table && picked() !== PROJECT_ROW && unsaved(column, edit);
+        saveRecipeButton.disabled = !on;
+        saveRecipeButton.style.opacity = on ? "" : "0.4";
+        saveRecipeButton.style.cursor = on ? "pointer" : "default";
+        saveRecipeButton.style.background = on ? HUB.accent : "transparent";
+        saveRecipeButton.style.color = on ? HUB.onAccent : HUB.inkSubtle;
+        saveRecipeButton.style.borderColor = on ? HUB.accent : HUB.hairline;
+        saveRecipeButton.title = !on ? `${column}: nothing unsaved.`
+            : edit === column ? `Save ${column}: it is edited on the canvas.`
+            : `Save ${column}.`;
+        saveRecipeButton.style.display = state.table ? "" : "none";
+        headDot.style.display = on ? "" : "none";
+    }
+
+    // Read on every watch tick; the tree is redrawn only when the answer moves.
+    let unsavedSig = null;
+    function paintUnsaved(force = false) {
+        const edit = canvasEdit();
+        const sig = `${state.dirty}|${edit}|${[...state.edits]}`;
+        if (!force && sig === unsavedSig) return;
+        unsavedSig = sig;
+        renderTree();
+        drawHead();
+        // A save's own line ("Saved.", "auto: saved …") stays; only the
+        // unsaved line is taken back when there is nothing unsaved left.
+        if (state.dirty || edit || /not saved$/.test(statusLine.textContent)) drawStatus();
     }
 
     // A recipe named by hand: the same act as picking an asset in Task, with
@@ -1865,10 +2126,22 @@ function recipePanel(node) {
         for (const row of rows) delete row.cells[column];
         unlinkRecipe(state.table, column);
         if (autoSelected === column) autoSelected = null;
-        pickRow(SHARED);
+        // Forgotten as the file held it too, so it reads as never captured:
+        // a category the order still names comes straight back as a red
+        // row, and `save project` leaves it out of the file.
+        if (state.project?.recipes && column in state.project.recipes) {
+            const { [column]: _gone, ...recipes } = state.project.recipes;
+            state.project = { ...state.project, recipes };
+        }
+        state.edits.delete(column);
+        categorySig = null;
+        syncCategories();
+        const back = state.table.columns.includes(column);
+        pickRow(back ? column : SHARED);
         state.dirty = true;
         renderFull();
-        status(`Removed ${column} (unsaved).`, false);
+        status(back ? `Reset ${column}: nothing captured (unsaved).`
+                    : `Removed ${column} (unsaved).`, false);
     }
 
     function renameRecipe() {
@@ -1969,8 +2242,11 @@ function recipePanel(node) {
         status(group ? `Linked ${group.length} recipes.` : `${from} unlinked.`, false);
     }
     stopCanvas(saveButton).addEventListener("click", (e) => { e.stopPropagation(); save(); });
-    stopCanvas(generateButton).addEventListener("click", (e) => { e.stopPropagation(); generate(); });
-    stopCanvas(apiButton).addEventListener("click", (e) => { e.stopPropagation(); exportApi(); });
+    stopCanvas(saveRecipeButton).addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (!saveRecipeButton.disabled) saveRecipe();
+    });
+    stopCanvas(exportAllButton).addEventListener("click", (e) => { e.stopPropagation(); exportAll(); });
     stopCanvas(deleteButton).addEventListener("click", (e) => { e.stopPropagation(); remove(); });
     autoBox.addEventListener("change", () => {
         const widget = node.widgets?.find((w) => w.name === "auto");
@@ -1986,6 +2262,7 @@ function recipePanel(node) {
     function touched(column = null) {
         if (column && state.table) mirrorLinked(state.table, column);
         state.dirty = true;
+        if (column) state.edits.add(column);
         renderTree();
         drawHead();
         drawStatus();
@@ -2001,8 +2278,8 @@ function recipePanel(node) {
             rows.push({ kind: "project", rel: PROJECT_ROW, depth: 0,
                         label: state.name, hint: "The project: its base "
                             + "workflow, and the values every recipe takes. "
-                            + "Its workflows are written beside the base, "
-                            + "named after it." });
+                            + "Its workflows are written to a folder beside "
+                            + "the base, named after it." });
             const stored = storedColumns();
             for (const column of state.table.columns) {
                 const shared = column === SHARED;
@@ -2049,6 +2326,7 @@ function recipePanel(node) {
                 : "Save the workflow first."));
         }
         const held = linking ?? picked();
+        const edit = canvasEdit();
         // While the link icon is pressed every other recipe row is a tick box
         // and a click ticks it; the project and shared rows cannot be linked.
         linkIcon.style.color = linking ? HUB.selInk : HUB.inkSubtle;
@@ -2067,6 +2345,25 @@ function recipePanel(node) {
             const on = !dim && row.rel === held;
             const mark = (name) => iconLead(name, { px: 11,
                 color: on || ticked ? HUB.selInk : HUB.inkTertiary });
+            // A recipe's state, as a dot: red while nothing is captured for
+            // it, orange while it holds edits save has not written, green
+            // once it is captured and saved. A linked one keeps its chain
+            // beside the dot.
+            const recipeDirty = row.kind === "recipe" && unsaved(row.rel, edit);
+            const stateLead = () => {
+                const colour = row.empty && !recipeDirty ? HUB.danger
+                    : recipeDirty ? HUB.warn : HUB.ok;
+                const dot = el("span", "flex:none;width:7px;height:7px;margin:0 3px 0 2px;"
+                    + `border-radius:50%;background:${colour};`);
+                dot._symState = row.empty && !recipeDirty ? "empty"
+                    : recipeDirty ? "unsaved" : "saved";
+                dot.title = row.empty && !recipeDirty ? "Nothing captured yet."
+                    : recipeDirty ? "Unsaved: save project writes it." : "Captured and saved.";
+                if (!row.linked) return dot;
+                const both = el("div", "flex:none;display:flex;align-items:center;gap:2px;");
+                both.append(dot, mark("link"));
+                return both;
+            };
             const line = treeRow({
                 kind: row.kind, rel: row.rel, depth: row.depth,
                 tone: on ? HUB.selBg : "",
@@ -2075,8 +2372,7 @@ function recipePanel(node) {
                 // and which of them you have been through is the one thing
                 // you read it for. A linked recipe carries a chain.
                 lead: tickable ? mark(ticked ? "ticked" : "unticked")
-                    : row.empty ? mark("newFile")
-                    : row.linked ? mark("link")
+                    : row.kind === "recipe" ? stateLead()
                     : undefined,
                 labelColour: on ? HUB.selInk
                     : dim || (row.empty && !ticked) ? HUB.inkTertiary
@@ -2092,6 +2388,10 @@ function recipePanel(node) {
                     : () => choose(row.rel),
             });
             if (row.hint) line.title = row.hint;
+            if (row.kind === "shared" && unsaved(row.rel, edit)) {
+                line.appendChild(unsavedDot());
+                line.title = `${line.title ? `${line.title} ` : ""}Unsaved: save project writes it.`;
+            }
             tree.appendChild(line);
         }
         // A rename or a removal must not leave the open hit list offering a
@@ -2144,6 +2444,7 @@ function recipePanel(node) {
             : `Read the slots off this canvas into ${column}: only what differs `
               + "from shared is kept.";
 
+        paintSave(canvasEdit());
         const autoWidget = node.widgets?.find((w) => w.name === "auto");
         autoBox.checked = !!autoWidget?.value;
         for (const key of ["template"]) {
@@ -2408,15 +2709,17 @@ function recipePanel(node) {
             : real.includes(active) ? ` · on ${active}` : ` · on ${active} (empty)`;
         const paint = paintProblem();
         const stranded = strandedKeys();
+        const edit = canvasEdit();
         // First, so the ellipsis never takes it: it is the one line here that
         // loses data if he does not act on it.
         const note = stranded.length
             ? `Save the workflow, or export drops ${stranded.join(", ")}.` : "";
         if (paint) status(paint, false);
         else if (note) status(note, false, note);
+        else if (edit) status(`${edit}: edited on the canvas, not saved`, false);
         else status(state.dirty ? `Unsaved edits${activeNote}`
             : `${real.length} recipes · ${rows.length} slots${activeNote}`);
-        if (!state.dirty && !real.length) status("No recipes yet.");
+        if (!state.dirty && !edit && !real.length) status("No recipes yet.");
     }
 
     // The tree and the pane are separate paths on purpose: a slot-list change
@@ -2438,7 +2741,7 @@ function recipePanel(node) {
         refit();
     }
 
-    node._symRecipe = { load, save, generate, exportApi, startNew, remove, resolveProject,
+    node._symRecipe = { load, save, generate, exportApi, exportEngine, exportAll, startNew, remove, resolveProject,
                         render: renderFull, choose };
     renderFull();
     resolveProject();

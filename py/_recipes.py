@@ -628,16 +628,28 @@ def list_projects(dir_: str) -> list[dict]:
     return out
 
 
+def output_rel(project: dict, api=False) -> str:
+    """Where a project's exports go: a folder beside the base named after the
+    project, `october/october-base-example/`, and its API files in `api/`
+    inside it. Twenty recipes written loose beside the base were forty files
+    to wade through (2026-09-28)."""
+    base = os.path.dirname(_template_rel(project.get("template")))
+    rel = f"{base}/{project_name(project.get('template'))}" if base else project_name(project.get("template"))
+    return f"{rel}/api" if api else rel
+
+
 def generate_all(workflows_dir: str, project: dict, display=None, only=None,
                  write=True) -> dict:
-    """Every recipe of one project, written BESIDE its base workflow — the
-    base is the source and its outputs sit next to it. Every workflow is
-    generated before any is written, so a bad row leaves the folder as it
-    was. `write=False` writes nothing and hands each workflow back: the API
-    export converts them on the canvas, where ComfyUI's own converter is."""
+    """Every recipe of one project, written into the project's folder beside
+    its base workflow (`output_rel`). Every workflow is generated before any
+    is written, so a bad row leaves the folder as it was. `write=False`
+    writes nothing and hands each workflow back: the API export converts
+    them on the canvas, where ComfyUI's own converter is."""
     template = read_template(workflows_dir, project.get("template"))
-    output_rel = os.path.dirname(_template_rel(project.get("template")))
-    output_dir = _under(workflows_dir, output_rel, "output folder") if output_rel else workflows_dir
+    base_rel = os.path.dirname(_template_rel(project.get("template")))
+    base_dir = _under(workflows_dir, base_rel, "base folder") if base_rel else workflows_dir
+    out_rel = output_rel(project)
+    output_dir = _under(workflows_dir, out_rel, "output folder")
     written = []
     stale = []
     wanted = [r for r in (project.get("recipes") or {}) if only is None or r == only]
@@ -647,11 +659,10 @@ def generate_all(workflows_dir: str, project: dict, display=None, only=None,
         workflow, report = generate(template, project, recipe, display)
         name = workflow_name(project, recipe)
         filename = f"{name}.json"
-        rel = f"{output_rel}/{filename}" if output_rel else filename
-        written.append({"path": rel, "recipe": recipe, "workflow": workflow, **report})
-        was = _left_behind(output_dir, project, recipe, name)
-        if was:
-            stale.append(f"{output_rel}/{was}" if output_rel else was)
+        written.append({"path": f"{out_rel}/{filename}", "recipe": recipe,
+                        "workflow": workflow, **report})
+        for was in _left_behind(base_dir, project, recipe, name):
+            stale.append(f"{base_rel}/{was}" if base_rel else was)
     if not write:
         return {"template": project.get("template"), "written": written, "stale": []}
     os.makedirs(output_dir, exist_ok=True)
@@ -662,42 +673,44 @@ def generate_all(workflows_dir: str, project: dict, display=None, only=None,
 
 
 def write_api(workflows_dir: str, project: dict, recipe: str, prompt) -> str:
-    """One recipe's API-format prompt, beside its workflow and named after it
-    with `-api`: `october-base-example-appliance-1x2-api.json`."""
+    """One recipe's API-format prompt, in the project folder's `api/` and
+    named after its workflow with `-api`:
+    `october/october-base-example/api/october-base-example-appliance-1x2-api.json`."""
     if recipe not in (project.get("recipes") or {}):
         raise RecipeError(f"project has no recipe {recipe!r}")
     if not isinstance(prompt, dict) or not prompt:
         raise RecipeError(f"{recipe}: the API export is empty")
-    output_rel = os.path.dirname(_template_rel(project.get("template")))
-    output_dir = _under(workflows_dir, output_rel, "output folder") if output_rel else workflows_dir
+    out_rel = output_rel(project, api=True)
+    output_dir = _under(workflows_dir, out_rel, "output folder")
     filename = f"{workflow_name(project, recipe)}-api.json"
     os.makedirs(output_dir, exist_ok=True)
     with open(os.path.join(output_dir, filename), "w", encoding="utf-8") as f:
         json.dump(prompt, f, indent=2)
-    return f"{output_rel}/{filename}" if output_rel else filename
+    return f"{out_rel}/{filename}"
 
 
-def _left_behind(output_dir: str, project: dict, recipe: str, name: str):
-    """The file this recipe was written to before the naming changed, if it is
-    still there and still ours. Nothing is deleted — they are workflow files in
-    his folder like any other — but a name he has been opening all day that
-    quietly stopped being regenerated has to be said out loud.
+def _left_behind(base_dir: str, project: dict, recipe: str, name: str) -> list:
+    """The files this recipe was written to beside the base before it moved
+    into the project folder — under the old prefix naming, and under today's
+    name — if they are still there and still ours. Nothing is deleted — they
+    are workflow files in his folder like any other — but a name he has been
+    opening all day that quietly stopped being regenerated has to be said out
+    loud.
 
     Ours is provable: a generated workflow's `id` is uuid5 over its own name,
     so a file whose id matches the name it carries was written by this
     generator. One he made himself carries the editor's own id and is left
     alone."""
-    old = f"{project.get('workflow_prefix', '')}{recipe}"
-    if old == name:
-        return None
-    path = os.path.join(output_dir, f"{old}.json")
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            was = json.load(f)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(was, dict):
-        return None
-    return f"{old}.json" if str(was.get("id") or "") == str(uuid.uuid5(NAMESPACE, old)) else None
+    found = []
+    for old in dict.fromkeys([f"{project.get('workflow_prefix', '')}{recipe}", name]):
+        path = os.path.join(base_dir, f"{old}.json")
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                was = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(was, dict) and str(was.get("id") or "") == str(uuid.uuid5(NAMESPACE, old)):
+            found.append(f"{old}.json")
+    return found

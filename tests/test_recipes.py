@@ -431,8 +431,10 @@ class TestRecipeLibrary:
             read_project(library["recipes"], "../secrets")
 
 
-# What `generate` names a workflow from `recipe-test/bakery-template.json`.
+# What `generate` names a workflow from `recipe-test/bakery-template.json`,
+# and the folder beside the base its exports go into.
 GEN = "recipe-test-bakery-template"
+OUT = f"recipe-test/{GEN}"
 
 
 class TestExportApi:
@@ -443,10 +445,10 @@ class TestExportApi:
         assert all(w["workflow"]["nodes"] for w in report["written"])
         assert os.listdir(os.path.join(library["workflows"], "recipe-test")) == ["bakery-template.json"]
 
-    def test_the_api_file_sits_beside_the_workflow_with_api_in_its_name(self, library):
+    def test_the_api_file_goes_in_the_project_folders_api_folder(self, library):
         r = read_project(library["recipes"], "imperia-bakery")
         path = write_api(library["workflows"], r, "appliance1x2", {"1": {"class_type": "X", "inputs": {}}})
-        assert path == f"recipe-test/{GEN}-appliance1x2-api.json"
+        assert path == f"{OUT}/api/{GEN}-appliance1x2-api.json"
         with open(os.path.join(library["workflows"], path), encoding="utf-8") as f:
             assert json.load(f) == {"1": {"class_type": "X", "inputs": {}}}
 
@@ -459,14 +461,18 @@ class TestExportApi:
 
 
 class TestGenerateAll:
-    def test_writes_one_workflow_per_recipe_next_to_the_template(self, library):
+    def test_writes_one_workflow_per_recipe_into_a_folder_beside_the_template(self, library):
         # Named after the BASE and the recipe: a file called `appliance1x2.json`
-        # beside its source says nothing about which source made it.
+        # says nothing about which source made it. In a folder of their own,
+        # because twenty recipes loose beside the base were a folder to wade
+        # through.
         r = read_project(library["recipes"], "imperia-bakery")
         report = generate_all(library["workflows"], r)
         paths = [w["path"] for w in report["written"]]
-        assert paths == [f"recipe-test/{GEN}-appliance1x1.json",
-                         f"recipe-test/{GEN}-appliance1x2.json"]
+        assert paths == [f"{OUT}/{GEN}-appliance1x1.json",
+                         f"{OUT}/{GEN}-appliance1x2.json"]
+        assert sorted(os.listdir(os.path.join(library["workflows"], "recipe-test"))) == [
+            "bakery-template.json", GEN]
         wf = json.load(open(os.path.join(library["workflows"], paths[1])))
         assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x2.png"
         assert report["written"][1]["recipe"] == "appliance1x2"
@@ -478,7 +484,7 @@ class TestGenerateAll:
         # in a project file written before that must not move the files.
         r = {**read_project(library["recipes"], "imperia-bakery"), "output": "bakery/generated"}
         report = generate_all(library["workflows"], r)
-        assert report["written"][0]["path"] == f"recipe-test/{GEN}-appliance1x1.json"
+        assert report["written"][0]["path"] == f"{OUT}/{GEN}-appliance1x1.json"
         assert os.path.isfile(os.path.join(library["workflows"], report["written"][0]["path"]))
 
     def test_a_prefix_left_in_an_old_project_is_ignored(self, library):
@@ -486,14 +492,14 @@ class TestGenerateAll:
         r = {**read_project(library["recipes"], "imperia-bakery"),
              "workflow_prefix": "dev-imperia-bakery-"}
         report = generate_all(library["workflows"], r)
-        assert report["written"][0]["path"] == f"recipe-test/{GEN}-appliance1x1.json"
+        assert report["written"][0]["path"] == f"{OUT}/{GEN}-appliance1x1.json"
 
     def test_regenerating_overwrites_the_previous_file(self, library):
         r = read_project(library["recipes"], "imperia-bakery")
         generate_all(library["workflows"], r)
         r["recipes"]["appliance1x1"]["control_image"] = "changed.png"
         generate_all(library["workflows"], r)
-        wf = json.load(open(os.path.join(library["workflows"], f"recipe-test/{GEN}-appliance1x1.json")))
+        wf = json.load(open(os.path.join(library["workflows"], f"{OUT}/{GEN}-appliance1x1.json")))
         assert by_id(wf, 10)["widgets_values"][0] == "changed.png"
 
     def test_names_the_file_the_old_naming_left_behind(self, library):
@@ -506,6 +512,16 @@ class TestGenerateAll:
         write_json(old, {"id": str(uuid.uuid5(NAMESPACE, "appliance1x1")), "nodes": []})
         report = generate_all(library["workflows"], r)
         assert report["stale"] == ["recipe-test/appliance1x1.json"]
+        assert os.path.isfile(old), "named, never deleted"
+
+    def test_names_what_the_last_export_left_beside_the_base(self, library):
+        # Exports went beside the base until they moved into the project
+        # folder. Those files are ours and no longer written, so they are named.
+        r = read_project(library["recipes"], "imperia-bakery")
+        old = os.path.join(library["workflows"], "recipe-test", f"{GEN}-appliance1x2.json")
+        write_json(old, {"id": str(uuid.uuid5(NAMESPACE, f"{GEN}-appliance1x2")), "nodes": []})
+        report = generate_all(library["workflows"], r)
+        assert report["stale"] == [f"recipe-test/{GEN}-appliance1x2.json"]
         assert os.path.isfile(old), "named, never deleted"
 
     def test_a_workflow_he_wrote_himself_is_not_named(self, library):
@@ -534,7 +550,7 @@ class TestGenerateAll:
         r["recipes"]["appliance1x2"]["pre_flip"] = "typo"
         with pytest.raises(RecipeError, match="typo"):
             generate_all(library["workflows"], r)
-        assert not os.path.exists(os.path.join(library["workflows"], f"recipe-test/{GEN}-appliance1x1.json"))
+        assert not os.path.exists(os.path.join(library["workflows"], f"{OUT}/{GEN}-appliance1x1.json"))
 
 
 from _recipes import new_project, project_name, read_template, template_slots, write_project

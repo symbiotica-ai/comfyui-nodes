@@ -67,10 +67,13 @@ The rule everything else follows from:
   name in different folders would otherwise share one recipe table. A project is
   resolved by its `template`, never by its name, so a file named some other way
   goes on working.
-- `export workflows` writes one real workflow per recipe BESIDE the base,
+- `export workflows` writes one real workflow per recipe into a folder beside
+  the base named after the project (`october/october-base-example/`), each
   named `<project>-<recipe>.json`, both halves lowercase with dashes. A file
-  called `appliance-1x2.json` next to its source says nothing about which
-  source made it.
+  called `appliance-1x2.json` says nothing about which source made it.
+  `export api workflows` writes `<project>-<recipe>-api.json` into `api/`
+  inside that folder. Twenty recipes loose beside the base were forty files
+  to wade through (2026-09-28).
 - A project holds its base, `shared`, its recipes and which of them are
   linked (`links`). Nothing else: `output` and `workflow_prefix` were a second
   and third knob for one rule, and a value left in an older file is ignored
@@ -95,7 +98,8 @@ The rule everything else follows from:
   holds. `shared` and the project row cannot be linked.
 - Opening a generated workflow finds no project, which is right: it is an
   output, not a source.
-- A file this project wrote under an older naming rule is NAMED in the generate
+- A file this project wrote under an older naming rule, or beside the base
+  before exports moved into the project folder, is NAMED in the generate
   toast, never deleted — it is a workflow in his folder like any other, and a
   name he has been opening all day that quietly stopped being regenerated has
   to be said out loud. Ours is provable: a generated workflow's `id` is uuid5

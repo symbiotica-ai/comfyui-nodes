@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import "./comfy_stub.mjs";
-import { cellText, cellValue, followPromptFile, generateSummary, projectToTable,
-         tableToProject } from "../../web/js/recipes.js";
+import { cellText, cellValue, engineName, followPromptFile, generateSummary, projectToTable,
+         syncGap, tableToProject } from "../../web/js/recipes.js";
 
 const slots = [
     { key: "control_image", kind: "scalar", default: "old.png", widgets: 2 },
@@ -175,6 +175,22 @@ test("a bad cell names its row and column", () => {
     assert.throws(() => tableToProject(r, table, slots), /pre_flip.*appliance1x2/);
 });
 
+test("an engine export is named after its workflow, as the platform names it", () => {
+    assert.equal(engineName("bakery-v2/bakery-v2-bakery-base-chair-1x1.json"), "bakery-v2-bakery-base-chair-1x1");
+    assert.equal(engineName("decoration1\u00d71.api.json"), "decoration1x1");
+    assert.equal(engineName(" .hidden "), null);
+    assert.equal(engineName("two words"), null);
+    assert.equal(engineName(null), null);
+});
+
+test("a file the Modal Volume sync hid for a moment is asked for again; a refusal is not", () => {
+    assert.ok(syncGap(404, "no such project"));
+    assert.ok(syncGap(500, ""));
+    assert.ok(syncGap(400, "template 'bakery-v2/bakery-base.json' is not in the workflows directory"));
+    assert.ok(!syncGap(400, "a project needs a template"));
+    assert.ok(!syncGap(409, "project 'x' exists — pick it instead"));
+});
+
 test("the generate toast names every file written and where edits belong", () => {
     const { summary, detail } = generateSummary({
         template: "recipe-test/bakery-template.json",
@@ -193,7 +209,7 @@ test("the summary names the files the old naming left behind", () => {
         written: [{ path: "base-example-appliance1x2.json", recipe: "appliance1x2" }],
         stale: ["appliance1x2.json"],
     });
-    assert.match(detail, /Left from the old naming and no longer written: appliance1x2\.json\./);
+    assert.match(detail, /Left beside the base and no longer written: appliance1x2\.json\./);
     assert.match(detail, /go on holding the graph they froze with/);
     assert.doesNotMatch(
         generateSummary({ template: "t.json", written: [], stale: [] }).detail, /Left from/);

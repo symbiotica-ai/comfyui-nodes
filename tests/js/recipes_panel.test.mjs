@@ -566,6 +566,70 @@ test("load puts the selected recipe onto the canvas and says how many slots",
     assert.match(statusText(node), /Loaded appliance1x2\./);
 });
 
+// A recipe row leads with its state dot (a chain beside it when linked);
+// shared keeps the trailing unsaved dot.
+const stateOf = (row) => {
+    const lead = row?.children?.[0];
+    return lead?._symState ?? lead?.children?.[0]?._symState;
+};
+const leadKind = (row) => {
+    const lead = row?.children?.[0];
+    if (lead?._symState) return "dot";
+    if (lead?.children?.[0]?._symState) return "chain";
+    return (row?.children?.length ?? 0) >= 2 ? "tick" : "none";
+};
+const hasDot = (row) => stateOf(row) === "unsaved" || [...(row?.children ?? [])]
+    .some((c) => !c._symState && String(c.style.cssText).includes("border-radius:50%"));
+const saveRecipe = (node) => word(node, "save");
+
+test("a recipe edited on the canvas carries the unsaved dot, and its save takes it in",
+     async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "appliance1x2"));
+    assert.ok(!hasDot(rowFor(node, "appliance1x2")));
+    assert.equal(saveRecipe(node).disabled, true);
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "floor-2x2.png";
+    await draw(node);
+    assert.ok(hasDot(rowFor(node, "appliance1x2")), "the edited recipe shows no dot");
+    assert.ok(!hasDot(rowFor(node, "appliance1x1")));
+    assert.equal(saveRecipe(node).disabled, false);
+    assert.match(saveRecipe(node).style.background, /#f86145/);
+    assert.equal(word(node, "save project").style.background, undefined);
+    assert.match(statusText(node), /appliance1x2: edited on the canvas, not saved/);
+    await click(saveRecipe(node));
+    assert.equal(posted.at(-1).project.recipes.appliance1x2.backdrop, "floor-2x2.png");
+    assert.ok(!hasDot(rowFor(node, "appliance1x2")), "the dot outlived the save");
+    assert.equal(saveRecipe(node).disabled, true);
+});
+
+test("a workflow just opened marks the recipe on screen once the canvas moves off it",
+     async () => {
+    // Nothing is loaded on open: the pane's recipe is what the canvas is
+    // compared against, and the canvas as saved matches it.
+    const node = await recipeNode({ nodes: [
+        painted("preamble", [["String", "a bakery"]]),
+        painted("backdrop", [["String", "floor-1x1.png"]]),
+    ] });
+    await draw(node);
+    assert.ok(!hasDot(rowFor(node, "shared")), "a clean canvas read as edited");
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "floor-9x9.png";
+    await draw(node);
+    assert.ok(hasDot(rowFor(node, "shared")));
+    await click(saveRecipe(node));
+    assert.equal(posted.at(-1).project.shared.backdrop, "floor-9x9.png");
+    assert.ok(!hasDot(rowFor(node, "shared")));
+});
+
+test("a cell typed in the pane marks its recipe until saved", async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "appliance1x1"));
+    await type(fieldFor(node, "preamble"), "a cafe");
+    assert.ok(hasDot(rowFor(node, "appliance1x1")));
+    assert.ok(!hasDot(rowFor(node, "appliance1x2")));
+    await click(saveRecipe(node));
+    assert.ok(!hasDot(rowFor(node, "appliance1x1")));
+});
+
 test("renaming a recipe carries its cells, re-sorts, and refuses a name taken",
      async () => {
     const node = await recipeNode();
@@ -591,7 +655,7 @@ test("renaming a recipe carries its cells, re-sorts, and refuses a name taken",
 test("removing a recipe takes it out in memory until save", async () => {
     const node = await recipeNode();
     await click(rowFor(node, "zebra"));
-    await click(button(node, "Remove this recipe"));
+    await click(resetIcon(node));
     assert.equal(rowFor(node, "zebra"), undefined);
     assert.equal(node.properties.symbiotica_recipes_pick, "shared");
     await click(word(node, "save project"));
@@ -618,16 +682,65 @@ test("generate saves first, because the route re-reads the project from disk",
     const node = await recipeNode();
     await click(rowFor(node, "shared"));
     await type(fieldFor(node, "preamble"), "a changed bakery");
-    await click(word(node, "export workflows"));
+    await click(part(node, "export:workflows:all"));
     assert.equal(posted[0].project.shared.preamble, "a changed bakery");
     assert.ok(posted[1].generate, "generate ran without a save");
 });
 
 test("a failed save stops generate", async () => {
     const node = await recipeNode({ saveFails: true });
-    await click(word(node, "export workflows"));
+    await click(part(node, "export:workflows:all"));
     assert.equal(posted.filter((p) => p.generate).length, 0);
     assert.equal(toasts.at(-1).summary, "Save failed");
+});
+
+// An export saves, generates and converts before it posts again: let the
+// whole chain land before judging it, or it lands in the next test.
+const drain = async () => { for (let i = 0; i < 10; i++) await settle(); };
+
+test("each export opens current and all; current sends the recipe on screen",
+     async () => {
+    const node = await recipeNode();
+    for (const key of ["workflows", "api", "engine"]) {
+        assert.equal(part(node, `export:${key}:current`).textContent, "export current");
+        assert.equal(part(node, `export:${key}:all`).textContent, "export all");
+    }
+    await click(part(node, "export:api"));
+    await click(rowFor(node, "appliance1x2"));
+    await click(part(node, "export:workflows:current"));
+    await drain();
+    assert.deepEqual(posted.filter((p) => p.generate).at(-1).generate,
+                     { name: "symtest-fixture", recipe: "appliance1x2" });
+    await click(part(node, "export:api:all"));
+    await drain();
+    assert.deepEqual(posted.filter((p) => p.generate).at(-1).generate,
+                     { name: "symtest-fixture", api: true });
+});
+
+test("export current on shared warns and exports nothing", async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "shared"));
+    await click(part(node, "export:engine:current"));
+    await drain();
+    assert.equal(toasts.at(-1).summary, "Pick a recipe first");
+    assert.equal(posted.filter((p) => p.generate).length, 0);
+});
+
+test("export all runs workflows, api and engine for every recipe", async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "appliance1x2"));
+    await click(part(node, "export:everything"));
+    await drain();
+    // The save's own rebuild of the recipe on screen is not the export's.
+    const runs = posted.filter((p) => p.generate && !p.generate.recipe?.length)
+        .map((p) => p.generate);
+    assert.deepEqual(runs, [
+        { name: "symtest-fixture" },
+        { name: "symtest-fixture", api: true },
+        { name: "symtest-fixture", api: true, recipe: null },
+    ]);
+    await drain();
+    assert.match(toasts.at(-1).summary, /^Exported/);
 });
 
 // ================================================================= the wire ==
@@ -857,17 +970,58 @@ test("an empty name leaves the project alone", async () => {
     assert.equal(posted.filter((p) => p.project).length, 0);
 });
 
-test("switching rows writes the recipe you are leaving", async () => {
+test("without auto, switching rows keeps the edit unsaved and marked on the recipe left",
+     async () => {
     const node = await recipeNode();
     await click(rowFor(node, "appliance1x2"));      // the canvas is now this one
     const backdrop = app.graph.nodes.find((n) => n.title === "backdrop");
     backdrop.widgets[0].value = "gargoyle.png";     // he changes a slot
+    await draw(node);
     await click(rowFor(node, "appliance1x1"));      // and picks another
-    const project = posted.filter((p) => p.project).at(-1).project;
-    assert.equal(project.recipes.appliance1x2.backdrop, "gargoyle.png",
-                 "the edit was written into the recipe he left");
+    assert.deepEqual(posted.filter((p) => p.project), [], "a switch by hand wrote the file");
     assert.equal(backdrop.widgets[0].value, "floor-1x1.png",
-                 "and the one he picked is on the canvas");
+                 "the one he picked is on the canvas");
+    await draw(node);
+    assert.ok(hasDot(rowFor(node, "appliance1x2")), "the recipe he left lost its dot");
+    await click(rowFor(node, "appliance1x2"));      // and comes back
+    await draw(node);
+    assert.equal(backdrop.widgets[0].value, "gargoyle.png", "the edit is back on the canvas");
+    assert.ok(hasDot(rowFor(node, "appliance1x2")), "the dot went on the way back");
+    await click(saveRecipe(node));
+    assert.equal(posted.filter((p) => p.project).at(-1).project.recipes.appliance1x2.backdrop,
+                 "gargoyle.png");
+    assert.ok(!hasDot(rowFor(node, "appliance1x2")));
+});
+
+test("a recipe's save writes that recipe, and leaves another's edit unsaved", async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "appliance1x2"));
+    const backdrop = app.graph.nodes.find((n) => n.title === "backdrop");
+    backdrop.widgets[0].value = "gargoyle.png";
+    await draw(node);
+    await click(rowFor(node, "appliance1x1"));
+    backdrop.widgets[0].value = "cafe.png";
+    await draw(node);
+    await click(saveRecipe(node));
+    const project = posted.filter((p) => p.project).at(-1).project;
+    assert.equal(project.recipes.appliance1x1.backdrop, "cafe.png");
+    assert.equal(project.recipes.appliance1x2.backdrop, "floor-1x2.png",
+                 "another recipe's unsaved edit was written");
+    assert.ok(hasDot(rowFor(node, "appliance1x2")));
+    assert.ok(!hasDot(rowFor(node, "appliance1x1")));
+});
+
+test("with auto on, switching rows still writes the recipe left", async () => {
+    const node = await recipeNode();
+    widget(node, "auto").value = true;
+    widget(node, "auto").callback(true);
+    await draw(node);
+    await click(rowFor(node, "appliance1x2"));
+    const backdrop = app.graph.nodes.find((n) => n.title === "backdrop");
+    backdrop.widgets[0].value = "gargoyle.png";
+    await click(rowFor(node, "appliance1x1"));
+    const project = posted.filter((p) => p.project).at(-1).project;
+    assert.equal(project.recipes.appliance1x2.backdrop, "gargoyle.png");
 });
 
 test("a row that has not moved is not written on the way past", async () => {
@@ -1179,8 +1333,8 @@ test("every category the order holds is a row, stored or not", async () => {
     ]);
     // The mark is what tells the two apart: `zebra` is an empty recipe the
     // file holds, `food-3-stages-1x1` is a category nothing is stored for.
-    assert.equal(rowFor(node, "food-3-stages-1x1").children.length, 2, "a lead");
-    assert.equal(rowFor(node, "zebra").children.length, 1, "no lead");
+    assert.equal(stateOf(rowFor(node, "food-3-stages-1x1")), "empty", "red");
+    assert.equal(stateOf(rowFor(node, "zebra")), "saved", "green");
     assert.equal(statusText(node), "3 recipes \u00b7 5 slots \u00b7 on appliance1x1",
                  "an empty category is counted in the sidebar, not on the line");
 });
@@ -1218,8 +1372,8 @@ test("capturing into an empty category is what makes it a recipe", async () => {
     await click(word(node, "save project"));
     const written = posted.filter((p) => p.project).at(-1).project.recipes;
     assert.equal(written["food-3-stages-1x1"]?.backdrop, "floor-food.png");
-    assert.equal(rowFor(node, "food-3-stages-1x1").children.length, 1,
-                 "and the mark is gone");
+    assert.equal(stateOf(rowFor(node, "food-3-stages-1x1")), "saved",
+                 "and the mark is green");
 });
 
 test("the wire landing on an empty category still captures, never loads over it",
@@ -1255,8 +1409,8 @@ test("browsing the categories with auto on writes nothing", async () => {
     await settle();
     assert.equal(state(node)["food-3-stages-1x1"], undefined,
                  "looking at a category is not capturing it");
-    assert.ok(rowFor(node, "food-3-stages-1x1").children.length === 2,
-              "and it is still marked empty");
+    assert.equal(stateOf(rowFor(node, "food-3-stages-1x1")), "empty",
+                 "and it is still marked empty");
 });
 
 test("an empty category leaves when the order stops naming it; a captured one stays",
@@ -1270,6 +1424,26 @@ test("an empty category leaves when the order stops naming it; a captured one st
     assert.equal(rowFor(node, "food-3-stages-1x1"), undefined, "and gone with it");
     assert.ok(rowFor(node, "appliance1x1"), "a recipe the file holds is not the order's to remove");
     assert.ok(rowFor(node, "zebra"));
+});
+
+const resetIcon = (node) => descendants(panel(node)).find((e) =>
+    /^Reset this recipe/.test(String(e.title)));
+
+test("reset turns a captured category red, and save leaves it out of the file",
+     async () => {
+    const node = await recipeNode();
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "appliance1x1"));
+    assert.equal(stateOf(rowFor(node, "appliance1x1")), "saved");
+    await click(resetIcon(node));
+    assert.equal(stateOf(rowFor(node, "appliance1x1")), "empty", "red at once");
+    assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x1", "still picked");
+    assert.match(statusText(node), /Reset appliance1x1/);
+    await click(word(node, "save project"));
+    assert.equal("appliance1x1" in lastProject().recipes, false, "left out of the file");
+    await draw(node);
+    assert.equal(stateOf(rowFor(node, "appliance1x1")), "empty", "and red after the save");
 });
 
 // The project as the panel currently holds it.
@@ -1302,8 +1476,8 @@ test("the link icon puts tick boxes on the recipes, and link links the ticked on
     await click(rowFor(node, "appliance1x2"));
     await click(linkIcon(node));
     assert.equal(statusText(node), "Tick the recipes to link with appliance1x2.");
-    assert.equal(rowFor(node, "appliance1x1").children.length, 2, "a tick box");
-    assert.equal(rowFor(node, "appliance1x2").children.length, 1,
+    assert.equal(leadKind(rowFor(node, "appliance1x1")), "tick", "a tick box");
+    assert.equal(leadKind(rowFor(node, "appliance1x2")), "dot",
                  "none on the recipe being linked");
     assert.equal(rowFor(node, "shared")._listeners?.click, undefined,
                  "shared takes no tick");
@@ -1321,7 +1495,7 @@ test("the link icon puts tick boxes on the recipes, and link links the ticked on
     assert.deepEqual(project.recipes.zebra, project.recipes.appliance1x2);
     assert.equal(project.recipes.appliance1x2.backdrop, "floor-1x2.png",
                  "the picked recipe keeps its own");
-    assert.equal(rowFor(node, "zebra").children.length, 2, "a chain on every linked row");
+    assert.equal(leadKind(rowFor(node, "zebra")), "chain", "a chain on every linked row");
     assert.match(rowFor(node, "zebra").title, /Linked with appliance1x2, appliance1x1/);
     assert.equal(word(node, "link").style.display, "none", "and the tick boxes are gone");
     assert.equal(statusText(node), "Linked 3 recipes.");
@@ -1333,7 +1507,7 @@ test("pressing the link icon again leaves without linking anything", async () =>
     await click(linkIcon(node));
     await click(rowFor(node, "appliance1x1"));
     await click(linkIcon(node));
-    assert.equal(rowFor(node, "appliance1x1").children.length, 1, "no box, no chain");
+    assert.equal(leadKind(rowFor(node, "appliance1x1")), "dot", "no box, no chain");
     assert.equal(word(node, "link").style.display, "none");
     assert.deepEqual(posted.filter((p) => p.project), []);
 });
@@ -1400,7 +1574,7 @@ test("unticking a linked recipe and pressing link ends its link, keeping its val
     const project = lastProject();
     assert.equal("links" in project, false);
     assert.equal(project.recipes.appliance1x1.backdrop, "floor-1x2.png");
-    assert.equal(rowFor(node, "appliance1x1").children.length, 1, "no chain");
+    assert.equal(leadKind(rowFor(node, "appliance1x1")), "dot", "no chain");
 });
 
 test("a category with nothing stored can be ticked, and is then a recipe",
@@ -1424,7 +1598,7 @@ test("shared, the project row and an empty category cannot be linked from", asyn
     for (const rel of ["shared", ":project", "food-3-stages-1x1"]) {
         await click(rowFor(node, rel));
         await click(linkIcon(node));
-        assert.equal(rowFor(node, "appliance1x1").children.length, 1, `${rel}: no tick boxes`);
+        assert.equal(leadKind(rowFor(node, "appliance1x1")), "dot", `${rel}: no tick boxes`);
         assert.equal(statusText(node), "Pick a recipe to link from.");
     }
 });

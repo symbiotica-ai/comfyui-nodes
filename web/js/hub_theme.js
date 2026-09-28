@@ -10,6 +10,7 @@ const DARK = {
     ink: "#f7f8f8", inkSubtle: "#8a8f98", inkTertiary: "#62666d",
     surface1: "#0f1011", surface2: "#141516", rowHover: "#1c1d20",
     accent: "#f86145", onAccent: "#ffffff", danger: "#f2777a", ok: "#8fbf8f",
+    warn: "#f0a050",
     hairline: "#23252a", hairlineStrong: "#34343a",
     // The "this one is picked" fill, for chips and toggles, and the "this one
     // is off/removed" fill beside it.
@@ -20,6 +21,7 @@ const LIGHT = {
     ink: "#1c1e21", inkSubtle: "#5b6169", inkTertiary: "#8a8f98",
     surface1: "#ffffff", surface2: "#f2f3f5", rowHover: "#e9ebee",
     accent: "#f86145", onAccent: "#ffffff", danger: "#c0392b", ok: "#2e7d32",
+    warn: "#e67e22",
     hairline: "#d9dce1", hairlineStrong: "#bcc1c9",
     selLine: "#3b6fb5", selBg: "#dbe7f8", selInk: "#123a68",
     dangerBg: "#f7dede", mat: "#e4e6ea",
