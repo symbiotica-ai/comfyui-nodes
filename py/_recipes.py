@@ -224,8 +224,27 @@ def _wired_widget_names(node: dict) -> set:
 # Merging them reconstructs the layout -- a wired name sits where the declared
 # order puts it, an undeclared one where the capture puts it -- and the merge
 # only counts if it lands on exactly as many widgets as the node holds.
+# The DOM panel each of this pack's nodes draws after its declared widgets
+# (`addDOMWidget` in web/js). The workflow saves its value -- `serialize: false`
+# in the widget's options is honoured by neither side -- but the canvas never
+# captures it, so without its name the merge below comes up one widget short.
+PANEL_WIDGETS = {
+    "SymbioticaPromptBlock": "prompts_panel",
+    "SymbioticaControlImage": "images_panel",
+    "SymbioticaOrderTracker": "tracker_panel",
+    "SymbioticaAssetFocus": "focus_panel",
+    "SymbioticaAssetRecipe": "focus_panel",
+    "SymbioticaTask": "task_panel",
+    "SymbioticaRecipe": "recipe_panel",
+    "SymbioticaModule": "modules_panel",
+}
+
+
 def _widget_positions(node: dict, captured) -> dict | None:
-    names = promoted_names(node)
+    names = list(promoted_names(node))
+    panel = PANEL_WIDGETS.get(node.get("type"))
+    if panel and panel not in names:
+        names.append(panel)
     widgets = node.get("widgets_values") or []
     if len(names) == len(widgets):
         return {name: i for i, name in enumerate(names)}

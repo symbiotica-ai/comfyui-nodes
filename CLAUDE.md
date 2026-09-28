@@ -440,7 +440,11 @@ the same thing. Each one failed silently first.
   wrote in widget order with the wired ones left out. The merge only counts if
   it lands on exactly as many widgets as the node holds. Its limit, written
   down in the tests: an undeclared widget and a typo are indistinguishable, so
-  the COUNT is the only discipline left.
+  the COUNT is the only discipline left. This pack's own DOM panels
+  (`prompts_panel`, `images_panel`, …) are saved but never captured, so
+  `PANEL_WIDGETS` names them per class and the merge counts them as declared
+  last. Without it every Prompts slot with a wired `path` refused
+  (2026-09-28).
 - **A node never retitled is keyed by the name the CANVAS DRAWS on it**, which
   for a custom node is its display name (`Control Image`), not its class
   (`SymbioticaControlImage`). A saved workflow stores no title for one, so

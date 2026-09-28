@@ -192,6 +192,21 @@ class TestWidgetsBehindTheNames:
         # `path` is fed by a link: its box keeps whatever the template had.
         assert wf["nodes"][0]["widgets_values"] == ["new.png", "", ""]
 
+    def test_the_pack_panel_the_canvas_never_captures_holds_its_place(self):
+        # His bakery-base: a Prompts node saves path, folder, file, text and
+        # its drawn panel, and the canvas captures the three unwired ones.
+        # All 18 recipes refused to generate on it (2026-09-28).
+        node = {"id": 4350, "type": "SymbioticaPromptBlock", "mode": 0, "outputs": [],
+                "color": "#323", "bgcolor": "#535", "title": "##llm-system-prompt",
+                "inputs": [{"name": n, "type": "STRING", "widget": {"name": n},
+                            "link": 5755 if n == "path" else None}
+                           for n in ("path", "folder", "file", "text")],
+                "widgets_values": ["", "old", "old.md", "old text", ""]}
+        wf = painted(node)
+        apply_recipe(wf, {"##llm-system-prompt": {
+            "folder": "llm-prompts", "file": "chair.md", "text": "new text"}}, "purple")
+        assert wf["nodes"][0]["widgets_values"] == ["", "llm-prompts", "chair.md", "new text", ""]
+
     def test_a_capture_that_names_too_few_widgets_is_refused_by_name(self):
         wf = painted(ksampler())
         with pytest.raises(RecipeError, match="Capture the slot again"):

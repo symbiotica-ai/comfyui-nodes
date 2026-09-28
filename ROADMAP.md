@@ -245,6 +245,19 @@ file rather than their own).
 
 ## Recipes and Asset Focus — open threads (no issue filed yet)
 
+Left open on 2026-09-28, after the bakery render runs. One line each.
+
+- `_set_groups` (`py/_recipes.py`) writes EVERY group switch in a recipe,
+  while the canvas's rgthree `toggle` moves only a group whose reading (any
+  node active) differs. So generate un-mutes nodes muted by hand inside a group
+  that is on, and a node sitting in two groups takes the last write. A version
+  that mirrors the canvas is uncommitted in the working tree and was pushed to
+  Modal, unasked. He asked for it put back. Open: keep it or revert it.
+- A node straddling a save group (his `Get $$render-final`, 4412, sits on the
+  corner of `save-high-res-1x1` and feeds all five save subgraphs) is muted by
+  every recipe switching that group off, under either version above.
+  Unconfirmed whether his editor behaves the same. He says the workflows run.
+
 Left open on 2026-09-11 after the recipes build; one line each, the decision
 still open. Move to an issue when one is picked up.
 
