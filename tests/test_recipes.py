@@ -583,6 +583,15 @@ class TestGroupSwitchSlots:
         apply_recipe(wf, {"engine": {"render-engine-nano2": False, "render-engine-qwen": True}}, "purple")
         assert by_id(wf, 2)["mode"] == 4
 
+    def test_a_group_already_on_keeps_the_nodes_he_muted_inside_it(self):
+        # The canvas toggle moves nothing when the group already reads as the
+        # recipe wants, so a node muted by hand in a live group stays muted.
+        wf = muter_template()
+        wf["nodes"].append({"id": 4, "type": "LayerStyle", "pos": [600, 200], "size": [100, 50], "mode": 2})
+        apply_recipe(wf, {"engine": {"render-engine-nano2": True, "render-engine-qwen": False}}, "purple")
+        assert by_id(wf, 2)["mode"] == 0
+        assert by_id(wf, 4)["mode"] == 2
+
     def test_a_group_the_template_does_not_have_is_refused_by_name(self):
         wf = muter_template()
         with pytest.raises(RecipeError, match="render-engine-gone"):

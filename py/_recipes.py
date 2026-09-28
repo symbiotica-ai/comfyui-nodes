@@ -182,17 +182,27 @@ def _group_nodes(workflow: dict, title: str) -> list[dict]:
             if any(_in_group(n, b) for b in boundings)]
 
 
+# What loading a recipe does on the canvas (`applyValuesToNodes` calling
+# rgthree's `toggle`): a group reads ON while any node in it is active, and a
+# switch already reading what the recipe wants moves nothing. Writing every
+# group every time un-muted the nodes he had muted by hand inside a group that
+# is on -- a LayerStyle node Modal does not have refused every workflow -- and
+# a node in two groups took whichever was written last. Offs go before ons, as
+# on the canvas.
 def _set_groups(workflow: dict, node: dict, key: str, value: dict) -> None:
     mode_off = RGTHREE_GROUP_NODES[node["type"]]
     for title, on in value.items():
         if not isinstance(on, bool):
             raise RecipeError(f"{key} / {title}: a group is on or off, got {on!r}")
-        members = _group_nodes(workflow, title)
-        if not members:
+    ordered = [e for e in value.items() if not e[1]] + [e for e in value.items() if e[1]]
+    for title, on in ordered:
+        found = _group_nodes(workflow, title)
+        if not found:
             raise RecipeError(f"{key}: the template has no group titled {title!r}")
+        members = [m for m in found if m is not node]
+        if any(m.get("mode", MODE_ACTIVE) == MODE_ACTIVE for m in members) == on:
+            continue
         for member in members:
-            if member is node:
-                continue
             member["mode"] = MODE_ACTIVE if on else mode_off
 
 
