@@ -604,12 +604,17 @@ test("clicking the recipe on screen again puts it back over a canvas edit", asyn
 
 // A recipe row leads with its state dot (a chain beside it when linked);
 // shared keeps the trailing unsaved dot.
-const stateOf = (row) => {
+// A recipe row's lead past the export box in front of it.
+const leadOf = (row) => {
     const lead = row?.children?.[0];
+    return lead?.children?.[0]?._symSelect ? lead.children[1] : lead;
+};
+const stateOf = (row) => {
+    const lead = leadOf(row);
     return lead?._symState ?? lead?.children?.[0]?._symState;
 };
 const leadKind = (row) => {
-    const lead = row?.children?.[0];
+    const lead = leadOf(row);
     if (lead?._symState) return "dot";
     if (lead?.children?.[0]?._symState) return "chain";
     return (row?.children?.length ?? 0) >= 2 ? "tick" : "none";
@@ -750,16 +755,16 @@ test("a failed save stops generate", async () => {
 // whole chain land before judging it, or it lands in the next test.
 const drain = async () => { for (let i = 0; i < 10; i++) await settle(); };
 
-test("each export opens current and all; current sends the recipe on screen",
+test("each export opens selected and all; selected sends the recipe clicked",
      async () => {
     const node = await recipeNode();
     for (const key of ["workflows", "api", "engine"]) {
-        assert.equal(part(node, `export:${key}:current`).textContent, "export current");
+        assert.equal(part(node, `export:${key}:selected`).textContent, "export selected");
         assert.equal(part(node, `export:${key}:all`).textContent, "export all");
     }
     await click(part(node, "export:api"));
     await click(rowFor(node, "appliance1x2"));
-    await click(part(node, "export:workflows:current"));
+    await click(part(node, "export:workflows:selected"));
     await drain();
     assert.deepEqual(posted.filter((p) => p.generate).at(-1).generate,
                      { name: "symtest-fixture", recipe: "appliance1x2" });
@@ -769,13 +774,62 @@ test("each export opens current and all; current sends the recipe on screen",
                      { name: "symtest-fixture", api: true });
 });
 
-test("export current on shared warns and exports nothing", async () => {
+test("export selected with nothing ticked warns and exports nothing", async () => {
     const node = await recipeNode();
     await click(rowFor(node, "shared"));
-    await click(part(node, "export:engine:current"));
+    await click(part(node, "export:engine:selected"));
     await drain();
-    assert.equal(toasts.at(-1).summary, "Pick a recipe first");
+    assert.equal(toasts.at(-1).summary, "Tick a recipe first");
     assert.equal(posted.filter((p) => p.generate).length, 0);
+});
+
+// The export box in front of a recipe's state dot.
+const boxOf = (row) => row?.children?.[0]?.children?.[0];
+const ticked = (node) => rows(node).filter((r) => boxOf(r)?._symSelect === "on")
+    .map((r) => r._sym.rel);
+const shiftClick = async (element) => {
+    fire(element, "click", { shiftKey: true, stopPropagation() {} });
+    await settle();
+};
+
+test("a click ticks that recipe alone, a shift-click ticks the range to it",
+     async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "appliance1x1"));
+    assert.deepEqual(ticked(node), ["appliance1x1"]);
+    await click(rowFor(node, "appliance1x2"));
+    assert.deepEqual(ticked(node), ["appliance1x2"], "a click replaces the ticks");
+    await click(rowFor(node, "appliance1x1"));
+    await shiftClick(rowFor(node, "zebra"));
+    assert.deepEqual(ticked(node), ["appliance1x1", "appliance1x2", "zebra"]);
+    assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x1",
+                 "a shift-click loads nothing");
+    await click(rowFor(node, "shared"));
+    assert.deepEqual(ticked(node), ["appliance1x1", "appliance1x2", "zebra"],
+                     "shared leaves the ticks alone");
+});
+
+test("the box ticks or unticks one recipe and loads nothing", async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "appliance1x1"));
+    await click(boxOf(rowFor(node, "zebra")));
+    assert.deepEqual(ticked(node), ["appliance1x1", "zebra"]);
+    assert.equal(node.properties.symbiotica_recipes_pick, "appliance1x1");
+    await click(boxOf(rowFor(node, "appliance1x1")));
+    assert.deepEqual(ticked(node), ["zebra"]);
+});
+
+test("export selected sends every ticked recipe once, in sidebar order", async () => {
+    const node = await recipeNode();
+    await click(rowFor(node, "zebra"));
+    await click(boxOf(rowFor(node, "appliance1x1")));
+    for (const key of ["workflows", "api", "engine"]) {
+        posted.length = 0;
+        await click(part(node, `export:${key}:selected`));
+        await drain();
+        assert.deepEqual(posted.filter((p) => p.generate).map((p) => p.generate.recipe),
+                         ["appliance1x1", "zebra"], key);
+    }
 });
 
 test("export all runs workflows, api and engine for every recipe", async () => {

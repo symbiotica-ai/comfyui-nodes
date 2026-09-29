@@ -1113,6 +1113,16 @@ function recipePanel(node) {
     // rest of the time. Nothing is linked until the `link` button is pressed.
     let linking = null;
     let ticks = new Set();
+    // The recipes ticked for `export selected`, and the row a shift-click
+    // ranges from. A click on a recipe ticks that one alone, a shift-click
+    // ticks every row from the anchor to it, and the box itself ticks or
+    // unticks one. View state: a reopen ticks the row the pane is on.
+    let selected = new Set();
+    let anchor = null;
+    const selectOnly = (row) => {
+        selected = new Set(row && row !== SHARED && row !== PROJECT_ROW ? [row] : []);
+        anchor = selected.size ? row : null;
+    };
     // The recipes that EXIST, which is what `auto` decides against: the wire
     // landing on a category with nothing stored must still capture the canvas
     // into it rather than load shared over what he painted.
@@ -1219,11 +1229,17 @@ function recipePanel(node) {
         const item = (text, all) => {
             const b = el("button", wordButtonCss + "text-align:left;white-space:nowrap;", text);
             b.className = "sym-btn";
-            b._symPart = `export:${key}:${all ? "all" : "current"}`;
-            stopCanvas(b).addEventListener("click", (e) => { e.stopPropagation(); close(); run(all); });
+            b._symPart = `export:${key}:${all ? "all" : "selected"}`;
+            stopCanvas(b).addEventListener("click", (e) => {
+                e.stopPropagation();
+                close();
+                // Nothing ticked has already warned, and exports nothing.
+                const recipes = all ? null : selectedRecipes();
+                if (recipes !== undefined) run(recipes);
+            });
             return b;
         };
-        menu.append(item("export current", false), item("export all", true));
+        menu.append(item("export selected", false), item("export all", true));
         stopCanvas(head).addEventListener("click", (e) => {
             e.stopPropagation();
             const open = menu.style.display === "none";
@@ -1235,11 +1251,9 @@ function recipePanel(node) {
         wrap.append(head, menu);
         return wrap;
     }
-    const generateMenu = exportMenu("workflows", "export workflows",
-                                    (all) => generate(all ? null : currentRecipe()));
-    const apiMenu = exportMenu("api", "export api",
-                               (all) => exportApi(all ? null : currentRecipe()));
-    const engineMenu = exportMenu("engine", "export engine", (all) => exportEngine(all));
+    const generateMenu = exportMenu("workflows", "export workflows", generate);
+    const apiMenu = exportMenu("api", "export api", exportApi);
+    const engineMenu = exportMenu("engine", "export engine", exportEngine);
     const exportAllButton = el("button", wordButtonCss, "export all");
     exportAllButton._symPart = "export:everything";
     exportAllButton.className = "sym-btn";
@@ -1322,6 +1336,7 @@ function recipePanel(node) {
             state.name = null; state.project = null; state.slots = [];
             state.templateSlots = []; state.table = null; state.dirty = false; state.edits.clear();
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
+            selectOnly(null);
             state.fresh = false;
             renderFull();
             status("Save the workflow first.", false);
@@ -1346,6 +1361,7 @@ function recipePanel(node) {
             state.name = null; state.project = null; state.slots = [];
             state.templateSlots = []; state.table = null; state.dirty = false; state.edits.clear();
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
+            selectOnly(null);
             state.fresh = false;
             renderFull();
             await startProject(path, projects);
@@ -1408,6 +1424,7 @@ function recipePanel(node) {
         state.fresh = fresh;
         slotSig = null;
         state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
+        selectOnly(null);
         auto.last = { name: null, sig: null };
         active = ""; autoSelected = SHARED;
         pickRow(SHARED);
@@ -1434,6 +1451,7 @@ function recipePanel(node) {
             // The offers belong to the table they were folded into; the sweep
             // on the next draw puts them back against this one.
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
+            selectOnly(null);
             auto.last = { name: null, sig: null };
             active = "";
             // The row he was on, if the project still has it. A selection that
@@ -1441,6 +1459,7 @@ function recipePanel(node) {
             const held = picked();
             pickRow(held === PROJECT_ROW || state.table.columns.includes(held)
                 ? held : SHARED);
+            selectOnly(picked());
             // Nothing picked by hand YET, so the wire may take the pane: on
             // opening a workflow the wire names the recipe the canvas is on,
             // and that is the one to be looking at.
@@ -1506,13 +1525,22 @@ function recipePanel(node) {
         }, 2000);
     }
 
-    // The recipe on screen, for an export's `current`: undefined, with a
-    // warning, while the pane is on shared or the project row.
-    function currentRecipe() {
-        const recipe = columnOf(picked());
-        if (recipe && recipe !== SHARED) return recipe;
-        toast("warn", "Pick a recipe first", "export current sends the recipe on screen.");
+    // The recipes ticked in the sidebar, in its order, for an export's
+    // `selected`: undefined, with a warning, while none is. A red row has
+    // nothing stored, so the server has no recipe to export for it.
+    function selectedRecipes() {
+        const recipes = realColumns().filter((c) => c !== SHARED && selected.has(c));
+        if (recipes.length) return recipes;
+        toast("warn", "Tick a recipe first",
+              "export selected sends the recipes ticked in the sidebar. A red one holds nothing yet.");
         return undefined;
+    }
+    // One export per recipe named, or one for every recipe when none is: the
+    // routes take one name or none.
+    async function each(recipes, run) {
+        const out = [];
+        for (const recipe of recipes ?? [null]) out.push(await run(recipe));
+        return out;
     }
 
     // Every export saves first: the routes re-read the project FROM DISK, so
@@ -1573,31 +1601,30 @@ function recipePanel(node) {
 
     const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-    async function generate(recipe = null) {
-        if (recipe === undefined) return;
+    // Each takes the recipes to export, or null for every one.
+    async function generate(recipes = null) {
         await runExport("Export failed", async () => {
-            const report = await writeWorkflows(recipe);
+            const reports = await each(recipes, writeWorkflows);
+            const report = { ...reports.at(-1),
+                             written: reports.flatMap((r) => r?.written ?? []) };
             const { summary, detail } = generateSummary(report);
             toast("success", summary, detail, 10000);
-            status(`Wrote ${plural(report?.written?.length ?? 0, "workflow")}.`);
+            status(`Wrote ${plural(report.written.length, "workflow")}.`);
         });
     }
 
-    async function exportApi(recipe = null) {
-        if (recipe === undefined) return;
+    async function exportApi(recipes = null) {
         await runExport("API export failed", async () => {
-            const paths = await writeApi(recipe);
+            const paths = (await each(recipes, writeApi)).flat();
             toast("success", `Wrote ${plural(paths.length, "API workflow")}`,
                   paths.join(", ") || "The project has no recipes.", 10000);
             status(`Wrote ${plural(paths.length, "API workflow")}.`);
         });
     }
 
-    async function exportEngine(all) {
-        const recipe = all ? null : currentRecipe();
-        if (recipe === undefined) return;
+    async function exportEngine(recipes = null) {
         await runExport("Engine export failed", async () => {
-            const paths = await sendEngine(recipe);
+            const paths = (await each(recipes, sendEngine)).flat();
             toast("success", `Exported ${plural(paths.length, "API workflow")} to engine/`,
                   paths.join(", ") || "The project has no recipes.", 10000);
             status(`Exported ${paths.length} to engine/.`);
@@ -1633,6 +1660,7 @@ function recipePanel(node) {
             state.table = null;
             state.dirty = false; state.edits.clear();
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
+            selectOnly(null);
             resolvedFor = undefined;
             renderFull();
             toast("info", `Deleted project "${name}"`, "Its generated workflows are still in the workflows folder.");
@@ -1654,6 +1682,7 @@ function recipePanel(node) {
             state.dirty = false; state.edits.clear();
             slotSig = null;
             state.offered = new Set(); categorySig = null; linking = null; ticks = new Set();
+            selectOnly(null);
             active = ""; autoSelected = SHARED;
             pickRow(SHARED);
             resolvedFor = template;
@@ -1876,6 +1905,11 @@ function recipePanel(node) {
         // arm there is how one hop past an unlisted category left the pane
         // behind for the rest of the session.
         if (follows && next && state.table.columns.includes(next)) {
+            // A tick that is only the row the pane was on moves with it, as a
+            // click would. Ticks he gathered himself stay.
+            if (!selected.size || (selected.size === 1 && selected.has(picked()))) {
+                selectOnly(next);
+            }
             pickRow(next);
             autoSelected = next;
         } else if (!follows) {
@@ -2022,6 +2056,9 @@ function recipePanel(node) {
         // under us, and a load would take the edits with it.
         if (column && leaving && leaving !== column) saveLeaving(leaving);
         pickRow(row);
+        // A click on a recipe ticks it alone. Shared and the project row are
+        // not exported, so they leave the ticks where they are.
+        if (column && column !== SHARED) selectOnly(column);
         // Taking the recipe the wire names re-arms the follow; taking any
         // other one is his, and the wire leaves the pane where he put it.
         autoSelected = row === active ? row : null;
@@ -2214,6 +2251,7 @@ function recipePanel(node) {
         }
         saveLeaving(columnOf(picked()));
         captureInto(name);
+        selectOnly(name);
         if (picked() !== name) { pickRow(name); autoSelected = null; renderFull(); }
         if (await save()) status(`Created ${name}.`, false);
     }
@@ -2230,6 +2268,7 @@ function recipePanel(node) {
         columns.splice(at, 1);
         for (const row of rows) delete row.cells[column];
         unlinkRecipe(state.table, column);
+        selected.delete(column);
         if (autoSelected === column) autoSelected = null;
         // Forgotten as the file held it too, so it reads as never captured:
         // a category the order still names comes straight back as a red
@@ -2264,6 +2303,8 @@ function recipePanel(node) {
                        ...sortedRecipes(columns.filter((c) => c !== SHARED)));
         for (const row of rows) { row.cells[next] = row.cells[column]; delete row.cells[column]; }
         renameLinked(state.table, column, next);
+        if (selected.delete(column)) selected.add(next);
+        if (anchor === column) anchor = next;
         if (autoSelected === column) autoSelected = next;
         if (auto.last.name === column) auto.last = { ...auto.last, name: next };
         if (state.edits.delete(column)) state.edits.add(next);
@@ -2308,6 +2349,28 @@ function recipePanel(node) {
         renderTree();
         drawStatus();
         refit();
+    }
+
+    // The export box on a row: shift ranges from the anchor, else it ticks or
+    // unticks that one.
+    function tickOne(name, event) {
+        if (event?.shiftKey) { tickRange(name); return; }
+        if (selected.has(name)) selected.delete(name); else selected.add(name);
+        anchor = name;
+        renderTree();
+    }
+
+    // A shift-click: every recipe from the anchor to this one is ticked, in
+    // sidebar order, beside what is ticked already. Nothing loads.
+    function tickRange(name) {
+        const order = (state.table?.columns ?? []).filter((c) => c !== SHARED);
+        const to = order.indexOf(name);
+        if (to < 0) return;
+        const at = order.indexOf(anchor ?? columnOf(picked()));
+        const from = at < 0 ? to : at;
+        for (const n of order.slice(Math.min(from, to), Math.max(from, to) + 1)) selected.add(n);
+        anchor = name;
+        renderTree();
     }
 
     // The ticks as they would change what is linked: some to add, some to take out.
@@ -2458,6 +2521,20 @@ function recipePanel(node) {
                 both.append(dot, mark("link"));
                 return both;
             };
+            // The export tick, in front of the state: a click on the box ticks
+            // or unticks that one alone and loads nothing.
+            const selectLead = () => {
+                const chosen = selected.has(row.rel);
+                const box = iconLead(chosen ? "ticked" : "unticked", { px: 11,
+                    color: on || chosen ? HUB.selInk : HUB.inkTertiary });
+                box._symSelect = chosen ? "on" : "off";
+                box.title = chosen ? "Ticked for export selected" : "Tick for export selected";
+                box.style.cursor = "pointer";
+                box.addEventListener("click", (e) => { e.stopPropagation(); tickOne(row.rel, e); });
+                const both = el("div", "flex:none;display:flex;align-items:center;gap:1px;");
+                both.append(box, stateLead());
+                return both;
+            };
             const line = treeRow({
                 kind: row.kind, rel: row.rel, depth: row.depth,
                 tone: on ? HUB.selBg : "",
@@ -2466,7 +2543,7 @@ function recipePanel(node) {
                 // and which of them you have been through is the one thing
                 // you read it for. A linked recipe carries a chain.
                 lead: tickable ? mark(ticked ? "ticked" : "unticked")
-                    : row.kind === "recipe" ? stateLead()
+                    : row.kind === "recipe" ? selectLead()
                     : undefined,
                 labelColour: on ? HUB.selInk
                     : dim || (row.empty && !ticked) ? HUB.inkTertiary
@@ -2483,9 +2560,15 @@ function recipePanel(node) {
                 onClick: dim ? undefined
                     : tickable ? () => toggleLink(row.rel)
                     : linking ? undefined
+                    : row.kind === "recipe" ? (e) => (e?.shiftKey ? tickRange(row.rel) : choose(row.rel))
                     : () => choose(row.rel),
             });
             if (row.hint) line.title = row.hint;
+            // Shift extends the page's text selection on a click; here it
+            // ranges the ticks.
+            if (row.kind === "recipe" && !linking) {
+                line.addEventListener("mousedown", (e) => { if (e.shiftKey) e.preventDefault(); });
+            }
             if (row.kind === "shared" && unsaved(row.rel, edit)) {
                 line.appendChild(unsavedDot());
                 line.title = `${line.title ? `${line.title} ` : ""}Unsaved: save project writes it.`;
