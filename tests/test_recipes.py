@@ -631,6 +631,42 @@ class TestGroupSwitchSlots:
         assert by_id(wf, 2)["mode"] == 0
         assert by_id(wf, 4)["mode"] == 2
 
+    @staticmethod
+    def shared_flip(mode):
+        # A Muter listing every group and a Bypasser listing `flip`, as on his canvas.
+        return {
+            "nodes": [
+                {"id": 1, "type": "Fast Groups Muter (rgthree)", "title": "muter",
+                 "color": "#323", "bgcolor": "#535", "pos": [0, 0], "size": [200, 60]},
+                {"id": 2, "type": "Fast Groups Bypasser (rgthree)", "title": "bypasser",
+                 "color": "#323", "bgcolor": "#535", "pos": [0, 200], "size": [200, 60]},
+                {"id": 3, "type": "ImageFlip", "pos": [520, 120], "size": [100, 50], "mode": mode},
+            ],
+            "groups": [{"title": "flip", "bounding": [500, 100, 300, 300]}],
+        }
+
+    def test_a_group_a_muter_and_a_bypasser_share_reads_muted_or_bypassed(self):
+        def read(mode):
+            return {s["key"]: s["default"]["flip"]
+                    for s in template_slots(self.shared_flip(mode), "purple")}
+        assert read(0) == {"muter": True, "bypasser": True}
+        assert read(2) == {"muter": False, "bypasser": True}
+        assert read(4) == {"muter": True, "bypasser": False}
+
+    @pytest.mark.parametrize("start", [0, 2, 4])
+    @pytest.mark.parametrize("target", [0, 2, 4])
+    def test_generate_puts_a_shared_group_in_the_mode_recorded(self, start, target):
+        want = {0: (True, True), 2: (False, True), 4: (True, False)}[target]
+        wf = self.shared_flip(start)
+        apply_recipe(wf, {"muter": {"flip": want[0]}, "bypasser": {"flip": want[1]}}, "purple")
+        assert by_id(wf, 3)["mode"] == target
+
+    def test_a_recipe_from_before_the_reading_with_both_rows_off_bypasses(self):
+        wf = self.shared_flip(0)
+        wf["nodes"][:2] = wf["nodes"][1::-1]
+        apply_recipe(wf, {"muter": {"flip": False}, "bypasser": {"flip": False}}, "purple")
+        assert by_id(wf, 3)["mode"] == 4
+
     def test_a_group_the_template_does_not_have_is_refused_by_name(self):
         wf = muter_template()
         with pytest.raises(RecipeError, match="render-engine-gone"):

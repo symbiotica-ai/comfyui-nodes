@@ -404,8 +404,15 @@ A painted slot node is captured whole, not by its first widget
 - a subgraph → its promoted inputs, wired ones left out
 - rgthree's **Fast Group Bypasser** → one entry per GROUP TITLE. Every row
   widget is named `RGTHREE_TOGGLE_AND_NAV` and holds `{toggled}`, so by name
-  they are one widget; loading calls `widget.toggle(bool)`, because assigning
-  `.value` is inert and the group never moves.
+  they are one widget. A row is read off the group's node MODES from its own
+  node's side (`groupReading`): a bypassed group is the Bypasser's `false` and
+  the Muter's `true`, because rgthree draws both rows `no` and a recipe then
+  could not tell muted from bypassed. Loading calls
+  `widget.doModeChange(bool, true)` in one pass over every node (`setGroups`,
+  `_write_groups` on the server), never `toggle(bool)`: toggle flips against a
+  cached `toggled` that lags half a second, and on `flip`, listed by his Muter
+  and his Bypasser, the second row turned back on what the first switched off
+  and auto then saved that into the recipe (2026-09-29).
 - a key in the project file with no slot on the canvas is not a row: it leaves
   the table on sight and the file on the next save.
 

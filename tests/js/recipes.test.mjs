@@ -680,6 +680,64 @@ test("loading a fast group bypasser's row toggles the group instead of setting a
     assert.deepEqual(report.applied, ["$$render-engine"]);
 });
 
+// His canvas: a Muter listing every group and a Bypasser listing `flip`, both
+// painted, one group between them. The rows are rgthree's: `toggle` flips
+// against the cached `toggled`, `doModeChange(v, true)` writes exactly v.
+function sharedFlip() {
+    const member = { mode: 0 };
+    const group = { title: "flip", nodes: [member], recomputeInsideNodes() {} };
+    const fast = (title, type, modeOff) => {
+        const node = { title, type, modeOff, mode: 0, inputs: [], color: "#323", bgcolor: "#535" };
+        node.widgets = [{
+            name: "RGTHREE_TOGGLE_AND_NAV", type: "custom", label: "Enable flip", group, node,
+            value: { toggled: true },
+            doModeChange(on) {
+                for (const m of group.nodes) m.mode = on ? 0 : modeOff;
+                this.value.toggled = on;
+            },
+            toggle(v) {
+                if (v === this.value.toggled) return;
+                this.doModeChange(!group.nodes.some((m) => m.mode === 0));
+            },
+        }];
+        return node;
+    };
+    return { member, nodes: [fast("Muter", "Fast Groups Muter (rgthree)", 2),
+                             fast("Bypasser", "Fast Groups Bypasser (rgthree)", 4)] };
+}
+
+test("a group both a muter and a bypasser list is read as muted or bypassed, not just off", () => {
+    const { member, nodes } = sharedFlip();
+    const read = () => Object.fromEntries(liveSlots({ nodes }, "purple").map((s) => [s.key, s.default.flip]));
+    assert.deepEqual(read(), { Muter: true, Bypasser: true });
+    member.mode = 2;
+    assert.deepEqual(read(), { Muter: false, Bypasser: true });
+    member.mode = 4;
+    assert.deepEqual(read(), { Muter: true, Bypasser: false });
+});
+
+test("loading puts a shared group back on, muted or bypassed from any of the three", () => {
+    const want = { 0: { Muter: { flip: true }, Bypasser: { flip: true } },
+                   2: { Muter: { flip: false }, Bypasser: { flip: true } },
+                   4: { Muter: { flip: true }, Bypasser: { flip: false } } };
+    for (const from of [0, 2, 4]) {
+        for (const to of [0, 2, 4]) {
+            const { member, nodes } = sharedFlip();
+            member.mode = from;
+            // rgthree's cached reading lags the modes by half a second
+            for (const n of nodes) n.widgets[0].value.toggled = from !== 0 ? true : false;
+            applyValuesToNodes(nodes, want[to], "purple");
+            assert.equal(member.mode, to, `from ${from} to ${to}`);
+        }
+    }
+});
+
+test("a recipe from before the reading, with both rows off, loads bypassed", () => {
+    const { member, nodes } = sharedFlip();
+    applyValuesToNodes([...nodes].reverse(), { Muter: { flip: false }, Bypasser: { flip: false } }, "purple");
+    assert.equal(member.mode, 4);
+});
+
 test("a Prompts slot captures folder, file and text, and leaves the wired path out", () => {
     const node = {
         title: "recipe:LLM-prompt", mode: 0, color: "#323", bgcolor: "#535",

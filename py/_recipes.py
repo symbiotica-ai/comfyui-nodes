@@ -207,25 +207,51 @@ def _group_nodes(workflow: dict, title: str) -> list[dict]:
             if any(_in_group(n, b) for b in boundings)]
 
 
-# What loading a recipe does on the canvas (`applyValuesToNodes` calling
-# rgthree's `toggle`): a group reads ON while any node in it is active, and a
-# switch already reading what the recipe wants moves nothing. Writing every
-# group every time un-muted the nodes he had muted by hand inside a group that
-# is on -- a LayerStyle node Modal does not have refused every workflow -- and
-# a node in two groups took whichever was written last. Offs go before ons, as
-# on the canvas.
-def _set_groups(workflow: dict, node: dict, key: str, value: dict) -> None:
+def _off_mode(members: list[dict]) -> int:
+    """The mode an off group is in: the one most of its nodes are in, the
+    lower on a tie (`groupOffMode` in web/js/recipes.js)."""
+    count: dict[int, int] = {}
+    for m in members:
+        mode = m.get("mode", MODE_ACTIVE)
+        count[mode] = count.get(mode, 0) + 1
+    return min(count, key=lambda mode: (-count[mode], mode))
+
+
+def _reads_on(members: list[dict], mode_off: int) -> bool:
+    """A group row reads the group from its own node's side: off only while
+    the group is off in THAT node's mode (`groupReading` in web/js/recipes.js).
+    A bypassed group is the Bypasser's False and the Muter's True, so a recipe
+    holding both rows says which of the two it was."""
+    if not members:
+        return False
+    if any(m.get("mode", MODE_ACTIVE) == MODE_ACTIVE for m in members):
+        return True
+    return _off_mode(members) != mode_off
+
+
+def _group_writes(workflow: dict, node: dict, key: str, value: dict) -> list[tuple]:
     mode_off = RGTHREE_GROUP_NODES[node["type"]]
     for title, on in value.items():
         if not isinstance(on, bool):
             raise RecipeError(f"{key} / {title}: a group is on or off, got {on!r}")
-    ordered = [e for e in value.items() if not e[1]] + [e for e in value.items() if e[1]]
-    for title, on in ordered:
+    out = []
+    for title, on in value.items():
         found = _group_nodes(workflow, title)
         if not found:
             raise RecipeError(f"{key}: the template has no group titled {title!r}")
-        members = [m for m in found if m is not node]
-        if any(m.get("mode", MODE_ACTIVE) == MODE_ACTIVE for m in members) == on:
+        out.append((mode_off, [m for m in found if m is not node], on))
+    return out
+
+
+# What loading a recipe does on the canvas (`setGroups`): every group row of
+# every node in one pass, offs first, mutes before bypasses, then ons. A row
+# already reading what the recipe wants moves nothing -- writing every group
+# every time un-muted the nodes he had muted by hand inside a group that is
+# on, and a LayerStyle node Modal does not have refused every workflow.
+def _write_groups(writes: list[tuple]) -> None:
+    offs = sorted((w for w in writes if not w[2]), key=lambda w: w[0])
+    for mode_off, members, on in offs + [w for w in writes if w[2]]:
+        if _reads_on(members, mode_off) == on:
             continue
         for member in members:
             member["mode"] = MODE_ACTIVE if on else mode_off
@@ -343,15 +369,17 @@ def apply_recipe(workflow: dict, values: dict, color=None, display=None) -> dict
     unknown = sorted(k for k in values if k not in slots)
     if unknown:
         raise RecipeError(f"no recipe slot named {', '.join(unknown)} in the template")
+    writes = []
     for key, value in values.items():
         for node in slots[key]:
             if is_group_switch(node):
                 if not isinstance(value, dict):
                     raise RecipeError(
                         f"{key}: a group switch takes one true/false per group title, got {value!r}")
-                _set_groups(workflow, node, key, value)
+                writes += _group_writes(workflow, node, key, value)
             else:
                 _set_value(node, key, value)
+    _write_groups(writes)
     return {
         "applied": sorted(values),
         "template": sorted(k for k in slots if k not in values),
@@ -487,7 +515,7 @@ def template_slots(workflow: dict, color=None, display=None) -> list[dict]:
                 members = [n for n in workflow.get("nodes") or []
                            if n is not node and _in_group(n, group.get("bounding"))]
                 if members:
-                    groups[title] = any(m.get("mode", MODE_ACTIVE) == MODE_ACTIVE for m in members)
+                    groups[title] = _reads_on(members, RGTHREE_GROUP_NODES[node["type"]])
             out.append({"key": key, "kind": "dict", "default": groups, "widgets": len(widgets)})
         elif node.get("type") in subgraph_ids:
             names = promoted_names(node)

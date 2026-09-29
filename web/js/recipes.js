@@ -418,8 +418,8 @@ const isToggleNode = (node) => String(node?.title ?? "").trimEnd().endsWith("?")
 // named RGTHREE_TOGGLE_AND_NAV and holding `{toggled}`, so the group's title
 // is the only thing that tells two rows apart -- read by name they are one
 // widget, and the slot recorded the first group's `{"toggled": true}` for the
-// whole node. Assigning `.value` is inert on these: `toggle(bool)` is what
-// moves the group.
+// whole node. Assigning `.value` is inert on these: `setGroups` moves the
+// group.
 const toggledOf = (widget) => (widget?.value && typeof widget.value === "object"
     && !Array.isArray(widget.value) && "toggled" in widget.value)
     ? !!widget.value.toggled : null;
@@ -429,6 +429,56 @@ const groupTitleOf = (widget) => String(widget?.group?.title
 
 export function groupSwitches(widgets) {
     return (widgets ?? []).filter((w) => toggledOf(w) !== null && groupTitleOf(w));
+}
+
+// The mode each rgthree node switches a group off with (its `modeOff`).
+const GROUP_OFF_MODE = { "Fast Groups Muter (rgthree)": 2, "Fast Groups Bypasser (rgthree)": 4 };
+const offModeOf = (node) => node?.modeOff ?? GROUP_OFF_MODE[node?.type];
+
+// An off group is in the mode most of its nodes are in, the lower on a tie.
+function groupOffMode(members) {
+    const count = new Map();
+    for (const m of members) count.set(m.mode, (count.get(m.mode) ?? 0) + 1);
+    let best = null;
+    for (const [mode, n] of count) {
+        if (best === null || n > count.get(best) || (n === count.get(best) && mode < best)) best = mode;
+    }
+    return best;
+}
+
+// A group row reads the group from ITS OWN node's side: off only while the
+// group is off in that node's mode. rgthree draws a Muter's row `no` over a
+// group the Bypasser switched off, so with both nodes listing `flip` the two
+// rows read alike, a recipe could not tell muted from bypassed, and a load put
+// back whichever was written last. Read this way a bypassed group is the
+// Bypasser's `false` and the Muter's `true`. The modes are read off the
+// group's nodes, never the row's cached `toggled`, which rgthree refreshes
+// half a second late.
+export function groupReading(widget, node = widget?.node) {
+    const members = [...(widget?.group?.nodes ?? widget?.group?._children ?? [])]
+        .filter((c) => c !== node && typeof c?.mode === "number");
+    const off = offModeOf(node);
+    if (!members.length || off == null) return toggledOf(widget);
+    if (members.some((m) => m.mode === 0)) return true;
+    return groupOffMode(members) !== off;
+}
+
+// Every group row a recipe writes, across all its nodes, in one pass: offs
+// first so rgthree's toggleRestriction cannot change the outcome, mutes before
+// bypasses, then ons. A row already reading what the recipe wants moves
+// nothing, so a node muted by hand inside a live group stays muted.
+// `doModeChange(v, true)` writes exactly `v`; `toggle(v)` flipped the group
+// against its cached reading, and on a group both a Muter and a Bypasser list,
+// the second row turned back on what the first had just switched off.
+function setGroups(writes) {
+    const offs = writes.filter((w) => !w.on)
+        .sort((a, b) => (offModeOf(a.node) ?? 0) - (offModeOf(b.node) ?? 0));
+    for (const { node, widget, on } of [...offs, ...writes.filter((w) => w.on)]) {
+        widget.group?.recomputeInsideNodes?.();
+        if (groupReading(widget, node) === on) continue;
+        if (widget.doModeChange) widget.doModeChange(on, true);
+        else widget.toggle?.(on);
+    }
 }
 
 // Every setting a node carries, by widget name: a recipe is the whole node,
@@ -646,7 +696,7 @@ function liveSlotValues(graph, color) {
             values[key] = promoted;
         } else if (groupSwitches(node.widgets).length) {
             const groups = {};
-            for (const w of groupSwitches(node.widgets)) groups[groupTitleOf(w)] = toggledOf(w);
+            for (const w of groupSwitches(node.widgets)) groups[groupTitleOf(w)] = groupReading(w, node);
             values[key] = groups;
         } else {
             const widgets = settableWidgets(node);
@@ -680,7 +730,7 @@ export function liveSlots(graph, color) {
             out[key] = { key, kind: "dict", default: promoted, widgets: widgets.length };
         } else if (groupSwitches(widgets).length) {
             const groups = {};
-            for (const w of groupSwitches(widgets)) groups[groupTitleOf(w)] = toggledOf(w);
+            for (const w of groupSwitches(widgets)) groups[groupTitleOf(w)] = groupReading(w, node);
             out[key] = { key, kind: "dict", default: groups, widgets: widgets.length };
         } else if (widgets.length > 1) {
             out[key] = { key, kind: "dict", default: widgetValues(node, widgets),
@@ -860,6 +910,7 @@ export function columnValues(table, slots, column) {
 export function applyValuesToNodes(nodes, values, color) {
     const applied = [];
     const seen = new Set();
+    const writes = [];
     const matches = colorMatcher(color);
     for (const node of nodes ?? []) {
         const key = slotKey(node, matches);
@@ -870,17 +921,9 @@ export function applyValuesToNodes(nodes, values, color) {
             node.mode = value ? 0 : 4;
         } else if (value && typeof value === "object" && !Array.isArray(value)) {
             const switches = groupSwitches(widgets);
-            // rgthree's toggleRestriction turns the other groups OFF when one
-            // goes on, so the groups a recipe wants off are written before the
-            // ones it wants on. Written the other way round, the last key in
-            // the recipe decides what stays on, whatever was recorded.
-            const entries = Object.entries(value);
-            const ordered = switches.length
-                ? [...entries.filter(([, v]) => !v), ...entries.filter(([, v]) => v)]
-                : entries;
-            for (const [name, item] of ordered) {
+            for (const [name, item] of Object.entries(value)) {
                 const group = switches.find((w) => groupTitleOf(w) === name);
-                if (group) { group.toggle?.(!!item); continue; }
+                if (group) { writes.push({ node, widget: group, on: !!item }); continue; }
                 const widget = widgets.find((w) => w.name === name);
                 if (widget) widget.value = item;
             }
@@ -898,6 +941,7 @@ export function applyValuesToNodes(nodes, values, color) {
         seen.add(key);
         if (!applied.includes(key)) applied.push(key);
     }
+    setGroups(writes);
     return { applied, missing: Object.keys(values).filter((k) => !seen.has(k)) };
 }
 
