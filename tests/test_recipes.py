@@ -392,7 +392,7 @@ class TestPromoteStringInput:
             promote_string_input(workflow_with_instance(), "render", 2, "p", "recipe:p", pos=[0, 0])
 
 
-from _recipes import NAMESPACE, generate_all, list_projects, read_project, write_api
+from _recipes import NAMESPACE, generate_all, list_projects, read_project, output_rel, write_api
 
 
 def write_json(path, data):
@@ -432,9 +432,9 @@ class TestRecipeLibrary:
 
 
 # What `generate` names a workflow from `recipe-test/bakery-template.json`,
-# and the folder beside the base its exports go into.
+# and the folder beside the base its workflows go into; API files go in `api/`.
 GEN = "recipe-test-bakery-template"
-OUT = f"recipe-test/{GEN}"
+OUT = "recipe-test/workflows"
 
 
 class TestExportApi:
@@ -448,7 +448,7 @@ class TestExportApi:
     def test_the_api_file_goes_in_the_project_folders_api_folder(self, library):
         r = read_project(library["recipes"], "imperia-bakery")
         path = write_api(library["workflows"], r, "appliance1x2", {"1": {"class_type": "X", "inputs": {}}})
-        assert path == f"{OUT}/api/{GEN}-appliance1x2-api.json"
+        assert path == f"recipe-test/api/{GEN}-appliance1x2.api.json"
         with open(os.path.join(library["workflows"], path), encoding="utf-8") as f:
             assert json.load(f) == {"1": {"class_type": "X", "inputs": {}}}
 
@@ -463,16 +463,16 @@ class TestExportApi:
 class TestGenerateAll:
     def test_writes_one_workflow_per_recipe_into_a_folder_beside_the_template(self, library):
         # Named after the BASE and the recipe: a file called `appliance1x2.json`
-        # says nothing about which source made it. In a folder of their own,
-        # because twenty recipes loose beside the base were a folder to wade
-        # through.
+        # says nothing about which source made it. In `workflows/` beside the
+        # base, because the base's folder is the project's and everything it
+        # exports stays in it.
         r = read_project(library["recipes"], "imperia-bakery")
         report = generate_all(library["workflows"], r)
         paths = [w["path"] for w in report["written"]]
         assert paths == [f"{OUT}/{GEN}-appliance1x1.json",
                          f"{OUT}/{GEN}-appliance1x2.json"]
         assert sorted(os.listdir(os.path.join(library["workflows"], "recipe-test"))) == [
-            "bakery-template.json", GEN]
+            "bakery-template.json", "workflows"]
         wf = json.load(open(os.path.join(library["workflows"], paths[1])))
         assert by_id(wf, 10)["widgets_values"][0] == "controlnet/bakery/appliance1x2.png"
         assert report["written"][1]["recipe"] == "appliance1x2"
@@ -540,6 +540,13 @@ class TestGenerateAll:
         r = {**project(), "template": "recipe-test/missing.json"}
         with pytest.raises(RecipeError, match="missing.json"):
             generate_all(library["workflows"], r)
+
+    def test_a_base_at_the_top_exports_into_a_folder_named_after_it(self, library):
+        # Its `workflows/` would otherwise be a folder called workflows inside
+        # the workflows folder, shared by every top-level base.
+        assert output_rel({"template": "Bakery Base.json"}) == "bakery-base/workflows"
+        assert output_rel({"template": "Bakery Base.json"}, api=True) == "bakery-base/api"
+        assert output_rel({"template": "imperia/bakery/bakery.json"}, api=True) == "imperia/bakery/api"
 
     def test_a_template_path_cannot_walk_out_of_the_workflows_dir(self, library):
         with pytest.raises(RecipeError):

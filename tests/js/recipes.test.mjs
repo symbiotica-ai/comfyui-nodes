@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import "./comfy_stub.mjs";
-import { cellText, cellValue, engineName, followPromptFile, generateSummary, projectToTable,
+import { cellText, cellValue, followPromptFile, generateSummary, projectToTable,
          syncGap, tableToProject } from "../../web/js/recipes.js";
 
 const slots = [
@@ -173,14 +173,6 @@ test("a bad cell names its row and column", () => {
     const table = projectToTable(r, slots);
     table.rows.find((x) => x.key === "pre_flip").cells.appliance1x2 = "maybe";
     assert.throws(() => tableToProject(r, table, slots), /pre_flip.*appliance1x2/);
-});
-
-test("an engine export is named after its workflow, as the platform names it", () => {
-    assert.equal(engineName("bakery-v2/bakery-v2-bakery-base-chair-1x1.json"), "bakery-v2-bakery-base-chair-1x1");
-    assert.equal(engineName("decoration1\u00d71.api.json"), "decoration1x1");
-    assert.equal(engineName(" .hidden "), null);
-    assert.equal(engineName("two words"), null);
-    assert.equal(engineName(null), null);
 });
 
 test("a file the Modal Volume sync hid for a moment is asked for again; a refusal is not", () => {

@@ -426,9 +426,9 @@ and `workflow_prefix` were two more knobs for one rule and are gone, ignored in
 any older file. Capture reads the canvas and stores only what differs from
 shared; load layers shared under the recipe and writes it back; `generate
 workflows` reads the BASE WORKFLOW from disk and writes one real workflow per
-recipe into a folder beside the base named after the project
-(`october/october-base-example/`, API files in its `api/`), each named
-`<project>-<recipe>.json` — the base is in the name because
+recipe into `workflows/` beside the base (`imperia/bakery/workflows/`, API
+files as `<project>-<recipe>.api.json` in `imperia/bakery/api/`, nothing sent
+to the platform's `engine/`), each named `<project>-<recipe>.json` — the base is in the name because
 `appliance-1x2.json` says nothing about which source made it. Both halves go through the same slug (`recipeSlug`
 on the canvas, `slugify` in `py/_recipes.py`, parallel and changed together):
 lowercase, dashes, no spaces. The recipe is a set of DIFFERENCES against one graph, which is what lets

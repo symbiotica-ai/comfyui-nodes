@@ -89,11 +89,12 @@ const workflowRel = (path) => {
     const rel = String(path ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
     return rel.startsWith(WORKFLOWS_PREFIX) ? rel.slice(WORKFLOWS_PREFIX.length) : rel;
 };
-// Where a project's exports go: a folder beside its base, named after it.
-const exportDir = (p) => {
+// Where a project's exports go: `workflows/` and `api/` in its base's folder,
+// or in a folder named after it for a base at the top (`output_rel`).
+const exportDirs = (p) => {
     const template = String(p?.template ?? "");
-    const dir = template.includes("/") ? template.slice(0, template.lastIndexOf("/")) : "";
-    return dir ? `${dir}/${p.name}` : String(p?.name ?? "");
+    const dir = template.includes("/") ? template.slice(0, template.lastIndexOf("/")) : String(p?.name ?? "");
+    return [`${dir}/workflows`, `${dir}/api`];
 };
 // Whether a workflow file is on disk. Asked twice: the Modal Volume sync
 // reads a file as missing for a second now and then, and "missing" here is
@@ -983,17 +984,6 @@ export async function apiPrompts(items, each) {
     }
 }
 
-// The engine/ stem a workflow name becomes, or null when it cannot be one
-// file: the rule of the platform's "Export (API) to engine/", whose route
-// (`/platform/export-api`, Modal canvases only) refuses anything else.
-// `×` is how the bakery graphs spell a grid size; the file gets an x.
-const ENGINE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-export function engineName(raw) {
-    if (typeof raw !== "string") return null;
-    const stem = raw.trim().split("/").pop()
-        .replace(/\.api\.json$/i, "").replace(/\.json$/i, "").replace(/×/g, "x");
-    return ENGINE_NAME.test(stem) ? stem : null;
-}
 
 export function generateSummary(report) {
     const written = report?.written ?? [];
@@ -1297,7 +1287,6 @@ function recipePanel(node) {
     }
     const generateMenu = exportMenu("workflows", "export workflows", generate);
     const apiMenu = exportMenu("api", "export api", exportApi);
-    const engineMenu = exportMenu("engine", "export engine", exportEngine);
     const exportAllButton = el("button", wordButtonCss, "export all");
     exportAllButton._symPart = "export:everything";
     exportAllButton.className = "sym-btn";
@@ -1305,7 +1294,7 @@ function recipePanel(node) {
         + `padding:3px 6px;flex:none;background:${HUB.surface2};`
         + `border-bottom:1px solid ${HUB.hairline};`);
     actionBar.append(autoWrap, el("div", "flex:1;"), generateMenu,
-                     apiMenu, engineMenu, exportAllButton);
+                     apiMenu, exportAllButton);
 
     // The project's own field — its base workflow — shown under the project
     // row only.
@@ -1428,7 +1417,7 @@ function recipePanel(node) {
     // wrote is left alone: its recipes live on the base it came from.
     async function startProject(path, projects) {
         const rel = workflowRel(path);
-        const maker = projects.find((p) => rel.startsWith(`${exportDir(p)}/`));
+        const maker = projects.find((p) => exportDirs(p).some((d) => rel.startsWith(`${d}/`)));
         if (maker) {
             status(`Written by ${maker.name}'s export: its recipes are on ${maker.template}.`, false);
             return;
@@ -1609,7 +1598,8 @@ function recipePanel(node) {
         postJson("/symbiotica/recipes/generate", { name: state.name, ...one(recipe) });
 
     // The same workflows, each run through ComfyUI's own Export (API) and
-    // written in the project folder's `api/` with `-api`. The server builds them without writing;
+    // written in the project folder's `api/` as `<name>.api.json`, the file
+    // the engine takes. The server builds them without writing;
     // the conversion needs the frontend, which is where the converter is.
     async function writeApi(recipe) {
         const report = await postJson("/symbiotica/recipes/generate",
@@ -1619,25 +1609,6 @@ function recipePanel(node) {
         await apiPrompts(report?.written ?? [], async (item, prompt) => {
             const { path } = await postJson("/symbiotica/recipes/write-api",
                                             { name, recipe: item.recipe, prompt });
-            paths.push(path);
-        });
-        return paths;
-    }
-
-    // The same API workflows, sent where the platform's "Export (API) to
-    // engine/" sends them: the studio's engine/<name>.api.json, which the
-    // hub's pin editor lists, each under its workflow's name.
-    async function sendEngine(recipe) {
-        const report = await postJson("/symbiotica/recipes/generate",
-                                      { name: state.name, api: true, recipe: recipe ?? null });
-        const paths = [];
-        const items = report?.written ?? [];
-        for (const item of items) {
-            if (!engineName(item.path)) throw new Error(`${item.recipe}: use one plain filename: letters, digits, . _ -`);
-        }
-        await apiPrompts(items, async (item, prompt) => {
-            const { path } = await postJson("/platform/export-api",
-                                            { name: engineName(item.path), prompt });
             paths.push(path);
         });
         return paths;
@@ -1666,26 +1637,16 @@ function recipePanel(node) {
         });
     }
 
-    async function exportEngine(recipes = null) {
-        await runExport("Engine export failed", async () => {
-            const paths = (await each(recipes, sendEngine)).flat();
-            toast("success", `Exported ${plural(paths.length, "API workflow")} to engine/`,
-                  paths.join(", ") || "The project has no recipes.", 10000);
-            status(`Exported ${paths.length} to engine/.`);
-        });
-    }
-
-    // All three, for every recipe.
+    // Both, for every recipe.
     async function exportAll() {
         await runExport("Export all failed", async () => {
             const report = await writeWorkflows(null);
             const api = await writeApi(null);
-            const engine = await sendEngine(null);
             const n = report?.written?.length ?? 0;
             toast("success", `Exported ${plural(n, "recipe")}`,
-                  `${plural(n, "workflow")}, ${plural(api.length, "API workflow")}, `
-                  + `${engine.length} to engine/. ${generateSummary(report).detail}`, 10000);
-            status(`Exported ${plural(n, "recipe")}: workflows, api, engine.`);
+                  `${plural(n, "workflow")}, ${plural(api.length, "API workflow")}. `
+                  + generateSummary(report).detail, 10000);
+            status(`Exported ${plural(n, "recipe")}: workflows, api.`);
         });
     }
 
@@ -2949,7 +2910,7 @@ function recipePanel(node) {
         refit();
     }
 
-    node._symRecipe = { load, save, generate, exportApi, exportEngine, exportAll, startNew, remove, resolveProject,
+    node._symRecipe = { load, save, generate, exportApi, exportAll, startNew, remove, resolveProject,
                         render: renderFull, choose };
     renderFull();
     resolveProject();

@@ -758,7 +758,7 @@ const drain = async () => { for (let i = 0; i < 10; i++) await settle(); };
 test("each export opens selected and all; selected sends the recipe clicked",
      async () => {
     const node = await recipeNode();
-    for (const key of ["workflows", "api", "engine"]) {
+    for (const key of ["workflows", "api"]) {
         assert.equal(part(node, `export:${key}:selected`).textContent, "export selected");
         assert.equal(part(node, `export:${key}:all`).textContent, "export all");
     }
@@ -777,7 +777,7 @@ test("each export opens selected and all; selected sends the recipe clicked",
 test("export selected with nothing ticked warns and exports nothing", async () => {
     const node = await recipeNode();
     await click(rowFor(node, "shared"));
-    await click(part(node, "export:engine:selected"));
+    await click(part(node, "export:api:selected"));
     await drain();
     assert.equal(toasts.at(-1).summary, "Tick a recipe first");
     assert.equal(posted.filter((p) => p.generate).length, 0);
@@ -823,7 +823,7 @@ test("export selected sends every ticked recipe once, in sidebar order", async (
     const node = await recipeNode();
     await click(rowFor(node, "zebra"));
     await click(boxOf(rowFor(node, "appliance1x1")));
-    for (const key of ["workflows", "api", "engine"]) {
+    for (const key of ["workflows", "api"]) {
         posted.length = 0;
         await click(part(node, `export:${key}:selected`));
         await drain();
@@ -832,7 +832,7 @@ test("export selected sends every ticked recipe once, in sidebar order", async (
     }
 });
 
-test("export all runs workflows, api and engine for every recipe", async () => {
+test("export all runs workflows and api for every recipe, and nothing else", async () => {
     const node = await recipeNode();
     await click(rowFor(node, "appliance1x2"));
     await click(part(node, "export:everything"));
@@ -843,8 +843,8 @@ test("export all runs workflows, api and engine for every recipe", async () => {
     assert.deepEqual(runs, [
         { name: "symtest-fixture" },
         { name: "symtest-fixture", api: true },
-        { name: "symtest-fixture", api: true, recipe: null },
     ]);
+    assert.equal(part(node, "export:engine"), undefined, "no engine export");
     await drain();
     assert.match(toasts.at(-1).summary, /^Exported/);
 });

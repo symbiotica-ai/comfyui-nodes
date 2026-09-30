@@ -682,13 +682,14 @@ def list_projects(dir_: str) -> list[dict]:
 
 
 def output_rel(project: dict, api=False) -> str:
-    """Where a project's exports go: a folder beside the base named after the
-    project, `october/october-base-example/`, and its API files in `api/`
-    inside it. Twenty recipes written loose beside the base were forty files
-    to wade through (2026-09-28)."""
-    base = os.path.dirname(_template_rel(project.get("template")))
-    rel = f"{base}/{project_name(project.get('template'))}" if base else project_name(project.get("template"))
-    return f"{rel}/api" if api else rel
+    """Where a project's exports go: `workflows/` and `api/` beside the base,
+    `imperia/bakery/workflows/` and `imperia/bakery/api/` for
+    `imperia/bakery/bakery.json` -- the base's folder is the project's, and
+    everything it exports is in it (2026-09-30). A base at the top of the
+    workflows folder gets a folder named after it, so its `workflows/` is not
+    the workflows folder's."""
+    base = os.path.dirname(_template_rel(project.get("template"))) or project_name(project.get("template"))
+    return f"{base}/api" if api else f"{base}/workflows"
 
 
 def generate_all(workflows_dir: str, project: dict, display=None, only=None,
@@ -727,15 +728,15 @@ def generate_all(workflows_dir: str, project: dict, display=None, only=None,
 
 def write_api(workflows_dir: str, project: dict, recipe: str, prompt) -> str:
     """One recipe's API-format prompt, in the project folder's `api/` and
-    named after its workflow with `-api`:
-    `october/october-base-example/api/october-base-example-appliance-1x2-api.json`."""
+    named after its workflow the way the engine names one:
+    `imperia/bakery/api/imperia-bakery-bakery-chair-1x1.api.json`."""
     if recipe not in (project.get("recipes") or {}):
         raise RecipeError(f"project has no recipe {recipe!r}")
     if not isinstance(prompt, dict) or not prompt:
         raise RecipeError(f"{recipe}: the API export is empty")
     out_rel = output_rel(project, api=True)
     output_dir = _under(workflows_dir, out_rel, "output folder")
-    filename = f"{workflow_name(project, recipe)}-api.json"
+    filename = f"{workflow_name(project, recipe)}.api.json"
     os.makedirs(output_dir, exist_ok=True)
     with open(os.path.join(output_dir, filename), "w", encoding="utf-8") as f:
         json.dump(prompt, f, indent=2)

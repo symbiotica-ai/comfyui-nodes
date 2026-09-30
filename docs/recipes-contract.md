@@ -67,13 +67,16 @@ The rule everything else follows from:
   name in different folders would otherwise share one recipe table. A project is
   resolved by its `template`, never by its name, so a file named some other way
   goes on working.
-- `export workflows` writes one real workflow per recipe into a folder beside
-  the base named after the project (`october/october-base-example/`), each
-  named `<project>-<recipe>.json`, both halves lowercase with dashes. A file
-  called `appliance-1x2.json` says nothing about which source made it.
-  `export api workflows` writes `<project>-<recipe>-api.json` into `api/`
-  inside that folder. Twenty recipes loose beside the base were forty files
-  to wade through (2026-09-28).
+- The base's folder is the project's, and every export stays in it
+  (2026-09-30): `export workflows` writes one real workflow per recipe into
+  `workflows/` beside the base (`imperia/bakery/workflows/`), each named
+  `<project>-<recipe>.json`, both halves lowercase with dashes. A file called
+  `appliance-1x2.json` says nothing about which source made it. `export api`
+  writes `<project>-<recipe>.api.json` into `api/` beside it, the file the
+  engine takes. There is no engine export: it wrote the same file into the
+  platform's `engine/`, and the API files are picked up from `api/` instead.
+  A base at the top of the workflows folder exports into a folder named after
+  it.
 - A project holds its base, `shared`, its recipes and which of them are
   linked (`links`). Nothing else: `output` and `workflow_prefix` were a second
   and third knob for one rule, and a value left in an older file is ignored
