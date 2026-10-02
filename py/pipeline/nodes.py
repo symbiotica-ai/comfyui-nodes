@@ -816,10 +816,22 @@ class SymbioticaPromptBlock(io.ComfyNode):
                 io.String.Input("text", default="", multiline=True,
                                 tooltip="The file's text. Edit here; "
                                         "`save file` writes it back."),
+                # APPENDED, never before `text`: an input added in front of a
+                # widget shifts the saved value of every one after it. The
+                # canvas hides it and writes it from the tick boxes in the
+                # tree, a JSON list of files relative to the path.
+                io.String.Input("files", default="", optional=True,
+                                tooltip="The ticked files, as JSON. Set by "
+                                        "ticking files in the tree."),
             ],
             outputs=[
                 io.String.Output(display_name="text",
                                  tooltip="The text as shown."),
+                # ComfyUI has no dynamic outputs: the node declares a fixed
+                # set and the canvas shows one per ticked file, in tick order.
+                *[io.String.Output(display_name=f"prompt_{i}",
+                                   tooltip="A ticked file's text.")
+                  for i in range(1, PROMPT_OUTPUTS + 1)],
             ],
             hidden=[io.Hidden.unique_id],
             # An output node so it can be queued on its own. A path arriving
@@ -830,15 +842,63 @@ class SymbioticaPromptBlock(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, path="", folder="", file="", text="") -> io.NodeOutput:
+    def fingerprint_inputs(cls, path="", folder="", file="", text="",
+                           files=""):
+        # A ticked file edited on disk is a change, the Prompt Load rule.
+        root = str(_one(path) or "").strip()
+        stamps = [stamp(root, rel) for rel in _ticked(files)]
+        return hashlib.sha256(json.dumps(
+            [root, str(_one(folder) or ""), str(_one(file) or ""),
+             str(_one(text) or ""), str(_one(files) or ""), stamps]
+        ).encode()).hexdigest()
+
+    @classmethod
+    def execute(cls, path="", folder="", file="", text="",
+                files="") -> io.NodeOutput:
         # The run knows the path the canvas only guessed at, so it hands it
         # back — the same way Asset Focus hands over its choices.
+        root = str(_one(path) or "").strip()
         _push("symbiotica.prompts", {
             "node_id": str(getattr(getattr(cls, "hidden", None),
                                    "unique_id", "")),
             "path": str(_one(path) or ""),
         })
-        return io.NodeOutput(str(_one(text) or ""))
+        shown = str(_one(text) or "")
+        folder_rel = str(_one(folder) or "").strip().strip("/")
+        name = str(_one(file) or "").strip()
+        open_rel = "" if _unpicked(name) else (
+            f"{folder_rel}/{name}" if folder_rel else name)
+        # The open file answers what the editor holds: an edit not yet saved
+        # is what he is looking at. Every other ticked file is read from disk,
+        # and one that has gone fails the run by name rather than sending an
+        # empty prompt to a billed model.
+        texts = [shown if rel == open_rel else read_file(root, rel)
+                 for rel in _ticked(files)[:PROMPT_OUTPUTS]]
+        texts += [""] * (PROMPT_OUTPUTS - len(texts))
+        return io.NodeOutput(shown, *texts)
+
+
+# How many files one Prompts node can hand out. The canvas refuses a tick past
+# it; raising it is this constant, and appending outputs shifts nothing saved.
+PROMPT_OUTPUTS = 16
+
+
+def _ticked(files):
+    """The ticked files, relative to the path, in tick order. Anything that is
+    not a JSON list of names — a workflow saved before the input existed hands
+    it the panel's value — is nothing ticked."""
+    raw = _one(files)
+    if isinstance(raw, list):
+        items = raw
+    else:
+        try:
+            items = json.loads(str(raw or "") or "[]")
+        except ValueError:
+            return []
+    if not isinstance(items, list):
+        return []
+    return [str(i).strip().strip("/") for i in items
+            if isinstance(i, str) and i.strip().strip("/")]
 
 
 # A file dropdown value the canvas uses to say "nothing to load": bracketed so

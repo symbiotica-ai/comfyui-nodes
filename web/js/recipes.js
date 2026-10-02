@@ -499,13 +499,18 @@ function setGroups(writes) {
 // the panel with "a subgraph's values are a JSON object".
 const displayOnly = (w) => w?.serialize === false || w?.options?.serialize === false;
 
+// The files ticked on a Prompts node are its outputs, not a setting: a recipe
+// holding fewer ticks would cut wires on every switch.
+const wiringOnly = (node, w) => w?.name === "files"
+    && String(node?.comfyClass ?? node?.type ?? "") === "SymbioticaPromptBlock";
+
 export function settableWidgets(node) {
     const wired = new Set();
     for (const inp of node?.inputs ?? []) {
         if (inp.widget && inp.link != null) wired.add(inp.widget.name ?? inp.name);
     }
     return (node?.widgets ?? []).filter((w) => w.type !== "button" && !wired.has(w.name)
-                                          && !displayOnly(w));
+                                          && !displayOnly(w) && !wiringOnly(node, w));
 }
 
 export function widgetValues(node, widgets) {

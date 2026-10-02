@@ -6,8 +6,8 @@ import { registerSymbioticaExtension } from "./register.js";
 import { nodeOutputString, resolveProjectPath } from "./order_source.js";
 import { hideWidget } from "./asset_focus.js";
 import { HUB, ghostButtonCss } from "./hub_theme.js";
-import { el, emptyState, errorLine, iconButton, ONE_LINE, pinPanelWidth,
-         sidebarShell, treeRow, walkTree } from "./browser_chrome.js";
+import { el, emptyState, errorLine, iconButton, iconLead, ONE_LINE,
+         pinPanelWidth, sidebarShell, treeRow, walkTree } from "./browser_chrome.js";
 
 const NODE = "SymbioticaPromptBlock";
 // Prompt Load lives in this file, not beside it: the platform syncs
@@ -182,11 +182,37 @@ const MIN_NODE_W = 460;
 const SIDE_PROP = "symbiotica_prompts_sidebar";
 const SIDE_SHUT_PROP = "symbiotica_prompts_shut";
 
+// Python's ceiling on ticked files (`PROMPT_OUTPUTS`), for a node that was
+// created without its declared outputs to count.
+const MAX_TICKS = 16;
+
+// The ticked files, as the hidden `files` widget holds them: a JSON list of
+// names relative to the path. A workflow saved before the widget existed hands
+// it the panel's value, which is nothing ticked.
+export function readTicks(widget) {
+    try {
+        const list = JSON.parse(typeof widget?.value === "string" && widget.value
+                                ? widget.value : "[]");
+        return Array.isArray(list) ? list.filter((n) => typeof n === "string" && n) : [];
+    } catch {
+        return [];
+    }
+}
+
+// What an output reads: the file's name without `.md`. Two ticked files that
+// share a name in different folders read as their paths instead.
+export function tickLabel(rel, ticks) {
+    const stem = (r) => baseOf(r).replace(/\.(md|txt)$/i, "");
+    const clash = ticks.some((t) => t !== rel && stem(t) === stem(rel));
+    return clash ? rel.replace(/\.(md|txt)$/i, "") : stem(rel);
+}
+
 function setupPrompts(node) {
     const pathW = widgetOf(node, "path");
     const textW = widgetOf(node, "text");
     const folderW = widgetOf(node, "folder");
     const fileW = widgetOf(node, "file");
+    const filesW = widgetOf(node, "files");
     if (!pathW || !textW || !folderW || !fileW) return;
 
     // The three the browser now drives. They stay on the node — they are what
@@ -195,6 +221,7 @@ function setupPrompts(node) {
     // already makes is the same control twice.
     hideWidget(folderW);
     hideWidget(fileW);
+    hideWidget(filesW);
     hideTextWidget(textW);
 
     // What the panel knows: the tree under the path it last read (every
@@ -203,7 +230,7 @@ function setupPrompts(node) {
     // folders are open, and which row was last clicked.
     const state = { path: "", folders: null, files: null, error: "",
                     loaded: "", read: "", everLoaded: false,
-                    open: new Set(), cursor: null };
+                    open: new Set(), cursor: null, anchor: null };
     const text = () => (typeof textW.value === "string" ? textW.value : "");
     const dirty = () => text() !== state.loaded;
 
@@ -342,12 +369,26 @@ function setupPrompts(node) {
         const lit = rel === fileRel();
         return treeRow({
             kind, rel, depth, tone: lit ? HUB.selBg : "",
-            lead: el("span", "flex:none;width:9px;"),
+            lead: filesW ? tickBox(rel, lit) : el("span", "flex:none;width:9px;"),
             label: baseOf(rel), labelColour: lit ? HUB.selInk : HUB.ink,
             actions: actions(() => { void renameFile(rel); },
                              () => { void deleteFile(rel); }),
             onClick: () => { void openFile(rel); },
         });
+    }
+
+    // The Recipes tick box, in front of a file's name: a click ticks or
+    // unticks that file and opens nothing; the name still opens it.
+    function tickBox(rel, lit) {
+        const at = readTicks(filesW).indexOf(rel);
+        const box = iconLead(at >= 0 ? "ticked" : "unticked", { px: 11,
+            color: lit || at >= 0 ? HUB.selInk : HUB.inkTertiary });
+        box._symTick = at >= 0 ? "on" : "off";
+        box.title = at >= 0 ? `Output ${at + 1}: untick to remove it`
+            : "Tick to add an output with this file";
+        box.style.cursor = "pointer";
+        box.addEventListener("click", (e) => { e.stopPropagation(); tick(rel, e); });
+        return box;
     }
 
     function rows() {
@@ -406,6 +447,88 @@ function setupPrompts(node) {
     node._symRenderPrompts = render;
 
     const repaint = () => { render(); node.setDirtyCanvas?.(true, true); };
+
+    // --- ticked files, one output each ---------------------------------------
+    // Output 0 is the open file; after it, one output per ticked file in tick
+    // order. Its NAME is its position (Python answers `prompt_2` with the
+    // second tick) and its LABEL is the file. Unticking takes that output out
+    // with `removeOutput`, which repoints every wire below it, so each wire
+    // stays on its file.
+    const writeTicks = (list) => {
+        filesW.value = list.length ? JSON.stringify(list) : "";
+    };
+
+    function syncOutputs() {
+        if (!filesW || !Array.isArray(node.outputs)) return;
+        const ticks = readTicks(filesW);
+        const want = 1 + ticks.length;
+        while (node.outputs.length > want) {
+            const last = node.outputs.length - 1;
+            // Only the tail, and only while nothing hangs off it: an untick
+            // has already taken its own output out.
+            if (node.outputs[last]?.links?.length) break;
+            node.removeOutput?.(last);
+        }
+        while (node.outputs.length < want) {
+            node.addOutput?.(`prompt_${node.outputs.length}`, "STRING");
+        }
+        ticks.forEach((rel, i) => {
+            const out = node.outputs[i + 1];
+            if (!out) return;
+            out.name = `prompt_${i + 1}`;
+            out.label = tickLabel(rel, ticks);
+        });
+        node.setDirtyCanvas?.(true, true);
+    }
+    node._symSyncPromptOutputs = syncOutputs;
+
+    // Take files out of the tick list, and their outputs off the node, from
+    // the bottom up so the indexes above stay where they are.
+    function untick(gone) {
+        const ticks = readTicks(filesW);
+        for (let i = ticks.length - 1; i >= 0; i -= 1) {
+            if (!gone(ticks[i])) continue;
+            ticks.splice(i, 1);
+            node.removeOutput?.(i + 1);
+        }
+        writeTicks(ticks);
+    }
+
+    // The files the tree shows, top to bottom: what a shift-click ranges over.
+    const visibleFiles = () => walkTree(
+        { folders: state.folders ?? [], files: state.files ?? [], open: state.open },
+        (kind, rel) => (kind === "file" ? rel : null)).filter(Boolean);
+
+    function tick(rel, event) {
+        const ticks = readTicks(filesW);
+        const max = node._symMaxPrompts || MAX_TICKS;
+        let add = [];
+        if (event?.shiftKey && state.anchor && state.anchor !== rel) {
+            const order = visibleFiles();
+            const a = order.indexOf(state.anchor);
+            const b = order.indexOf(rel);
+            if (a >= 0 && b >= 0) {
+                add = order.slice(Math.min(a, b), Math.max(a, b) + 1)
+                    .filter((f) => !ticks.includes(f));
+            }
+        } else if (ticks.includes(rel)) {
+            untick((f) => f === rel);
+            state.anchor = rel;
+            syncOutputs();
+            repaint();
+            return;
+        } else {
+            add = [rel];
+        }
+        if (ticks.length + add.length > max) {
+            toast("warn", "Prompts", `One node hands out ${max} files at most.`);
+            return;
+        }
+        writeTicks([...ticks, ...add]);
+        state.anchor = rel;
+        syncOutputs();
+        repaint();
+    }
 
     // --- reading and writing -------------------------------------------------
     async function load({ keep = "" } = {}) {
@@ -536,7 +659,12 @@ function setupPrompts(node) {
         state.files = (state.files ?? []).map(move).sort();
         state.open = new Set([...state.open].map(move));
         if (state.cursor) state.cursor = move(state.cursor);
+        if (state.anchor) state.anchor = move(state.anchor);
         if (state.read) state.read = move(state.read);
+        if (filesW) {
+            writeTicks(readTicks(filesW).map(move));
+            syncOutputs();
+        }
         const open = fileRel();
         if (open && move(open) !== open) {
             folderW.value = dirOf(move(open)) || ROOT;
@@ -683,6 +811,10 @@ function setupPrompts(node) {
         state.files = (state.files ?? []).filter((f) => !under(f));
         state.open = new Set([...state.open].filter((f) => !under(f)));
         if (state.cursor !== null && under(state.cursor)) state.cursor = null;
+        if (filesW && readTicks(filesW).some(under)) {
+            untick(under);
+            syncOutputs();
+        }
         if (fileRel() && under(fileRel())) {
             // Up to whatever held what was deleted, and empty: the next
             // listing picks the first file there rather than leaving the node
@@ -772,6 +904,7 @@ function setupPrompts(node) {
         window.removeEventListener(SAVED_EVT, onSaved);
         prevRemoved?.apply(this, arguments);
     };
+    syncOutputs();
     render();
 }
 
@@ -897,12 +1030,18 @@ registerSymbioticaExtension(app, {
             // restores its own over this, on configure.
             this.size[0] = Math.max(this.size[0], 620);
             this.size[1] = Math.max(this.size[1], 380);
+            // Python's ceiling, taken before the unticked outputs come off.
+            if ((this.outputs?.length ?? 0) > 1) {
+                this._symMaxPrompts = this.outputs.length - 1;
+            }
             setupPrompts(this);
             this._symRefreshPrompts?.();
         };
         const origCfg = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             origCfg?.apply(this, arguments);
+            // The saved outputs are back; their labels follow the ticks.
+            this._symSyncPromptOutputs?.();
             this._symRefreshPrompts?.();
         };
         const origConn = nodeType.prototype.onConnectionsChange;

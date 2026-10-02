@@ -32,25 +32,84 @@ def test_prompts_outputs_the_text_as_shown(nodes_mod):
     out = nodes_mod.SymbioticaPromptBlock.execute(
         path="/p/bakery/prompts", folder="_rules", file="01-game.md",
         text="GAME RULES\n")
-    assert out.args == ("GAME RULES\n",)
+    assert out.args[0] == "GAME RULES\n"
+    assert out.args[1:] == ("",) * nodes_mod.PROMPT_OUTPUTS
 
 
 def test_prompts_with_nothing_picked_outputs_empty(nodes_mod):
     out = nodes_mod.SymbioticaPromptBlock.execute()
-    assert out.args == ("",)
+    assert out.args == ("",) * (1 + nodes_mod.PROMPT_OUTPUTS)
 
 
-def test_prompts_is_four_widgets_and_one_output(nodes_mod):
-    # The node is a literal with a file behind it: path, folder, file, text.
-    # No category, slot, subfolder, passthrough or chain input — every one of
-    # those was a second way to say something the canvas already says.
+def test_prompts_is_four_widgets_and_the_tick_list(nodes_mod):
+    # The node is a literal with a file behind it: path, folder, file, text,
+    # and the ticked files APPENDED after them so no saved value shifts.
     schema = nodes_mod.SymbioticaPromptBlock.define_schema()
     assert schema.node_id == "SymbioticaPromptBlock"
     assert schema.display_name == "Prompts (Symbiotica)"
-    assert [i.id for i in schema.inputs] == ["path", "folder", "file", "text"]
-    assert [o.display_name for o in schema.outputs] == ["text"]
+    assert [i.id for i in schema.inputs] == ["path", "folder", "file", "text",
+                                             "files"]
+    assert [o.display_name for o in schema.outputs] == ["text", *[
+        f"prompt_{i}" for i in range(1, nodes_mod.PROMPT_OUTPUTS + 1)]]
     text = schema.inputs[3]
     assert text.multiline is True
+
+
+def _prompts(tmp_path):
+    root = tmp_path / "prompts"
+    (root / "image").mkdir(parents=True)
+    (root / "llm").mkdir()
+    (root / "image" / "sketch.md").write_text("SKETCH")
+    (root / "image" / "final.md").write_text("FINAL")
+    (root / "llm" / "system.md").write_text("SYSTEM")
+    return root
+
+
+def test_ticked_files_answer_in_tick_order(nodes_mod, tmp_path):
+    root = _prompts(tmp_path)
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        path=str(root), folder="llm", file="system.md", text="SYSTEM",
+        files='["image/final.md", "llm/system.md", "image/sketch.md"]')
+    assert out.args[:4] == ("SYSTEM", "FINAL", "SYSTEM", "SKETCH")
+    assert out.args[4:] == ("",) * (nodes_mod.PROMPT_OUTPUTS - 3)
+
+
+def test_the_open_files_unsaved_edit_wins(nodes_mod, tmp_path):
+    root = _prompts(tmp_path)
+    out = nodes_mod.SymbioticaPromptBlock.execute(
+        path=str(root), folder="image", file="sketch.md", text="EDITED",
+        files='["image/sketch.md", "image/final.md"]')
+    assert out.args[:3] == ("EDITED", "EDITED", "FINAL")
+
+
+def test_a_ticked_file_that_is_gone_fails_by_name(nodes_mod, tmp_path):
+    root = _prompts(tmp_path)
+    with pytest.raises(Exception, match="gone.md"):
+        nodes_mod.SymbioticaPromptBlock.execute(
+            path=str(root), folder="image", file="sketch.md", text="SKETCH",
+            files='["image/gone.md"]')
+
+
+def test_a_workflow_saved_before_ticks_reads_nothing_ticked(nodes_mod, tmp_path):
+    # An old save hands `files` the panel's value: "" or null.
+    root = _prompts(tmp_path)
+    for old in ("", None, "not json", '{"a": 1}'):
+        out = nodes_mod.SymbioticaPromptBlock.execute(
+            path=str(root), folder="image", file="sketch.md", text="X",
+            files=old)
+        assert out.args == ("X",) + ("",) * nodes_mod.PROMPT_OUTPUTS
+
+
+def test_editing_a_ticked_file_on_disk_reruns_the_node(nodes_mod, tmp_path):
+    root = _prompts(tmp_path)
+    args = dict(path=str(root), folder="image", file="sketch.md",
+                text="SKETCH", files='["image/final.md"]')
+    before = nodes_mod.SymbioticaPromptBlock.fingerprint_inputs(**args)
+    assert before == nodes_mod.SymbioticaPromptBlock.fingerprint_inputs(**args)
+    target = root / "image" / "final.md"
+    target.write_text("FINAL, LONGER")
+    os.utime(target, ns=(1, 1))
+    assert before != nodes_mod.SymbioticaPromptBlock.fingerprint_inputs(**args)
 
 
 def test_prompts_is_an_output_node_so_it_can_be_queued_alone(nodes_mod):

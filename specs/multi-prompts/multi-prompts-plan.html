@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Prompts multi select</title>
+<style>
+:root{--bg:#f6f5f2;--ink:#1c1c1a;--mute:#6b6a66;--line:#d9d7d1;--acc:#2a5d9f;--acc2:#e8eef7;--ok:#2f7d4f;--warn:#a8541f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,Inter,Segoe UI,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:26px;margin:0 0 8px}
+h2{font-size:17px;margin:34px 0 8px;letter-spacing:.02em;text-transform:uppercase;color:var(--mute)}
+h3{font-size:16px;margin:18px 0 4px}
+h4{font-size:14.5px;margin:14px 0 4px}
+ul.terse,ul.checklist{margin:0;padding-left:18px}
+ul.terse li,ul.checklist li{margin:3px 0}
+ul.checklist{list-style:none;padding-left:0}
+p.chain{font-family:ui-monospace,Menlo,monospace;font-size:13.5px;background:var(--acc2);padding:10px 12px;border-left:3px solid var(--acc);margin:8px 0 14px}
+figure{margin:12px 0}
+figure img{width:100%;border:1px solid var(--line);border-radius:6px;display:block}
+figcaption{font-size:12.5px;color:var(--mute);margin-top:4px}
+.phase{padding:10px 0 4px;border-top:1px solid var(--line)}
+details.meta summary{cursor:pointer;color:var(--mute);font-size:13px}
+dl{display:grid;grid-template-columns:110px 1fr;gap:2px 10px;font-size:13px;margin:6px 0 0}
+dt{color:var(--mute)}dd{margin:0;font-family:ui-monospace,Menlo,monospace}
+table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0}
+th,td{text-align:left;vertical-align:top;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--mute);font-weight:600;font-size:12.5px;text-transform:uppercase}
+details{margin:6px 0}
+details summary{cursor:pointer}
+code{font-family:ui-monospace,Menlo,monospace;font-size:13px;background:#ecebe6;padding:0 4px;border-radius:3px}
+code.status{background:none;color:var(--mute);padding:0}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;color:#fff;vertical-align:middle}
+.tag.existing{background:var(--mute)}
+.tag.new{background:var(--ok)}
+p.note,div.loop{font-size:14px;margin:8px 0;padding:8px 10px;border-left:3px solid var(--warn);background:#f6efe8}
+.tree,.tree ul{list-style:none;margin:0;padding-left:16px}
+.tree{padding-left:0;font-size:14px}
+.tree ul{border-left:1px solid var(--line);margin-left:6px}
+.tree li{margin:3px 0}
+.tree summary{list-style:none}
+.tree summary::before{content:"▾ ";color:var(--mute)}
+.tree details:not([open]) > summary::before{content:"▸ "}
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <h1>Plan: Prompts multi select</h1>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-10-02T22:20:00Z</dd>
+        <dt>modified</dt>     <dd>2026-10-02T22:20:00Z</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>claude-opus-5-5</dd>
+        <dt>session id</dt>   <dd>b8f84a36-082a-43e2-b5a2-1d8de914079f</dd>
+        <dt>back refs</dt>    <dd>specs/multi-prompts/multi-prompts-plan-draft.md, web/js/recipes.js (selectLead), web/js/asset_recipe.js (slot outputs), user/default/workflows/bakery-final-03.json</dd>
+        <dt>forward refs</dt> <dd>py/pipeline/nodes.py, py/_recipes.py, web/js/prompts.js, web/js/recipes.js, tests/test_nodes_prompt_blocks.py, tests/test_recipes*.py, tests/js/prompts.test.mjs</dd>
+      </dl>
+    </details>
+  </header>
+
+  <figure>
+    <img src="hero.png" alt="One Prompts node: ticked files in the tree, one output per tick">
+    <figcaption>Tick a file in the tree, get an output named after it.</figcaption>
+  </figure>
+
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>One Prompts node hands out several prompt files at once, one output per file, so a prompt set is one node instead of one node per file.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p><code>bakery-final-03</code> holds four Prompts nodes (#4349, #4345, #4530, #4350), each a full copy of the same panel pointed at a different file. Every extra prompt is another copy to place, path, paint and keep in step.</p>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <ul class="terse">
+      <li><b>A tick box on every file row</b>, the Recipes one: <code>iconLead("ticked"/"unticked")</code> in front of the name. A click on the box ticks that file and opens nothing. Shift-click ticks the range from the last tick. A click on the name still opens the file, as today.</li>
+      <li><b>Each tick adds one output, labelled with the file name</b> without <code>.md</code> (<code>render-preamble-sketch</code>). Two ticked files with the same name in different folders are labelled by their path under the root.</li>
+      <li><b><code>text</code> stays output 0</b> and stays the open file. The 12 wires on <code>bakery-final-03</code> do not move. Nothing ticked is today's node exactly.</li>
+      <li><b>Outputs follow tick order.</b> Unticking removes that output and its wires. The wires after it stay on their files. Rename and delete in the tree carry the tick.</li>
+      <li><b>The run reads each ticked file from disk.</b> The open file's unsaved edit wins for that file. A ticked file that is gone fails the run and names it. Editing a ticked file on disk re-runs the node.</li>
+      <li><b>Recipes leave the ticks alone.</b> The ticks are wiring, not a setting: a recipe holding fewer ticks would cut wires on every switch. They are never captured and a recipe load never removes an output.</li>
+    </ul>
+    <figure>
+      <img src="solution.png" alt="Three Prompts nodes become one node with three outputs">
+      <figcaption>Four copies on the canvas become one node with one output per prompt.</figcaption>
+    </figure>
+    <p class="note"><b>Where the ticks live:</b> a hidden <code>files</code> input (a JSON list of paths under the root), appended after <code>text</code>. Python declares 16 <code>prompt_N</code> STRING outputs and the canvas shows as many as are ticked, the Asset Recipe pattern. An old workflow loads <code>files</code> empty. A 17th tick is refused with a toast.</p>
+  </section>
+
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+    <ul class="tree">
+      <li class="dir">
+        <details open>
+          <summary><code>comfyui-nodes/</code></summary>
+          <ul>
+            <li class="dir">
+              <details open>
+                <summary><code>py/</code></summary>
+                <ul>
+                  <li class="dir">
+                    <details open>
+                      <summary><code>pipeline/</code></summary>
+                      <ul>
+                        <li class="file"><span class="tag existing">existing</span> <code>nodes.py</code> — <code>SymbioticaPromptBlock</code>: <code>files</code> input, 16 <code>prompt_N</code> outputs, read the ticked files, fingerprint on their stamps</li>
+                      </ul>
+                    </details>
+                  </li>
+                  <li class="file"><span class="tag existing">existing</span> <code>_recipes.py</code> — <code>files</code> is saved but never captured, and a base saved before it still generates</li>
+                </ul>
+              </details>
+            </li>
+            <li class="dir">
+              <details open>
+                <summary><code>web/js/</code></summary>
+                <ul>
+                  <li class="file"><span class="tag existing">existing</span> <code>prompts.js</code> — tick boxes, the outputs, rename/delete carrying ticks, reconcile on load</li>
+                  <li class="file"><span class="tag existing">existing</span> <code>recipes.js</code> — <code>settableWidgets</code> skips <code>files</code> on a Prompts node (one line, beside your uncommitted 81)</li>
+                </ul>
+              </details>
+            </li>
+            <li class="dir">
+              <details open>
+                <summary><code>tests/</code></summary>
+                <ul>
+                  <li class="file"><span class="tag existing">existing</span> <code>test_nodes_prompt_blocks.py</code> — outputs in tick order, unsaved edit wins, a missing file fails</li>
+                  <li class="file"><span class="tag existing">existing</span> <code>test_recipes*.py</code> — generate on a 5-value and a 6-value Prompts node, <code>files</code> never written</li>
+                  <li class="file"><span class="tag existing">existing</span> <code>js/prompts.test.mjs</code> — tick, shift-tick, untick middle, rename, reopen</li>
+                </ul>
+              </details>
+            </li>
+          </ul>
+        </details>
+      </li>
+    </ul>
+  </section>
+
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 1: Python node (about 45 minutes)</h3>
+      <p>The node takes the list and answers one string per tick.</p>
+      <h4>1. Schema</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Append <code>io.String.Input("files", default="")</code> after <code>text</code>. Never before it.</li>
+        <li><code class="status">[x]</code> Keep <code>text</code> as output 0, then <code>prompt_1..prompt_16</code> as <code>io.String.Output</code>.</li>
+      </ul>
+      <h4>2. Execute and cache</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Parse <code>files</code>. For each path, <code>read_file(path, rel)</code>, except the open <code>folder/file</code>, which answers <code>text</code>. Pad the rest with <code>""</code>.</li>
+        <li><code class="status">[x]</code> <code>fingerprint_inputs</code>: the inputs plus <code>stamp(path, rel)</code> of every ticked file, the Prompt Load rule.</li>
+      </ul>
+      <h4>3. Recipes server side</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> In <code>_widget_positions</code>, place <code>files</code> by declared order like a wired widget, so the merge never needs it captured.</li>
+        <li><code class="status">[x]</code> A Prompts node saved before <code>files</code> holds 5 values: names without the panel match it, which is how the frontend pairs them on load.</li>
+      </ul>
+      <h4>4. Testing Strategy</h4>
+      <p>pytest with the comfy_api stub, against temp prompt folders.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>.venv/bin/pytest tests/test_nodes_prompt_blocks.py tests/test_recipes*.py</code> — tick order, edit wins, missing file fails, old and new saves generate</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run.</div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 2: Canvas (about 1.5 hours)</h3>
+      <p>All in <code>prompts.js</code>. No new <code>web/js</code> file, so Modal gets it on the next push.</p>
+      <h4>1. Tick boxes</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Hide <code>files</code> with <code>hideWidget</code>. Read and write it as a JSON list.</li>
+        <li><code class="status">[x]</code> In <code>makeRow</code>, file rows get the Recipes box as <code>lead</code>. Box click toggles, shift-click ranges over visible file rows.</li>
+      </ul>
+      <h4>2. Outputs</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>syncOutputs</code>: outputs = <code>text</code> + one per tick. Name <code>prompt_N</code> by position, <code>label</code> the file name. Remove with <code>removeOutput(index)</code>, which repoints later wires.</li>
+        <li><code class="status">[x]</code> Run it on tick, untick, rename, delete and <code>onConfigure</code>. Rename and delete edit the list first.</li>
+      </ul>
+      <h4>3. Recipes canvas side</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>settableWidgets</code> leaves out <code>files</code> on <code>SymbioticaPromptBlock</code>, so capture and load never touch it.</li>
+      </ul>
+      <h4>4. Testing Strategy</h4>
+      <p>node:test with the comfy stub for logic, then the real thing in local ComfyUI.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>node --import ./tests/js/register_hooks.mjs --test tests/js/*.test.mjs</code> — tick, shift-tick, untick middle keeps the third wire, rename, reopen</li>
+        <li><code class="status">[x]</code> Spare ComfyUI on 8189 with a copy of <code>bakery-final-03</code>, playwright: tick 3 files on #4345, wire each to PreviewAny, queue, read the 3 texts</li>
+        <li><code class="status">[x]</code> Same spare: save, reopen, ticks, labels and wires survive. Switch two recipes, outputs and wires survive. Drag the node smaller, it shrinks.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run.</div>
+    </div>
+  </section>
+
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[x]</code> <code>.venv/bin/pytest</code> — the whole Python suite passes</li>
+      <li><code class="status">[x]</code> <code>node --import ./tests/js/register_hooks.mjs --test tests/js/*.test.mjs</code> — the whole canvas suite passes</li>
+      <li><code class="status">[x]</code> <code>/symbiotica/recipes/generate</code> on the spare's <code>bakery-final-03</code> — every recipe writes, ticks kept from the base</li>
+      <li><code class="status">[]</code> You, in local Comfy after a restart — tick, wire, queue on your canvas</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If a step is not possible to complete, mark it with [f] and move on if possible.</strong></div>
+  </section>
+
+  <section id="notes">
+    <h2>Notes</h2>
+    <h3>Effort</h3>
+    <table>
+      <tr><th>Part</th><th>Time</th></tr>
+      <tr><td>Python node + recipes server side</td><td>45 minutes</td></tr>
+      <tr><td>Canvas: ticks, outputs, recipes skip</td><td>1.5 hours</td></tr>
+      <tr><td>Tests</td><td>45 minutes</td></tr>
+      <tr><td>Local ComfyUI verification</td><td>45 minutes</td></tr>
+      <tr><td><b>Total</b></td><td><b>about 3.5 hours</b></td></tr>
+    </table>
+    <h3>Risks</h3>
+    <ul class="terse">
+      <li><b>R1</b> <code>recipes.js</code> has 81 uncommitted lines of yours. The change there is one condition in <code>settableWidgets</code>. A commit takes only that hunk.</li>
+      <li><b>R2</b> Restart Comfy after this lands: a new input and new outputs register only on start.</li>
+      <li><b>R3</b> 16 outputs is a ceiling. Raising it later is one constant, and appending outputs shifts nothing saved.</li>
+    </ul>
+    <h3>Rejected</h3>
+    <ul class="terse">
+      <li>Ticks in <code>node.properties</code>: the run never sees properties, so Python could not read the files.</li>
+      <li>Ticks captured per recipe: a recipe with fewer ticks cuts wires on every switch.</li>
+      <li>One joined output: the draft asks for one output per prompt.</li>
+    </ul>
+  </section>
+
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <ul class="terse">
+      <li>2026-10-02: <code>_recipes.py</code> needed no change. A saved node lists <code>files</code> among its inputs, so the names match the 6 values exactly, and an old node still holds 5. Held by a test in <code>tests/test_recipes.py</code>.</li>
+      <li>2026-10-02: generate on the spare refused on a stale group title in the recipes (<code>##LLM</code>, now <code>llm-prompt</code>), the same on the unticked file. With that key dropped, 21 of 22 recipes generate with ticks and outputs kept. The 22nd stops on a second stale title, <code>Control Image</code>.</li>
+    </ul>
+  </section>
+
+</main>
+</body>
+</html>

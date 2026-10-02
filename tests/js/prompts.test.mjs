@@ -3,8 +3,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { app, create, emit, fire, link, reset, setResponder, tick } from "./comfy_stub.mjs";
+import { app, configure, create, emit, fire, link, reset, serializeWidgets, setResponder,
+         tick } from "./comfy_stub.mjs";
 import { SAVED_EVT } from "../../web/js/prompts.js";
+import { settableWidgets } from "../../web/js/recipes.js";
 
 const TREE = {
     folders: ["_image", "_rules", "_rules/old"],
@@ -729,4 +731,147 @@ test("a file renamed under an open list leaves it by its new name", async () => 
     answer({ text: "07-lighting.md" });
     await click(rowAction(node, "_rules/03-light.md", "Rename"));
     assert.deepEqual(hits(node), ["_rules/07-lighting.md"]);
+});
+
+// --- ticked files, one output each -------------------------------------------
+// "select multiple prompts will output them individually, the name of the
+// output will be the prompt's file name" (2026-10-02).
+
+const OUTPUTS = ["text", ...Array.from({ length: 16 }, (_, i) => `prompt_${i + 1}`)];
+
+async function tickNode(seen = [], widgets = {}) {
+    reset();
+    app.graph._nodes = [];
+    app.graph.links = {};
+    setResponder(router(seen));
+    const node = await create("SymbioticaPromptBlock",
+                              { path: "/p/bakery/prompts", folder: "_rules",
+                                file: "01-refs.md", text: "", files: "", ...widgets },
+                              { output_name: OUTPUTS });
+    node.inputs = [];
+    app.graph._nodes = [node];
+    await node.onNodeCreated?.call(node);
+    await settle();
+    return node;
+}
+const box = (node, rel) => descendants(rowFor(node, rel)).find((e) => e._symTick);
+async function tickFile(node, rel, shiftKey = false) {
+    fire(box(node, rel), "click", { stopPropagation() {}, shiftKey });
+    await settle();
+}
+const ticks = (node) => JSON.parse(widget(node, "files").value || "[]");
+const labels = (node) => node.outputs.map((o) => o.label ?? o.name);
+
+test("nothing ticked is the node as it was: one output", async () => {
+    const node = await tickNode();
+    assert.deepEqual(labels(node), ["text"]);
+    assert.equal(widget(node, "files").value, "");
+    assert.equal(widget(node, "files").hidden, true);
+    assert.equal(box(node, "_rules/01-refs.md")._symTick, "off");
+});
+
+test("each tick adds an output named after its file, in tick order", async () => {
+    const node = await tickNode();
+    await tickFile(node, "_rules/03-light.md");
+    await tickFile(node, "Chair.md");
+    assert.deepEqual(ticks(node), ["_rules/03-light.md", "Chair.md"]);
+    assert.deepEqual(labels(node), ["text", "03-light", "Chair"]);
+    assert.deepEqual(node.outputs.map((o) => o.name), ["text", "prompt_1", "prompt_2"]);
+    // A tick opens nothing: the editor stays on the file it was on.
+    assert.equal(widget(node, "file").value, "01-refs.md");
+    assert.equal(box(node, "Chair.md")._symTick, "on");
+});
+
+test("shift-click ticks the range from the last tick over the visible rows", async () => {
+    const node = await tickNode();
+    await tickFile(node, "_rules/01-refs.md");
+    await tickFile(node, "Chair.md", true);
+    assert.deepEqual(ticks(node), ["_rules/01-refs.md", "_rules/03-light.md", "Chair.md"]);
+});
+
+test("unticking the middle file keeps the third wire on its file", async () => {
+    const node = await tickNode();
+    for (const rel of ["_rules/01-refs.md", "_rules/03-light.md", "Chair.md"]) {
+        await tickFile(node, rel);
+    }
+    const a = { id: 900, inputs: [] };
+    const c = { id: 901, inputs: [] };
+    const toA = link(node, a, "text", 1);
+    const toC = link(node, c, "text", 3);
+    await tickFile(node, "_rules/03-light.md");
+    assert.deepEqual(ticks(node), ["_rules/01-refs.md", "Chair.md"]);
+    assert.deepEqual(labels(node), ["text", "01-refs", "Chair"]);
+    assert.equal(app.graph.links[toA].origin_slot, 1);
+    assert.equal(app.graph.links[toC].origin_slot, 2);
+});
+
+test("a rename carries the tick and a delete takes it and its output", async () => {
+    const node = await tickNode();
+    await tickFile(node, "_rules/03-light.md");
+    await tickFile(node, "Chair.md");
+    answer({ text: "07-lighting.md" });
+    await click(rowAction(node, "_rules/03-light.md", "Rename"));
+    assert.deepEqual(ticks(node), ["_rules/07-lighting.md", "Chair.md"]);
+    assert.deepEqual(labels(node), ["text", "07-lighting", "Chair"]);
+    answer({ confirm: true });
+    await click(rowAction(node, "_rules/07-lighting.md", "Delete"));
+    assert.deepEqual(ticks(node), ["Chair.md"]);
+    assert.deepEqual(labels(node), ["text", "Chair"]);
+});
+
+test("two ticked files with one name read as their paths", async () => {
+    const node = await tickNode();
+    await click(rowFor(node, "_image"));
+    await tickFile(node, "_image/01-model.md");
+    await tickFile(node, "_rules/01-refs.md");
+    assert.deepEqual(labels(node), ["text", "01-model", "01-refs"]);
+});
+
+test("a reopened workflow keeps its ticks, labels and outputs", async () => {
+    const node = await tickNode();
+    await tickFile(node, "_rules/03-light.md");
+    await tickFile(node, "Chair.md");
+    const values = serializeWidgets(node);
+    const outputs = node.outputs.map((o) => ({ name: o.name, links: [] }));
+    const again = await tickNode();
+    again.outputs = outputs;
+    configure(again, { widgets_values: values });
+    await settle();
+    assert.deepEqual(labels(again), ["text", "03-light", "Chair"]);
+    assert.equal(box(again, "Chair.md")._symTick, "on");
+});
+
+test("a workflow saved before ticks reopens with nothing ticked", async () => {
+    // Five values: path, folder, file, text and the panel's "" -- which lands
+    // on `files`.
+    const node = await tickNode();
+    node.outputs = [{ name: "text", links: [] }];
+    configure(node, { widgets_values: ["/p/bakery/prompts", "_rules", "01-refs.md", "x", ""] });
+    await settle();
+    assert.deepEqual(labels(node), ["text"]);
+    assert.equal(widget(node, "text").value, "x");
+});
+
+test("a tick past the sixteen outputs Python declares is refused", async () => {
+    const many = { folders: [], files: Array.from({ length: 17 }, (_, i) => `p${String(i).padStart(2, "0")}.md`) };
+    reset();
+    app.graph._nodes = [];
+    setResponder(router([], many));
+    const node = await create("SymbioticaPromptBlock",
+                              { path: "/p", folder: "/", file: "p00.md", text: "", files: "" },
+                              { output_name: OUTPUTS });
+    node.inputs = [];
+    app.graph._nodes = [node];
+    await node.onNodeCreated?.call(node);
+    await settle();
+    for (const rel of many.files) await tickFile(node, rel);
+    assert.equal(ticks(node).length, 16);
+    assert.equal(node.outputs.length, 17);
+});
+
+test("recipes never capture the ticks", async () => {
+    const node = await tickNode();
+    await tickFile(node, "Chair.md");
+    assert.deepEqual(settableWidgets(node).map((w) => w.name).filter((n) => n !== "prompts_panel"),
+                     ["path", "folder", "file", "text"]);
 });

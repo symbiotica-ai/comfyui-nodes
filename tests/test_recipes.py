@@ -207,6 +207,22 @@ class TestWidgetsBehindTheNames:
             "folder": "llm-prompts", "file": "chair.md", "text": "new text"}}, "purple")
         assert wf["nodes"][0]["widgets_values"] == ["", "llm-prompts", "chair.md", "new text", ""]
 
+    def test_a_prompts_node_with_ticked_files_keeps_its_ticks(self):
+        # The ticks are wiring, not a setting: the canvas never captures
+        # `files`, and a recipe written onto the node leaves it as the base
+        # holds it -- a recipe holding fewer ticks would cut wires.
+        ticks = '["image/a.md", "image/b.md"]'
+        node = {"id": 4345, "type": "SymbioticaPromptBlock", "mode": 0, "outputs": [],
+                "color": "#323", "bgcolor": "#535", "title": "##render-sketch-preamble",
+                "inputs": [{"name": n, "type": "STRING", "widget": {"name": n},
+                            "link": 5755 if n == "path" else None}
+                           for n in ("path", "folder", "file", "text", "files")],
+                "widgets_values": ["", "old", "old.md", "old text", ticks, ""]}
+        wf = painted(node)
+        apply_recipe(wf, {"##render-sketch-preamble": {
+            "folder": "image", "file": "c.md", "text": "new text"}}, "purple")
+        assert wf["nodes"][0]["widgets_values"] == ["", "image", "c.md", "new text", ticks, ""]
+
     def test_a_capture_that_names_too_few_widgets_is_refused_by_name(self):
         wf = painted(ksampler())
         with pytest.raises(RecipeError, match="Capture the slot again"):
