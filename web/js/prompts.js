@@ -14,6 +14,10 @@ const NODE = "SymbioticaPromptBlock";
 // CHANGES to a pack file into a running sandbox but never ADDS a new one,
 // so a node whose panel ships as its own .js comes up as raw widgets.
 const LOAD_NODE = "SymbioticaPromptLoad";
+const SPECS_NODE = "SymbioticaPromptSpecs";
+// The ticks this Specs node last drew, on the node so a reopened workflow can
+// tell WHICH file an untick took out and repoint the wires below it.
+const SPECS_TICKS = "symbiotica_specs_ticks";
 
 // One node's save is every other node's stale view: two Prompts nodes on the
 // same file must agree after either saves. Saves are announced on the window
@@ -182,8 +186,8 @@ const MIN_NODE_W = 460;
 const SIDE_PROP = "symbiotica_prompts_sidebar";
 const SIDE_SHUT_PROP = "symbiotica_prompts_shut";
 
-// Python's ceiling on ticked files (`PROMPT_OUTPUTS`), for a node that was
-// created without its declared outputs to count.
+// Python's ceiling on ticked files (`PROMPT_OUTPUTS`), the sockets
+// the Prompt Specs node declares.
 const MAX_TICKS = 16;
 
 // The ticked files, as the hidden `files` widget holds them: a JSON list of
@@ -448,50 +452,22 @@ function setupPrompts(node) {
 
     const repaint = () => { render(); node.setDirtyCanvas?.(true, true); };
 
-    // --- ticked files, one output each ---------------------------------------
-    // Output 0 is the open file; after it, one output per ticked file in tick
-    // order. Its NAME is its position (Python answers `prompt_2` with the
-    // second tick) and its LABEL is the file. Unticking takes that output out
-    // with `removeOutput`, which repoints every wire below it, so each wire
-    // stays on its file.
+    // --- ticked files ----------------------------------------------------------
+    // The ticks ride on the hidden `files` widget and leave as ONE `prompts`
+    // wire; Prompt Specs (below) draws a socket per file. This node's own
+    // outputs never change with the ticks, so ticking cannot grow it.
     const writeTicks = (list) => {
         filesW.value = list.length ? JSON.stringify(list) : "";
     };
 
     function syncOutputs() {
-        if (!filesW || !Array.isArray(node.outputs)) return;
-        const ticks = readTicks(filesW);
-        const want = 1 + ticks.length;
-        while (node.outputs.length > want) {
-            const last = node.outputs.length - 1;
-            // Only the tail, and only while nothing hangs off it: an untick
-            // has already taken its own output out.
-            if (node.outputs[last]?.links?.length) break;
-            node.removeOutput?.(last);
-        }
-        while (node.outputs.length < want) {
-            node.addOutput?.(`prompt_${node.outputs.length}`, "STRING");
-        }
-        ticks.forEach((rel, i) => {
-            const out = node.outputs[i + 1];
-            if (!out) return;
-            out.name = `prompt_${i + 1}`;
-            out.label = tickLabel(rel, ticks);
-        });
         node.setDirtyCanvas?.(true, true);
     }
     node._symSyncPromptOutputs = syncOutputs;
 
-    // Take files out of the tick list, and their outputs off the node, from
-    // the bottom up so the indexes above stay where they are.
+    // Take files out of the tick list.
     function untick(gone) {
-        const ticks = readTicks(filesW);
-        for (let i = ticks.length - 1; i >= 0; i -= 1) {
-            if (!gone(ticks[i])) continue;
-            ticks.splice(i, 1);
-            node.removeOutput?.(i + 1);
-        }
-        writeTicks(ticks);
+        writeTicks(readTicks(filesW).filter((rel) => !gone(rel)));
     }
 
     // The files the tree shows, top to bottom: what a shift-click ranges over.
@@ -501,7 +477,7 @@ function setupPrompts(node) {
 
     function tick(rel, event) {
         const ticks = readTicks(filesW);
-        const max = node._symMaxPrompts || MAX_TICKS;
+        const max = MAX_TICKS;
         let add = [];
         if (event?.shiftKey && state.anchor && state.anchor !== rel) {
             const order = visibleFiles();
@@ -1018,9 +994,93 @@ function installPromptLoad(nodeType) {
     };
 }
 
+// --- Prompt Specs: one socket per ticked file ----------------------------------
+// The Prompts node hands every ticked file out on one wire; this node draws a
+// socket per file, labelled with its name. Its OWN size follows the ticks, the
+// Prompts panel's never does.
+
+// The Prompts node feeding input 0, through any reroutes.
+function promptsSource(node) {
+    let cur = node;
+    for (let hops = 0; hops < 8; hops += 1) {
+        const up = cur.getInputNode?.(0);
+        if (!up) return null;
+        if (up.comfyClass === NODE || up.type === NODE) return up;
+        cur = up;
+    }
+    return null;
+}
+
+export function syncPromptSpecs(node) {
+    if (!Array.isArray(node.outputs)) return;
+    const src = promptsSource(node);
+    // Nothing upstream the canvas can read yet: leave what is drawn alone.
+    if (!src) return;
+    const ticks = readTicks(widgetOf(src, "files"));
+    node.properties = node.properties ?? {};
+    const prev = Array.isArray(node.properties[SPECS_TICKS]) ? node.properties[SPECS_TICKS] : [];
+    // A file that left the list takes its socket with it, bottom up, so the
+    // wires below keep their file.
+    for (let i = prev.length - 1; i >= 0; i -= 1) {
+        if (!ticks.includes(prev[i]) && node.outputs[i]) node.removeOutput?.(i);
+    }
+    while (node.outputs.length > ticks.length) {
+        const last = node.outputs.length - 1;
+        if (node.outputs[last]?.links?.length) break;
+        node.removeOutput?.(last);
+    }
+    while (node.outputs.length < ticks.length) {
+        node.addOutput?.(`prompt_${node.outputs.length + 1}`, "STRING");
+    }
+    // The socket order is the tick order only when nothing was reordered, which
+    // ticking never does; a file ticked later is appended.
+    ticks.forEach((rel, i) => {
+        const out = node.outputs[i];
+        if (!out) return;
+        out.name = `prompt_${i + 1}`;
+        out.label = tickLabel(rel, ticks);
+    });
+    node.properties[SPECS_TICKS] = ticks;
+    node.setDirtyCanvas?.(true, true);
+}
+
+function installPromptSpecs(nodeType) {
+    const orig = nodeType.prototype.onNodeCreated;
+    nodeType.prototype.onNodeCreated = function () {
+        orig?.apply(this, arguments);
+        // Python declares the most it can hand out; a node nobody wired has
+        // none to show yet.
+        while ((this.outputs?.length ?? 0) > 0 && !this.outputs[this.outputs.length - 1]?.links?.length) {
+            this.removeOutput?.(this.outputs.length - 1);
+        }
+    };
+    const origCfg = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function () {
+        origCfg?.apply(this, arguments);
+        syncPromptSpecs(this);
+    };
+    const origConn = nodeType.prototype.onConnectionsChange;
+    nodeType.prototype.onConnectionsChange = function () {
+        origConn?.apply(this, arguments);
+        syncPromptSpecs(this);
+    };
+    // A tick on the Prompts node fires nothing this node can hear.
+    const origDraw = nodeType.prototype.onDrawForeground;
+    nodeType.prototype.onDrawForeground = function () {
+        const src = promptsSource(this);
+        const sig = src ? widgetOf(src, "files")?.value ?? "" : null;
+        if (sig !== null && sig !== this._symSpecsSig) {
+            this._symSpecsSig = sig;
+            syncPromptSpecs(this);
+        }
+        return origDraw?.apply(this, arguments);
+    };
+}
+
 registerSymbioticaExtension(app, {
     name: "symbiotica.prompts",
     async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData?.name === SPECS_NODE) { installPromptSpecs(nodeType); return; }
         if (nodeData?.name === LOAD_NODE) { installPromptLoad(nodeType); return; }
         if (nodeData.name !== NODE) return;
         const orig = nodeType.prototype.onNodeCreated;
@@ -1030,17 +1090,20 @@ registerSymbioticaExtension(app, {
             // restores its own over this, on configure.
             this.size[0] = Math.max(this.size[0], 620);
             this.size[1] = Math.max(this.size[1], 380);
-            // Python's ceiling, taken before the unticked outputs come off.
-            if ((this.outputs?.length ?? 0) > 1) {
-                this._symMaxPrompts = this.outputs.length - 1;
-            }
             setupPrompts(this);
             this._symRefreshPrompts?.();
         };
         const origCfg = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             origCfg?.apply(this, arguments);
-            // The saved outputs are back; their labels follow the ticks.
+            // A workflow saved with the old per-file outputs brings them
+            // back, labels and all. The node has ONE output now.
+            while ((this.outputs?.length ?? 0) > 1) this.removeOutput?.(this.outputs.length - 1);
+            if (this.outputs?.[0]) {
+                this.outputs[0].name = "prompts";
+                this.outputs[0].type = "SYMBIOTICA_PROMPTS";
+                delete this.outputs[0].label;
+            }
             this._symSyncPromptOutputs?.();
             this._symRefreshPrompts?.();
         };

@@ -14,12 +14,13 @@ from comfy_api.latest import io
 import folder_paths
 
 from .order_loader import event_spec, load_order
-from .order_sheet import bucket_for, canvas_size, category_recipe
+from .order_sheet import bucket_for, canvas_size, category_recipe, recipe_slug
 from .asset_refs import DEFAULT_BACKGROUND
 from .order_assets import assets_by_category, save_paths
 from .prompt_store import read_file, stamp
 
 Order = io.Custom("SYMBIOTICA_ORDER")
+Prompts = io.Custom("SYMBIOTICA_PROMPTS")
 
 
 def _push(event: str, payload: dict) -> None:
@@ -796,10 +797,10 @@ class SymbioticaPromptBlock(io.ComfyNode):
             node_id="SymbioticaPromptBlock",
             display_name="Prompts (Symbiotica)",
             category="Symbiotica",
-            description="A text file on the canvas. Point it at a path, "
+            description="Text files on the canvas. Point it at a path, "
                         "pick a folder under it and a file in that folder, "
-                        "read and edit it here, save it back. The output is "
-                        "the text as shown.",
+                        "read and edit it here, save it back. Tick files to "
+                        "send several; Prompt Specs splits them.",
             inputs=[
                 io.String.Input("path", default="",
                                 tooltip="The folder holding the prompts. Type "
@@ -825,13 +826,11 @@ class SymbioticaPromptBlock(io.ComfyNode):
                                         "ticking files in the tree."),
             ],
             outputs=[
-                io.String.Output(display_name="text",
-                                 tooltip="The text as shown."),
-                # ComfyUI has no dynamic outputs: the node declares a fixed
-                # set and the canvas shows one per ticked file, in tick order.
-                *[io.String.Output(display_name=f"prompt_{i}",
-                                   tooltip="A ticked file's text.")
-                  for i in range(1, PROMPT_OUTPUTS + 1)],
+                # ONE output, like Task. A socket per file grew the node with
+                # its ticks; Prompt Specs splits this back out.
+                Prompts.Output(display_name="prompts",
+                               tooltip="Every ticked file, as one wire. "
+                                       "Feed it to Prompt Specs."),
             ],
             hidden=[io.Hidden.unique_id],
             # An output node so it can be queued on its own. A path arriving
@@ -874,8 +873,43 @@ class SymbioticaPromptBlock(io.ComfyNode):
         # empty prompt to a billed model.
         texts = [shown if rel == open_rel else read_file(root, rel)
                  for rel in _ticked(files)[:PROMPT_OUTPUTS]]
+        names = _ticked(files)[:PROMPT_OUTPUTS]
+        if not names and not _unpicked(name):
+            # Nothing ticked: the open file is the one prompt.
+            names, texts = [open_rel], [shown]
+        return io.NodeOutput({"names": names, "texts": texts})
+
+
+class SymbioticaPromptSpecs(io.ComfyNode):
+    """A Prompts node's `prompts` wire, split into one text per file.
+
+    The sockets are labelled and counted by the canvas
+    (`web/js/prompts.js`); the node declares the most it can hand out.
+    """
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SymbioticaPromptSpecs",
+            display_name="Prompt Specs (Symbiotica)",
+            category="Symbiotica",
+            description="The files ticked on a Prompts node, one output "
+                        "each, named after the file.",
+            inputs=[Prompts.Input("prompts",
+                                  tooltip="A Prompts node's `prompts` "
+                                          "output.")],
+            outputs=[io.String.Output(display_name=f"prompt_{i}",
+                                      tooltip="A ticked file's text.")
+                     for i in range(1, PROMPT_OUTPUTS + 1)],
+        )
+
+    @classmethod
+    def execute(cls, prompts=None) -> io.NodeOutput:
+        if not isinstance(prompts, dict) or "texts" not in prompts:
+            raise ValueError("wire a Prompts node's `prompts` into this node")
+        texts = [str(t) for t in prompts["texts"]][:PROMPT_OUTPUTS]
         texts += [""] * (PROMPT_OUTPUTS - len(texts))
-        return io.NodeOutput(shown, *texts)
+        return io.NodeOutput(*texts)
 
 
 # How many files one Prompts node can hand out. The canvas refuses a tick past
@@ -1078,5 +1112,6 @@ PIPELINE_NODE_CLASSES = [
     SymbioticaAssetRecipe,
     SymbioticaPromptBlock,
     SymbioticaPromptLoad,
+    SymbioticaPromptSpecs,
     SymbioticaOrderTracker,
 ]

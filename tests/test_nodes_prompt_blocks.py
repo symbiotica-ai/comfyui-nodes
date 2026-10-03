@@ -32,13 +32,13 @@ def test_prompts_outputs_the_text_as_shown(nodes_mod):
     out = nodes_mod.SymbioticaPromptBlock.execute(
         path="/p/bakery/prompts", folder="_rules", file="01-game.md",
         text="GAME RULES\n")
-    assert out.args[0] == "GAME RULES\n"
-    assert out.args[1:] == ("",) * nodes_mod.PROMPT_OUTPUTS
+    assert out.args == ({"names": ["_rules/01-game.md"],
+                         "texts": ["GAME RULES\n"]},)
 
 
 def test_prompts_with_nothing_picked_outputs_empty(nodes_mod):
     out = nodes_mod.SymbioticaPromptBlock.execute()
-    assert out.args == ("",) * (1 + nodes_mod.PROMPT_OUTPUTS)
+    assert out.args == ({"names": [], "texts": []},)
 
 
 def test_prompts_is_four_widgets_and_the_tick_list(nodes_mod):
@@ -49,8 +49,7 @@ def test_prompts_is_four_widgets_and_the_tick_list(nodes_mod):
     assert schema.display_name == "Prompts (Symbiotica)"
     assert [i.id for i in schema.inputs] == ["path", "folder", "file", "text",
                                              "files"]
-    assert [o.display_name for o in schema.outputs] == ["text", *[
-        f"prompt_{i}" for i in range(1, nodes_mod.PROMPT_OUTPUTS + 1)]]
+    assert [o.display_name for o in schema.outputs] == ["prompts"]
     text = schema.inputs[3]
     assert text.multiline is True
 
@@ -70,8 +69,18 @@ def test_ticked_files_answer_in_tick_order(nodes_mod, tmp_path):
     out = nodes_mod.SymbioticaPromptBlock.execute(
         path=str(root), folder="llm", file="system.md", text="SYSTEM",
         files='["image/final.md", "llm/system.md", "image/sketch.md"]')
-    assert out.args[:4] == ("SYSTEM", "FINAL", "SYSTEM", "SKETCH")
-    assert out.args[4:] == ("",) * (nodes_mod.PROMPT_OUTPUTS - 3)
+    assert out.args[0] == {
+        "names": ["image/final.md", "llm/system.md", "image/sketch.md"],
+        "texts": ["FINAL", "SYSTEM", "SKETCH"]}
+
+
+def test_prompt_specs_splits_the_wire_and_pads(nodes_mod):
+    out = nodes_mod.SymbioticaPromptSpecs.execute(
+        prompts={"names": ["a.md", "b.md"], "texts": ["A", "B"]})
+    assert out.args[:2] == ("A", "B")
+    assert out.args[2:] == ("",) * (nodes_mod.PROMPT_OUTPUTS - 2)
+    with pytest.raises(ValueError):
+        nodes_mod.SymbioticaPromptSpecs.execute()
 
 
 def test_the_open_files_unsaved_edit_wins(nodes_mod, tmp_path):
@@ -79,7 +88,7 @@ def test_the_open_files_unsaved_edit_wins(nodes_mod, tmp_path):
     out = nodes_mod.SymbioticaPromptBlock.execute(
         path=str(root), folder="image", file="sketch.md", text="EDITED",
         files='["image/sketch.md", "image/final.md"]')
-    assert out.args[:3] == ("EDITED", "EDITED", "FINAL")
+    assert out.args[0]["texts"] == ["EDITED", "FINAL"]
 
 
 def test_a_ticked_file_that_is_gone_fails_by_name(nodes_mod, tmp_path):
@@ -97,7 +106,7 @@ def test_a_workflow_saved_before_ticks_reads_nothing_ticked(nodes_mod, tmp_path)
         out = nodes_mod.SymbioticaPromptBlock.execute(
             path=str(root), folder="image", file="sketch.md", text="X",
             files=old)
-        assert out.args == ("X",) + ("",) * nodes_mod.PROMPT_OUTPUTS
+        assert out.args == ({"names": ["image/sketch.md"], "texts": ["X"]},)
 
 
 def test_editing_a_ticked_file_on_disk_reruns_the_node(nodes_mod, tmp_path):
