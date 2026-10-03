@@ -28,6 +28,12 @@ try:
     from ._modules import _pos, _size, promoted_names
 except ImportError:  # tests import py/ as top-level modules
     from _modules import _pos, _size, promoted_names
+# The slug rule lives beside the category it names (the Task's
+# `category_recipe`); a recipe file is named with the same one.
+try:
+    from .pipeline.order_sheet import recipe_slug as slugify
+except ImportError:
+    from pipeline.order_sheet import recipe_slug as slugify
 
 PREFIX = "recipe:"
 TOGGLE = "?"
@@ -586,14 +592,6 @@ def delete_project(dir_: str, name: str) -> bool:
         return False
     os.remove(path)
     return True
-
-
-def slugify(text) -> str:
-    """The shape a name takes on disk: lowercase, apostrophes dropped, one dash
-    where anything else non-alphanumeric was. The same rule `recipeSlug` gives
-    a recipe on the canvas — the two are parallel and change together."""
-    out = str(text or "").lower().replace("'", "").replace("\u2019", "")
-    return re.sub(r"[^a-z0-9._]+", "-", out).strip("-")
 
 
 def project_name(template_rel) -> str:

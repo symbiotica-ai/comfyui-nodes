@@ -153,14 +153,24 @@ export function tilesOf(canvas) {
     return `${w / TILE_PX}x${h / TILE_PX}`;
 }
 
-// The category as a workflow is named: the category plus its canvas in tiles
-// (`Appliance 1x2`), the raw pixels when there is no whole-tile grid, the
-// plain category when the row names no canvas. Mirrors order_sheet.category_recipe.
+// A recipe name is the suffix of a workflow file name, so whatever arrives
+// on the input is lowercased, loses its apostrophes and gets one dash where
+// anything else non-alphanumeric was. Mirrors _recipes.slugify. Lives here
+// because the category below is named with it; recipes.js imports it.
+export function recipeSlug(text) {
+    return String(text ?? "").toLowerCase().replace(/['’]/g, "")
+        .replace(/[^a-z0-9._]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+// The category as a workflow is named, in the one flat shape the Recipes node
+// lists it: the category plus its canvas in tiles (`appliance-1x2`), the raw
+// pixels when there is no whole-tile grid, the plain category when the row
+// names no canvas. Mirrors order_sheet.category_recipe.
 export function categoryRecipeOf(asset) {
     const category = String(asset?.category ?? "").trim();
     const canvas = String(asset?.canvas ?? "").replace(/\s+/g, "");
     const size = tilesOf(canvas) || canvas;
-    return size ? `${category} ${size}`.trim() : category;
+    return recipeSlug(size ? `${category} ${size}` : category);
 }
 
 // The recipe an ASSET belongs to, for a node whose `category` is empty. Picking
@@ -184,13 +194,14 @@ export function assetRecipeOf(node, assetName) {
              recipe: categoryRecipeOf(asset) };
 }
 
-// Does an asset fall under a dropdown pick? The pick is a recipe label
-// (`Appliance 1x2`, one canvas) or a plain category (every canvas).
+// Does an asset fall under a dropdown pick? The pick is a recipe name
+// (`appliance-1x2`, one canvas) or a plain category (every canvas). Compared
+// as slugs, so a workflow saved holding `Appliance 1x2` still narrows.
 function inCategory(asset, pick) {
-    const want = String(pick ?? "").trim().toLowerCase();
+    const want = recipeSlug(pick);
     if (!want) return true;
-    return String(asset?.category ?? "").trim().toLowerCase() === want
-        || categoryRecipeOf(asset).toLowerCase() === want;
+    return recipeSlug(asset?.category) === want
+        || categoryRecipeOf(asset) === want;
 }
 
 // The categories the wired order actually holds, split by canvas, A-Z under
@@ -486,8 +497,11 @@ function focusPanel(node) {
         if (wanted) {
             const categories = categoriesOf(node);
             const cw = widgetOf(node, "category");
-            if (cw && wanted.category && categories.includes(wanted.category)) {
-                cw.value = wanted.category;
+            // Matched as a slug and put back as one: a workflow saved before
+            // the names went flat holds `Appliance 1x2`.
+            if (cw && wanted.category
+                    && categories.includes(recipeSlug(wanted.category))) {
+                cw.value = recipeSlug(wanted.category);
             }
             const offered = new Set([
                 ...(publishedAssets(node)?.assets ?? []),
@@ -719,8 +733,9 @@ function focusPanel(node) {
         // not in this feature". Fall back to everything, the same way a chosen
         // asset that is no longer listed is dropped in `render`.
         const categoryW = widgetOf(node, "category");
-        if (categoryW && !categoriesOf(node).includes(categoryW.value)) {
-            categoryW.value = ALL_CATEGORIES;
+        if (categoryW && categoryW.value !== ALL_CATEGORIES) {
+            categoryW.value = categoriesOf(node).includes(recipeSlug(categoryW.value))
+                ? recipeSlug(categoryW.value) : ALL_CATEGORIES;
         }
         render();
     };
@@ -877,14 +892,14 @@ function groupAssets(assets, feature, into = new Map()) {
 // "" when the node is already on an event that holds it — nothing to move —
 // or when nothing in the month does.
 export function eventForCategory(node, label) {
-    const want = String(label ?? "").trim().toLowerCase();
+    const want = recipeSlug(label);
     if (!want) return "";
     const source = orderSource(node) ?? node;
     const events = source._symEvents ?? [];
     const holds = (event) => (event.assets ?? []).some(
         (a) => String(a.assetName ?? "").trim()
             && categoryRecipeOf({ category: a.category, canvas: a.canvas })
-                .toLowerCase() === want);
+                === want);
     const held = featureKey(widgetOf(node, "feature")?.value);
     const on = events.find((e) => featureKey(e.feature) === held) ?? events[0];
     if (on && holds(on)) return "";
@@ -925,7 +940,7 @@ function taskRows(node, state) {
         for (const [recipe, members] of sorted) {
             const holdsPick = members.some((a) => a.name === chosen);
             const openCat = holdsPick
-                || recipe.toLowerCase() === pick.toLowerCase();
+                || recipe === recipeSlug(pick);
             rows.push({ kind: "category", label: recipe, count: members.length,
                         month: m, feature: members[0]?.feature ?? "",
                         category: recipe, open: openCat, depth,
@@ -1036,7 +1051,8 @@ function taskPanel(node) {
                 const name = String(a.assetName ?? "").trim();
                 if (!name) continue;
                 const category = categoryRecipeOf(a) || "uncategorised";
-                out.set(`${feature}/${category}/${name}`, {
+                // Flat, the way the tree draws it and the outputs name it.
+                out.set(`${recipeSlug(feature)}/${category}/${recipeSlug(name)}`, {
                     kind: "asset", label: name, month, feature, category,
                     asset: { name, category: a.category ?? "",
                              canvas: a.canvas ?? "",
@@ -1196,7 +1212,7 @@ function taskPanel(node) {
     // on screen before you queue it.
     function chooseCategory(row) {
         const held = String(widgetOf(node, "category")?.value ?? "").trim();
-        const taking = held === row.category ? "" : row.category;
+        const taking = recipeSlug(held) === row.category ? "" : row.category;
         // The category view offers every category in the MONTH, so one of them
         // can belong to an event the node is not on. Taking it moves the node
         // there — the same hop an asset makes — or the node holds a narrowing
@@ -1380,9 +1396,10 @@ function taskPanel(node) {
         // he is stepping through, not what one queue sends.
         runs.textContent = inRun.length
             ? (row ? "runs 1" : `runs 1 of ${inRun.length}`) : "";
+        // Flat, as the tree draws it and the outputs name it.
         crumb.textContent = show
-            ? `${show.month} / ${show.feature} / ${show.category} / ${show.label}`
-              + (row ? "" : " · first")
+            ? [show.month, show.feature, show.category, show.label]
+                .map(recipeSlug).join(" / ") + (row ? "" : " · first")
             : (narrow ? `${narrow} · no assets` : "no assets");
 
         strip.replaceChildren();
@@ -1412,14 +1429,14 @@ function taskPanel(node) {
             shown.title = lit;
             attachHoverZoom(shown, () => ({
                 w: shown.naturalWidth, h: shown.naturalHeight,
-                label: show.label, hint: lit,
+                label: recipeSlug(show.label), hint: lit,
                 placeholder: shown.src,
                 src: () => imageFullUrl(path),
             }));
         }
         // The prompt belongs to the asset the run will take, and names it
         // when nothing was picked — the crumb above says `· first` there.
-        promptHead.textContent = `client prompt${row ? "" : ` · ${show.label}`}`
+        promptHead.textContent = `client prompt${row ? "" : ` · ${recipeSlug(show.label)}`}`
             + `${show.asset?.canvas ? ` · ${show.asset.canvas}` : ""}`;
         const text = promptFor(show);
         promptBox.appendChild(text
@@ -1458,7 +1475,7 @@ function taskPanel(node) {
             for (const row of rows) {
                 const on = (row.kind === "asset" && row.label === chosen)
                     || (row.kind === "category" && !chosen
-                        && row.category.toLowerCase() === narrow.toLowerCase());
+                        && row.category === recipeSlug(narrow));
                 tree.appendChild(treeRow({
                     kind: row.kind, rel: row.rel,
                     depth: row.depth
@@ -1469,9 +1486,12 @@ function taskPanel(node) {
                     // The count rides in the label: `treeRow` hides its
                     // `actions` until the pointer is on the row, and a badge
                     // you have to hover for is a badge nobody reads. The
-                    // category view says the event the same way.
-                    label: row.count ? `${row.label} · ${row.count}`
-                        : row.note ? `${row.label} · ${row.note}` : row.label,
+                    // category view says the event the same way. Every name
+                    // is drawn flat, the way the outputs name it; the row
+                    // keeps the sheet's own, which is what the widgets hold.
+                    label: row.count ? `${recipeSlug(row.label)} · ${row.count}`
+                        : row.note ? `${recipeSlug(row.label)} · ${recipeSlug(row.note)}`
+                        : recipeSlug(row.label),
                     onClick: () => {
                         if (row.kind === "month") chooseMonth(row);
                         else if (row.kind === "feature") chooseFeature(row);

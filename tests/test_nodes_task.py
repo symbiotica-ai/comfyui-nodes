@@ -142,10 +142,10 @@ class TestTheWholeRecordOnOneWire:
         assert flat_columns(out) == flat_columns(
             run(nodes_mod, order=event, asset="Frankenstein Pops"))
         assert (out.args[0], out.args[3]) == (
-            ["Frankenstein Pops"],
-            ["October/Mini 3 — Franken-Feast/Food - 3 stages/"
-             "Frankenstein Pops"])
-        assert out.args[-3:] == (["Food - 3 stages 1x2"], [128], [256])
+            ["frankenstein-pops"],
+            ["october/mini-3-franken-feast/food-3-stages/"
+             "frankenstein-pops"])
+        assert out.args[-3:] == (["food-3-stages-1x2"], [128], [256])
 
     def test_the_reference_and_the_prompt_come_off_task_specs(
             self, nodes_mod, event):

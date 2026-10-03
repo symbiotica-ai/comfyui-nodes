@@ -53,10 +53,10 @@ class TestOneAssetsWholeRecord:
         downstream has a list left to index. The outputs are lists of one,
         which runs downstream exactly once — the same as a scalar."""
         out = run(nodes_mod, order=ORDER, asset="Frankenstein Pops")
-        assert out.args[:4] == (["Frankenstein Pops"], ["Food - 3 stages"],
+        assert out.args[:4] == (["frankenstein-pops"], ["food-3-stages"],
                                 ["cake pops"],
-                                ["October/Mini 3 — Franken-Feast/"
-                                 "Food - 3 stages/Frankenstein Pops"])
+                                ["october/mini-3-franken-feast/"
+                                 "food-3-stages/frankenstein-pops"])
 
     def test_the_save_path_matches_what_order_assets_emits(self, nodes_mod):
         """A save node and a Pick node's save_path both take this value, so
@@ -75,17 +75,17 @@ class TestOneAssetsWholeRecord:
         and clicking a category in the tree or a row in the Recipes sidebar
         both CLEAR `asset`, which made thirty renders one click away."""
         out = run(nodes_mod, order=ORDER)
-        assert out.args[0] == ["Frankencrisps"]
+        assert out.args[0] == ["frankencrisps"]
 
     def test_choosing_nothing_files_that_first_asset_under_its_own_path(
             self, nodes_mod):
         out = run(nodes_mod, order=ORDER)
-        assert out.args[3] == ["October/Mini 3 — Franken-Feast/"
-                               "Food - 3 stages/Frankencrisps"]
+        assert out.args[3] == ["october/mini-3-franken-feast/"
+                               "food-3-stages/frankencrisps"]
 
     def test_a_category_narrows_what_can_be_chosen(self, nodes_mod):
         out = run(nodes_mod, order=ORDER, category="Decoration")
-        assert (out.args[0], out.args[1]) == (["Bunting"], ["Decoration"])
+        assert (out.args[0], out.args[1]) == (["bunting"], ["decoration"])
 
 
 class TestTheFocusedOrder:
@@ -237,8 +237,8 @@ class TestWhatThePanelIsTold:
         other categories, or there is nothing to switch to — "category
         selector doesn't work anymore"."""
         run(nodes_mod, order=ORDER, category="Decoration")
-        assert self.detail(pushed)["categories"] == ["Food - 3 stages",
-                                                     "Decoration"]
+        assert self.detail(pushed)["categories"] == ["food-3-stages",
+                                                     "decoration"]
 
     def test_categories_are_recipes_split_by_canvas(self, nodes_mod, pushed):
         order = {**ORDER, "assets": [
@@ -247,7 +247,7 @@ class TestWhatThePanelIsTold:
             ORDER["assets"][2]]}
         run(nodes_mod, order=order)
         assert self.detail(pushed)["categories"] == [
-            "Food - 3 stages 1x1", "Food - 3 stages 1x2", "Decoration"]
+            "food-3-stages-1x1", "food-3-stages-1x2", "decoration"]
 
 
 class TestTheBucketOnTheWire:
@@ -335,7 +335,7 @@ class TestTheClickedReference:
         files and fans out assets — most graphs do not wire it at all."""
         os.remove(os.path.join(refs["refsRoot"], "a.png"))
         out = run(nodes_mod, order=refs, asset="Frankencrisps")
-        assert (out.args[0], out.args[9]) == (["Frankencrisps"], [""])
+        assert (out.args[0], out.args[9]) == (["frankencrisps"], [""])
 
     def test_an_order_with_no_references_folder_still_runs(self, nodes_mod):
         """A Reference Browser event carries no refs root at all."""
@@ -375,7 +375,7 @@ class TestItMakesItsOwnOrder:
                   feature="Mini 3", asset="Bunting")
         assert seen == {"project": "/p", "month": "October",
                         "feature": "Mini 3"}
-        assert out.args[0] == ["Bunting"]
+        assert out.args[0] == ["bunting"]
 
     def test_a_wired_order_wins_over_the_widgets(self, nodes_mod, monkeypatch):
         """The wire is the explicit statement; reading the folder again would
@@ -385,7 +385,7 @@ class TestItMakesItsOwnOrder:
                             lambda *a: (_ for _ in ()).throw(
                                 AssertionError("should not parse")))
         out = run(nodes_mod, order=ORDER, project_path="/p", asset="Bunting")
-        assert out.args[0] == ["Bunting"]
+        assert out.args[0] == ["bunting"]
 
     def test_neither_says_what_to_do(self, nodes_mod):
         with pytest.raises(ValueError, match="set project_path"):
@@ -462,18 +462,18 @@ class TestCategoryByTiles:
         schema = nodes_mod.SymbioticaAssetFocus.GET_SCHEMA()
         names = [o.display_name for o in schema.outputs]
         assert names[-3:] == ["category_recipe", "width", "height"]
-        assert out.args[1] == ["Appliance"]
-        assert out.args[-3:] == (["Appliance 1x2"], [128], [256])
+        assert out.args[1] == ["appliance"]
+        assert out.args[-3:] == (["appliance-1x2"], [128], [256])
 
     def test_no_canvas_means_the_plain_category_and_no_size(self, nodes_mod):
         out = run(nodes_mod, order=self.ORDER, asset="Bunting")
-        assert out.args[-3:] == (["Decoration"], [0], [0])
+        assert out.args[-3:] == (["decoration"], [0], [0])
 
     def test_a_canvas_with_no_whole_tile_grid_carries_its_pixels(self, nodes_mod):
         order = {**ORDER, "assets": [
             {"assetName": "Chest", "category": "Crate Icon", "canvas": "200x200", "prompt": "a"}]}
         out = run(nodes_mod, order=order)
-        assert out.args[-3:] == (["Crate Icon 200x200"], [200], [200])
+        assert out.args[-3:] == (["crate-icon-200x200"], [200], [200])
 
     def test_the_recipe_label_narrows_to_one_canvas_and_the_plain_name_keeps_both(self, nodes_mod):
         # ONE asset comes out of the node either way, so the narrowing is read
@@ -483,9 +483,11 @@ class TestCategoryByTiles:
             return [a["assetName"]
                     for a in nodes_mod._focus_items(self.ORDER, category)[0]]
 
+        assert narrowed("appliance-1x2") == ["Tall Oven"]
+        # A workflow saved before the names went flat holds the label.
         assert narrowed("Appliance 1x2") == ["Tall Oven"]
         assert narrowed("Appliance") == ["Short Oven", "Tall Oven"]
         assert run(nodes_mod, order=self.ORDER,
-                   category="Appliance 1x2").args[0] == ["Tall Oven"]
+                   category="Appliance 1x2").args[0] == ["tall-oven"]
         assert run(nodes_mod, order=self.ORDER,
-                   category="Appliance").args[0] == ["Short Oven"]
+                   category="Appliance").args[0] == ["short-oven"]

@@ -80,9 +80,9 @@ class TestItIsAssetFocusWithSlots:
 
     def test_the_asset_is_still_chosen_here(self, nodes_mod):
         out = run(nodes_mod, order=ORDER, asset="Frankencrisps")
-        assert out.args[0] == ["Frankencrisps"]
-        assert out.args[3] == ["October/Mini 3 — Franken-Feast/"
-                               "Food - 3 stages/Frankencrisps"]
+        assert out.args[0] == ["frankencrisps"]
+        assert out.args[3] == ["october/mini-3-franken-feast/"
+                               "food-3-stages/frankencrisps"]
 
 
 class TestWhatTheSlotsSend:
@@ -147,7 +147,7 @@ class TestWhenTheTableIsWrong:
         """The focus half files the render. A mangled slot table must not take
         that down with it."""
         out = run(nodes_mod, order=ORDER, slots="{oops")
-        assert out.args[0] == ["Frankencrisps"]
+        assert out.args[0] == ["frankencrisps"]
         focus = len(nodes_mod.SymbioticaAssetFocus.GET_SCHEMA().outputs)
         assert set(out.args[focus:]) == {None}
 

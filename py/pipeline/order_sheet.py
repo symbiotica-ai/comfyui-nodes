@@ -234,16 +234,24 @@ def canvas_tiles(canvas: str) -> str:
     return f"{spec['w'] // TILE_PX}x{spec['h'] // TILE_PX}"
 
 
+def recipe_slug(text) -> str:
+    """The shape a recipe name takes on disk: lowercase, apostrophes dropped, one dash
+    where anything else non-alphanumeric was. The same rule `recipeSlug` gives
+    a recipe on the canvas — the two are parallel and change together."""
+    out = str(text or "").lower().replace("'", "").replace("\u2019", "")
+    return re.sub(r"[^a-z0-9._]+", "-", out).strip("-")
+
+
 def category_recipe(asset: dict) -> str:
-    """The category as a workflow is named: the category plus its canvas in
-    tiles (`Appliance 1x2`), since a 128x128 and a 128x256 Appliance are two
-    drawings and two recipes. A canvas with no whole-tile grid carries its
-    pixels instead (`Crate Icon 200x200`); no canvas at all is the plain
-    category."""
+    """The category as a workflow is named, in the flat shape the Recipes node
+    lists it: the category plus its canvas in tiles (`appliance-1x2`), since a
+    128x128 and a 128x256 Appliance are two drawings and two recipes. A canvas
+    with no whole-tile grid carries its pixels instead (`crate-icon-200x200`);
+    no canvas at all is the plain category."""
     category = str(asset.get("category", "") or "").strip()
     canvas = re.sub(r"\s+", "", str(asset.get("canvas", "") or ""))
     size = canvas_tiles(canvas) or canvas
-    return f"{category} {size}".strip() if size else category
+    return recipe_slug(f"{category} {size}" if size else category)
 
 
 def canvas_size(asset: dict) -> tuple[int, int]:

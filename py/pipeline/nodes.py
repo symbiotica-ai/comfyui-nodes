@@ -389,8 +389,10 @@ def _focus_columns(order, items, raw, asset="", ref=""):
     # own event, and is returned untouched so a graph that wires it keeps the
     # object it was given.
     event = ({**order, "assets": whole} if "eventAssets" in order else order)
-    return ([i["assetName"] for i in picked],
-            [i["category"] for i in picked],
+    # Every name comes out flat, the shape the Recipes node and the workflow
+    # files use: `black-cat-fortune-booth`, `decoration`.
+    return ([recipe_slug(i["assetName"]) for i in picked],
+            [recipe_slug(i["category"]) for i in picked],
             [i["prompt"] for i in picked],
             save_paths(order, picked),
             narrowed,

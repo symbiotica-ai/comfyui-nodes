@@ -1284,7 +1284,7 @@ test("picking a recipe points the wire at it, and drops the asset narrowing",
     assert.equal(task.widgets[0].options, undefined,
                  "the real node's category has no options to read labels off");
     await click(rowFor(node, "appliance1x2"));
-    assert.equal(task.widgets[0].value, "Appliance1x2", "the Task node followed");
+    assert.equal(task.widgets[0].value, "appliance1x2", "the Task node followed");
     assert.equal(task.widgets[1].value, "", "one asset would decide it instead");
     assert.equal(task.widgets[2].value, "",
                  "and a reference belongs to the asset that just went");
@@ -1300,7 +1300,7 @@ test("a recipe whose key is not its label still points the wire at it", async ()
     const node = await recipeNode({ project });
     const task = taskChain(node, "Appliance1x1");
     await click(rowFor(node, "food-3-stages-1x1"));
-    assert.equal(task.widgets[0].value, "Food - 3 stages 1x1",
+    assert.equal(task.widgets[0].value, "food-3-stages-1x1",
                  "the label whose slug is the recipe");
     assert.equal(app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value,
                  "floor-food.png", "and its values are on the canvas");
@@ -1347,7 +1347,7 @@ test("picking a category from another event moves the Task to that event",
     await draw(node);
     await click(rowFor(node, "mini-banner"));
     const w = (name) => task.widgets.find((x) => x.name === name).value;
-    assert.equal(w("category"), "Mini Banner");
+    assert.equal(w("category"), "mini-banner");
     assert.equal(w("feature"), "Mini 1 — Ghostly Goodies", "moved to the event that has it");
     assert.equal(w("asset"), "");
 });
@@ -1477,7 +1477,7 @@ test("picking an empty category loads shared and points the wire at it",
     const task = taskChain(node, "Appliance1x1");
     await draw(node);
     await click(rowFor(node, "food-3-stages-1x1"));
-    assert.equal(task.widgets[0].value, "Food - 3 stages 1x1", "the Task followed");
+    assert.equal(task.widgets[0].value, "food-3-stages-1x1", "the Task followed");
     assert.equal(app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value,
                  "floor-1x1.png", "shared is what a recipe starts from");
 });

@@ -40,8 +40,14 @@ ORDER = {
 }
 
 
+def flat(name):
+    return "-".join(name.lower().replace("'", "").split())
+
+
 def folder_for(nodes, asset, category):
-    return os.path.join(nodes._TEST_OUTPUT, "October", "Mini 3", category, asset)
+    # Where `save_paths` files an asset: every segment flat.
+    return os.path.join(nodes._TEST_OUTPUT, "october", "mini-3", flat(category),
+                        flat(asset))
 
 
 def render(folder, *names):
@@ -89,10 +95,10 @@ class TestTheBoard:
         `<category>/<asset>/_base_00001_.png` — the last segment of a save
         prefix names the FILE. The board was tested only against the second
         and could never fill against the first."""
-        category = os.path.join(nodes_mod._TEST_OUTPUT, "October", "Mini 3",
-                                "Decoration")
-        render(category, "Bat Brew_00001_.png")
-        render(os.path.join(category, "Bat Brew"), "_final_00001_.png")
+        category = os.path.join(nodes_mod._TEST_OUTPUT, "october", "mini-3",
+                                "decoration")
+        render(category, "bat-brew_00001_.png")
+        render(os.path.join(category, "bat-brew"), "_final_00001_.png")
         board = pushed(nodes_mod, monkeypatch, order=ORDER)
         assert board["slots"][0]["asset"] == "Bat Brew"
         assert board["slots"][0]["image"] is not None

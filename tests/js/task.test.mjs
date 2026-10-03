@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { app, create, fire, reset, setResponder, tick } from "./comfy_stub.mjs";
-import "../../web/js/asset_focus.js";
+import { recipeSlug } from "../../web/js/asset_focus.js";
 
 const PROJECT = "/studio-assets/imperia-bakery";
 const REFS = "/studio-assets/imperia-bakery/orders/october/references";
@@ -15,6 +15,11 @@ const MONTHS = ["October 2026", "November 2026", "December 2026"];
 const [OCT, NOV, DEC] = MONTHS;
 const FEAST = "Mini 3 — Franken-Feast";
 const GHOSTS = "Mini 1 — Ghostly Goodies";
+// What the tree DRAWS: every name flat, the way the outputs name it. The
+// widgets and the row paths keep the sheet's own names.
+const [D_OCT, D_NOV, D_DEC] = MONTHS.map(recipeSlug);
+const D_FEAST = recipeSlug(FEAST);
+const D_GHOSTS = recipeSlug(GHOSTS);
 
 // Out of alphabetical order at every level: Mini 3 is the event at the top of
 // the October order, Wallpaper is the first category in it, and Skull
@@ -194,7 +199,7 @@ test("no render path writes the node a height", async () => {
     node.size = [300, 420];
     node._symRenderFocus();
     await settle();
-    await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper`));
+    await click(rowFor(node, `${OCT}/${FEAST}/wallpaper`));
     assert.ok(sized.length, "the narrowed node was never widened back");
     for (const [, h] of sized) assert.equal(h, 420);
 });
@@ -236,18 +241,18 @@ test("categories read A-Z, months and events keep the calendar's and the sheet's
     // backwards.
     const node = await taskNode();
     assert.deepEqual(labels(node),
-                     [OCT, FEAST, "Appliance 1x2 · 1", "Wallpaper · 2",
-                      GHOSTS, NOV, DEC]);
+                     [D_OCT, D_FEAST, "appliance-1x2 · 1", "wallpaper · 2",
+                      D_GHOSTS, D_NOV, D_DEC]);
 });
 
 test("the tree is four levels, each one indented under the last", async () => {
     const node = await taskNode();
-    await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper`));
+    await click(rowFor(node, `${OCT}/${FEAST}/wallpaper`));
     // Skull before Bone: assets keep the sheet's order, the order a category
     // pick runs them in.
     assert.deepEqual(labels(node),
-                     [OCT, FEAST, "Appliance 1x2 · 1", "Wallpaper · 2",
-                      "Skull Wallpaper", "Bone Wallpaper", GHOSTS, NOV, DEC]);
+                     [D_OCT, D_FEAST, "appliance-1x2 · 1", "wallpaper · 2",
+                      "skull-wallpaper", "bone-wallpaper", D_GHOSTS, D_NOV, D_DEC]);
     assert.deepEqual(kinds(node),
                      ["month", "feature", "category", "category", "asset",
                       "asset", "feature", "month", "month"]);
@@ -259,9 +264,9 @@ test("the sheet's unnamed padding rows are not assets", async () => {
     // Nine of them in a real month. `assets_by_category` drops them on the
     // Python side and the panel has to show the run it describes.
     const node = await taskNode();
-    await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper`));
-    assert.deepEqual(labels(node).filter((l) => l.startsWith("Wallpaper")),
-                     ["Wallpaper · 2"]);
+    await click(rowFor(node, `${OCT}/${FEAST}/wallpaper`));
+    assert.deepEqual(labels(node).filter((l) => l.startsWith("wallpaper")),
+                     ["wallpaper · 2"]);
     assert.ok(!labels(node).some((l) => l.startsWith("uncategorised")));
     assert.ok(!labels(node).some((l) => !l.trim()));
 });
@@ -269,19 +274,22 @@ test("the sheet's unnamed padding rows are not assets", async () => {
 test("two rows that flatten to one path stay two rows, where they belong",
      async () => {
     // This is why `walkTree` is not used here: it derives parentage from a
-    // slash-joined key, so `Front/Till` under `Cashier's Desk` would be re-hung
-    // under a `Cashier's Desk/Front` that is a different category entirely —
-    // or swallowed by it.
+    // slash-joined key, so `Front/Till` under `cashiers-desk` would be re-hung
+    // under a `Front` that is no row at all. The sheet's `Cashier's Desk/Front`
+    // is named `cashiers-desk-front` now, so the category can no longer spell
+    // an asset's path, but the asset names still carry their slashes.
     const node = await taskNode({ asset: "Till" }, SLASHED);
     assert.deepEqual(labels(node),
-                     [OCT, FEAST, "Cashier's Desk · 2", "Till", "Front/Till",
-                      "Cashier's Desk/Front · 1", "Till", NOV, DEC]);
-    // `Front/Till` is the second asset of `Cashier's Desk`, at the asset level,
+                     [D_OCT, D_FEAST, "cashiers-desk · 2", "till", "front-till",
+                      "cashiers-desk-front · 1", "till", D_NOV, D_DEC]);
+    // `Front/Till` is the second asset of `cashiers-desk`, at the asset level,
     // above the header of the category whose name its own name spells out.
     assert.deepEqual(rows(node).map(depthOf),
                      [0, 1, 2, 3, 3, 2, 3, 0, 0]);
-    const shared = `${OCT}/${FEAST}/Cashier's Desk/Front/Till`;
-    assert.equal(rows(node).filter((r) => r._sym.rel === shared).length, 2);
+    for (const rel of [`${OCT}/${FEAST}/cashiers-desk/Front/Till`,
+                       `${OCT}/${FEAST}/cashiers-desk-front/Till`]) {
+        assert.equal(rows(node).filter((r) => r._sym.rel === rel).length, 1);
+    }
 });
 
 // --- the two groupings ---------------------------------------------------------
@@ -296,8 +304,8 @@ test("grouped by category, the month's events collapse into one list of types",
     const node = await taskNode();
     await click(groupToggle(node));
     assert.deepEqual(labels(node),
-                     [OCT, "Appliance 1x2 · 1", "Food - 3 stages · 1",
-                      "Wallpaper · 2", NOV, DEC]);
+                     [D_OCT, "appliance-1x2 · 1", "food-3-stages · 1",
+                      "wallpaper · 2", D_NOV, D_DEC]);
     // No event level: a category sits directly under the month.
     assert.deepEqual(kinds(node),
                      ["month", "category", "category", "category", "month", "month"]);
@@ -310,9 +318,9 @@ test("a category gathers its assets from every event, each saying which",
      async () => {
     const node = await taskNode();
     await click(groupToggle(node));
-    await click(rowFor(node, `${OCT}/Food - 3 stages`));
-    assert.deepEqual(labels(node).filter((l) => l.includes("Cupcake")),
-                     ["Ghost Cupcake · Mini 1"]);
+    await click(rowFor(node, `${OCT}/food-3-stages`));
+    assert.deepEqual(labels(node).filter((l) => l.includes("cupcake")),
+                     ["ghost-cupcake · mini-1"]);
 });
 
 test("taking an asset from another event moves the node to that event",
@@ -321,25 +329,25 @@ test("taking an asset from another event moves the node to that event",
     // at once — but the widgets do, or the queue would build the wrong one.
     const node = await taskNode({ feature: FEAST });
     await click(groupToggle(node));
-    await click(rowFor(node, `${OCT}/Food - 3 stages`));
-    await click(rowFor(node, `${OCT}/Food - 3 stages/${GHOSTS}/Ghost Cupcake`));
+    await click(rowFor(node, `${OCT}/food-3-stages`));
+    await click(rowFor(node, `${OCT}/food-3-stages/${GHOSTS}/Ghost Cupcake`));
     assert.equal(widget(node, "feature").value, GHOSTS);
     assert.equal(widget(node, "asset").value, "Ghost Cupcake");
     assert.equal(widget(node, "category").value, "", "a name decides it now");
-    assert.equal(crumb(node), `${OCT} / ${GHOSTS} / Food - 3 stages / Ghost Cupcake`);
+    assert.equal(crumb(node), `${D_OCT} / ${D_GHOSTS} / food-3-stages / ghost-cupcake`);
 });
 
 test("an asset in the event the tree is already on is not a hop", async () => {
     const node = await taskNode({ feature: FEAST });
     await click(groupToggle(node));
-    await click(rowFor(node, `${OCT}/Wallpaper`));
-    await click(rowFor(node, `${OCT}/Wallpaper/${FEAST}/Skull Wallpaper`));
+    await click(rowFor(node, `${OCT}/wallpaper`));
+    await click(rowFor(node, `${OCT}/wallpaper/${FEAST}/Skull Wallpaper`));
     assert.equal(widget(node, "feature").value, FEAST);
     assert.equal(widget(node, "asset").value, "Skull Wallpaper");
     // Clicking it again clears it, the same as in the event view.
-    await click(rowFor(node, `${OCT}/Wallpaper/${FEAST}/Skull Wallpaper`));
+    await click(rowFor(node, `${OCT}/wallpaper/${FEAST}/Skull Wallpaper`));
     assert.equal(widget(node, "asset").value, "");
-    assert.equal(widget(node, "category").value, "Wallpaper");
+    assert.equal(widget(node, "category").value, "wallpaper");
 });
 
 test("taking a category from another event moves the node to that event",
@@ -350,9 +358,9 @@ test("taking a category from another event moves the node to that event",
     // its event.
     const node = await taskNode({ feature: FEAST });
     await click(groupToggle(node));
-    await click(rowFor(node, `${OCT}/Food - 3 stages`));
+    await click(rowFor(node, `${OCT}/food-3-stages`));
     assert.equal(widget(node, "feature").value, GHOSTS);
-    assert.equal(widget(node, "category").value, "Food - 3 stages");
+    assert.equal(widget(node, "category").value, "food-3-stages");
     assert.equal(widget(node, "asset").value, "");
     assert.equal(runs(node), "runs 1 of 1");
 });
@@ -360,7 +368,7 @@ test("taking a category from another event moves the node to that event",
 test("a category the held event has does not move the event", async () => {
     const node = await taskNode({ feature: FEAST });
     await click(groupToggle(node));
-    await click(rowFor(node, `${OCT}/Wallpaper`));
+    await click(rowFor(node, `${OCT}/wallpaper`));
     assert.equal(widget(node, "feature").value, FEAST);
     assert.equal(runs(node), "runs 1 of 2");
 });
@@ -376,8 +384,8 @@ test("the grouping rides on a property, so a saved workflow reopens on it",
     await click(groupToggle(node));
     assert.equal(node.properties.symbiotica_task_by_category, false);
     assert.deepEqual(labels(node),
-                     [OCT, FEAST, "Appliance 1x2 · 1", "Wallpaper · 2", GHOSTS,
-                      NOV, DEC]);
+                     [D_OCT, D_FEAST, "appliance-1x2 · 1", "wallpaper · 2", D_GHOSTS,
+                      D_NOV, D_DEC]);
 });
 
 // --- what a click writes ------------------------------------------------------
@@ -395,7 +403,7 @@ test("clicking an event moves to it and drops everything chosen in the last one"
     assert.equal(widget(node, "asset").value, "");
     assert.equal(widget(node, "ref").value, "");
     assert.deepEqual(labels(node),
-                     [OCT, FEAST, GHOSTS, "Food - 3 stages · 1", NOV, DEC]);
+                     [D_OCT, D_FEAST, D_GHOSTS, "food-3-stages · 1", D_NOV, D_DEC]);
 });
 
 test("clicking a category runs its FIRST asset, not all of them", async () => {
@@ -404,19 +412,19 @@ test("clicking a category runs its FIRST asset, not all of them", async () => {
     // asset is what a queue sends: "there should be only one asset at once so
     // i don't send 30 requests to nano banana".
     const node = await taskNode({ asset: "Skull Wallpaper" });
-    await click(rowFor(node, `${OCT}/${FEAST}/Appliance 1x2`));
-    assert.equal(widget(node, "category").value, "Appliance 1x2");
+    await click(rowFor(node, `${OCT}/${FEAST}/appliance-1x2`));
+    assert.equal(widget(node, "category").value, "appliance-1x2");
     assert.equal(widget(node, "asset").value, "");
     assert.equal(runs(node), "runs 1 of 1");
     assert.equal(crumb(node),
-                 `${OCT} / ${FEAST} / Appliance 1x2 / Tall Oven · first`);
+                 `${D_OCT} / ${D_FEAST} / appliance-1x2 / tall-oven · first`);
 });
 
 test("clicking an asset clears the narrowing rather than setting it", async () => {
     // With a name chosen the narrowing decides nothing, and a stale one that
     // excludes the name is a hard refusal at queue time.
     const node = await taskNode({ category: "Wallpaper" });
-    const rel = `${OCT}/${FEAST}/Wallpaper/Skull Wallpaper`;
+    const rel = `${OCT}/${FEAST}/wallpaper/Skull Wallpaper`;
     await click(rowFor(node, rel));
     assert.equal(widget(node, "asset").value, "Skull Wallpaper");
     assert.equal(widget(node, "category").value, "");
@@ -431,11 +439,11 @@ test("clicking the chosen asset again falls back to its category, not to nothing
     // called — and an EMPTY narrowing would close the level the row is on,
     // taking the row you just clicked off the screen.
     const node = await taskNode({ category: "Wallpaper" });
-    const rel = `${OCT}/${FEAST}/Wallpaper/Skull Wallpaper`;
+    const rel = `${OCT}/${FEAST}/wallpaper/Skull Wallpaper`;
     await click(rowFor(node, rel));
     await click(rowFor(node, rel));
     assert.equal(widget(node, "asset").value, "");
-    assert.equal(widget(node, "category").value, "Wallpaper");
+    assert.equal(widget(node, "category").value, "wallpaper");
     assert.ok(rowFor(node, rel), "the row clicked went off the screen");
     assert.equal(runs(node), "runs 1 of 2");
 });
@@ -447,7 +455,7 @@ test("moving to another asset drops the reference that belonged to the last one"
     const node = await taskNode({ category: "Wallpaper",
                                   asset: "Skull Wallpaper",
                                   ref: "skull-wall-b.png" });
-    await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper/Bone Wallpaper`));
+    await click(rowFor(node, `${OCT}/${FEAST}/wallpaper/Bone Wallpaper`));
     assert.equal(widget(node, "asset").value, "Bone Wallpaper");
     assert.equal(widget(node, "ref").value, "");
 });
@@ -458,7 +466,7 @@ test("the pane is the client's own brief: the art they sent and what they wrote"
      async () => {
     const node = await taskNode({ category: "Wallpaper",
                                   asset: "Skull Wallpaper" });
-    assert.equal(crumb(node), `${OCT} / ${FEAST} / Wallpaper / Skull Wallpaper`);
+    assert.equal(crumb(node), `${D_OCT} / ${D_FEAST} / wallpaper / skull-wallpaper`);
     assert.deepEqual(tiles(node).map((t) => t.title.split(" — ")[0]),
                      ["skull-wall-a.png", "skull-wall-b.png"]);
     assert.equal(promptText(node),
@@ -488,7 +496,7 @@ test("with nothing picked the pane draws the asset that will run", async () => {
     // the one asset the queue was about to send.
     const node = await taskNode();
     assert.equal(crumb(node),
-                 `${OCT} / ${FEAST} / Wallpaper / Skull Wallpaper · first`);
+                 `${D_OCT} / ${D_FEAST} / wallpaper / skull-wallpaper · first`);
     assert.deepEqual(tiles(node).map((t) => t.title.split(" — ")[0]),
                      ["skull-wall-a.png", "skull-wall-b.png"]);
     assert.match(shown(node).src,
@@ -506,7 +514,7 @@ test("the count is the event's, not the rows that happen to be open",
     assert.equal(runs(node), "runs 1 of 3");
     // And the pane draws the first of those three, built off the parse rather
     // than off a row the tree has not opened.
-    assert.equal(promptHead(node), "client prompt · Skull Wallpaper");
+    assert.equal(promptHead(node), "client prompt · skull-wallpaper");
 });
 
 test("picking a category shows the asset it will run, without picking it",
@@ -515,21 +523,21 @@ test("picking a category shows the asset it will run, without picking it",
     // category is what the queue sends, and no widget moves for it — the node
     // goes on holding the CATEGORY, which is what stepping through them needs.
     const node = await taskNode();
-    await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper`));
-    assert.equal(widget(node, "category").value, "Wallpaper");
+    await click(rowFor(node, `${OCT}/${FEAST}/wallpaper`));
+    assert.equal(widget(node, "category").value, "wallpaper");
     assert.equal(widget(node, "asset").value, "", "the preview is not a pick");
     assert.equal(runs(node), "runs 1 of 2", "one of the category's two");
     assert.equal(crumb(node),
-                 `${OCT} / ${FEAST} / Wallpaper / Skull Wallpaper · first`);
+                 `${D_OCT} / ${D_FEAST} / wallpaper / skull-wallpaper · first`);
     assert.match(shown(node).src,
                  new RegExp(encodeURIComponent(`${REFS}/skull-wall-a.png`)));
-    assert.equal(promptHead(node), "client prompt · Skull Wallpaper");
+    assert.equal(promptHead(node), "client prompt · skull-wallpaper");
     assert.match(promptText(node), /dusty rose wallpaper/);
 });
 
 test("clicking a reference on a previewed asset is what picks it", async () => {
     const node = await taskNode();
-    await click(rowFor(node, `${OCT}/${FEAST}/Wallpaper`));
+    await click(rowFor(node, `${OCT}/${FEAST}/wallpaper`));
     await click(tileFor(node, "skull-wall-b.png"));
     assert.equal(widget(node, "asset").value, "Skull Wallpaper");
     assert.equal(widget(node, "ref").value, "skull-wall-b.png");
@@ -578,10 +586,10 @@ test("the search finds an asset in an event the tree is not showing", async () =
     // The tree answers "what is in this event". A name you half-remember is a
     // different question, and the event holding it is closed.
     const node = await taskNode();
-    assert.ok(!labels(node).includes("Ghost Cupcake"));
+    assert.ok(!labels(node).includes("ghost-cupcake"));
     await look(node, "cupcake");
     assert.deepEqual(hits(node),
-                     [`${GHOSTS}/Food - 3 stages/Ghost Cupcake`]);
+                     [`${D_GHOSTS}/food-3-stages/ghost-cupcake`]);
 });
 
 test("taking a search hit moves the event too, not just the asset", async () => {
@@ -589,13 +597,13 @@ test("taking a search hit moves the event too, not just the asset", async () => 
     // is a refusal at queue time.
     const node = await taskNode();
     await look(node, "cupcake");
-    await click(hitFor(node, `${GHOSTS}/Food - 3 stages/Ghost Cupcake`));
+    await click(hitFor(node, `${D_GHOSTS}/food-3-stages/ghost-cupcake`));
     assert.equal(widget(node, "feature").value, GHOSTS);
     assert.equal(widget(node, "asset").value, "Ghost Cupcake");
     assert.equal(widget(node, "category").value, "");
     assert.equal(crumb(node),
-                 `${OCT} / ${GHOSTS} / Food - 3 stages / Ghost Cupcake`);
-    assert.ok(rowFor(node, `${OCT}/${GHOSTS}/Food - 3 stages/Ghost Cupcake`),
+                 `${D_OCT} / ${D_GHOSTS} / food-3-stages / ghost-cupcake`);
+    assert.ok(rowFor(node, `${OCT}/${GHOSTS}/food-3-stages/Ghost Cupcake`),
               "the tree did not follow the hit");
 });
 
@@ -607,6 +615,6 @@ test("the search survives the fold that takes the tree away", async () => {
     assert.equal(part(node, "tree").style.display, "none");
     assert.ok(searchBox(node), "the search field went with the tree");
     await look(node, "cupcake");
-    await click(hitFor(node, `${GHOSTS}/Food - 3 stages/Ghost Cupcake`));
+    await click(hitFor(node, `${D_GHOSTS}/food-3-stages/ghost-cupcake`));
     assert.equal(widget(node, "asset").value, "Ghost Cupcake");
 });

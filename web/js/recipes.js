@@ -19,7 +19,7 @@ import { askForName, findSource, graphScope, slotName } from "./find_node.js";
 // does. `hideWidget` is exported from there and imported by three other
 // panels; a second copy of it is how they drift.
 import { assetRecipeOf, eventForCategory, hideWidget,
-         monthCategories } from "./asset_focus.js";
+         monthCategories, recipeSlug } from "./asset_focus.js";
 import { SAVED_EVT as PROMPT_SAVED } from "./prompts.js";
 
 const NODE_CLASS = "SymbioticaRecipe";
@@ -148,19 +148,22 @@ function inputTextAt(graph, node, index, depth, inputName) {
 }
 
 // What a focus/task node's `category` / `category_recipe` output says on the
-// canvas. The dropdown holds the recipe label (`Appliance 1x2`); the plain
-// `category` output is that without its size, and "All" names nothing. Picking
+// canvas, flat as Python emits it. The dropdown holds the recipe name
+// (`appliance-1x2`); the plain `category` output is that without its size,
+// and "All" names nothing. Picking
 // an ASSET clears the dropdown, and the asset's own row is what names its
 // recipe -- without that fallback, choosing an asset leaves the Recipes node
 // with no name and it silently stores nothing.
 function categoryOutput(node, output) {
     const picked = String(widgetValue(node, "category") ?? "").trim();
     if (picked && picked !== "All") {
-        return output === "category" ? picked.replace(/\s+\d+x\d+$/i, "") : picked;
+        return output === "category"
+            ? recipeSlug(picked.replace(/[-\s]+\d+x\d+$/i, "")) : picked;
     }
     const fromAsset = assetRecipeOf(node, widgetValue(node, "asset"));
     if (!fromAsset) return null;
-    return (output === "category" ? fromAsset.category : fromAsset.recipe) || null;
+    return (output === "category" ? recipeSlug(fromAsset.category)
+                                  : fromAsset.recipe) || null;
 }
 
 function nodeText(graph, node, slot, depth) {
@@ -337,13 +340,9 @@ export function autoDecision(prev, next, columns) {
     return actions;
 }
 
-// A recipe name is the suffix of a workflow file name, so whatever arrives
-// on the input is lowercased, loses its apostrophes and gets one dash where
-// anything else non-alphanumeric was.
-export function recipeSlug(text) {
-    return String(text ?? "").toLowerCase().replace(/['’]/g, "")
-        .replace(/[^a-z0-9._]+/g, "-").replace(/^-+|-+$/g, "");
-}
+// A recipe name is the suffix of a workflow file name. The rule lives in
+// asset_focus.js, which names the Task's categories with it.
+export { recipeSlug };
 
 // ----------------------------------------------------------------- color --
 

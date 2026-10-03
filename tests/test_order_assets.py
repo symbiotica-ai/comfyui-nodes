@@ -152,25 +152,24 @@ ORDER = {**MINI_1, "month": "October", "eventName": "Ghostly Goodies"}
 def test_save_path_is_month_feature_category_asset():
     from pipeline.order_assets import save_paths
     paths = save_paths(ORDER, assets_by_category(ORDER, "Food - 3 stages"))
-    assert paths[0] == ("October/Mini 1 — Ghostly Goodies/"
-                        "Food - 3 stages/Spookies")
+    assert paths[0] == ("october/mini-1-ghostly-goodies/"
+                        "food-3-stages/spookies")
     assert len(paths) == 3
 
 
-def test_names_are_kept_as_the_order_writes_them():
-    # Not slugified: these folders are read by people looking for this month's
-    # work, and a slug is harder to scan than the order it came from.
+def test_every_segment_is_flat():
+    # The one naming the Task emits everywhere: the recipe slug.
     from pipeline.order_assets import save_paths
     p = save_paths(ORDER, assets_by_category(ORDER, "Decoration"))[0]
-    assert "Food" not in p and p.endswith("Phantom Freezer Cart")
-    assert "Mini 1 — Ghostly Goodies" in p
+    assert "food" not in p and p.endswith("phantom-freezer-cart")
+    assert "mini-1-ghostly-goodies" in p
 
 
 def test_a_feature_with_no_event_name_is_just_the_feature():
     from pipeline.order_assets import save_paths
     order = {**MINI_1, "month": "October"}
     assert save_paths(order, assets_by_category(order))[0].startswith(
-        "October/Mini 1/")
+        "october/mini-1/")
 
 
 def test_a_separator_in_a_name_cannot_deepen_the_tree():
@@ -179,7 +178,7 @@ def test_a_separator_in_a_name_cannot_deepen_the_tree():
     order = {"month": "October", "feature": "Mini 1",
              "assets": [_asset("Sign / Board", "Deco: Wall")]}
     path = save_paths(order, assets_by_category(order))[0]
-    assert path == "October/Mini 1/Deco Wall/Sign Board"
+    assert path == "october/mini-1/deco-wall/sign-board"
     assert path.count("/") == 3
 
 
@@ -187,7 +186,7 @@ def test_missing_segments_are_dropped_not_left_empty():
     # "//" would put the file at the wrong depth, silently.
     from pipeline.order_assets import save_paths
     order = {"feature": "Mini 1", "assets": [_asset("Cake", "")]}
-    assert save_paths(order, assets_by_category(order)) == ["Mini 1/Cake"]
+    assert save_paths(order, assets_by_category(order)) == ["mini-1/cake"]
 
 
 def test_a_type_folder_may_be_the_plural_of_the_order_s_word(tmp_path):

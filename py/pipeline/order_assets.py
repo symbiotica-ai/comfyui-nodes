@@ -4,7 +4,7 @@ import os
 import random
 
 from .compose import IMG_EXTS
-from .order_sheet import category_recipe
+from .order_sheet import category_recipe, recipe_slug
 
 
 def assets_by_category(order, category="All"):
@@ -32,9 +32,11 @@ def assets_by_category(order, category="All"):
         if not name:
             continue
         cat = str(a.get("category", "") or "").strip()
-        # A recipe label (`Appliance 1x2`) narrows to one canvas of the
-        # category; the plain name keeps every canvas.
-        if want != "All" and cat != want and category_recipe(a) != want:
+        # A recipe name (`appliance-1x2`) narrows to one canvas of the
+        # category; the plain name keeps every canvas. Compared as slugs, so
+        # a workflow saved holding `Appliance 1x2` still narrows.
+        if want != "All" and recipe_slug(cat) != recipe_slug(want) \
+                and category_recipe(a) != recipe_slug(want):
             continue
         groups.setdefault(cat, []).append(a)
     out = []
@@ -59,26 +61,21 @@ def event_label(order):
 
 
 def _segment(value):
-    """One path segment from an order value.
+    """One path segment from an order value, in the flat shape every name the
+    Task emits takes (`black-cat-fortune-booth`, the recipe slug).
 
     A separator inside a name would silently deepen the tree — an asset called
-    "Sign / Board" must not become a "Sign" folder — so separators collapse to a
-    space. Windows-illegal characters go too: these paths are written to a
-    shared Drive folder that syncs to other machines.
+    "Sign / Board" must not become a "Sign" folder — and the slug leaves none,
+    nor any character Windows refuses on the shared Drive folder.
     """
-    out = str(value or "").strip()
-    for bad in ("/", "\\", ":", "*", "?", '"', "<", ">", "|", "\n", "\r", "\t"):
-        out = out.replace(bad, " ")
-    return " ".join(out.split()).strip(". ")
+    return recipe_slug(value)
 
 
 def save_paths(order, items):
     """month/feature/category/asset for each asset, ready for a save node's
-    filename prefix.
+    filename prefix, every segment flat:
+    `october/mini-2-purrfection-sweets/decoration/black-cat-fortune-booth`.
 
-    Kept as the order sheet writes them — "Food - 3 stages", not a slug —
-    because these folders are read by people looking for this month's work, and
-    a slug makes the delivered tree harder to scan than the order it came from.
     Empty segments are dropped rather than left as "//", which would put the
     file at the wrong depth.
     """

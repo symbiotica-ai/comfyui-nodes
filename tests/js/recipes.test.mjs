@@ -341,7 +341,7 @@ test("a wired recipe name is read live through string, join and asset-focus node
     const graph = graphOf([focus, plot, join, recipes], {
         10: { origin_id: 1, origin_slot: 1 }, 11: { origin_id: 2, origin_slot: 0 }, 12: { origin_id: 3, origin_slot: 0 },
     });
-    assert.equal(resolveText(graph, recipes, "recipe"), "Counter1x1");
+    assert.equal(resolveText(graph, recipes, "recipe"), "counter1x1");
 });
 
 test("join strings uses its delimiter and a typed value is read as is", () => {
@@ -482,7 +482,7 @@ test("asset focus's category_recipe output is the picked label, and category the
         _slot: slot });
     const graphFor = (slot) => graphOf([focus, target(slot)], { 10: { origin_id: 1, origin_slot: slot } });
     assert.equal(resolveText(graphFor(3), target(3), "recipe"), "Appliance 1x2");
-    assert.equal(resolveText(graphFor(1), target(1), "recipe"), "Appliance");
+    assert.equal(resolveText(graphFor(1), target(1), "recipe"), "appliance");
     focus.widgets[0].value = "All";
     assert.equal(resolveText(graphFor(3), target(3), "recipe"), null);
 });
@@ -510,8 +510,8 @@ test("an asset picked with no category names the recipe from the asset's own row
         widgets: [{ name: "recipe", value: "" }] });
     const graphFor = (slot) => graphOf([focus, target(slot)],
                                        { 10: { origin_id: 1, origin_slot: slot } });
-    assert.equal(resolveText(graphFor(3), target(3), "recipe"), "Appliance 1x2");
-    assert.equal(resolveText(graphFor(1), target(1), "recipe"), "Appliance");
+    assert.equal(resolveText(graphFor(3), target(3), "recipe"), "appliance-1x2");
+    assert.equal(resolveText(graphFor(1), target(1), "recipe"), "appliance");
     // A category typed by hand still wins over the asset's own.
     focus.widgets[0].value = "Counter 1x1";
     assert.equal(resolveText(graphFor(3), target(3), "recipe"), "Counter 1x1");
@@ -541,10 +541,10 @@ test("Task Specs answers the same way — the Task feeding it holds the asset", 
         6: { origin_id: 1, origin_slot: 0 },
         10: { origin_id: 2, origin_slot: slot },
     });
-    assert.equal(resolveText(graphFor(10), target, "recipe"), "Appliance 1x2");
-    assert.equal(resolveText(graphFor(1), target, "recipe"), "Appliance");
+    assert.equal(resolveText(graphFor(10), target, "recipe"), "appliance-1x2");
+    assert.equal(resolveText(graphFor(1), target, "recipe"), "appliance");
     task.widgets[1].value = "Spider Mosaic Counter";
-    assert.equal(resolveText(graphFor(10), target, "recipe"), "Counter 1x1");
+    assert.equal(resolveText(graphFor(10), target, "recipe"), "counter-1x1");
 });
 
 import { liveSlots, retable } from "../../web/js/recipes.js";

@@ -379,7 +379,7 @@ test("category is a dropdown of what the order actually holds", async () => {
     assert.equal(w.type, "combo");
     // A-Z under "All" — see the sorting test at the end of this file.
     assert.deepEqual(w.options.values(),
-                     ["All", "Appliance", "Decoration", "Food - 3 stages"]);
+                     ["All", "appliance", "decoration", "food-3-stages"]);
 });
 
 test("All means no narrowing", async () => {
@@ -470,7 +470,7 @@ test("All groups the rows under a header per category", async () => {
     const node = await focusNode({ category: "All" });
     // First-appearance order, the same order the run itself is grouped in.
     assert.deepEqual(headers(node),
-                     ["Food - 3 stages · 2", "Decoration · 1"]);
+                     ["food-3-stages · 2", "decoration · 1"]);
     assert.deepEqual(names(node),
                      ["Frankencrisps", "Frankenstein Pops", "Bunting"]);
 });
@@ -761,18 +761,19 @@ test("the category and asset picked last session come back after a restart",
     // option list does not survive the load.
     const node = await reopened({ category: "Food - 3 stages",
                                   asset: "Frankencrisps" });
-    assert.equal(widgetOf(node, "category").value, "Food - 3 stages");
+    // Saved as the sheet's label, put back as the flat name the list holds.
+    assert.equal(widgetOf(node, "category").value, "food-3-stages");
     assert.equal(widgetOf(node, "asset").value, "Frankencrisps");
 });
 
 test("a saved pick the order no longer holds is not put back", async () => {
-    const node = await reopened({ category: "Decoration", asset: "Gone Asset" });
-    assert.equal(widgetOf(node, "category").value, "Decoration");
+    const node = await reopened({ category: "decoration", asset: "Gone Asset" });
+    assert.equal(widgetOf(node, "category").value, "decoration");
     assert.equal(widgetOf(node, "asset").value, "");
 });
 
 test("restoring the category narrows the list on the same pass", async () => {
-    const node = await reopened({ category: "Decoration", asset: "Bunting" });
+    const node = await reopened({ category: "decoration", asset: "Bunting" });
     assert.deepEqual(names(node), ["Bunting"]);
 });
 
@@ -795,8 +796,8 @@ test("the category dropdown is sorted A-Z under All", async () => {
     node._symRenderFocus();
     for (let i = 0; i < 5; i++) await tick();
     const values = widgetOf(node, "category").options.values();
-    assert.deepEqual(values, ["All", "Appliance", "Cashier's Desk",
-                              "Food - 3 stages", "Wallpaper"]);
+    assert.deepEqual(values, ["All", "appliance", "cashiers-desk",
+                              "food-3-stages", "wallpaper"]);
 });
 
 test("the category dropdown splits a category by its canvas in tiles", async () => {
@@ -816,7 +817,7 @@ test("the category dropdown splits a category by its canvas in tiles", async () 
     for (let i = 0; i < 5; i++) await tick();
     const w = node.widgets.find((x) => x.name === "category");
     assert.deepEqual(w.options.values(),
-                     ["All", "Appliance 1x1", "Appliance 1x2", "Crate Icon 200x200", "Decoration"]);
+                     ["All", "appliance-1x1", "appliance-1x2", "crate-icon-200x200", "decoration"]);
 });
 
 test("choosing a tiles label narrows to that canvas, and All groups by it", async () => {
@@ -826,10 +827,10 @@ test("choosing a tiles label narrows to that canvas, and All groups by it", asyn
         { name: "Bunting", category: "Decoration" },
     ];
     const node = await focusNode({ category: "All" }, assets);
-    assert.deepEqual(headers(node), ["Appliance 1x1 · 1", "Appliance 1x2 · 1", "Decoration · 1"]);
+    assert.deepEqual(headers(node), ["appliance-1x1 · 1", "appliance-1x2 · 1", "decoration · 1"]);
     const w = node.widgets.find((x) => x.name === "category");
-    w.value = "Appliance 1x2";
-    w.callback("Appliance 1x2");
+    w.value = "appliance-1x2";
+    w.callback("appliance-1x2");
     for (let i = 0; i < 5; i++) await tick();
     assert.deepEqual(names(node), ["Tall Oven · 128x256"]);
 });
