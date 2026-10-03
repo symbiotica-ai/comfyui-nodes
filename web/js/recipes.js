@@ -315,7 +315,11 @@ const textValue = (node, name) => resolveText(liveGraph(), node, name);
 
 // What auto does when the name on the wire is `next` and the canvas was on
 // `prev` (changed = slot values moved since that recipe was last written):
-// save what you leave, then load the recipe you arrive at, or create it.
+// save what you leave, then load the recipe you arrive at. Auto only ever
+// writes a recipe that EXISTS (`columns`). A name with nothing stored -- a red
+// row -- is PARKED on: the canvas is remembered as being on it, nothing is
+// written, and the recipe that was left is not saved over by edits meant for
+// the new one. A red row becomes a recipe by `new recipe`, never by auto.
 // The first tick of a session has no memory of where the canvas is. What the
 // canvas holds is what he last pressed -- the workflow saved it -- so auto
 // takes that as the recipe's current state instead of writing the stored one
@@ -335,8 +339,8 @@ export function slotSignature(values) {
 
 export function autoDecision(prev, next, columns) {
     const actions = [];
-    if (prev.name && prev.changed) actions.push(`save:${prev.name}`);
-    if (next && next !== prev.name) actions.push(columns.includes(next) ? `load:${next}` : `create:${next}`);
+    if (prev.name && prev.changed && columns.includes(prev.name)) actions.push(`save:${prev.name}`);
+    if (next && next !== prev.name) actions.push(columns.includes(next) ? `load:${next}` : `park:${next}`);
     return actions;
 }
 
@@ -745,6 +749,47 @@ export function liveSlots(graph, color) {
         }
     }
     return Object.keys(out).sort().map((key) => out[key]);
+}
+
+// The painted nodes by ID: the key each carries and the title it carries it
+// under. Compared tick to tick, this is what tells a RENAME from a slot that
+// left and another that arrived.
+export function paintedTitles(graph, color) {
+    const out = new Map();
+    const matches = colorMatcher(color);
+    for (const node of graph?.nodes ?? []) {
+        const key = slotKey(node, matches);
+        if (key) out.set(node.id, { key, title: node.title, node });
+    }
+    return out;
+}
+
+// What a retitle moved between two readings. A node that kept its ID and now
+// carries another key is a rename, unless another painted node still holds
+// the old key (that key is not leaving) or already held the new one (two
+// nodes on one key overwrite each other: a CLASH, put back by the caller).
+export function retitledSlots(before, after) {
+    const held = (map, key, skip) => [...map].some(([id, s]) => id !== skip && s.key === key);
+    const moves = [];
+    const clashes = [];
+    for (const [id, now] of after) {
+        const was = before.get(id);
+        if (!was || was.key === now.key) continue;
+        if (held(after, was.key, id)) continue;
+        if (held(before, now.key, id)) clashes.push({ from: was.key, to: now.key, title: was.title, node: now.node });
+        else moves.push({ from: was.key, to: now.key });
+    }
+    return { moves, clashes };
+}
+
+// A slot renamed: its row keeps every cell under the new key. Keyed by
+// title, a rename otherwise read as a slot gone -- its values left the table
+// on sight and every recipe on the next save.
+export function renameSlot(table, from, to) {
+    const row = table.rows.find((r) => r.key === from);
+    if (!row || table.rows.some((r) => r.key === to)) return false;
+    row.key = to;
+    return true;
 }
 
 // The table again under a changed slot list, the cell text kept exactly as
@@ -1794,7 +1839,7 @@ function recipePanel(node) {
         try {
             for (const action of actions) {
                 const [verb, name] = action.split(/:(.*)/s);
-                if (verb === "save" || verb === "create") {
+                if (verb === "save") {
                     captureColumn(state.table, state.slots, name, values);
                     state.dirty = true;
                     // On a failed save the signature is still recorded, so the
@@ -1804,7 +1849,9 @@ function recipePanel(node) {
                     // RECONCILED, not rebuilt: auto fires a second after an
                     // edit, which is while he is still typing the next one.
                     renderAll();
-                    status(`auto: ${verb === "save" ? "saved" : "created"} ${name}`, false);
+                    status(`auto: saved ${name}`, false);
+                } else if (verb === "park") {
+                    auto.last = { name, sig };
                 } else if (verb === "load") {
                     loadColumn(name);
                     auto.last = { name, sig: slotSignature(liveSlotValues(liveGraph(), matchColor())) };
@@ -1846,6 +1893,45 @@ function recipePanel(node) {
         renderPane();
         drawStatus();
         refit();
+    }
+
+    // A painted node retitled carries its key: the row is renamed in the
+    // table, so shared and every recipe keep the values, and the project is
+    // saved at once. A title another painted node already carries is put
+    // back -- two nodes on one key would overwrite each other.
+    let titles = null;
+    let titlesGraph = null;
+    async function syncTitles() {
+        if (!state.table) { titles = null; return; }
+        const graph = liveGraph();
+        if (!graph?.nodes?.length) return;
+        const color = matchColor();
+        const now = paintedTitles(graph, color);
+        const before = titles;
+        const sameGraph = titlesGraph === graph;
+        titles = now;
+        titlesGraph = graph;
+        if (!before || !sameGraph) return;
+        const { moves, clashes } = retitledSlots(before, now);
+        for (const c of clashes) {
+            c.node.title = c.title;
+            now.set(c.node.id, { key: c.from, title: c.title, node: c.node });
+            graph.setDirtyCanvas?.(true, true);
+            status(`"${c.to}" is already a slot · kept "${c.from}"`, false);
+        }
+        const moved = moves.filter((m) => renameSlot(state.table, m.from, m.to));
+        if (!moved.length) return;
+        // Auto must not read the rename as an edit of the recipe the canvas
+        // is on: the values are the same ones under another name.
+        const values = liveSlotValues(graph, color);
+        const back = { ...values };
+        for (const m of moved) { back[m.from] = back[m.to]; delete back[m.to]; }
+        if (auto.last.sig === slotSignature(back)) auto.last.sig = slotSignature(values);
+        syncSlots();
+        state.dirty = true;
+        if (await save()) {
+            status(`renamed ${moved.map((m) => `${m.from} → ${m.to}`).join(", ")}`, false);
+        }
     }
 
     // Every CATEGORY the order holds is a row, whether or not the project has
@@ -1931,6 +2017,7 @@ function recipePanel(node) {
     node._symRebuild = rebuild;
     function watchTick() {
         resolveProject();
+        syncTitles();
         syncSlots();
         syncCategories();
         syncActive();
@@ -2115,6 +2202,8 @@ function recipePanel(node) {
     // does on the way past, for a switch made by hand.
     function saveLeaving(column) {
         if (!state.table || !column || auto.last.name !== column) return;
+        // A red row is not a recipe: leaving it writes nothing.
+        if (untouched(column)) return;
         const values = liveSlotValues(liveGraph(), matchColor());
         if (!Object.keys(values).length) return;
         if (slotSignature(values) === auto.last.sig) return;
@@ -2251,14 +2340,22 @@ function recipePanel(node) {
             toast("warn", "No project for this workflow", "Save the workflow first.");
             return;
         }
-        const name = recipeSlug(await askForName("New recipe", ""));
+        // A red row picked IS the recipe this makes: its name is the
+        // category's, so there is nothing to ask. This is the only way a red
+        // row becomes a recipe; picking it, or the wire landing on it, never is.
+        const red = picked() !== PROJECT_ROW && untouched(columnOf(picked()))
+            ? columnOf(picked()) : null;
+        const name = red ?? recipeSlug(await askForName("New recipe", ""));
         if (!name) return;
-        if (state.table.columns.includes(name)) {
+        if (!red && state.table.columns.includes(name)) {
             toast("warn", `"${name}" is already a recipe`,
                   "Pick it in the sidebar, or give this one another name.");
             return;
         }
         saveLeaving(columnOf(picked()));
+        // No longer an offer: a canvas equal to shared stores no cell, and an
+        // offered row with no cell is kept out of the file.
+        if (red) state.offered.delete(red);
         captureInto(name);
         selectOnly(name);
         if (picked() !== name) { pickRow(name); autoSelected = null; renderFull(); }
@@ -2456,7 +2553,7 @@ function recipePanel(node) {
                     label: column, empty, linked,
                     hint: shared ? "What every recipe takes unless it sets its own."
                         : empty ? `${column}: a category in the order, with nothing `
-                            + "stored for it yet. Pick it, set the canvas, and it is a recipe."
+                            + "stored for it yet. Pick it, set the canvas, and press new recipe."
                         : `${column}: only what differs from shared is stored.`
                           + (linked ? ` Linked with ${linked.join(", ")}: they hold the `
                               + "same values, and an edit to one is an edit to all." : ""),

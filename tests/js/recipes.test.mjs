@@ -5,7 +5,7 @@ import { test } from "node:test";
 
 import "./comfy_stub.mjs";
 import { cellText, cellValue, followPromptFile, generateSummary, projectToTable,
-         syncGap, tableToProject } from "../../web/js/recipes.js";
+         renameSlot, retitledSlots, syncGap, tableToProject } from "../../web/js/recipes.js";
 
 const slots = [
     { key: "control_image", kind: "scalar", default: "old.png", widgets: 2 },
@@ -432,16 +432,21 @@ test("auto adopts the canvas it opens on instead of writing the recipe over it",
     const columns = ["shared", "counter1x1"];
     // Nothing remembered yet: the canvas is what was saved with the workflow.
     assert.equal(autoAdopt({ name: null, sig: null }, "counter1x1", columns), true);
-    // A name with no recipe is created from the canvas, not adopted.
+    // A name with no recipe is not adopted (and not created: auto parks on it).
     assert.equal(autoAdopt({ name: null, sig: null }, "chair1x1", columns), false);
     assert.equal(autoAdopt({ name: null, sig: null }, "", columns), false);
     // Once auto knows where it is, a switch loads as before.
     assert.equal(autoAdopt({ name: "counter1x1", sig: "x" }, "chair1x1", columns), false);
 });
 
-test("auto decides: save the recipe you leave, then load an existing one or create a new one", () => {
+test("auto decides: save the recipe you leave, then load an existing one or park on a red row", () => {
     const columns = ["shared", "counter1x1"];
-    assert.deepEqual(autoDecision({ name: "counter1x1", changed: true }, "chair1x1", columns), ["save:counter1x1", "create:chair1x1"]);
+    // chair1x1 is a red row: auto remembers the canvas is on it and writes nothing.
+    assert.deepEqual(autoDecision({ name: "counter1x1", changed: true }, "chair1x1", columns), ["save:counter1x1", "park:chair1x1"]);
+    assert.deepEqual(autoDecision({ name: null, changed: false }, "chair1x1", columns), ["park:chair1x1"]);
+    // Edits made while parked on a red row are never saved into it.
+    assert.deepEqual(autoDecision({ name: "chair1x1", changed: true }, "chair1x1", columns), []);
+    assert.deepEqual(autoDecision({ name: "chair1x1", changed: true }, "counter1x1", columns), ["load:counter1x1"]);
     assert.deepEqual(autoDecision({ name: "chair1x1", changed: false }, "counter1x1", columns), ["load:counter1x1"]);
     assert.deepEqual(autoDecision({ name: "counter1x1", changed: true }, "counter1x1", columns), ["save:counter1x1"]);
     assert.deepEqual(autoDecision({ name: "counter1x1", changed: false }, "counter1x1", columns), []);
@@ -886,4 +891,33 @@ test("a category linked while it holds only shared's values is still written", (
     const out = tableToProject(r, table, slots, new Set(["chair"]));
     assert.deepEqual(out.recipes.chair, {});
     assert.deepEqual(out.links, [["appliance1x1", "chair"]]);
+});
+
+// A painted node retitled carries its values: before this, the old key left
+// every recipe on the next save and the new one held nothing.
+const reading = (pairs) => new Map(pairs.map(([id, key]) => [id, { key, title: key, node: { id } }]));
+
+test("a retitled slot is a move, a title another slot holds is a clash", () => {
+    const before = reading([[1, "controlnet-image"], [2, "render-base-preamble"]]);
+    assert.deepEqual(retitledSlots(before, reading([[1, "cn-image"], [2, "render-base-preamble"]])),
+                     { moves: [{ from: "controlnet-image", to: "cn-image" }], clashes: [] });
+    const { moves, clashes } = retitledSlots(before, reading([[1, "render-base-preamble"], [2, "render-base-preamble"]]));
+    assert.deepEqual(moves, []);
+    assert.deepEqual(clashes.map((c) => [c.from, c.to, c.title]),
+                     [["controlnet-image", "render-base-preamble", "controlnet-image"]]);
+});
+
+test("a key another node still holds is not moved by a retitle", () => {
+    const before = reading([[1, "seed"], [2, "seed"]]);
+    assert.deepEqual(retitledSlots(before, reading([[1, "seed-2"], [2, "seed"]])), { moves: [], clashes: [] });
+});
+
+test("renaming a slot keeps every recipe's cell, and the project writes the new key", () => {
+    const project = { template: "t.json", shared: { "controlnet-image": "a.png" },
+                      recipes: { food: { "controlnet-image": "food.png" }, chair: { "controlnet-image": "chair.png" } } };
+    const table = projectToTable(project, [{ key: "controlnet-image", kind: "scalar", default: "a.png", widgets: 1 }]);
+    assert.equal(renameSlot(table, "controlnet-image", "cn-image"), true);
+    const out = tableToProject(project, table, [{ key: "cn-image", kind: "scalar", default: "a.png", widgets: 1 }]);
+    assert.deepEqual(out.shared, { "cn-image": "a.png" });
+    assert.deepEqual(out.recipes, { chair: { "cn-image": "chair.png" }, food: { "cn-image": "food.png" } });
 });

@@ -1496,11 +1496,10 @@ test("capturing into an empty category is what makes it a recipe", async () => {
                  "and the mark is green");
 });
 
-test("the wire landing on an empty category still captures, never loads over it",
+test("the wire landing on an empty category writes nothing and loads nothing over the canvas",
      async () => {
-    // The row exists now, but it is not a recipe until something is stored in
-    // it — so auto must not answer the wire by writing shared over the canvas
-    // he has just painted.
+    // The row is not a recipe, and auto never makes one: it neither captures
+    // the canvas into the row nor writes shared over what he has painted.
     const node = await recipeNode();
     const task = taskChain(node, "Appliance1x1");
     await draw(node);
@@ -1510,8 +1509,57 @@ test("the wire landing on an empty category still captures, never loads over it"
     await draw(node);
     await settle();
     assert.equal(app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value,
-                 "floor-food.png", "the canvas was captured, not overwritten");
-    assert.equal(state(node)["food-3-stages-1x1"]?.backdrop, "floor-food.png");
+                 "floor-food.png", "the canvas was not overwritten");
+    assert.equal(state(node)["food-3-stages-1x1"], undefined, "and nothing was captured");
+    assert.equal(stateOf(rowFor(node, "food-3-stages-1x1")), "empty", "the row is still red");
+});
+
+test("an edit made on a red row is not saved into it, nor into the recipe left behind",
+     async () => {
+    const node = await recipeNode();
+    const task = taskChain(node, "Appliance1x1");
+    await draw(node);
+    await autoOn(node);
+    await click(rowFor(node, "appliance1x2"));
+    task.widgets[0].value = "Food - 3 stages 1x1";
+    await draw(node);
+    await settle();
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "floor-food.png";
+    await draw(node);
+    await new Promise((r) => setTimeout(r, 1200));   // past auto's one-second settle
+    await settle();
+    assert.equal(state(node)["food-3-stages-1x1"], undefined);
+    assert.equal(state(node).appliance1x2.backdrop, PROJECT().recipes.appliance1x2.backdrop,
+                 "the recipe left is not overwritten with edits meant for the red one");
+});
+
+test("leaving a red row with the canvas edited writes nothing into it", async () => {
+    const node = await recipeNode();
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "food-3-stages-1x1"));
+    app.graph.nodes.find((n) => n.title === "backdrop").widgets[0].value = "floor-food.png";
+    await draw(node);
+    await click(rowFor(node, "appliance1x2"));
+    await draw(node);
+    await settle();
+    assert.equal(stateOf(rowFor(node, "food-3-stages-1x1")), "empty");
+    assert.equal(posted.filter((p) => p.project).length, 0, "and nothing was saved");
+});
+
+test("new recipe on a picked red row makes that recipe, without asking for a name",
+     async () => {
+    const node = await recipeNode();
+    taskChain(node, "Appliance1x1");
+    await draw(node);
+    await click(rowFor(node, "food-3-stages-1x1"));
+    asked.answer = "never used";
+    await click(newRecipeIcon(node));
+    await settle();
+    const written = lastProject().recipes;
+    assert.ok("food-3-stages-1x1" in written, "the red row is a recipe now");
+    assert.ok(!("never-used" in written), "no name was asked");
+    assert.equal(stateOf(rowFor(node, "food-3-stages-1x1")), "saved", "and the mark is green");
 });
 
 test("browsing the categories with auto on writes nothing", async () => {

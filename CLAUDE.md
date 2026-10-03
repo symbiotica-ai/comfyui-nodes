@@ -504,11 +504,18 @@ the same thing. Each one failed silently first.
   `shared` and writes NOTHING — `choose` adopts `auto.last` so auto does not
   read the wire as a name it has never seen and capture the canvas on the
   spot, which would write one recipe per click down the list. It becomes a
-  recipe the moment something is captured into it, and `tableToProject` is
-  where an offered-and-empty column is kept out of the file. `autoAdopt` /
-  `autoDecision` are handed `realColumns()`, not every column, so the WIRE
-  landing on an uncaptured category still captures the canvas into it —
-  unchanged, and the one path that does write on its own.
+  recipe only when HE makes it one (2026-10-03: "clicking a red recipe and the
+  new recipe button creates one, not auto"): `new recipe` with the red row
+  picked captures the canvas into it without asking a name and drops it from
+  `state.offered`, and the pane's `save` does the same for a canvas edit.
+  `tableToProject` is where an offered-and-empty column is kept out of the
+  file. **Auto never writes a red row.** `autoDecision` is handed
+  `realColumns()` and answers `save:` only for a recipe that exists; the wire
+  landing on a red category PARKS auto on it (`park:`, `auto.last` moves, no
+  write) so edits meant for the red row are not saved into the recipe left
+  behind. `saveLeaving` skips a red row too. The wire used to `create:` the
+  row on the spot, which also fired at load whenever the Task already sat on
+  an uncaptured category.
 - **A recipe that holds nothing writes nothing, and that is not an error.**
   "No recipe slots on this canvas" is for a `match_color` that matches
   nothing; with `shared` empty it fired on every category he had not been
